@@ -1,0 +1,734 @@
+db inv;
+string[] items_selected;
+string item_to_move;
+int item_to_move_index, cindex=0;
+void load_inv(string invdata) {
+	string content =string_replace(invdata, "inv ", "", true);
+	string[] lines =delinear(content);
+	string[] values;
+	if(lines.length()==0) {
+		return;
+	}
+	for(int i=0; i<lines.length(); i++) {
+		if(lines.length()>0) {
+			values =string_split(lines[i], "=", false);
+			inv.set(values[0], values[1]);
+		}
+		if(string_to_number(values[1])==0) {
+			inv.delete(values[0]);
+		}
+	}
+}
+void setinv(string invdata) {
+	string content =string_replace(invdata, "setinv ", "", true);
+	string[] lines =delinear(content);
+	string[] values;
+	if(lines.length()==0) {
+		return;
+	}
+inv.delete_all();
+	for(int i=0; i<lines.length(); i++) {
+		if(lines.length()>0) {
+			values =string_split(lines[i], "=", false);
+			inv.set(values[0], values[1]);
+		}
+		if(string_to_number(values[1])==0) {
+			inv.delete(values[0]);
+		}
+	}
+}
+void sort_inv(string itemname, int range) {
+	if(inv.exists(itemname) && inv_item_number(itemname)>0) {
+		inv.sort(itemname, range);
+	send_reliable(peer_id, "sortinv "+itemname+" "+range, 0);
+	}
+	return;
+}
+void invmenu(string category, string sonido="abrirziper.ogg") {
+	reset_all_forced_keys();
+	key_hold ileft(KEY_LEFT,500,50);
+	key_hold iright(KEY_RIGHT,500,50);
+	key_hold iup(KEY_UP,500,50);
+	key_hold idown(KEY_DOWN,500,50);
+	key_hold idell(KEY_DELETE,500,50);
+	get_characters();
+	string cl;
+	int counter=0;
+	string[] values;
+	string[] peramitors =inv.get_keys();
+	string[] peramitors2;
+	send_unreliable(peer_id,"playsocial "+sonido,0);
+	if(inv_categories[cindex].name=="all"){
+		speak(pu.get_value("Compartimento general,")+" "+peramitors.length()+" "+pu.get_value("elementos."));
+		}
+		else{
+			int cantity=0;
+			for(int x=0; x<inv_categories[cindex].items_in_category.length(); x++){
+				if(inv_item_number(inv_categories[cindex].items_in_category[x])>0) cantity++;
+			}
+			speak(inv_categories[cindex].name+", "+cantity+" "+pu.get_value("elementos."));
+	}
+	while(true) {
+		wait(5);
+		mainloop();
+		if(ausente||!moveable||dinventario==1){
+			break;
+		}
+		peramitors.resize(0);
+		peramitors2.resize(0);
+		values.resize(0);
+		peramitors2 =inv.get_keys();
+		if(peramitors2.length()==0)break;
+		if(cindex==0){
+			for(uint i=0; i<peramitors2.length(); i++) {
+				peramitors.insert_last(peramitors2[i]);
+			}
+		}
+		else if(cindex>0){
+			for(int x=0; x<inv_categories[cindex].items_in_category.length(); x++){
+				if(inv_item_number(inv_categories[cindex].items_in_category[x])>0) peramitors.insert_last(inv_categories[cindex].items_in_category[x]);
+			}
+		}
+		if(cavar.playing==false&&cavando==1){
+			cavando=0;
+			send_unreliable(peer_id, "enterrar "+opa, 2);
+		}
+		if (ileft.pressing()&&cavando==0&&inv_categories.length()>1){
+			cindex-=1;
+			if (cindex<0)
+			cindex=inv_categories.length()-1;
+			invmenu(inv_categories[cindex].name, "mobeziper.ogg");
+			break;
+		}
+		if (iright.pressing()&&cavando==0&&inv_categories.length()>1){
+			cindex+=1;
+			if (cindex>=inv_categories.length())
+			cindex=0;
+			invmenu(inv_categories[cindex].name, "mobeziper.ogg");
+			break;
+		}
+		if(counter > peramitors.length()){
+			counter=peramitors.length()-1;
+		}
+		if(cavando==0)cl=get_characters();
+		if(cl!="" and cl!=" " and !string_is_digits(cl) and cl.length()==1 and peramitors.length()>0){
+			int f=0;
+			int oc=counter;
+			for(uint i=counter; i<peramitors.length(); i++){
+				if(i==counter){
+					continue;
+				}
+				string invitem=get_item_translation(peramitors[i]);
+				if(invitem=="") invitem=pu.get_value(peramitors[i]);
+				invitem[0]=string_to_lower_case(invitem[0]);
+				if(invitem[0]==cl){
+					counter=i;
+					p.play_stationary(soundinv, false);
+					speak(invitem+", "+inv_item_number(peramitors[counter]));
+					copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+					cl="";
+					f=1;
+					break;
+				}
+			}
+			if(f==0){
+				counter=0;
+				for(uint i=counter; i<peramitors.length(); i++){
+					string invitem=get_item_translation(peramitors[i]);
+					if(invitem=="") invitem=pu.get_value(peramitors[i]);
+					invitem[0]=string_to_lower_case(invitem[0]);
+					if(invitem[0]==cl){
+						counter=i;
+						p.play_stationary(soundinv, false);
+						speak(invitem+", "+inv_item_number(peramitors[counter]));
+						copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+						cl="";
+						f=1;
+						break;
+					}
+				}
+			}
+		}
+		if(key_down(KEY_LCONTROL)&&key_pressed(KEY_RETURN)||key_down(KEY_LCONTROL)&&key_pressed(KEY_NUMPADENTER)||key_down(KEY_RCONTROL)&&key_pressed(KEY_RETURN)||key_down(KEY_RCONTROL)&&key_pressed(KEY_NUMPADENTER)&&peramitors.length()>0)descitem(peramitors[counter]);
+		if (key_up(KEY_LSHIFT) and key_up(KEY_RSHIFT) and key_up(KEY_LMENU) and key_pressed(KEY_RETURN) or key_pressed(KEY_NUMPADENTER) and key_up(KEY_LCONTROL) and key_up(KEY_RCONTROL)) {
+			if(peramitors.length()>0) {
+				give(peramitors[counter]);
+			}
+		}
+		else if (key_down(KEY_LSHIFT) and key_pressed(KEY_RETURN) and peramitors.length()>0 or key_down(KEY_RSHIFT) and key_pressed(KEY_RETURN) and peramitors.length()>0 or key_down(KEY_LSHIFT) and key_pressed(KEY_NUMPADENTER) and peramitors.length()>0 or key_down(KEY_RSHIFT) and key_pressed(KEY_NUMPADENTER) and peramitors.length()>0){
+			setupmenu2();
+			m.add_item_tts(pu.get_value("mgerems."), "mgerems");
+			m.add_item_tts(pu.get_value("elementales."), "elementales");
+			int mres=m.run(pu.get_value("¿Con qué moneda desea hacer la subasta?"), true);
+			if(mres==0)return;
+			if(m.get_item_name(mres)=="mgerems"){
+				auction(peramitors[counter]);
+			}
+			if(m.get_item_name(mres)=="elementales"){
+				auction2(peramitors[counter]);
+			}
+		}
+		else if(key_down(KEY_LMENU) and key_pressed(KEY_SPACE)&&peramitors.length()>0&&counter < peramitors.length()){
+			retirar(peramitors[counter]);
+		}
+		else if(shift_pressionado()==false&&key_pressed(KEY_SPACE)&&peramitors.length()>0&&counter < peramitors.length()){
+			interact(peramitors[counter]);
+		}
+		else if(shift_pressionado()&&key_pressed(KEY_SPACE)&&cavando==0&&peramitors.length()>0&&counter<peramitors.length()){
+			if(item_is_selected(peramitors[counter])){
+				bool unselect=unselect_item(peramitors[counter]);
+				if(unselect){
+					speak(pu.get_value(peramitors[counter])+" "+pu.get_value("no seleccionado."));
+					item_to_move="";
+					item_to_move_index=-1;
+				}
+			}
+			else if(item_is_selected(peramitors[counter])==false){
+				bool select=select_item(peramitors[counter]);
+				if(select){
+					speak(pu.get_value(peramitors[counter])+" "+pu.get_value("seleccionado."));
+					item_to_move=peramitors[counter];
+					item_to_move_index=counter;
+				}
+			}
+		}
+		if(is_pressed_application_keys()){
+			actions_menu("inv", "elija la opción correspondiente y pulse enter.");
+		}
+		if(alt_presionado()&&key_pressed(KEY_A)&&cindex>0&&items_selected.length()>0){
+			for(int x=0; x<items_selected.length(); x++){
+				inv_categories[cindex].add_new_item(items_selected[x]);
+			}
+			if(items_selected.length()==1) speak(pu.get_value("objeto añadido correctamente a la categoría")+" "+inv_categories[cindex].name);
+			else if(items_selected.length()>1) speak(pu.get_value("objetos añadidos correctamente a la categoría")+" "+inv_categories[cindex].name);
+			items_selected.resize(0);
+			save_categories_or_items();
+		}
+		if(alt_presionado()&&key_pressed(KEY_D)&&cindex>0&&items_selected.length()>0){
+			for(int x=0; x<items_selected.length(); x++){
+				inv_categories[cindex].remove_item_from(items_selected[x]);
+			}
+			if(items_selected.length()==1) speak(pu.get_value("objeto eliminado correctamente de la categoría")+" "+inv_categories[cindex].name);
+			else if(items_selected.length()>1) speak(pu.get_value("objetos eliminados correctamente de la categoría")+" "+inv_categories[cindex].name);
+			items_selected.resize(0);
+			save_categories_or_items();
+		}
+		if(key_down(KEY_LMENU)&&key_pressed(KEY_RETURN)&&items_selected.length()==1&&inv_item_number(items_selected[0])>0){
+			int new_position;
+			if(item_to_move_index>counter){
+				new_position=item_to_move_index-counter;
+				sort_inv(item_to_move, -new_position);
+				p.play_stationary("invmove5.ogg", false);
+			}
+			else if(item_to_move_index<counter){
+				new_position=item_to_move_index-counter;
+				sort_inv(item_to_move, -new_position);
+				p.play_stationary("invmove5.ogg", false);
+			}
+			item_to_move_index=-1;
+			item_to_move="";
+			items_selected.resize(0);
+		}
+		if (idell.pressing() and droptimer.elapsed>=droptime and peramitors.length()>0&&cavando==0 and peramitors[counter]>0){
+			droptimer.restart();
+			if (key_down(KEY_LSHIFT) or key_down(KEY_RSHIFT)){
+				string stuff=v.input(pu.get_value("Quantos desse item você quer deletar?"));
+				if(stuff.length()>9)return;
+				double s=string_to_number(stuff);
+				if (s>0)
+				drop(peramitors[counter], s);
+			}
+			else if (key_down(KEY_LCONTROL) or key_down(KEY_RCONTROL)){
+				double s=inv_item_number(peramitors[counter]);
+				drop(peramitors[counter],s);
+			}
+			else
+			drop(peramitors[counter]);
+		}
+		if(key_pressed(KEY_HOME) and peramitors.length()>0&&cavando==0){
+			counter=0;
+			string invitem=get_item_translation(peramitors[counter]);
+			if(invitem=="") invitem=pu.get_value(peramitors[counter]);
+			p.play_stationary(soundinv, false);
+			speak(invitem+", "+inv_item_number(peramitors[counter]));
+			copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+		}
+		if(key_pressed(KEY_END) and peramitors.length()>0&&cavando==0){
+			counter=peramitors.length()-1;
+			string invitem=get_item_translation(peramitors[counter]);
+			if(invitem=="") invitem=pu.get_value(peramitors[counter]);
+			speak(invitem+", "+inv_item_number(peramitors[counter]));
+			p.play_stationary(soundinv, false);
+			copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+		}
+		if(iup.pressing()&&cavando==0&&counter>0){
+			counter--;
+			string invitem=get_item_translation(peramitors[counter]);
+			if(invitem=="") invitem=pu.get_value(peramitors[counter]);
+			speak(invitem+", "+inv_item_number(peramitors[counter]));
+			p.play_stationary(soundinv, false);
+			copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+		}
+		if(idown.pressing()&&cavando==0&&counter<peramitors.length()-1){
+			counter++;
+			string invitem=get_item_translation(peramitors[counter]);
+			if(invitem=="") invitem=pu.get_value(peramitors[counter]);
+			speak(invitem+", "+inv_item_number(peramitors[counter]));
+			p.play_stationary(soundinv, false);
+			copiaragora=pu.get_value(invitem)+", "+inv_item_number(peramitors[counter]);
+		}
+		if(key_down(KEY_LCONTROL) && key_pressed(KEY_C) || key_down(KEY_RCONTROL) && key_pressed(KEY_C)) {
+			copiar();
+		}
+		if(key_pressed(KEY_ESCAPE)&&cavando==0){
+			send_unreliable(peer_id,"playsocial fecharziper.ogg",0);
+			copiaragora="";
+			return;
+		}
+	}
+}
+void inv_add_item(string itemname, double itemvalue) {
+string[] itemnames =inv.get_keys();
+	string value;
+	if(inv_item_exists(itemname)) {
+		inv.get(itemname, value);
+		double orgval;
+		if(inv_item_number(itemname) > 0) {
+			orgval =string_to_number(value);
+		}
+		else{
+			return;
+		}
+		if(orgval+itemvalue < 1) {
+			inv_delete_item(itemname);
+		}
+		else {
+			itemvalue =orgval+itemvalue;
+		}
+	}
+	else{
+		if(itemvalue > 0){
+			inv.set(itemname, itemvalue);
+		}
+	}
+}
+
+bool inv_item_exists(string itemname) {
+
+	if(inv.exists(itemname)){
+		return true;
+	}
+	return false;
+}
+
+double inv_item_number(string itemname){
+	string value;
+		if(inv.exists(itemname)) {
+			inv.get(itemname, value);
+			return string_to_number(value);
+		}
+	return 0;
+}
+
+double inv_item(string itemname) {
+	string[] itemnames =inv.get_keys();
+	for(uint i=0; i<itemnames.length(); i++) {
+		if(itemnames[i]==itemname) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void inv_delete_item(string itemname) {
+		if(inv.exists(itemname)) {
+			inv.delete(itemname);
+		}
+	}
+
+void give(string item){
+	string char=daritem();
+	if(char==""){
+		speak(pu.get_value("Ninguém perto de você."));
+	}
+	else{
+		string amount=v.input(pu.get_value("Quantos você quer dar para")+" "+char+"?");
+		if (char!="" and amount!=""){
+			send_reliable(peer_id, "give "+char+" "+item+" "+amount, 0);
+		}
+	}
+}
+void drop(string item, double amount=1){
+	if(amount<1 || amount>100000000000)return;
+	send_reliable(peer_id, "drop "+amount+" "+item, 0);
+}
+
+void auction(string item){
+	double amount=string_to_number(v.input(pu.get_value("Cantidad de")+" "+pu.get_value(item)+" "+"que desea poner en subasta:"));
+	string minbid2=v.input(pu.get_value("Precio en el que iniciará la subasta:"));
+	double minbid=string_to_number(minbid2);
+	if(get_number2(amount)>0 && get_number2(amount)<1000000000000 && get_number2(minbid)>0 && get_number2(minbid)<100000000000000) {
+		send_unreliable(peer_id,"/auction "+amount+" "+item+" "+minbid,1);
+	}
+	else {
+		speak(pu.get_value("Por favor asegúrece que todos los valores estén escritos correctamente y vuelva a intentarlo."));
+	}
+}
+
+void auction2(string item){
+	double amount=string_to_number(v.input(pu.get_value("Cantidad de")+" "+pu.get_value(item)+" "+"que desea poner en subasta:"));
+	string minbid2=v.input(pu.get_value("Precio en el que iniciará la subasta:"));
+	double minbid=string_to_number(minbid2);
+	if(get_number2(amount)>0 && get_number2(amount)<1000000000000 && get_number2(minbid)>0 && get_number2(minbid)<100000000000000) {
+		send_unreliable(peer_id,"/vender "+amount+" "+item+" "+minbid,1);
+	}
+	else {
+		speak(pu.get_value("Por favor asegúrece que todos los valores estén escritos correctamente y vuelva a intentarlo."));
+	}
+}
+
+bool select_item(string item){
+	if(items_selected.find(item)>-1){
+		return false;
+	}
+	else{
+		items_selected.insert_last(item);
+		return true;
+	}
+}
+bool unselect_item(string item){
+	int find=items_selected.find(item);
+	if(find<0){
+		return false;
+	}
+	else{
+		items_selected.remove_at(find);
+		return true;
+	}
+}
+bool item_is_selected(string item){
+	int find=items_selected.find(item);
+	if(find>-1){
+		return true;
+	}
+	return false;
+}
+
+void select_items_to_give(string playername){
+	int counter=0;
+	string[] data_items, inv_items, data=inv.get_keys();
+	if(data.length()>0){
+		for(int x=0; x<data.length(); x++){
+			inv_items.insert_last(data[x]+"=0");
+		}
+	}
+	speak(pu.get_value("Seleccione los items con su respectiva cantidad para darle a la persona."));
+	string cl;
+	while(true){
+		wait(5);
+		if(connected)mainloop();
+		if(key_pressed(KEY_ESCAPE)) break;
+		cl=get_characters();
+		if(cl!="" and cl!=" " and cl.length()==1 and inv_items.length()>0){
+			int f=0;
+			int oc=counter;
+			for(uint i=counter; i<inv_items.length(); i++){
+				if(i==counter){
+					continue;
+				}
+				string item=get_item_translation(inv_items[i]);
+				if(item=="") item=pu.get_value(inv_items[i]);
+				if(item[0]==cl){
+					counter=i;
+					data_items=string_split(inv_items[counter], "=", false);
+					item=get_item_translation(data_items[0]);
+					if(item=="") item=pu.get_value(data_items[0]);
+					speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+					cl="";
+					f=1;
+					break;
+				}
+			}
+			if(f==0){
+				counter=0;
+				for(uint i=counter; i<inv_items.length(); i++){
+					string item=get_item_translation(inv_items[i]);
+					if(item=="") item=pu.get_value(inv_items[i]);
+					if(item[0]==cl){
+						counter=i;
+						data_items=string_split(inv_items[counter], "=", false);
+						item=get_item_translation(data_items[0]);
+						if(item=="") item=pu.get_value(data_items[0]);
+						speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+						cl="";
+						f=1;
+						break;
+					}
+				}
+			}
+		}
+		if(left.pressing()&&counter>0){
+			counter--;
+			data_items=string_split(inv_items[counter], "=", false);
+			string item=get_item_translation(data_items[0]);
+			if(item=="") item=pu.get_value(data_items[0]);
+			speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+		}
+		if(right.pressing()&&counter<inv_items.length()-1){
+			counter++;
+			data_items=string_split(inv_items[counter], "=", false);
+			string item=get_item_translation(data_items[0]);
+			if(item=="") item=pu.get_value(data_items[0]);
+			speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+		}
+		if(key_pressed(KEY_HOME)&&counter>0){
+			counter=0;
+			data_items=string_split(inv_items[counter], "=", false);
+			string item=get_item_translation(data_items[0]);
+			if(item=="") item=pu.get_value(data_items[0]);
+			speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+		}
+		if(key_pressed(KEY_END)&&counter<inv_items.length()-1){
+			counter=inv_items.length()-1;
+			data_items=string_split(inv_items[counter], "=", false);
+			string item=get_item_translation(data_items[0]);
+			if(item=="") item=pu.get_value(data_items[0]);
+			speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+		}
+		if(key_pressed(KEY_SPACE) && counter<inv_items.length()) {
+			data_items=string_split(inv_items[counter], "=", false);
+			string item=get_item_translation(data_items[0]);
+			if(item=="") item=pu.get_value(data_items[0]);
+			speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+		}
+		if(shift_pressionado()&&key_pressed(KEY_RETURN)){
+			string cantity=v.input(pu.get_value("escribe la cantidad de")+" "+pu.get_value(data_items[0])+" "+pu.get_value("que quieres depositar en tu caja de regalo."));
+			if(cantity!="" && get_number2(cantity)>0){
+				string old=data_items[1];
+				data_items[1]=string_replace(data_items[1], old, string_to_number(cantity), true);
+				inv_items[counter]=data_items[0]+"="+data_items[1];
+				string item=get_item_translation(data_items[0]);
+				if(item=="") item=pu.get_value(data_items[0]);
+				speak(item+", "+data_items[1]+"/"+inv_item_number(data_items[0]));
+			}
+		}
+		if(!shift_pressionado()&&key_pressed(KEY_RETURN)){
+			string final;
+			for(int x=0; x<inv_items.length(); x++){
+				string[] items_data=string_split(inv_items[x], "=", false);
+				if(string_to_number(items_data[1])>0){
+					final+=items_data[0]+":"+items_data[1]+",";
+				}
+			}
+			if(final!=""){
+				send_reliable(peer_id, "create_gift "+playername+" "+final, 0);
+				break;
+			}
+		}
+	}
+}
+
+inv_category@[] inv_categories;
+class inv_category{
+string name;
+string[] items_in_category;
+inv_category(string name){
+this.name=name;
+}
+bool add_new_item(string itemname){
+int find=items_in_category.find(itemname);
+if(find>-1){
+return false;
+}
+file f;
+f.open("categories.db", "r");
+string[] lines_from_categories=delinear(string_decrypt(f.read(), PREFS_ENCRYPTION_KEY));
+f.close();
+for(int x=0; x<lines_from_categories.length(); x++){
+string[] data=string_split(lines_from_categories[x], "=", false);
+if(data[0]=="items_to_set"&&data.length()>1){
+data[1]+=itemname+":"+this.name+",";
+int pos=x;
+lines_from_categories.remove_at(x);
+lines_from_categories.insert_at(pos, data[0]+"="+data[1]);
+}
+}
+save_categories_or_items();
+items_in_category.insert_last(itemname);
+return true;
+}
+bool remove_item_from(string itemname){
+int find=items_in_category.find(itemname);
+if(find<0){
+return false;
+}
+file f;
+f.open("categories.db", "rb");
+string[] lines_from_categories=delinear(string_decrypt(f.read(), PREFS_ENCRYPTION_KEY));
+f.close();
+for(int x=0; x<lines_from_categories.length(); x++){
+string[] data=string_split(lines_from_categories[x], "=", false);
+if(data[0]=="items_to_set"&&data.length()>1){
+data[1]=string_replace(data[1], itemname+":"+this.name, "", false);
+int pos=x;
+lines_from_categories.remove_at(x);
+lines_from_categories.insert_at(pos, data[0]+"="+data[1]);
+}
+}
+save_categories_or_items();
+items_in_category.remove_at(find);
+return true;
+}
+bool rename(string new_name){
+if(new_name==""){
+return false;
+}
+this.name=new_name;
+return true;
+}
+}
+void create_category(string name, bool save=true){
+inv_category i(name);
+inv_categories.insert_last(i);
+if(save) save_categories_or_items();
+}
+void save_categories_or_items(){
+	file f;
+	string final="categories=\r\nitems_to_set=";
+	string[] lines=delinear(final);
+	for(int x=0; x<lines.length(); x++){
+		string[] data=string_split(lines[x], "=", false);
+		if(data[0]=="categories"){
+			for(int y=0; y<inv_categories.length(); y++){
+				lines[x]+=inv_categories[y].name+",";
+			}
+		}
+		if(data[0]=="items_to_set"){
+			string final_items;
+			for(int y=0; y<inv_categories.length(); y++){
+				if(inv_categories[y].items_in_category.length()>0){
+					for(int z=0; z<inv_categories[y].items_in_category.length(); z++){
+						final_items+=inv_categories[y].items_in_category[z]+":"+inv_categories[y].name+",";
+					}
+				}
+			}
+			lines[x]+=final_items;
+		}
+	}
+	f.open("categories.db", "wb");
+	f.write(string_encrypt(linear(lines), PREFS_ENCRYPTION_KEY));
+	f.close();
+}
+void load_categories_and_items(){
+	if(!file_exists("categories.db")) return;
+	file f;
+	f.open("categories.db", "rb");
+	string[] lines_from_categories=delinear(string_decrypt(f.read(), PREFS_ENCRYPTION_KEY));
+	f.close();
+	for(int x=0; x<lines_from_categories.length(); x++){
+		string[] data=string_split(lines_from_categories[x], "=", false);
+		if(data[0]=="categories"&&data.length()>1){
+			string[] categories=string_split(data[1], ",", false);
+			for(int y=0; y<categories.length(); y++){
+				if(categories[y]!="all") create_category(categories[y], false);
+			}
+		}
+		if(data[0]=="items_to_set"&&data.length()>1){
+			string[] lines2=string_split(data[1], ",", false);
+			for(int y=0; y<lines2.length(); y++){
+				string[] lines3=string_split(lines2[y], ":", false);
+				inv_categories[get_category_index(lines3[1])].add_new_item(lines3[0]);
+			}
+		}
+	}
+	save_categories_or_items();
+}
+int get_category_index(string name){
+	for(int x=0; x<inv_categories.length(); x++){
+		if(inv_categories[x].name==name) return x;
+	}
+	return -1;
+}
+void actions_menu(string type, string text){
+	setupmenu2();
+	if(type=="inv"){
+		m.add_item_tts(pu.get_value("crear una categoría."), "create_category");
+		m.add_item_tts(pu.get_value("eliminar una categoría"), "delete_category");
+		m.add_item_tts(pu.get_value("renombrar una categoría."), "rename_category");
+	}
+	int mres=m.run(pu.get_value(text), true);
+	if(m.get_item_name(mres)=="create_category"){
+		string name=v.input(pu.get_value("escribe el nombre para la categoría a crear."));
+		if(name!=""&&name.length()<1025&&name!="all"){
+			int index=get_category_index(name);
+			if(index<0){
+				create_category(name);
+				speak(pu.get_value("categoría creada correctamente."));
+			}
+		}
+	}
+if(m.get_item_name(mres)=="delete_category"){
+string name=v.input(pu.get_value("escriba el nombre de la categoría que quiere eliminar."));
+if(name!=""&&name!="all"){
+int index=get_category_index(name);
+if(index>-1){
+inv_categories.remove_at(index);
+				speak(pu.get_value("categoría eliminada correctamente."));
+cindex=0;
+save_categories_or_items();
+}
+}
+}
+if(m.get_item_name(mres)=="rename_category"){
+string name=v.input(pu.get_value("escriba el nombre de la categoría que desea renombrar."));
+if(name!=""&&name!="all"){
+int index=get_category_index(name);
+if(index>-1){
+string new_name=v.input(pu.get_value("escriba el nuevo nombre para esta categoría."));
+if(new_name!=""){
+bool success=inv_categories[index].rename(new_name);
+if(success){
+speak(pu.get_value("categoría renombrada correctamente."));
+save_categories_or_items();
+}
+}
+}
+}
+}
+}
+
+string get_item_translation(string itemname){
+int total=0;
+for(int x=0; x<items_for_translate.length(); x++){
+if(string_contains(itemname, items_for_translate[x], 1)>-1){
+itemname=string_replace(itemname, items_for_translate[x], pu.get_value(items_for_translate[x]), true);
+total++;
+}
+}
+if(total>0) return itemname;
+else return "";
+}
+
+void view_selected_items() {
+	if(items_selected.length()==0){
+		speak(pu.get_value("No tienes ningún item seleccionado."));
+	}
+	if(items_selected.length()==1){
+		speak(pu.get_value("Solo tienes")+" "+pu.get_value(items_selected[0])+" "+pu.get_value("seleccionado."));
+	}
+	if(items_selected.length()>=2){
+		string final =pu.get_value("Tienes seleccionados")+" ";
+		for(int i=0; i<items_selected.length(); i++) {
+			final +=pu.get_value(items_selected[i])+", ";
+		}
+		final.resize(final.length()-2);
+		final +=".";
+		if(items_selected[items_selected.length()-1][0]=="i"){
+			final =string_replace(final, items_selected[items_selected.length()-1], "e "+items_selected[items_selected.length()-1], true);
+		}
+		else{
+			final =string_replace(final, items_selected[items_selected.length()-1], "y "+items_selected[items_selected.length()-1], true);
+		}
+		speak(final);
+	}
+}
