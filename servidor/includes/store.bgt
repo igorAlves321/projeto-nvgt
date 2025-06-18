@@ -1,0 +1,157 @@
+﻿store@[] items_sale;
+class store{
+	string item, money, description;
+	double price;
+	int id;
+	store(string item2, string money2, double price2, string description2, int id2){
+		this.item=item2;
+		this.money=money2;
+		this.price=price2;
+		this.description=description2;
+		this.id=id2;
+	}
+	double check_price(){
+		return this.price;
+	}
+	bool buy(int index, double value){
+		value=round(value, 0);
+		bool save=false;
+		if(this.money=="celestiums"){
+			if(value*this.price>players[index].celestiums)
+			return false;
+		}
+		else if(this.money=="esmeraldas"){
+			if(value*this.price>players[index].esmeraldas)
+			return false;
+		}
+		else{
+			if(value*this.price>players[index].inv_item_number(this.money))
+			 return false;
+		}
+		if(this.item=="lancha"&&file_exists("players/"+players[index].charname+"/lancha.md")) {
+			send_reliable(players[index].peer_id, "msgnormal Você já tem uma lancha!", 0);
+			return false;
+		}
+		if(this.item=="carro"&&file_exists("players/"+players[index].charname+"/carro.md")) {
+			send_reliable(players[index].peer_id, "msgnormal Você já tem um carro!", 0);
+			return false;
+		}
+		if(this.item=="motocicleta"&&file_exists("players/"+players[index].charname+"/moto.md")) {
+			send_reliable(players[index].peer_id, "msgnormal Você já tem uma moto!", 0);
+			return false;
+		}
+		if(this.item=="carro") {
+			players[index].inv_add_item("chave_del_carro_de_"+players[index].charname, 1);
+			players[index].inv_add_item("carro", -value);
+			send_reliable(players[index].peer_id, "msgnormal compraste tu automovil! aquí tienes, tu llave.", 0);
+			file f;
+			f.open("players/"+players[index].charname+"/carro.md", "w");
+			f.write("a");
+			f.close();
+			f.open("carros/"+players[index].charname+".md", "w");
+			f.write("100");
+			f.close();
+		}
+		if(this.item=="motocicleta") {
+			players[index].inv_add_item("chave_da_moto_de_"+players[index].charname, 1);
+			players[index].inv_add_item("moto", -value);
+			send_reliable(players[index].peer_id, "msgnormal compraste tu motocicleta! aquí tienes, tu llave.", 0);
+			file f;
+			f.open("players/"+players[index].charname+"/moto.md", "w");
+			f.write("a");
+			f.close();
+			f.open("motos/"+players[index].charname+".md", "w");
+			f.write("1000");
+			f.close();
+		}
+		if(this.item=="lancha") {
+			players[index].inv_add_item("chave_da_lancha_de_"+players[index].charname, 1);
+			players[index].inv_add_item("lancha", -value);
+			send_reliable(players[index].peer_id, "msgnormal compraste tu lancha! la podrás usar solamente en el mar profundo debido a la imposibilidad de nadar por ahí.", 0);
+			file f;
+			f.open("players/"+players[index].charname+"/lancha.md", "w");
+			f.write("a");
+			f.close();
+			f.open("lanchas/"+players[index].charname+".md", "w");
+			f.write("100");
+			f.close();
+		}
+		if(this.money=="celestiums") {
+			players[index].celestiums-=round(value*this.price, 0);
+			save=true;
+		}
+		else if(this.money=="esmeraldas"){
+			players[index].esmeraldas-=round(value*this.price, 0);
+			save=true;
+		}
+		else players[index].inv_add_item(this.money, -round(value*this.price, 0));
+		players[index].inv_add_item(this.item, value);
+		if(save) {
+			save_transfer("sistema", players[index].charname, this.item, "mediante compra con"+" "+this.money, value);
+			eadm(players[index].charname+" hizo la compra de "+value+" "+this.item+" con "+this.money+" el "+DATE_DAY+"."+DATE_MONTH+"."+DATE_YEAR+" a "+TIME_HOUR+"."+TIME_MINUTE+".");
+		}
+		return true;
+	}
+}//end class
+
+int item_exists_for_sale(string item){
+	for(int x=0; x<items_sale.length(); x++) {
+		if(items_sale[x].item==item){
+			return x;
+		}
+	}
+	return -1;
+}
+
+int item_exists_for_sale(int id){
+	for(int x=0; x<items_sale.length(); x++){
+		if(items_sale[x].id==id){
+			return x;
+		}
+	}
+	return -1;
+}
+
+void add_to_sale(string item, string money, double price, string description, int id){
+	store s(item, money, price, description, id);
+	items_sale.insert_last(s);
+}
+
+void load_items_for_sale(bool reset=false){
+	file f;
+	string content;
+	string[] lines;
+	if(reset){
+		items_sale.resize(0);
+	}
+	f.open("items_for_sale.db", "r");
+	content=f.read();
+	f.close();
+	if(content=="") {
+		return;
+	}
+	else {
+		lines=delinear(content);
+		if(lines.length()==0) return;
+		for(int x=0; x<lines.length(); x++){
+			string[] data=string_split(lines[x], "=", true);
+			if(data.length()>4){
+				store s(data[0], data[1], string_to_number(data[2]), data[3], string_to_number(data[4]));
+				items_sale.insert_last(s);
+			}
+		}
+	}
+}
+
+void save_items_for_sale() {
+	file f;
+	string final;
+	if(items_sale.length()>0){
+		for(int x=0; x<items_sale.length(); x++){
+			final+=items_sale[x].item+"="+items_sale[x].money+"="+items_sale[x].price+"="+items_sale[x].description+"="+items_sale[x].id+"\r\n";
+		}
+		f.open("items_for_sale.db", "w");
+		f.write(final);
+		f.close();
+	}
+}

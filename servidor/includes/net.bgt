@@ -1,0 +1,2551 @@
+void netloop(){
+	event=net.request();
+	if(event.type==0) return;
+	if(event.type==event_disconnect){
+		int index=get_player_index(event.peer_id);
+		if(index>-1){
+			if(ar.is_open==1){
+				ar.remove_player_from(index);
+			}
+			if(players[index].invs==0 && !players[index].is_admin()) {
+				send_reliable(0, "msgconexoes "+players[index].charname+" ;ha perdido la conexión con esta dimensión.", 0);
+			}
+				colocar_tempocair(players[index].charname);
+			terminar(index, 0, 1, true);
+		}
+	}
+else if(event.type==event_receive&&event.channel==16){
+int index=get_player_index(event.peer_id);
+string[]parsed=string_split(get_event_message(), " ", false);
+if(index>-1){
+if(parsed[0]=="update_lang_file"&&parsed.length()>1){
+string langfile=string_replace(parsed[1], ".lang", "", true);
+double new_ver=manage_langs_version(langfile);
+for(int x=0; x<players.length(); x++){
+if(players[x].idiomajogo==langfile&&players[x].peer_id!=players[index].peer_id){
+send_reliable(players[x].peer_id, "set_lang_file lang/"+parsed[1], 0);
+send_reliable(players[x].peer_id, "msg2 ;La información de idioma fue actualizada.;", 0);
+players[x].manage_my_langs_version(langfile, new_ver);
+}
+}
+send_reliable(players[index].peer_id, "msg2 ;¡Archivo de idioma actualizado correctamente! Será enviado a todos los jugadores conectados.;", 0);
+eadm(players[index].charname+" lanzó una nueva actualización del idioma "+langfile+".", "notify5.ogg", 150);
+writeprefs();
+}
+}
+}
+
+if(event.type==event_receive&&event.channel==14){
+string[] parsed=string_split(get_event_message(), " ", true);
+int index=get_player_index(event.peer_id);
+if(index>-1){
+if(parsed[0]=="tiendasgeneral"){
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "r");
+string content=f.read();
+f.close();
+send_reliable(players[index].peer_id, "open_store "+content, 0);
+}
+else if(parsed[0]=="manage_stores"){
+string content, final;
+string[] lines, files;
+file f;
+f.open("items_for_sale.db", "r");
+content=f.read();
+f.close();
+lines=delinear(content);
+for(int x=0; x<lines.length(); x++){
+final+=lines[x]+"\r\n";
+}
+files=find_files("tiendas/*.txt");
+final+="|\r\n";
+for(int x=0; x<files.length(); x++){
+final+=string_replace(files[x], ".txt", "", true)+"\r\n";
+}
+send_reliable(players[index].peer_id, "manage_stores "+final, 0);
+}
+else if(parsed[0]=="replace_item_for_sale"&&parsed.length()>1){
+file f;
+string content=string_replace(get_event_message(), parsed[0]+" ", "", true);
+string[] lines, data=string_split(content, "|", true);
+f.open("items_for_sale.db", "r");
+lines=delinear(f.read());
+f.close();
+int find=lines.find(data[1]);
+if(find>-1&&lines[find]!=data[0]){
+lines[find]=data[0];
+f.open("items_for_sale.db", "w");
+f.write(linear(lines));
+f.close();
+load_items_for_sale(true);
+string[] name=string_split(lines[find], "=", false);
+eadm(players[index].charname+" ;reemplazó los valores del item llamado; "+name[0]+". ;Favor de revisar para comprobar que esté bien.;", "notify5.ogg", 150);
+}
+}
+else if(parsed[0]=="remove_item_for_sale"&&parsed.length()>1){
+file f;
+int sindex=item_exists_for_sale(parsed[1]);
+if(sindex>-1&&players[index].is_admin()){
+items_sale.remove_at(sindex);
+save_items_for_sale();
+load_items_for_sale(true);
+eadm(players[index].charname+" ;eliminó de los objetos a la venta el siguiente item:; "+parsed[1]+".", "notify5.ogg", 150);
+}
+if(items_sale.length()==0){
+items_sale.resize(0);
+f.open("items_for_sale.db", "w");
+f.write("");
+f.close();
+}
+}
+else if(parsed[0]=="show_store"&&parsed.length()>1){
+if(!file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;tienda inexistente.;", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "r");
+string content=f.read();
+f.close();
+send_reliable(players[index].peer_id, "show_store "+parsed[1]+" "+content, 0);
+}
+}
+else if(parsed[0]=="delete_store"&&parsed.length()>1){
+if(!file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;tienda inexistente.;", 0);
+return;
+}
+else{
+file_delete("tiendas/"+parsed[1]+".txt");
+eadm(players[index].charname+" ;eliminó del servidor la tienda llamada; "+parsed[1]+".", "notify5.ogg", 150);
+}
+}
+else if(parsed[0]=="remove_item_on_store"&&parsed.length()>2){
+if(!file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;tienda inexistente.;", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "r");
+string content=f.read();
+f.close();
+string[] lines=delinear(content);
+int find=lines.find(parsed[2]);
+if(find>-1){
+lines.remove_at(find);
+f.open("tiendas/"+parsed[1]+".txt", "w");
+f.write(linear(lines));
+f.close();
+eadm(players[index].charname+" ;eliminó el item; "+parsed[2]+" ;de la tienda llamada; "+parsed[1]+".", "notify5.ogg", 150);
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;item inexistente en esta tienda.;", 0);
+return;
+}
+}
+}
+else if(parsed[0]=="replace_item_on_store"&&parsed.length()>2){
+int sindex=string_to_number(parsed[3]);
+if(!file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;tienda inexistente.;", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "r");
+string content=f.read();
+f.close();
+string[] lines=delinear(content);
+if(lines[sindex]==parsed[2]){
+send_reliable(players[index].peer_id, "msg2 ;este item ya existe.;", 0);
+return;
+}
+else{
+string previous_item=lines[sindex];
+lines.remove_at(sindex);
+lines.insert_at(sindex, parsed[2]);
+f.open("tiendas/"+parsed[1]+".txt", "w");
+f.write(linear(lines));
+f.close();
+eadm(players[index].charname+" ;reemplazó el item; "+previous_item+" ;por el item llamado; "+parsed[2]+", ;en la tienda llamada; "+parsed[1]+".", "notify5.ogg", 150);
+}
+}
+}
+else if(parsed[0]=="add_item_to_store"&&parsed.length()>2){
+if(!file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;tienda inexistente.;", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "r");
+string content=f.read();
+f.close();
+string[] lines=delinear(content);
+int find=lines.find(parsed[2]);
+if(find>-1){
+send_reliable(players[index].peer_id, "msg2 ;este item ya existe en esta tienda.;", 0);
+return;
+}
+else{
+lines.insert_last(parsed[2]);
+f.open("tiendas/"+parsed[1]+".txt", "w");
+f.write(linear(lines));
+f.close();
+eadm(players[index].charname+" ;añadió el item; "+parsed[2]+" ;a la tienda llamada; "+parsed[1]+".", "notify5.ogg", 150);
+}
+}
+}
+else if(parsed[0]=="add_item_for_sale"&&parsed.length()>4){
+bool exists;
+string itemname=parsed[1], money=parsed[2], description=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" "+parsed[2]+" "+parsed[3]+" "+parsed[4]+" ", "", true);
+double price=string_to_number(parsed[3]);
+int id=string_to_number(parsed[4]);
+if(id<1000||id>9999) return;
+file f;
+f.open("items_for_sale.db", "r");
+string content=f.read();
+f.close();
+string[] lines=delinear(content);
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", true);
+if(data.length()>4&&id==data[4]){
+send_reliable(players[index].peer_id, "msg2 ;este item ya existe.;", 0);
+exists=true;
+return;
+}
+else{
+exists=false;
+}
+}
+if(exists==false){
+lines.insert_last(itemname+"="+money+"="+price+"="+description+"="+id);
+f.open("items_for_sale.db", "w");
+f.write(linear(lines));
+f.close();
+load_items_for_sale(true);
+eadm(players[index].charname+" ;añadió a los objetos a la venta el item llamado; "+itemname+". para más información, consultar el menú de gestión de objetos a la venta en el servidor.", "notify5.ogg", 150);
+}
+}
+else if(parsed[0]=="create_store"&&parsed.length()>1){
+if(file_exists("tiendas/"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;esta tienda ya existe.;", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/"+parsed[1]+".txt", "w");
+f.write("");
+f.close();
+eadm(players[index].charname+" ;creó la tienda llamada; "+parsed[1]+". ;actualmente está sin contenido, para añadir items vaya al menú de gestión de tiendas.;", "notify5.ogg", 150);
+}
+}
+else if(parsed[0]=="buy"&&parsed.length()>2){
+double value=string_to_number(parsed[1]);
+int id=string_to_number(parsed[2]);
+int sindex=item_exists_for_sale(id);
+if(value<=0){
+return;
+}
+if(sindex>-1){
+bool success=items_sale[sindex].buy(index, value);
+if(!success){
+send_reliable(players[index].peer_id, "msg2 ;no tienes dinero suficiente.;", 0);
+}
+else{
+send_packet(0, "play buy.ogg", players[index].x, players[index].y, players[index].mapindex);
+}
+}
+}
+else if(parsed[0]=="check_price"&&parsed.length()>1){
+int sindex=item_exists_for_sale(string_to_number(parsed[1]));
+if(sindex>-1){
+send_reliable(players[index].peer_id, "msg2 ;el precio de este artículo es de; "+items_sale[sindex].price+" ;"+items_sale[sindex].money+".;", 0);
+}
+}
+else if(parsed[0]=="check_desc"&&parsed.length()>1){
+int sindex=item_exists_for_sale(string_to_number(parsed[1]));
+if(sindex>-1){
+send_reliable(players[index].peer_id, "msg2 ;"+items_sale[sindex].description+";", 0);
+}
+}
+
+}
+}
+
+	else if(event.type==event_receive and event.channel==0){
+		int index=get_player_index(event.peer_id);
+		string[] parsed=string_split(get_event_message()," ",true);
+		if(parsed[0]=="xt55"&&parsed.length()>5)create(parsed[1],parsed[2],parsed[3], string_to_number(parsed[4]), parsed[5], event.peer_id);
+		else if(parsed[0]=="h33j"&&parsed.length()>4)login(event.peer_id, parsed[1],parsed[2], parsed[3],parsed[4]);
+		if(index>-1&&index<players.length){
+if(parsed[0]=="setgender"){
+send_reliable(players[index].peer_id, "gender "+players[index].sexo2, 6);
+}
+		else if(parsed[0]=="close" && parsed.length()==2){
+			if(parsed[1]=="terminate") {
+				send_reliable(players[index].peer_id, "terminate ok", 0);
+			}
+			if(parsed[1]=="relogin") {
+				send_reliable(players[index].peer_id, "terminate relogin", 0);
+			}
+			players[index].matou=0;
+			if(players[index].healthfixed>=1){
+				players[index].maxhealth=players[index].saludfangelical;
+				players[index].health=players[index].saludfangelical;
+				players[index].nbaculo=players[index].baculofangelical;
+			}
+			else{
+				players[index].maxhealth=10000;
+				players[index].health=10000;
+				players[index].nbaculo=0;
+			} 
+			if(players[index].invs==1 && players[index].is_admin()) {
+				terminar(index, 0, 1);
+			}
+			else {
+				terminar(index, 1, 1);
+			}
+		}
+			else if(parsed[0]=="get_player_info")get_player_info(index);
+			else if(parsed[0]=="/changepassword"&&parsed.length>2) change_password(players[index].charname,parsed[1],parsed[2],event.peer_id);
+			else if(parsed[0]=="ping")send_reliable(event.peer_id,"pong",0);
+			else if(parsed[0]=="uitem"&&parsed.length()>1&&players[index].afk==false&&players[index].paralisado==false&&players[index].paralisado2==false&&gamestopped==false&&players[index].map!="túnel")usar(index, parsed[1]);
+			else if(parsed[0]=="retirar"&&parsed.length()>1)retirar(index, parsed[1]);
+			else if(parsed[0]=="/vestindo"){
+				if(players[index].w_name.length()>0){
+					int index2=get_player_index_from(players[index].w_name);
+					if(index2>-1) vestindo(index2, index);
+				}
+				else vestindo(index);
+			}
+	else if(parsed[0] =="sortinv" && parsed.length()==3) {
+		players[index].sort_inv(parsed[1], string_to_number(parsed[2]));
+	}
+else if(parsed[0]=="is_married"){
+if(players[index].whomarried==""){
+send_reliable(players[index].peer_id, "is_married soltero", 0);
+}
+else if(players[index].whomarried!=""){
+send_reliable(players[index].peer_id, "is_married casado "+players[index].whomarried, 0);
+}
+}
+else if(parsed[0]=="parabatai"&&parsed.length()>1){
+string[] soundsmenu={"ma208.ogg", "ma205.ogg", "ma147.ogg"};
+if(parsed[1]=="check"&&players[index].whoparabatai.length()==0){
+if(players[index].fangelical<50||parabataying){
+send_reliable(players[index].peer_id, "msg2 ;no puedes hacer esto.;", 0);
+return;
+}
+else{
+if(server_maps[players[index].mapindex].mapplayers.length()==1){
+send_reliable(players[index].peer_id, "msg2 ;Lástima que este ritual no funcione de manera solitaria...;", 0);
+return;
+}
+string[] final;
+for(int x=0; x<server_maps[players[index].mapindex].mapplayers.length(); x++){
+if(players[server_maps[players[index].mapindex].mapplayers[x]].charname!=players[index].charname&&players[server_maps[players[index].mapindex].mapplayers[x]].whoparabatai.length()==0&&!players[server_maps[players[index].mapindex].mapplayers[x]].parabataying&&players[server_maps[players[index].mapindex].mapplayers[x]].charname!=players[index].whomarried){
+final.insert_last(players[server_maps[players[index].mapindex].mapplayers[x]].charname+"="+players[server_maps[players[index].mapindex].mapplayers[x]].charname);
+}
+}
+server_maps[players[index].mapindex].send_packet(0, "play ma169.ogg", players[index].x, players[index].y);
+server_maps[players[index].mapindex].send_packet(0, "msg2 ;La luz que estaba en el altar, ahora se intensifica con gran fuerza iluminando a todos los que se encuentran a tu lado.;", true);
+send_menu(index, "La luz invade tus retinas, grabando algunos nombres en ellas...", "parabatai send_to", 0, final, soundsmenu);
+}
+}
+if(parsed[1]=="send_to"&&parsed.length()>2){
+int index2=get_player_index_from(parsed[2]);
+if(index2>-1){
+string[] optionitems={"Sí.=si::"+players[index].charname, "No.=no"};
+send_menu(index2, ";La luz que se encuentra en el altar cambia de un color amarillo a un púrpura intenso rodeándote por completo. En tu mente se graba el nombre de; "+players[index].charname+" ;mientras solo piensas una cosa: Aceptar o rechazar.;", "parabatai confirm", 0, optionitems, soundsmenu);
+}
+}
+if(parsed[1]=="confirm"&&parsed.length()>2){
+if(parsed[2]=="no"){
+server_maps[players[index].mapindex].send_packet(0, "ps ma171.ogg", true);
+server_maps[players[index].mapindex].send_packet(0, "msg2 ;Una gran presencia expresa su desaprobación por la negativa...;", true);
+}
+else{
+string[] data=string_split(parsed[2], "::", true);
+if(data[0]=="si"&&data.length()>1){
+int index2=get_player_index_from(data[1]);
+if(index2>-1){
+tparabatai.restart();
+send_reliable(0, "msg2 ;¡Dentro de unos momentos el pacto por los 4 elementos entre; "+players[index].charname+" ;y; "+players[index2].charname+" ;está a punto de realizarse!;", 0);
+players[index].parabataying=true;
+players[index2].parabataying=true;
+w2=players[index].charname;
+h2=players[index2].charname;
+parabataying=true;
+}
+}
+}
+}
+}
+		else if(parsed[0] =="parabatai_remove" && parsed.length()==2) {
+			if(parsed[1] =="send_question") {
+				parabatai_confirm_remove(players[index].charname, players[index].whoparabatai);
+			}
+			if(parsed[1] =="confirm_parabatai_remove") {
+				parabatai_remove(players[index].whoparabatai, players[index].charname);
+			}
+			if(parsed[1] =="decline_parabatai_remove") {
+				server_maps[players[index].mapindex].send_packet(0, "msg2 "+players[index].charname+" "+";no acepta la disolución de la sagrada unión con;"+" "+players[index].whoparabatai, true);
+			}
+		}
+else if(parsed[0]=="confirmmarried"&&parsed.length()>=2){
+int index2=get_player_index_from(parsed[1]);
+int index3=get_player_index_from(parsed[2]);
+if(index2>-1&&index3>-1){
+if(players[index2].marring==true||players[index3].marring==true){
+return;
+}
+else{
+send_reliable(players[index2].peer_id, "confirm "+players[index3].charname, 0);
+}
+}
+}
+else if(parsed[0]=="marry"&&parsed.length()>=2){
+int index2=get_player_index_from(parsed[1]);
+int index3=get_player_index_from(parsed[2]);
+if(index2>-1&&index3>-1){
+if(players[index2].marring==true||players[index3].marring==true||players[index2].whomarried!=""||players[index3].whomarried!=""){
+return;
+}
+else{
+tmarried.restart();
+send_reliable(0, "msg2 Dentro de un momento la boda de "+players[index2].charname+" y "+players[index3].charname+" se llevará a cabo.", 0);
+players[index2].marring=true;
+players[index3].marring=true;
+w=players[index2].charname;
+h=players[index3].charname;
+wedding=true;
+}
+}
+}
+else if(parsed[0]=="divorc"&&parsed.length()>=1){
+int index2=get_player_index_from(parsed[1]);
+if(index2>-1){
+send_reliable(players[index2].peer_id, "confirmdivorc "+players[index2].whomarried, 0);
+}
+}else if(parsed[0]=="divorce"&&parsed.length()>2){
+int index2=get_player_index_from(parsed[1]);
+int index3=get_player_index_from(parsed[2]);
+if(index2>-1&&index3>-1){
+players[index2].whomarried="";
+players[index3].whomarried="";
+players[index2].saludfangelical-=3000;
+players[index3].saludfangelical-=3000;
+players[index2].inv_add_item("runa_dorada", -1);
+players[index3].inv_add_item("runa_dorada", -1);
+sconfigs(index2);
+sconfigs(index3);
+send_reliable(players[index2].peer_id, "amarried", 0);
+send_reliable(players[index3].peer_id, "amarried", 0);
+for(uint i=0; i<players.length(); i++){
+if(players[i].map==players[index2].map||players[i].map==players[index3].map){
+send_reliable(players[i].peer_id, "msg2 desde ahora han dejado la gracia del matrimonio para convertirse en personas solteras de nuevo. pueden ir en paz.", 0);
+}
+}
+}
+}
+				else if(parsed[0]=="change_name"&&parsed.length()>1){
+					string name=parsed[1];
+					if(players[index].validated_name!=""){
+						send_reliable(players[index].peer_id, "msg2 ;Paciencia, ya tienes un nombre en proceso de ser validado.;", 0);
+						return;
+					}
+					validate_nick(index, name);
+				}
+				else if(parsed[0]=="dejarmensaje" and parsed.length > 2){
+					if(file_exists("players/"+players[index].charname+"/silencio.usr") || players[index].map=="prisão2"){
+						return;
+				}
+					int index2=get_player_index_from(parsed[1]);
+					if(index2>-1){
+						if(players[index2].has_muted(players[index].charname)==false){
+							if(players[index2].map=="tribunal"||players[index2].map=="prisão2"){send_reliable(players[index].peer_id, "msgdepois "+players[index2].charname+" não pode te ouvir.", 0);return;}
+	if(file_exists("players/"+players[index2].charname+"/silencio.usr")){send_reliable(players[index2].peer_id, "msgnormal Hmm. alguien te está intentando mandar un mensaje. por qué no le respondes?", 0);return;}
+							send_reliable(players[index2].peer_id, "mensaje de "+players[index].charname+": "+string_replace(get_event_message(), "dejarmensaje "+parsed[1]+" ", "", false), 0);
+							send_reliable(event.peer_id, "mensaje para "+players[index2].charname+": "+string_replace(get_event_message(), "dejarmensaje "+parsed[1]+" ", "", false), 0);
+						}
+						else return;
+					}
+					else{
+						send_reliable(event.peer_id, "msgjogadornãoencontrado", 0);
+					}
+			}
+else if(parsed[0]=="craft"&&parsed.length()>2){
+if(parsed[1]=="pergamino_de_fuego"&&parsed[2]=="pluma_de_diamante"||parsed[1]=="pluma_de_diamante"&&parsed[2]=="pergamino_de_fuego"&&(players[index].inv_item_number("pluma_de_diamante")>0&&players[index].inv_item_number("pergamino_de_fuego")>0)){
+send_reliable(players[index].peer_id, "mtext ;Escribe un título con el que los arcángeles puedan identificar tu mensaje.;|invocation title| |0", 0);
+}
+else if(players[index].c.craft_exists(parsed[1], parsed[2])){
+players[index].c.craft(parsed[1], parsed[2], index);
+}
+}
+	else if(parsed[0] =="getplayers") {
+		getplayers(index);
+	}
+else if(parsed[0]=="invocation"&&parsed.length()>1){
+if(parsed[1]=="title"&&parsed.length()>2){
+string tittle=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", false);
+tittle=string_replace(tittle, "\r\n", "  ", true);
+tittle=string_replace(tittle, "=", " - ", true);
+if(tittle.length()>120||tittle.length()<6){
+send_reliable(players[index].peer_id, "msg2 ;El águila al mirarte con atención se percata de la longitud del título del mensaje y te lanza una mirada de desaprobación, indicándote que algo hiciste mal.;", 0);
+return;
+}
+else{
+send_reliable(players[index].peer_id, "mtext ;Escribe el mensaje con detalle respecto al tema que quieres abordar con las entidades divinas.;|invocation text| |0", 0);
+players[index].eagle_message=tittle+"=";
+}
+}
+if(parsed[1]=="text"&&parsed.length()>2){
+string message=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", false);
+message=string_replace(message, "\r\n", "  ", true);
+message=string_replace(message, "=", " - ", true);
+if(message.length()<30||message.length()>1024){
+send_reliable(players[index].peer_id, "msg2 ;El águila al mirarte con atención se percata de la longitud del mensaje y te lanza una mirada de desaprobación, indicándote que algo hiciste mal.;", 0);
+return;
+}
+else{
+server_maps[players[index].mapindex].send_packet(0, "play bot127.ogg", players[index].x, players[index].y);
+send_reliable(players[index].peer_id, "msg2 ;El imponente ave asiente con la cabeza y desaparece con su majestuoso vuelo en medio de una nube de humo gris, que deja al extender sus alas.;", 0);
+if(players[index].time.hour<12){
+players[index].eagle_message+=message+"="+players[index].charname+"="+players[index].time.day+"/"+players[index].time.month+"/"+players[index].time.year+"="+players[index].time.hour+":"+players[index].time.minute+" AM";
+}
+else if(players[index].time.hour>=12){
+players[index].eagle_message+=message+"="+players[index].charname+"="+players[index].time.day+"/"+players[index].time.month+"/"+players[index].time.year+"="+players[index].time.hour+":"+players[index].time.minute+" PM";
+}
+players[index].inv_add_item("pergamino_de_fuego", -players[index].inv_item_number("pergamino_de_fuego"));
+players[index].inv_add_item("pluma_de_diamante", -players[index].inv_item_number("pluma_de_diamante"));
+send_reliable(players[index].peer_id, "reset_items_selected", 6);
+string[] data=string_split(players[index].eagle_message, "=", false);
+eagle_message(";Se ha generado una nueva petición por parte de; "+players[index].charname+", ;el título de la misma es; "+data[0], players[index].eagle_message);
+players[index].eagle_message.resize(0);
+}
+}
+}
+else if(parsed[0]=="times"){
+string final;
+if(players[index].caverna==1)final+=";El tiempo que resta para que el efecto de la bebida luminosa termine es:; "+ms_to_readable_time(7200000-players[index].caverna_time*1000)+"\r\n";
+if(players[index].trueno==1)final+=";El tiempo que resta para que el efecto de la  poción del trueno termine es:; "+ms_to_readable_time(10*60000-players[index].tmveloz2.elapsed)+"\r\n";
+if(players[index].ameteoro==1)final+=";El tiempo que resta para que el efecto de la  poción antimeteoros termine es:; "+ms_to_readable_time(10*60000-players[index].tameteoro.elapsed)+"\r\n";
+if(players[index].antimina==1)final+=";El tiempo que resta para que el efecto de la poción antiminas termine es:; "+ms_to_readable_time(5*60000-players[index].tantimina.elapsed)+"\r\n";
+if(players[index].protegido==1)final+=";El tiempo que resta para que el efecto de la poción protectora termine es:; "+ms_to_readable_time(60000-players[index].tprotegido.elapsed)+"\r\n";
+if(players[index].amethyst==1)final+=";El tiempo que resta para que el efecto de la poción de amatista termine es:; "+ms_to_readable_time(900000-players[index].amethyst_time*1000)+"\r\n";
+if(final==""){
+send_reliable(players[index].peer_id, "msg2 ;No hay ninguna poción o bebida haciendo efecto en ti.;", 0);
+return;
+}
+string[] text=delinear(final);
+text.insert_at(0, ";Menú de tiempos mágicos.;");
+send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
+}
+	else if(parsed[0]=="create_gift"&&parsed.length()==3){
+		create_gift(index, parsed);
+	}
+else if(parsed[0]=="celular"&&parsed.length()>1){
+string option=parsed[1];
+if(option=="sanity"){
+send_reliable(players[index].peer_id, "msg2 ;De un lado del celular sale una pequeña aguja la cuál extrae unas cuantas gotas de sangre de tu mano para conectar con tu organismo, revelando así en un examen rápido tu nivel de cordura. Actualmente es de; "+players[index].sanity+"%.", 0);
+players[index].health-=2000;
+players[index].maxhealth-=2000;
+}
+}
+	else if(parsed[0]=="monster"){
+		vermonstruo(index);
+	}
+			else if(parsed[0]=="checkstats"&&players[index].afk==false&&parsed.length()>1){
+if(parsed[1]=="stats1"){
+send_reliable(players[index].peer_id, "msg2 ;Actualmente tienes; "+players[index].ngripe+"% ;de gripe.;", 0);
+}
+if(parsed[1]=="stats2"){
+send_reliable(players[index].peer_id, "msg2 ;Actualmente tienes; "+players[index].doente+"% ;de enfermedad.;", 0);
+}
+if(parsed[1]=="stats3"){
+send_reliable(players[index].peer_id, "msg2 ;Actualmente tienes; "+players[index].demoniaca+"% ;de la enfermedad demoníaca.;", 0);
+}
+}
+else if(parsed[0]=="message_to_couple"&&parsed.length()>1){
+string msg=players[index].charname+" |dice:| "+string_replace(get_event_message(), parsed[0]+" ", "", true);
+int index2=get_player_index_from(players[index].whomarried);
+if(index2<0){
+send_reliable(players[index].peer_id, "msg2 ;no lo entiendo. realmente crees que enviar un mensaje a este canal es conveniente, teniendo en cuenta que tu pareja está desconectada?;", 0);
+return;
+}
+else{
+send_reliable(players[index].peer_id, "msg conversaciones_con_la_pareja "+msg, 0);
+send_reliable(players[index].peer_id, "ps notifitictic.ogg", 0);
+send_reliable(players[index2].peer_id, "msg conversaciones_con_la_pareja "+msg, 0);
+send_reliable(players[index2].peer_id, "ps notifitictic.ogg", 0);
+}
+}
+else if(parsed[0]=="message_to_parabatai"&&parsed.length()>1){
+string msg=players[index].charname+" |dice:| "+string_replace(get_event_message(), parsed[0]+" ", "", true);
+int index2=get_player_index_from(players[index].whoparabatai);
+if(index2<0){
+send_reliable(players[index].peer_id, "msg2 ;no lo entiendo. realmente crees que enviar un mensaje a este canal es conveniente, teniendo en cuenta que tu parabatai está desconectado?;", 0);
+return;
+}
+else{
+send_reliable(players[index].peer_id, "msg conversaciones_celestiales "+msg, 0);
+send_reliable(players[index].peer_id, "ps2 notifitictic.ogg 150", 0);
+send_reliable(players[index2].peer_id, "msg conversaciones_celestiales "+msg, 0);
+send_reliable(players[index2].peer_id, "ps2 notifitictic.ogg 150", 0);
+}
+}
+			else if(parsed[0]=="escucharfutbol"&&players[index].afk==false){
+send_reliable(players[index].peer_id, "msg2 enciendes la televisión.", 0);
+			string ss="partido"+random(1, 2)+".ogg";
+			send_packet(0, "play "+ss, players[index].x, players[index].y, players[index].mapindex);
+}
+else if(parsed[0]=="iamadev"){
+if(players[index].invs==0){
+if(players[index].sexo==1){
+send_reliable(0, "msg4 "+players[index].charname+" ;es un desarrollador de reino elemental.;", 0);
+send_reliable(0, "ps notify_packman.ogg", 0);
+}
+else if(players[index].sexo==0){
+send_reliable(0, "msg4 "+players[index].charname+" ;es una desarrolladora de reino elemental.;", 0);
+send_reliable(0, "ps notify_packman.ogg", 0);
+}
+}
+}
+else if(parsed[0]=="cheater"){
+for(uint i=0; i<players.length(); i++){
+if(players[i].is_admin()){
+send_reliable(players[i].peer_id, "msg4 "+parsed[1]+" está con el cheat engine ejecutándose en su dispositivo. Verificar si está usándolo para su beneficio o para afectar al servidor.", 0);
+send_reliable(players[i].peer_id, "ps stunstart.ogg", 0);
+}
+}
+}
+else if(parsed[0]=="name_puppy"&&parsed.length()>1){
+spawn_cachorromascota(players[index].x, players[index].y, players[index].map, players[index].charname, random(2000, 3000), 0, parsed[1], true);
+players[index].cantidadcachorros++;
+players[index].inv_add_item("pergamino_sanguinolento", -1);
+send_reliable(players[index].peer_id, "msg2 ;tu cachorrito ha aparecido!;", 0);
+}
+	else if(parsed[0]=="rnc") {
+		int cachorro_index =get_cachorro_index(players[index].charname);
+		if(cachorro_index>-1) {
+			if(cachorromascotas[cachorro_index].name=="default") {
+				send_reliable(players[index].peer_id, "mtext ;Escribe el nuevo nombre para tu cachorro. Esta operación tendrá un costo de 0 mgerems;|rnc2| |0", 0);
+			}
+			else {
+				send_reliable(players[index].peer_id, "mtext ;Escribe el nuevo nombre para tu cachorro. Esta operación tendrá un costo de 500000000 mgerems;|rnc2| |0", 0);
+			}
+		}
+	}
+	else if(parsed[0]=="rnc2" && parsed.length()>=2) {
+		string name =string_replace(get_event_message(), parsed[0]+" ", "", true);
+		renombrar_cachorro(index, name);
+	}
+else if(parsed[0]=="armaavion"&&players[index].pacifico==0){
+spawn_misilavion(players[index].x, 0, players[index].map, players[index].charname);
+}
+else if(parsed[0]=="conseguirvehiculo"){
+string v=parsed[1];
+if(v=="tanque_de_guerra"){
+send_reliable(players[index].peer_id, "hablarbot el_general vaya, un tanque. muy buena elección. mira, ten esta caja, ve a dársela al fabricante de armas que está en la bodega del fondo y él te dará la llave. no podrás abrirla tú, ni lo intentes.", 0);
+players[index].inv_add_item("paquete_del_general", 1);
+}
+if(v=="avión_bombardero"){
+send_reliable(players[index].peer_id, "hablarbot el_general oh, esa belleza de vehículo. se nota que estás entusiasmad"+players[index].sexo2+" por ir a destrozar cuerpos humanos por allá afuera. bueno, llévale esta carta al comandante de la policía federal, él te dará más información sobre la forma en la que puedas recoger tu lindo avión.", 0);
+players[index].inv_add_item("carta_del_general_a", 1);
+}
+if(v=="helicóptero_de_guerra"){
+send_reliable(players[index].peer_id, "hablarbot el_general oh, esa belleza de vehículo. se nota que estás entusiasmad"+players[index].sexo2+" por ir a destrozar cuerpos humanos por allá afuera. bueno, llévale esta carta al comandante de la policía federal, él te dará más información sobre la forma en la que puedas recoger tu lindo helicóptero.", 0);
+players[index].inv_add_item("carta_del_general_b", 1);
+}
+}
+else if(parsed[0]=="aumentar_vida"){
+if(players[index].inv_item_number("mgerems")<200000000){
+send_reliable(players[index].peer_id, "msg2 no tienes dinero suficiente.", 0);
+}
+else{
+for(uint i=0; i<jaulas.length(); i++){
+if(jaulas[i].dueno==players[index].charname){
+jaulas[i].vida+=100000000;
+send_packet(0, "play buy.ogg", players[index].x, players[index].y, players[index].mapindex);
+players[index].inv_add_item("mgerems", -200000000);
+}
+}
+}
+}
+else if(parsed[0]=="transferencia"&&parsed.length()>3){
+string m=parsed[1];
+if(m=="mgerems"){
+double cantidad=get_number2(parsed[2]);
+int index2=get_player_index_from(parsed[3]);
+if(index2>-1){
+if(cantidad<=0){
+send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+return;
+}
+else if(cantidad<=players[index].inv_item_number("mgerems")){
+players[index].inv_add_item("mgerems", -cantidad);
+players[index2].inv_add_item("mgerems", cantidad);
+save_transfer(players[index].charname, players[index2].charname, parsed[1], cantidad);
+send_reliable(players[index].peer_id, "msg2 ;Transferencia satisfactoria.;", 0);
+send_reliable(players[index2].peer_id, "msg2 ;Has recibido una transferencia de mgerems por parte de; "+players[index].charname+"! ;valor:; "+cantidad+".", 0);
+send_reliable(players[index2].peer_id, "ps notify8.ogg", 0);
+}
+}
+}
+if(m=="elementales"){
+double cantidad=get_number2(parsed[2]);
+int index2=get_player_index_from(parsed[3]);
+if(index2>-1){
+if(cantidad<=0){
+send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+return;
+}
+else if(cantidad<=players[index].inv_item_number("elementales")){
+players[index].inv_add_item("elementales", -cantidad);
+players[index2].inv_add_item("elementales", cantidad);
+save_transfer(players[index].charname, players[index2].charname, parsed[1], cantidad);
+send_reliable(players[index].peer_id, "msg2 ;Transferencia satisfactoria.;", 0);
+send_reliable(players[index2].peer_id, "msg2 ;Has recibido una transferencia de elementales por parte de; "+players[index].charname+"! ;valor:; "+cantidad+".", 0);
+send_reliable(players[index2].peer_id, "ps notify8.ogg", 0);
+}
+}
+}
+if(m=="celestiums"){
+double cantidad=get_number2(parsed[2]);
+int index2=get_player_index_from(parsed[3]);
+if(index2>-1){
+if(cantidad<=0){
+send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+return;
+}
+else if(cantidad<=players[index].celestiums){
+players[index].celestiums-=cantidad;
+players[index2].celestiums+=cantidad;
+save_transfer(players[index].charname, players[index2].charname, parsed[1], cantidad);
+send_reliable(players[index].peer_id, "msg2 ;Transferencia satisfactoria.;", 0);
+send_reliable(players[index2].peer_id, "msg2 ;Has recibido una transferencia de celestiums por parte de; "+players[index].charname+"! ;valor:; "+cantidad+".", 0);
+send_reliable(players[index2].peer_id, "ps notify8.ogg", 0);
+}
+}
+}
+}
+else if(parsed[0]=="converter"&&parsed.length()>2){
+string m=parsed[1];
+if(m=="mgerems"){
+double cantidad=get_number2(parsed[2]);
+if(cantidad<=0 || cantidad<100){
+send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+return;
+}
+else if(cantidad<=players[index].inv_item_number("mgerems")){
+players[index].inv_add_item("mgerems", -cantidad);
+players[index].inv_add_item("elementales", cantidad/100);
+send_reliable(players[index].peer_id, "msg2 ;Conversión satisfactoria.;", 0);
+send_reliable(players[index].peer_id, "ps2 notify8.ogg 60", 0);
+}
+}
+if(m=="elementales"){
+double cantidad=get_number2(parsed[2]);
+if(cantidad<=0 || cantidad<10){
+send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+return;
+}
+else if(cantidad<=players[index].inv_item_number("elementales")){
+players[index].inv_add_item("elementales", -cantidad);
+players[index].inv_add_item("mgerems", cantidad*10);
+send_reliable(players[index].peer_id, "msg2 ;Conversión satisfactoria.;", 0);
+send_reliable(players[index].peer_id, "ps2 notify8.ogg 60", 0);
+}
+}
+}
+else if(parsed[0] =="change_msgserver" && parsed.length()>3) {
+string content =string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", true);
+if(content.length()>0) {
+file f;
+f.open(parsed[1], "w");
+f.write(content);
+f.close();
+eadm(players[index].charname+" modificó los mensajes del servidor.", "notify5.ogg", 150);
+}
+}
+else if(parsed[0]=="minijuegos"){
+if(players[index].votou==0){
+file f;
+f.open("votantes_minijuegos.txt", "a");
+f.write(players[index].charname+"\r\n");
+f.close();
+send_reliable(players[index].peer_id, "msg2 ;tu voto fue enviado!;", 0);
+eadm(players[index].charname+" asignó su voto a los minijuegos.", "notify8.ogg", 140);
+players[index].votou=1;
+}
+}
+else if(parsed[0]=="batallas"){
+if(players[index].votou==0){
+file f;
+f.open("votantes_batallas.txt", "a");
+f.write(players[index].charname+"\r\n");
+f.close();
+send_reliable(players[index].peer_id, "msg2 ;tu voto fue enviado!;", 0);
+eadm(players[index].charname+" asignó su voto a las batallas.", "notify8.ogg", 140);
+players[index].votou=1;
+}
+}
+else if(parsed[0]=="nave"){
+if(file_exists("players/"+players[index].charname+"/silencio.usr") || players[index].map=="prisão2"){
+return;
+}
+send_reliable(players[index].peer_id, "msg2 dentro de un momento la nave llegará por ti.", 0);
+players[index].contrato=1;
+players[index].tnave.restart();
+}
+else if(parsed[0]=="comida"){
+c=parsed[1];
+if(c==""){
+send_reliable(players[index].peer_id, "msg2 tienes que elegir un lugar de destino!", 0);
+return;
+}
+else if(c=="opcion"){
+send_reliable(players[index].peer_id, "opcioncomida", 0);
+}
+else if(c=="cabaña"||c=="casa"||c=="mansión"){
+if(players[index].inv_item_number("mgerems")<10000000){
+send_reliable(players[index].peer_id, "msg2 no tienes dinero para comprar esto.", 0);
+return;
+}
+else if(!file_exists("maps/"+c+"_de_"+players[index].charname+".map")){
+send_reliable(players[index].peer_id, "msg2 intentas enviar comida a un lugar inexistente? no!", 0);
+return;
+}
+else{
+file f;
+f.open("tiendas/comidas.txt", "r");
+string[]articles=string_split(f.read(), "\r\n", false);
+send_reliable(players[index].peer_id, "comida "+linear(articles), 0);
+}
+}
+else if(c=="comprar"&&parsed.length()>4){
+players[index].valorcomida=string_to_number(parsed[2]);
+players[index].comida=parsed[3];
+players[index].destinocomida=parsed[4];
+send_reliable(players[index].peer_id, "msg2 todo listo! en un instante su comida llegará a su destino. el costo se lo descontaremos automáticamente.", 0);
+players[index].compro=true;
+players[index].tcomida.restart();
+}
+}
+else if(parsed[0]=="tienda"){
+file f;
+f.open("tiendas/esmeraldas.txt", "r");
+string[]articles=string_split(f.read(), "\r\n", false);
+send_reliable(players[index].peer_id, "esmeraldas "+linear(articles), 0);
+f.close();
+}
+else if(parsed[0]=="tienda2"){
+file f;
+f.open("tiendas/celestiums.txt", "r");
+string[]articles=string_split(f.read(), "\r\n", false);
+send_reliable(players[index].peer_id, "celestiums "+linear(articles), 0);
+f.close();
+}
+else if(parsed[0]=="speedhack"){
+eadm(players[index].charname+" ;está usando speed hack.;");
+}
+else if(parsed[0]=="report"&&parsed.length()>1){
+					string a;
+					for (uint i2=1; i2<parsed.length(); i2++){
+						a+=parsed[i2]+" ";
+					}
+					msgadm.insert_last("reporte de "+players[index].charname+": "+a);
+					file f;
+					f.open("servidor.msgadm","a");
+f.write("reporte de "+players[index].charname+": "+a+"\r\n");
+					f.close();
+eadm(";reporte de; "+players[index].charname+": "+string_replace(get_event_message(), parsed[0]+" ", "", false), "stunstop.ogg", 150);
+}
+			else if(parsed[0]=="/pacifista"&&players[index].afk==false){
+				players[index].atpacifistasegundos=3;
+				players[index].atpacifista=true;
+				players[index].atpacifistatempo.restart();
+			}
+			else if(parsed[0]=="/afk")afk(index);
+			else if(parsed[0]=="frasesbarra"&&parsed.length()>2)frasesbarra(index, string_to_number(parsed[1]), parsed[2]);
+			else if(parsed[0]=="idiomachat"&&parsed.length()>1)players[index].idiomachat=parsed[1];
+			else if(parsed[0]=="idiomajogo"&&parsed.length()>1)players[index].idiomajogo=parsed[1];
+			else if(parsed[0]=="get_maps"){
+				string filename="maps_of_portal.txt";
+				file f;
+				if(file_exists(filename)){
+					f.open(filename, "r");
+					send_reliable(players[index].peer_id, "use_portal "+f.read(), 0);
+					f.close();
+				}
+			}
+			else if(parsed[0]=="mtester" and parsed.length()>1){
+				string mapname=parsed[1];
+				if(file_exists("maps/"+mapname+".map"))changemap(mapname, index, 1, 0);
+			}
+			else if(parsed[0]=="use") u_bcurar(index, "elíxir_angelical", string_to_number(parsed[1]));
+			else if(parsed[0]=="ndor")players[index].mdor=0;
+			else if(parsed[0]=="imenu"&&players[index].afk==false&&players[index].paralisado==false&&players[index].paralisado2==false)imenu(index);
+			else if(parsed[0]=="enterportal") players[index].enter_the_portal();
+			else if(parsed[0]=="zsa"&&parsed.length()>1)zsa1(index);
+			else if(parsed[0]=="chutad2"){
+				players[index].thack.restart();
+				send_reliable(players[index].peer_id, "stopmoving", 0);
+			}
+			else if(parsed[0]=="lc"&&players[index].afk==false)send_reliable(players[index].peer_id, "msg2 Você está no nível; "+players[index].level+", ;e na patente; ;"+players[index].title+";. ;Você está com; ;"+players[index].nsede+"% ;de sede;, "+players[index].nfome+"% ;de fome,; ;"+players[index].sujo+"% ;suj"+players[index].sexo2+", e; ;"+players[index].doente+"% ;enferm"+players[index].sexo2+";.", 0);
+else if(parsed[0]=="reencarn"&&players[index].afk==false){
+send_reliable(players[index].peer_id, "msg2 ;Estás en la fase angelical; ;"+players[index].fangelical+".; ;actualmente tienes; ;"+players[index].xp+"; ;puntos de experiencia y para subir al siguiente nivel necesitas; ;"+(players[index].xprequerida-players[index].xp)+"; ;de los mismos.; ;tu energía elemental es de un; "+players[index].elemental_energy+"%", 0);
+}
+else if(parsed[0]=="celestiums"&&players[index].afk==false){
+send_reliable(players[index].peer_id, "msg2 ;Actualmente tienes; "+players[index].celestiums+" celestiums.", 0);
+}
+else if(parsed[0]=="esmeraldas"&&players[index].afk==false){
+send_reliable(players[index].peer_id, "msg2 ;Actualmente tienes; "+players[index].esmeraldas+" ;esmeraldas;.", 0);
+}
+			else if(parsed[0]=="bug" && parsed.length()>1)enviar_error_de_juego(index, parsed);
+			else if(parsed[0]=="escribirpeluche"&&parsed.length()>1){
+				string nome=parsed[1]+"_de_"+players[index].charname;
+				for(uint i=0;i<desc.length();i++){
+					string[] a=string_split(desc[i], "=", false);
+					if(a[0]==nome)desc.remove_at(i);
+				}
+				desc.insert_last(nome+"="+string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", false));
+				if(players[index].inv_item_number(nome)<=0)players[index].inv_add_item(nome, 1);
+			}
+else if(parsed[0]=="eliminarpeluche"&&parsed.length()>1){
+players[index].inv_add_item(parsed[1], -1);
+}
+			else if(parsed[0]=="imprimir"&&parsed.length()>1){
+				string nome="Folheto_de_"+players[index].charname;
+				for(uint i=0;i<desc.length();i++){
+					string[] a=string_split(desc[i], "=", false);
+					if(a[0]==nome)desc.remove_at(i);
+				}
+				desc.insert_last(nome+"="+string_replace(get_event_message(), parsed[0]+" ", "", false));
+				if(players[index].inv_item_number(nome)<=0)players[index].inv_add_item(nome, 1);
+				send_packet(0, "play impressora.ogg", players[index].x, players[index].y, players[index].mapindex);
+				players[index].tmaquina.restart();
+			}
+else if(parsed[0]=="enlace"){
+if(parsed[1]=="s"){
+file z;
+z.open("maps/"+players[index].map+".map", "r");
+string[] m=string_split(z.read(), "\r\n", false);
+z.close();
+for(uint i2=0;i2<m.length();i2++){
+if(string_contains(m[i2], "url:", 1)>-1){
+m.remove_at(i2);
+}
+}
+z.open("maps/"+players[index].map+".map", "w");
+z.write(linear(m));
+z.close();
+update(players[index].map);
+}
+else{
+file z;
+z.open("maps/"+players[index].map+".map", "r");
+string[] m=string_split(z.read(), "\r\n", false);
+z.close();
+for(uint i2=0;i2<m.length();i2++){
+if(string_contains(m[i2], "url:", 1)>-1){
+m.remove_at(i2);
+}
+}
+z.open("maps/"+players[index].map+".map", "w");
+z.write(linear(m));
+z.close();
+update(players[index].map);
+z.open("maps/"+players[index].map+".map", "r");
+z.close();
+m.insert_last("url:"+string_replace(get_event_message(), parsed[0]+" ", "", true));
+z.open("maps/"+players[index].map+".map", "w");
+z.write(linear(m));
+z.close();
+update(players[index].map);
+}
+}
+else if(parsed[0]=="r"){
+server_maps[players[index].mapindex].view(index);
+}
+			else if(parsed[0]=="check_items"){
+				server_maps[players[index].mapindex].view_items(index);
+			}
+			else if(parsed[0]=="whoonline") whoonline(index);
+else if(parsed[0]=="adm"&&parsed.length()>1){
+string mensagem="msg4 "+players[index].charname+"; ;diz:; "+string_replace(get_event_message(), parsed[0]+" ", "", false);
+string sound_packet;
+if(beta==true)sound_packet="ps2 notify5.ogg 110";
+else if(beta==false)sound_packet="ps notify5.ogg";
+for(uint i=0;i<players.length();i++){
+if(players[i].avisarcg==0&&!players[i].has_muted(players[index].charname)){
+if(file_exists("players/"+players[i].charname+"/admintudo.usr")||file_exists("players/"+players[i].charname+"/enable_chat_adm.usr")||players[i].is_mod()){
+send_reliable(players[i].peer_id, sound_packet, 0);
+send_reliable(players[i].peer_id, mensagem, 0);
+}
+}
+}
+}
+			else if(parsed[0]=="morreu"&&players[index].map!="portal_espiritual")morreu(index, parsed);
+			else if(parsed[0]=="olhar"&&parsed.length()>1){
+				if(!is_enable_command(players[index].charname, parsed[0])){
+					return;
+				}
+				if(players[index].watching==0) watch_player(index, parsed[1]);
+				if(players[index].is_admin()) eadm(players[index].charname+" ;está observando a; "+parsed[1]+".", "notifi10.ogg");
+			}
+			else if(parsed[0]=="volhar"&&players[index].watching==1){
+				if(players[index].is_admin()) eadm(players[index].charname+" dejó de observar a; "+players[index].w_name+".", "notifi10.ogg");
+				stop_watch(index);
+			}
+			else if(parsed[0]=="nnivel")players[index].avisanivel=0;
+			else if(parsed[0]=="nfalarteclas")players[index].falarteclas=0;
+			else if(parsed[0]=="j1"&&parsed.length()>1){
+				int id=get_player_index_from(parsed[1]);
+				if(id>-1){
+					string locate, m;
+					if(players[id].vmap==""){
+						locate=get_locate_at(players[id].map);
+						locate=string_replace(locate, "*g*", players[id].sexo2, true);
+						m=";en; ;"+players[id].map+";";
+						if(locate!=""){
+							m=";"+locate+";";
+						}
+					}
+					else{
+						locate=get_locate_at(players[id].vmap);
+						locate=string_replace(locate, "*g*", players[id].sexo2, true);
+						m=";en; ;"+players[id].vmap+";";
+						if(locate!=""){
+							m=";"+locate+";";
+						}
+					}
+					send_reliable(players[index].peer_id, "msg2 "+players[id].charname+" ;está; "+m+".", 0);
+				}
+				else send_reliable(players[index].peer_id, "msgnormal Jogador não encontrado.", 0);
+			}
+			else if(parsed[0]=="j2"&&parsed.length()>1){
+				int id=get_player_index_from(parsed[1]);
+if(id>-1)send_reliable(players[index].peer_id, "msg2 "+players[id].charname+" ;está no nível; "+players[id].level+", ;e na patente; ;"+players[id].title+";. ;Su fase angelical actual es la número; "+players[id].fangelical+";.", 0);
+				else send_reliable(players[index].peer_id, "msgnormal Jogador não encontrado.", 0);
+			}
+			else if(parsed[0]=="j3"&&parsed.length()>1){
+				int id=get_player_index_from(parsed[1]);
+				if(id>-1){
+					string m="";
+					int a=players[id].matou;
+					if(a==0)m=players[id].charname+" ;aún es inocente, no se ha cobrado ninguna vida;";
+					else if(a==1)m=players[id].charname+" ;le ha robado el alma únicamente a una persona;";
+					else if(a==2)m=players[id].charname+" ;le destrozó la vida a la familia de 2 personas;";
+					else if(a>2) m=";es mejor tener cuidado con; "+players[id].charname+". ;su estado mental no es el mejor, pues le ha arrebatado la vida fríamente a; "+players[id].matou+" ;personas inocentes;";
+					send_reliable(players[index].peer_id, "msg2 "+m+";.", 0);
+				}
+				else send_reliable(players[index].peer_id, "msgnormal Jogador não encontrado.", 0);
+			}
+			else if(parsed[0]=="j4"&&parsed.length()>1){
+				int id=get_player_index_from(parsed[1]);
+				if(id>-1){
+					string d;
+					if(channels.exists(players[id].idiomachat)) {
+						channels.get(players[id].idiomachat, d);
+						if(players[index].idiomachat=="Desativado")send_reliable(players[index].peer_id, "msg2 "+players[id].charname+" ;está con el chat desativado.", 0);
+						else send_reliable(players[index].peer_id, "msg2 "+players[id].charname+" ;está en el chat; ;"+d+";.", 0);
+					}
+				}
+			}
+			else if(parsed[0]=="/falarnomapa" and parsed.length()>=1){
+				string message=get_event_message();
+				message=string_replace(message,"/falarnomapa ","",true);
+				telllocal(index, message);
+			}
+			else if(parsed[0]=="terminouafogando"){
+				players[index].deaths+=1;
+				if(players[index].sexo==0) send_reliable(0, "msgafogada "+players[index].charname, 0);
+				else if(players[index].sexo==1) send_reliable(0, "msgdepois "+players[index].charname+" morreu afogado!", 0);
+				changemap(mapainicial, index, 1, 0);
+				send_reliable(players[index].peer_id,"morreu",0);
+			}
+			else if(parsed[0]=="congelou"){
+				players[index].deaths+=1;
+				if(players[index].sexo==0)send_reliable(0, "msgcongelada "+players[index].charname, 3);
+				else if(players[index].sexo==1)send_reliable(0, "msgcongelado "+players[index].charname, 3);
+				if (players[index].inv_item_exists("perna_quebrada"))
+				players[index].inv_add_item("perna_quebrada", 0-players[index].inv_item_number("perna_quebrada"));
+				changemap(mapainicial, index, 1, 0);
+				send_reliable(players[index].peer_id,"morreu",0);
+			}
+			else if(parsed[0]=="enter")enter(index);
+		else if(parsed[0]=="enter2"){
+			int mapindex=players[index].mapindex;
+			for (uint i=0; i<server_maps[mapindex].objs.length(); i++){
+				if(server_maps[mapindex].objs[i].x==players[index].x && server_maps[mapindex].objs[i].y==players[index].y){
+					if(!server_maps[mapindex].objs[i].taked) {
+						server_maps[mapindex].objs[i].get(index);
+						break;
+					}
+				}
+			}
+		}
+			else if(parsed[0]=="nv"&&players[index].inv_item_number("baculo")>0)send_reliable(players[index].peer_id, "msg2 "+players[index].nbaculo+"% ;de la energía de tu ;baculo; ;cargada;.", 0);
+			else if(parsed[0]=="baculo"&&players[index].inv_item_number("baculo")>0){
+				if(players[index].nbaculo<10){send_reliable(players[index].peer_id, "msgnormal tu báculo aún está siendo recargado.", 0);return;}
+				string[] spells;
+				double m=players[index].elemental_energy;
+				double mm=players[index].nbaculo;
+				if(m>=1&&mm>=50) spells.insert_last("luz_de_protección: Con toda tu fuerza  espiritual invocas el poder de la diosa del fuego,  creando una inmensa luz alrededor de tu cuerpo que te protegerá de las llamas por un corto tiempo.");
+				if(m>=1&&mm>=50) spells.insert_last("respiro_acuático: al invocar el poder de aqaeel, puedes introducirte a las profundidades de los ríos y mares, sin temor a morir  por asfixia. pero cuidado, no es por mucho tiempo...");
+				if(m>=6&&mm>=75) spells.insert_last("viento_protector: usando una bendición de la diosa del aire, invocas una protección hacia el peligro ocultando tu imagen ante la presencia de los demás.");
+				if(m>=1&&mm>=100) spells.insert_last("levitación: después de una pequeña cita con la relajación espiritual, logras elevarte unos metros del suelo pudiendo así transportarte también en el aire.");
+				if(m>=2&&mm>=15) spells.insert_last("salto_mortal: invocando a los 4 dioses, obtienes el poder de saltar lo suficiente mente alto para atravezar cualquier obstáculo que se te presente.");
+				if(players[index].whoparabatai!=""&&m>=100&&mm>=80) spells.insert_last("salvación_celestial: con todas tus fuerzas pides por la salud de tu parabatai, salvándolo así de todo peligro.");
+				if(players[index].whomarried!=""&&m>=100&&mm>=80) spells.insert_last("salvación_del_amor: con todas tus fuerzas pides por la salud de tu pareja, salvándole así de todo peligro.");
+				if(m>=2000&&mm>=80) spells.insert_last("bendición_de_diamante: al invocar este hechizo un gran poder forjado por los magos más poderosos del continente de fuego será absorbido por tu cuerpo, dándote las suficientes energías para aumentar tu capacidad al subir de rango por un periodo de tiempo limitado.");
+				if(players[index].pacifico==0){
+					if(players[index].tiempometeoro==0 && !players[index].achuva && players[index].ameteoro==0 && m>=150 && mm>=100) spells.insert_last("meteorito_luminoso: Tu báculo se ilumina intensamente invocando una lluvia de meteoros capaz de arrasar con todo ser vivo a su paso.");
+					if(m>=6&&mm>=10) spells.insert_last("puño_demoníaco: Invocas la fuerza del gran príncipe lucifer, lanzándole un golpe mortal a la persona que esté más cerca de ti.");
+					if(m>=6&&mm>=10&&players[index].inv_item_number("alma_terrestre")>0) spells.insert_last("poder_subterráneo: con la ayuda de las fuerzas insuperables del dios estoico, convocas un terremoto de magnitudes nunca antes vistas causando un daño intenso a cualquier ente mundano cercano.");
+				if(m>=1&&mm>=50) spells.insert_last("destello_celestial: el fuego celestial es invocado por este hechizo, generando un poderoso rayo de energía que desintegra a los humanos más cercanos a ti.");
+					if(m>=8&&mm>=40) spells.insert_last("rayo_de_venganza: invocas la ira del dios de las aguas haciendo que un gran rayo caiga sobre la persona más cercana a ti, destrulléndóla por completo.");
+					if(m>=10&&mm>=50) spells.insert_last("bola_del_dragón: usando el poder del gran rey de los dragones, serás capaz de lanzar una gran bola de fuego quemando así todo a su paso.");
+				}
+				if(spells.length()>0)send_reliable(event.peer_id,"spellslist "+linear(spells),0);
+			}
+			else if(parsed[0]=="spellcast"&&parsed.length>2&&players[index].map!=mapainicial){
+				string[] spells2;
+				spells2.insert_last("bola_del_dragón:10:50");
+				spells2.insert_last("respiro_acuático:1:50");
+				spells2.insert_last("luz_de_protección:1:50");
+				spells2.insert_last("destello_celestial:1:100");
+				spells2.insert_last("meteorito_luminoso:200:100");
+				spells2.insert_last("puño_demoníaco:15:10");
+				spells2.insert_last("poder_subterráneo:15:10");
+				spells2.insert_last("viento_protector:6:75");
+				spells2.insert_last("levitación:1:100");
+				spells2.insert_last("salto_mortal:1:15");
+				spells2.insert_last("salvación_celestial:100:80");
+				spells2.insert_last("salvación_del_amor:100:80");
+				spells2.insert_last("bendición_de_diamante:2000:80");
+				spells2.insert_last("rayo_de_venganza:8:40");
+				double m=players[index].elemental_energy;
+				for(uint i=0; i<spells2.length(); i++){
+					string[] mm=string_split(spells2[i], ":", false);
+					if(mm[0]==parsed[1]){
+						if(m<string_to_number(mm[1])||players[index].nbaculo<string_to_number(mm[2]))send_packet(0, "play spellfail.ogg", players[index].x, players[index].y, players[index].mapindex);
+						else{
+							players[index].elemental_energy-= string_to_number(mm[1]);
+							players[index].nbaculo-=string_to_number(mm[2]);
+							players[index].lado=string_to_number(parsed[2]);
+							players[index].use_spell(parsed[1]);
+						}
+						break;
+					}
+				}
+			}
+			else if(parsed[0]=="usetele" && parsed.length()==4 && players[index].inv_item_number("portal_de_luz")>0 && players[index].afk==false && players[index].paralisado==false && players[index].paralisado2==false && gamestopped==false){
+				if(is_disabled("portal_de_luz", players[index].map))return;
+				if(players[index].teletimer.elapsed>=30000) {
+					players[index].teletimer.restart();
+					spawn_portal(index, players[index].x, players[index].y, players[index].map, parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]));
+				}
+			}
+else if(parsed[0]=="portallist"){
+string teamlist;
+for(uint i=0; i<players[index].nomesequipe.length(); i++){
+int index2=get_player_index_from(players[index].nomesequipe[i]);
+if(index2>-1){
+teamlist+=players[index2].charname+"\r\n";
+}
+}
+send_reliable(players[index].peer_id, "portal "+teamlist, 0);
+}
+	else if(parsed[0]=="portal"&&parsed.length>1){
+			int index1=get_player_index_from(parsed[1]);
+			if(index1>-1){
+if(is_disabled("portal", players[index].map)||is_disabled("portal", players[index1].map)){
+send_reliable(players[index].peer_id, "msg2 ;una fuerza mágica te impide hacer esta acción.;", 0);
+return;
+}
+					for(uint i=1;i<players[index1].nomesequipe.length();i++){
+if(players[index1].nomesequipe[i]==players[index].charname&&players[index1].map!="mausoleo_infernal"&&is_game_disabled(players[index1].x, players[index1].y, players[index1].map)==false){
+				changemap(players[index1].map, index,players[index1].x,players[index1].y, "moveu.ogg");
+		players[index].inv_add_item("runa_de_portal", -1, true, false);
+		players[index].inv_add_item("runa_de_portal_gastada", 1, true, false);
+				send_packet(0,"upl "+players[index].peer_id+" "+players[index].x+" "        +players[index].y+" "+players[index].map,players[index].map);
+				send_packet(0,"upl "+players[index1].peer_id+" "+players[index1].x+" "        +players[index1].y+" "+players[index1].map,players[index1].map);
+send_packet(0, "play deviant.ogg", players[index].x, players[index].y, players[index].mapindex);
+}
+}
+		}
+	}
+	else if(parsed[0]=="tumba1"){
+				changemap("tumba_de_samael", index, 1, 0);
+		players[index].inv_add_item("botella_con_sangre_de_demonio", -1);
+send_reliable(players[index].peer_id, "msg2 entras a la misteriosa tumba.", 0);
+send_reliable(players[index].peer_id, "ps fire2.ogg", 0);
+}
+	else if(parsed[0]=="tumba2"){
+				changemap("tumba_de_lilith", index, 1, 0);
+		players[index].inv_add_item("botella_con_sangre_de_demonio", -1);
+send_reliable(players[index].peer_id, "msg2 entras a la misteriosa tumba.", 0);
+send_reliable(players[index].peer_id, "ps fire2.ogg", 0);
+}
+	else if(parsed[0]=="pieles"){
+if(players[index].inv_item_number("piel_de_serpiente")<20){
+send_reliable(players[index].peer_id, "msgnormal no tienes lo que necesito, suerte a la próxima.", 0);
+return;
+}
+else{
+		players[index].inv_add_item("piel_de_serpiente", -20);
+players[index].inv_add_item("mana", random(200, 800));
+send_reliable(players[index].peer_id, "msg2 Toma! aquí tienes esto que seguro te será de mucha ayuda!", 0);
+}
+}
+			else if(parsed[0]=="setvoice")players[index].voice=string_to_number(parsed[1]);
+			else if(parsed[0]=="give"&&parsed.length()>3&&players[index].afk==false&&players[index].paralisado==false&&players[index].paralisado2==false&&gamestopped==false)give(index, parsed);
+			else if(parsed[0]=="turn"&&parsed.length()>1){
+players[index].lado=string_to_number(parsed[1]);
+			}
+else if(parsed[0]=="jump")
+{
+players[index].jumping=1;
+if(!players[index].cloakhiding&&players[index].invs==0){
+for(uint i=0;i<players.length();i++){
+if(players[i].map==players[index].map&&is_game_disabled(players[index].x, players[index].y, players[index].map)==false)send_reliable(players[i].peer_id, "jumping "+players[index].charname+" "+players[index].x+" "+players[index].y+" "+players[index].map, 0);
+}
+}
+}
+else if(parsed[0]=="land"){
+int fallheight=0, cindex=get_clothing_index("paracaídas");
+if (parsed.length()>1){
+fallheight=string_to_number(parsed[1]);
+if(fallheight>=20&&players[index].watching==0){
+if(players[index].have_parachute==0){
+players[index].health-=random(1000, 2000)*(fallheight);
+send_packet(0, "inithurt "+players[index].voice, players[index].x, players[index].y, players[index].mapindex);
+if (players[index].health<=0){
+players[index].health=players[index].maxhealth;
+changemap(mapainicial, index, 1, 0);
+players[index].lasthit="altura";
+}
+}
+}
+if(cindex>-1){
+int find, success=clothes[cindex].remove(index);
+if(success>0){
+find=players[index].body_parts.find(clothes[cindex].body_part);
+if(find>-1) players[index].body_parts.remove_at(find);
+}
+}
+}
+players[index].jumping=0;
+if(players[index].invs==0&&!players[index].cloakhiding){
+for(uint i=0;i<server_maps[players[index].mapindex].mapplayers.length();i++){
+if(is_game_disabled(players[index].x, players[index].y, players[index].map)==false)send_reliable(players[server_maps[players[index].mapindex].mapplayers[i]].peer_id, "land "+players[index].charname+" "+players[index].x+" "+players[index].y+" "+players[index].map+" "+fallheight, 0);
+}
+}
+}
+			else if(parsed[0]=="drop"&&parsed.length()>=3&&players[index].paralisado==false&&players[index].paralisado2==false)drop(index, string_to_number(parsed[1]), parsed[2]);
+			else if(parsed[0]=="move" && parsed.length()==4) players[index].move(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]));
+			else if(parsed[0]=="move2" && parsed.length()==3) players[index].move("", string_to_number(parsed[1]), string_to_number(parsed[2]), 1);
+			else if(parsed[0]=="healthcheck"){
+				int w_index=get_player_index_from(players[index].w_name);
+				if(players[index].watching==1&&w_index>-1){
+					send_reliable(players[index].peer_id, players[w_index].health+"/"+players[w_index].maxhealth,0);
+				}
+				else{
+					send_reliable(players[index].peer_id, players[index].health+"/"+players[index].maxhealth,0);
+				}
+			}
+			else if(parsed[0]=="carregar"&&parsed.length()>3){
+string ammo=parsed[2];
+double ammo_value=string_to_number(parsed[3]);
+				send_packet10(0, players[index].charname, players[index].charname, parsed[1]+" "+players[index].x+" "+players[index].y, players[index].map);
+				players[index].tarma=parsed[1];
+				players[index].inv_add_item(ammo, -ammo_value, true, false);
+			}
+			else if(parsed[0]=="playsocial" and parsed.length()>1)send_packet10(0, players[index].charname, players[index].charname, parsed[1]+" "+players[index].x+" "+players[index].y, players[index].map);
+			else if(parsed[0]=="select_weapon"&&parsed.length()>1){
+				int windex=string_to_number(parsed[1]);
+				players[index].weapon_index=windex;
+			}
+			else if(parsed[0]=="draw"&&parsed.length()>1&&players[index].invs==0){
+				players[index].draw=parsed[1];
+				players[index].tarma=parsed[1];
+				server_maps[players[index].mapindex].send_to_others(players[index].peer_id, 0, "draw "+parsed[1], players[index].x, players[index].y, 20, false);
+				if(parsed[1]=="levantar.ogg")players[index].centado=false;
+				if(parsed[1]=="centar.ogg")players[index].centado=true;
+			}
+			else if(parsed[0]=="getmotd2"){
+				string ms2="motd3 ";
+ms2+=msgaes;
+				send_reliable(players[index].peer_id, ms2, 0);
+			}
+			else if(parsed[0]=="get_channels") {
+				get_channels(index);
+			}
+		}
+	}
+	else if(event.type==event_receive&&event.channel==1){
+		bool parse=true;
+		string sendmes;
+		bool willsend=true;
+		string message=get_event_message();
+		int index=get_player_index(event.peer_id);
+		if(index<0){
+			return;
+		}
+		else if(index>-1){
+			if(players[index].naoitens==1||message.length()<=0||players[index].afk==true&&players[index].is_admin()==false||string_contains(players[index].map, "prisão", 1)>-1&&players[index].is_admin()==false||message[0]!="/"&&message.length()>6000)return;
+			string msg=message;
+			msg=string_replace(msg, "\r\n", "", true);
+			msg=string_replace(msg, " ", "", true);
+			msg=string_to_lower_case(msg);
+		}
+		if(message[0]==";") {
+			send_reliable(players[index].peer_id, "msgnormal Coloque o / primeiro!", 0);
+			return;
+		}
+		if(players[index].map=="tribunal"||players[index].map=="prisão2") {
+			send_reliable(players[index].peer_id, "msgnormal As paredes absorvem suas palavras...", 0);
+			return;
+		}
+		if(file_exists("players/"+players[index].charname+"/silencio.usr") || players[index].silenciado==1 || players[index].antispam==1){
+			send_reliable(players[index].peer_id, "msgnormal Por alguna razón, algo te impide hablar...", 0);
+			return;
+		}
+antispam_manage(index);
+		if(players[index].invs==1) sendmes=players[index].charname+" "+players[index].title+" desconocid"+players[index].sexo2+" diz: "+bell+message;
+		else sendmes=players[index].charname+" "+players[index].title+" "+players[index].charname+" diz: "+bell+message;
+		parse=true;
+		if (message.length()>0){
+			if(message[0]=="/"&&parse==true&&message.length()>1){
+				willsend=false;
+				string[] parsed=string_split(message, " ", false);
+				string command=string_replace(parsed[0], "/", "", true);
+				if(parsed[0]=="/me"&&parsed.length()>1){
+					string mensagem=string_replace(get_event_message(), parsed[0]+" ", players[index].charname+" ", false);
+					if(players[index].idiomachat=="Desativado")send_reliable(players[index].peer_id, "msgnormal Seu chat está desativado.", 0);
+					else{
+						for(uint i=0;i<players.length();i++){
+							if(players[i].idiomachat==players[index].idiomachat&&players[i].has_muted(players[index].charname)==false){
+								send_reliable(players[i].peer_id, "ps chat.ogg", 0);
+								send_reliable(players[i].peer_id, mensagem, 0);
+							}
+						}
+					}
+				}
+				else if(parsed[0]=="/eql"){
+					string nomes;
+					for(uint i=1;i<players[index].nomesequipe.length();i++){
+						if(i<players[index].nomesequipe.length()-1){
+							nomes+=players[index].nomesequipe[i]+", ";
+						}
+						if(i==players[index].nomesequipe.length()-1){
+							nomes+=" e "+players[index].nomesequipe[i];
+						}
+					}
+					if(players[index].nomesequipe.length()==1) send_reliable(players[index].peer_id, "msgnormal ninguém na sua equipe!", 0);
+					else if(players[index].nomesequipe.length()==2) send_reliable(players[index].peer_id, "msgsublinhado Apenas "+players[index].nomesequipe[1]+" em_sua_equipe!", 0);
+					else send_reliable(players[index].peer_id, nomes+" em sua equipe.", 0);
+				}
+				else if(parsed[0]=="/eqls"){
+					string final;
+					for(uint i=0; i<players.length(); i++){
+						for(uint i2=0; i2<players[i].nomesequipe.length(); i2++){
+							if(players[i].nomesequipe[i2]==players[index].charname&&players[i].charname!=players[index].charname){
+								final+=players[i].charname+"\r\n";
+							}
+						}
+					}
+					string[]text=string_split(final, "\r\n", false);
+					if(final.length()==0){
+						send_reliable(players[index].peer_id, "msg2 ;no estás en el equipo de nadie.;", 0);
+						return;
+						}
+						else{
+							send_reliable(players[index].peer_id, "msg2 ;estas son las personas que actualmente te tienen equipad"+players[index].sexo2+";: "+final, 0);
+						}
+					}
+					else if(parsed[0]=="/eqpd"){
+						bool achou=false;
+						for(uint i=0;i<players[index].nomesequipe.length();i++){
+							int z=get_player_index_from(players[index].nomesequipe[i]);
+								if(z>-1){
+									send_reliable(players[z].peer_id, "msgdepois "+players[index].charname+" desfez sua equipe!", 0);
+									achou=true;
+								}
+							players[index].nomesequipe.remove_at(i);
+						}
+						players[index].nomesequipe.resize(0);
+						players[index].nomesequipe.insert_last(players[index].charname);
+						send_reliable(players[index].peer_id, "clear_team_members", 6);
+						if(!achou)send_reliable(players[index].peer_id, "msgnormal Ninguém em sua equipe.", 0);
+					}
+					else if(parsed[0]=="/dqr"&&parsed.length()>1){
+						if(parsed[1]==players[index].charname)return;
+						bool achou=false;
+						string n=parsed[1];
+						if(n==players[index].charname)send_reliable(players[index].peer_id, "msgnormal Mas você sempre vai fazer parte de sua equipe!", 0);
+						for(uint i=0;i<players[index].nomesequipe.length();i++){
+							if(players[index].nomesequipe[i]==n){
+								achou=true;
+								send_reliable(players[index].peer_id, "remove_team_member "+players[index].nomesequipe[i], 6);
+								players[index].nomesequipe.remove_at(i);
+							}
+						}
+						if(achou==false) send_reliable(players[index].peer_id, "msgdepois "+n+" não está em sua equipe!", 0);
+						else{
+							send_reliable(players[index].peer_id, "msgdepois "+n+" removido de sua equipe!", 0);
+							int a=get_player_index_from(n);
+							if(a>-1){
+								send_reliable(players[a].peer_id, "msgdepois "+players[index].charname+" te removeu da equipe!", 0);
+								send_reliable(players[a].peer_id, "ps notify_died.ogg", 0);
+							}
+						}
+					}
+					else if(parsed[0]=="/vtl") {
+						if(players[index].healthfixed>=1) {
+							send_reliable(players[index].peer_id, "msg2 ;El tiempo que resta para que tu vitalidad termine es:; "+ms_to_readable_time(players[index].vitalidad_time*1000-players[index].vitalidaddegradacion*1000), 0);
+						}
+						else {
+							send_reliable(players[index].peer_id, "msg2 ;Tu vitalidad es la de un ser humano normal...;", 0);
+						}
+					}
+else if(parsed[0]=="/mmapa"&&parsed.length()>1&&players[index].constructor){
+int mapindex=get_map_index_from(parsed[1]);
+if(mapindex>-1){
+changemap(server_maps[mapindex].name, index, 1, 0);
+}
+}
+	else if(parsed[0]=="/darcg"&&players[index].is_mod()){
+		if(players[index].avisarcg==0){
+			send_reliable(players[index].peer_id, "msg2 chat administrativo desactivado.", 0);
+			players[index].avisarcg=1;
+		}
+		else if(players[index].avisarcg==1){
+			send_reliable(players[index].peer_id, "msg2 chat administrativo activado.", 0);
+			players[index].avisarcg=0;
+		}
+	}
+	else if(parsed[0]=="/delmap" and parsed.length()>1&&players[index].constructor==true&&is_enable_command(players[index].charname, command)){
+		if(file_exists("maps/"+parsed[1]+".map")){
+			file_delete("maps/"+parsed[1]+".map");
+			send_reliable(event.peer_id,"msgnormal Pronto.", 0);
+			eadm(players[index].charname+" eliminó el mapa "+parsed[1]+".", "motd.ogg", 80);
+			log(players[index].charname+" eliminó el mapa "+parsed[1]+" a las "+server_calendar.hour+":"+server_calendar.minute+", el día "+server_calendar.day+"/"+server_calendar.month+"/"+server_calendar.year+".", "log_maps");
+			remove_map(parsed[1]);
+		}
+	}
+	else if(parsed[0]=="/newmap"&&parsed.length()>3&&players[index].constructor==true&&is_enable_command(players[index].charname, command)){
+		int maxx=string_to_number(parsed[2]);
+		int maxy=string_to_number(parsed[3]);
+		if(maxx<100001 and maxx>5 and maxy<100001 and maxy>5) {
+			string mapname=parsed[1];
+			if(!file_exists("maps/"+mapname+".map")) {
+				file f;
+				f.open("maps/"+mapname+".map", "w");
+				string wtext="map:"+mapname+"\r\nmaxx:"+maxx+"\r\nmaxy:"+maxy+"\r\np:0:"+maxx+":0:"+parsed[4]+"\r\nw:0:0:"+maxy+":wallnone\r\nw:"+maxx+":0:"+maxy+":wallnone\r\n";
+				f.write(wtext);
+				f.close();
+				log(players[index].charname+" creó el mapa "+mapname+" a las "+server_calendar.hour+":"+server_calendar.minute+", el día "+server_calendar.day+"/"+server_calendar.month+"/"+server_calendar.year+".", "log_maps");
+				insert_map(mapname);
+				changemap(mapname, index, 1, 0);
+			}
+			else{
+				send_reliable(event.peer_id, "Este mapa ya existe", 0);
+			}
+		}
+		else {
+			send_reliable(event.peer_id, "Fuera de los rangos de coordenadas!", 0);
+		}
+	}
+else if(parsed[0]=="/rawmap"&&parsed.length()>=1&&players[index].constructor==true){
+file f;
+f.open("maps/"+players[index].map+".map","r");
+send_reliable(players[index].peer_id,f.read(),2);
+f.close();
+}
+else if(parsed[0]=="/rawdata"&&parsed.length()>1&&players[index].constructor==true&&is_enable_command(players[index].charname, command)){
+if(string_contains(get_event_message(), players[index].map, 1)>-1){
+string content=string_replace(get_event_message(), parsed[0]+" ", "", false);
+save_map(server_maps[players[index].mapindex].name, content);
+send_unreliable(players[index].peer_id, "msg2 ;Mapa atualizado.;", 0);
+log(players[index].charname+" modificó el mapa "+server_maps[players[index].mapindex].name+" a las "+server_calendar.hour+":"+server_calendar.minute+", el día "+server_calendar.day+"/"+server_calendar.month+"/"+server_calendar.year+".", "log_maps");
+}
+}
+else if(parsed[0]=="/getmap"&&parsed.length()>1&&players[index].constructor==true){
+file f;
+if(file_exists("maps/"+parsed[1]+".map")){
+f.open("maps/"+parsed[1]+".map","r");
+send_reliable(players[index].peer_id,f.read(),2);
+f.close();
+}
+}
+else if(parsed[0]=="/setmap"&&parsed.length()>1&&players[index].constructor==true&&is_enable_command(players[index].charname, command)){
+int mapindex=get_map_index_from(parsed[1]);
+string content=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", false);
+if(mapindex>-1){
+save_map(server_maps[mapindex].name, content);
+send_unreliable(players[index].peer_id, "msg2 ;Mapa atualizado.;", 0);
+log(players[index].charname+" modificó el mapa "+server_maps[players[index].mapindex].name+" a las "+server_calendar.hour+":"+server_calendar.minute+", el día "+server_calendar.day+"/"+server_calendar.month+"/"+server_calendar.year+".", "log_maps");
+}
+}
+	else if(parsed[0]=="/move"&&players[index].constructor==true&&is_enable_command(players[index].charname, command)&&parsed.length()>2){
+				players[index].x=string_to_number(parsed[1]);
+				players[index].y=string_to_number(parsed[2]);
+				send_reliable(players[index].peer_id,"move "+parsed[1]+" "+parsed[2],0);
+				server_maps[players[index].mapindex].send_packet(0,"upl "+players[index].peer_id+" "+players[index].x+" "        +players[index].y+" "+players[index].map, true);
+	}
+				else if(parsed[0]=="/eqr"&&parsed.length()>1){
+					if(parsed[1]==players[index].charname)return;
+if(players[index].map=="arena"||players[index].map=="helicóptero_de_guerra")return;
+					string n=parsed[1];
+					int a=get_player_index_from(n);
+					if(a>-1){
+						if(players[a].has_muted(players[index].charname)==true)return;
+						bool achou=false;
+						for(uint i=0;i<players[index].nomesequipe.length();i++){
+							if(players[index].nomesequipe[i]==players[a].charname) achou=true;
+						}
+						if(achou==false){
+							players[index].nomesequipe.insert_last(players[a].charname);
+							send_reliable(players[index].peer_id, "add_team_member "+players[a].charname, 6);
+							send_reliable(players[index].peer_id, "ps notify_bigbang.ogg", 0);
+							send_reliable(players[index].peer_id, "msgdepois "+players[a].charname+" Adicionado em sua equipe!", 0);
+							send_reliable(players[a].peer_id, "msg2 Você agora está na equipe de; "+players[index].charname+"!", 0);
+							send_reliable(players[a].peer_id, "ps notify_bigbang.ogg", 0);
+						}
+						else if(achou==true) send_reliable(players[index].peer_id, "msgdepois "+players[a].charname+" já está em sua equipe!", 0);
+						send_reliable(players[a].peer_id, "ps qack.ogg", 0);
+					}
+					else send_reliable(players[index].peer_id, "msgnormal Jogador não encontrado.", 0);
+				}
+				else if(parsed[0]=="/e"&&parsed.length()>1||parsed[0]=="/t"&&parsed.length()>1){
+if(players[index].dequipo==1){
+send_reliable(players[index].peer_id, "msg2 ;no puedes enviar mensajes a un chat desactivado.;", 0);
+return;
+}
+					string a=string_replace(get_event_message(), parsed[0]+" ", "", false);
+					int b;
+					for(uint i=0;i<players[index].nomesequipe.length();i++){
+						b=get_player_index_from(players[index].nomesequipe[i]);
+						if(b>-1){
+if(players[b].dequipo==0){
+							send_reliable(players[b].peer_id, "msg3 "+players[index].charname+" ;disse:; "+a, 0);
+							send_reliable(players[b].peer_id, "ps notify_trumpet.ogg", 0);
+}
+						}
+					}
+				}
+				else if(parsed[0]=="/eqs"&&parsed.length()>1){
+int index2=get_player_index_from(parsed[1]);
+if(index2>-1){
+for(uint i=0; i<players[index2].nomesequipe.length(); i++){
+if(players[index2].nomesequipe[i]==players[index].charname){
+send_reliable(players[index2].peer_id, "remove_team_member "+players[index].charname, 6);
+players[index2].nomesequipe.remove_at(i);
+send_reliable(players[index2].peer_id, "msg2 "+players[index].charname+" ;salió de tu equipo!;", 0);
+send_reliable(players[index2].peer_id, "ps notify_died.ogg", 0);
+send_reliable(players[index].peer_id, "msg2 ;saliste del equipo de; "+players[index2].charname+".", 0);
+}
+}
+				}
+}
+				else if(parsed[0]=="/bid2" and parsed.length()>=2){
+					if (auction2==false)send_reliable(event.peer_id,"msgnormal Nenhuma venda em progresso.", 0);
+					else{
+						if (auctionwho3==players[index].charname){
+							send_reliable(event.peer_id,"msgnormal Você não pode ofertar sob sua venda.",0);
+						}
+						else{
+							double bid=get_number2(parsed[1]);
+							if(bid==0) {
+								send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+								return;
+							}
+							if (auctionbid2>bid){
+								send_reliable(event.peer_id,"msgnormal A próxima oferta deve ser de "+(auctionbid2+1)+" elementales.", 0);
+							}
+							else{
+								if (bid>=players[index].inv_item_number("elementales")){
+									send_reliable(event.peer_id,"msgnormal Você não tem dinheiro suficiente.",0);
+								}
+								else
+								if(auctionbid2==bid){
+									send_reliable(event.peer_id,"msgnormal A oferta já está neste valor.",0);
+								}
+								else{
+									auctionbid2=bid;
+									auctionwho4=players[index].charname;
+									auctionbidder2=true;
+									auctiontimer2.restart();
+									send_reliable(0,"ps bid.ogg",0);
+									send_reliable(0, "msgfezaoferta2 "+players[index].charname+" "+bid,0);
+								}
+							}
+						}
+					}
+				}
+				else if(parsed[0]=="/auction2"&&parsed.length()<4||parsed[0]=="/venda2"&&parsed.length()<4||parsed[0]=="/venta2"&&parsed.length()<4||parsed[0]=="/vente2"&&parsed.length()<4){
+					if (auction2==false){
+						send_reliable(event.peer_id,"msgnormal Nenhum item à venda.",0);
+					}
+					else{
+						send_reliable(event.peer_id, "noleilão2 "+auctionitem2+" "+auctionamount2+" "+auctionbid2, 0);
+					}
+				}
+				else if(parsed[0]=="/auction2" and parsed.length()>=4||parsed[0]=="/vender" and parsed.length()>=4||parsed[0]=="/vender" and parsed.length()>=4){
+					if(players[index].is_admin())return;
+					string opa=parsed[2];
+					double amount=string_to_number(parsed[1]);
+					if(amount<=0){
+						send_reliable(event.peer_id,"msgnormal Você não pode fazer ofertas negativas!",0);
+					}
+					else if(semleilao2==1){
+						send_reliable(players[index].peer_id,"msgnormal Você não pode vender nada agora!",0);
+					}
+					else if(players[index].naoitens==1){
+						send_reliable(players[index].peer_id,"msgnormal Você não pode leiloar.",0);
+					}
+					else if(string_contains(opa,"corpo_de_",1)!=-1){
+						send_reliable(players[index].peer_id,"msgnormal Somente alguém muito idiota para tentar leiloar uma coisa dessa!",0);
+					}
+					else if (parsed[2]=="perna_quebrada"){
+						send_reliable(event.peer_id, "msgnormal Não, você não pode separar suas pernas e leiloá-las.", 0);
+					}
+					else if (parsed[2]=="control_remoto"){
+						send_reliable(event.peer_id, "msgnormal Não, você não pode vender isso.", 0);
+					}
+					else if (parsed[2]=="troféu_de_atirador_de_elite"||parsed[2]=="colete_aprova_de_balas"||parsed[2]=="escudo_do_tempo"){
+						send_reliable(event.peer_id, "msgnormal Você não pode vender esse item!", 0);
+					}
+					else if(parsed[2]=="mgerems"||parsed[2]=="glock"||parsed[2]=="faca"||parsed[2]=="desert_eagle"||parsed[2]=="elementales"){
+						send_reliable(event.peer_id, "msgnormal Você não pode vender isso.",0);
+					}
+					else{
+						string what=parsed[2];
+						double minbid=string_to_number(parsed[3]);
+						ofertainicial2=minbid;
+						if(minbid<=0){
+							send_reliable(event.peer_id,"msgnormal Você não pode fazer oferta negativa!",0);
+						}
+						else{
+							if (auction2==false){
+								if (players[index].inv_item_exists(what)){
+									if (players[index].inv_item_number(what)>=amount){
+										auctionitem2=what;
+										auctionbid2=minbid-1;
+										auctionamount2=amount;
+										auctionwho3=players[index].charname;
+										send_reliable(0,"msgnovoleilão2 "+players[index].charname+" "+amount+" "+auctionitem2+" "+ofertainicial2, 0);
+										send_reliable(0,"ps auction.ogg",0);
+										auctiontimer2.restart();
+										auction2=true;
+										auctionbidder2=false;
+									}
+									else{
+										send_reliable(event.peer_id,"msgnormal Você não tem isso.", 0);
+									}
+								}
+								else{
+									send_reliable(event.peer_id,"msgnormal Você não tem isso.", 0);
+								}
+							}
+						}
+					}
+				}
+				else if(parsed[0]=="/bid" and parsed.length()>=2||parsed[0]=="/ofertar" and parsed.length()>=2){
+					if (auction==false)send_reliable(event.peer_id,"msgnormal Nenhuma venda em progresso.", 0);
+					else{
+						if (auctionwho==players[index].charname){
+							send_reliable(event.peer_id,"msgnormal Você não pode ofertar sob sua venda.",0);
+						}
+						else{
+							double bid=get_number2(parsed[1]);
+							if(bid==0) {
+								send_reliable(players[index].peer_id, "msg2 ;Por favor escribe un valor válido...;", 0);
+								return;
+							}
+							if (auctionbid>bid){
+								send_reliable(event.peer_id,"msgapróximaoferta "+(auctionbid+1), 0);
+							}
+							else{
+								if (bid>=players[index].inv_item_number("mgerems")){
+									send_reliable(event.peer_id,"msgnormal Você não tem dinheiro suficiente.",0);
+								}
+								else
+								if(auctionbid==bid){
+									send_reliable(event.peer_id,"msgnormal A oferta já está neste valor.",0);
+								}
+								else{
+									auctionbid=bid;
+									auctionwho2=players[index].charname;
+									auctionbidder=true;
+									auctiontimer.restart();
+									send_reliable(0,"ps bid.ogg",0);
+									send_reliable(0, "msgfezaoferta "+players[index].charname+" "+bid,0);
+								}
+							}
+						}
+					}
+				}
+				else if(parsed[0]=="/auction"&&parsed.length()<4||parsed[0]=="/venda"&&parsed.length()<4||parsed[0]=="/venta"&&parsed.length()<4||parsed[0]=="/vente"&&parsed.length()<4){
+					if (auction==false){
+						send_reliable(event.peer_id,"msgnormal Nenhum item à venda.",0);
+					}
+					else{
+						send_reliable(event.peer_id, "noleilão "+auctionitem+" "+auctionamount+" "+auctionbid, 0);
+					}
+				}
+				else if(parsed[0]=="/auction" and parsed.length()>=4||parsed[0]=="/leilão" and parsed.length()>=4){
+					if(players[index].is_admin())return;
+					string opa=parsed[2];
+					double amount=string_to_number(parsed[1]);
+					if(amount<=0){
+						send_reliable(event.peer_id,"msgnormal Você não pode fazer ofertas negativas!",0);
+					}
+					else if(semleilao==1){
+						send_reliable(players[index].peer_id,"msgnormal Você não pode vender nada agora!",0);
+					}
+					else if(players[index].naoitens==1){
+						send_reliable(players[index].peer_id,"msgnormal Você não pode leiloar.",0);
+					}
+					else if(string_contains(opa,"corpo_de_",1)!=-1){
+						send_reliable(players[index].peer_id,"msgnormal Somente alguém muito idiota para tentar leiloar uma coisa dessa!",0);
+					}
+					else if (parsed[2]=="perna_quebrada"){
+						send_reliable(event.peer_id, "msgnormal Não, você não pode separar suas pernas e leiloá-las.", 0);
+					}
+					else if (parsed[2]=="control_remoto"){
+						send_reliable(event.peer_id, "msgnormal Não, você não pode vender isso.", 0);
+					}
+					else if (parsed[2]=="troféu_de_atirador_de_elite"||parsed[2]=="colete_aprova_de_balas"||parsed[2]=="escudo_do_tempo"){
+						send_reliable(event.peer_id, "msgnormal Você não pode vender esse item!", 0);
+					}
+					else if(parsed[2]=="mgerems"||parsed[2]=="glock"||parsed[2]=="faca"||parsed[2]=="desert_eagle"||parsed[2]=="elementales"){
+						send_reliable(event.peer_id, "msgnormal Você não pode vender isso.",0);
+					}
+					else{
+						string what=parsed[2];
+						double minbid=string_to_number(parsed[3]);
+						ofertainicial=minbid;
+						if(minbid<=0){
+							send_reliable(event.peer_id,"msgnormal Você não pode fazer oferta negativa!",0);
+						}
+						else{
+							if (auction==false){
+								if (players[index].inv_item_exists(what)){
+									if (players[index].inv_item_number(what)>=amount){
+										auctionitem=what;
+										auctionbid=minbid-1;
+										auctionamount=amount;
+										auctionwho=players[index].charname;
+										send_reliable(0,"msgnovoleilão "+players[index].charname+" "+amount+" "+auctionitem+" "+ofertainicial, 0);
+										send_reliable(0,"ps auction.ogg",0);
+										auctiontimer.restart();
+										auction=true;
+										auctionbidder=false;
+									}
+									else{
+										send_reliable(event.peer_id,"msgnormal Você não tem isso.", 0);
+									}
+								}
+								else{
+									send_reliable(event.peer_id,"msgnormal Você não tem isso.", 0);
+								}
+							}
+						}
+					}
+				}
+				else if(parsed[0]=="/g"){
+					bool d=file_copy("players/"+players[index].charname+"/inv.md", "players/"+players[index].charname+"/inv2.md", true);
+					if(d)send_reliable(players[index].peer_id, "msgnormal Pronto.", 0);
+					else send_reliable(players[index].peer_id, "msgnormal Erro.", 0);
+				}
+				else if(parsed[0]=="/stats" and parsed.length()>1){
+		int index2=get_player_index_from(parsed[1]);
+if(!file_exists("players/"+parsed[1]+"/configs.ini")){
+send_reliable(players[index].peer_id, "msg2 pero este jugador no existe!", 0);
+return;
+}
+string 				charfolder="players/"+parsed[1];
+int nivel;
+int fangelical;
+file f;
+				f.open(charfolder+"/configs.ini","rb");
+				dictionary@ sd=deserialize(f.read());
+				f.close();
+				if(sd.exists("level")){
+					sd.get("level", nivel);
+				}
+if(sd.exists("fangelical")){
+sd.get("fangelical", fangelical);
+}
+if(index2<0){
+send_reliable(players[index].peer_id, "msg2 ;estadísticas sobre; "+parsed[1]+": ;su nivel es; "+nivel+", ;y su fase angelical es la número; "+fangelical+". ;actualmente está fuera de línea.;", 0);
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;estadísticas sobre; "+parsed[1]+": ;su nivel es; "+nivel+", ;y su fase angelical es la número; "+fangelical+".", 0);
+}
+}
+else if(parsed[0]=="/wm2"&&parsed.length()>1){
+int index2=get_player_index_from(parsed[1]);
+if(index2>-1){
+if(players[index2].whomarried==""){
+send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" ;está solter"+players[index2].sexo2+".;", 0);
+}
+else{
+send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" ;está casad"+players[index2].sexo2+" con; "+players[index2].whomarried+".", 0);
+}
+}
+}
+else if(parsed[0]=="/wp"&&parsed.length()>1){
+int index2=get_player_index_from(parsed[1]);
+if(index2>-1){
+if(players[index2].whoparabatai==""){
+send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" ;no tiene parabatai.;", 0);
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;el parabatai de; "+players[index2].charname+" ;es; "+players[index2].whoparabatai+".", 0);
+}
+}
+}
+				else if(parsed[0]=="/status" and parsed.length()>1){
+file status;
+	if(!file_exists("players/"+parsed[1]+"/status.usr")){
+send_reliable(players[index].peer_id, "msgnormal este jugador no tiene estado!", 0);
+}
+	if(file_exists("players/"+parsed[1]+"/status.usr")){
+status.open("players/"+parsed[1]+"/status.usr", "r");
+send_reliable(players[index].peer_id, "msg2 ;estado de; "+parsed[1]+": "+status.read(), 0);
+status.close();
+return;
+}
+				}
+				else if(parsed[0]=="/setstatus" and parsed.length()>1){
+string status=string_replace(get_event_message(), parsed[0]+" ", "", true);
+file f;
+if(status.length()<=1024){
+if(string_contains(status, "\r\n", 1)>-1) status=string_replace(status, "\r\n", "  ", true);
+f.open("players/"+players[index].charname+"/status.usr", "w");
+f.write(status);
+f.close;
+players[index].seestatus=status;
+send_reliable(players[index].peer_id, "msgnormal estado actualizado.", 0);
+}
+				}
+				else if(parsed[0]=="/ign" and parsed.length()>1){
+					if(string_to_upper_case(parsed[1])==string_to_upper_case(players[index].charname)){send_reliable(players[index].peer_id, "msgnormal Com você???", 0);return;}
+					players[index].add_muted(parsed[1]);
+					send_reliable(event.peer_id,"msgnormal Pronto.",0);
+				}
+				else if(parsed[0]=="/deign" and parsed.length()>1){
+					bool s=players[index].remove_muted(parsed[1]);
+					if (s==true)
+					send_reliable(event.peer_id,"msgnormal Pronto.",0);
+					else
+					send_reliable(event.peer_id,"Failed",0);
+				}
+				else if (parsed[0]=="/igns"){
+					send_reliable(event.peer_id,players[index].muted,2);
+				}
+				else if(parsed[0]=="/aserver"){
+if(players[index].avisaserver==1){
+send_reliable(players[index].peer_id, "msg2 avisos del servidor desactivados!", 0);
+players[index].avisaserver=0;
+}
+else if(players[index].avisaserver==0){
+send_reliable(players[index].peer_id, "msg2 avisos del servidor activados!", 0);
+players[index].avisaserver=1;
+}
+}
+				else if(parsed[0]=="/afa"){
+if(players[index].avisafangelical==1){
+send_reliable(players[index].peer_id, "msg2 avisos  de fases angelicales obtenidas desactivados!", 0);
+players[index].avisafangelical=0;
+}
+else if(players[index].avisafangelical==0){
+send_reliable(players[index].peer_id, "msg2 avisos  de fases angelicales obtenidas activados!", 0);
+players[index].avisafangelical=1;
+}
+}
+				else if(parsed[0]=="/alv"){
+if(players[index].avisanivel==1){
+send_reliable(players[index].peer_id, "msg2 avisos  de niveles obtenidos desactivados!", 0);
+players[index].avisanivel=0;
+}
+else if(players[index].avisanivel==0){
+send_reliable(players[index].peer_id, "msg2 avisos  de niveles obtenidos activados!", 0);
+players[index].avisanivel=1;
+}
+}
+else if(parsed[0]=="/arank"){
+if(players[index].arank==0){
+players[index].arank=1;
+send_reliable(players[index].peer_id, "msg2 ;avisos de cambios de rango desactivados.;", 0);
+}
+else{
+players[index].arank=0;
+send_reliable(players[index].peer_id, "msg2 ;avisos de cambios de rango activados.;", 0);
+}
+}
+else if(parsed[0]=="/axp"){
+if(players[index].avisaxp==1){
+players[index].avisaxp=0;
+send_reliable(players[index].peer_id, "msg2 avisos de xp desactivados.", 0);
+}
+else{
+players[index].avisaxp=1;
+send_reliable(players[index].peer_id, "msg2 avisos de xp activados.", 0);
+}
+}
+else if(parsed[0]=="/aequipo"){
+if(players[index].dequipo==1){
+players[index].dequipo=0;
+send_reliable(players[index].peer_id, "msg2 ;chat de equipo activado.;", 0);
+}
+else{
+players[index].dequipo=1;
+send_reliable(players[index].peer_id, "msg2 ;chat de equipo desactivado.;", 0);
+}
+}
+else if(parsed[0]=="/apm"){
+if(players[index].dpm==1){
+players[index].dpm=0;
+send_reliable(players[index].peer_id, "msg2 ;mensajes privados activados.;", 0);
+}
+else{
+players[index].dpm=1;
+send_reliable(players[index].peer_id, "msg2 ;mensajes privados desactivados.;", 0);
+}
+}
+else if(parsed[0]=="/aitem"){
+if(players[index].aitem==1){
+players[index].aitem=0;
+send_reliable(players[index].peer_id, "msg2 ;avisos de items desactivados.;", 0);
+}
+else{
+players[index].aitem=1;
+send_reliable(players[index].peer_id, "msg2 ;avisos de items activados.;", 0);
+}
+}
+				else if(parsed[0]=="/inverter" and parsed.length()>=1){
+					string frase=string_replace(get_event_message(),"/inverter ","",true);
+					string frase_invertida=string_reverse(frase);
+					send_reliable(players[index].peer_id,frase_invertida,0);
+				}
+				else if(parsed[0]=="/social" and parsed.length()>2){
+	int i2=get_player_index_from(parsed[1]);
+	if(i2>-1){
+		send_reliable(players[index].peer_id, "msg2 tu social fue enviado a "+players[i2].charname+"!", 0);
+			send_reliable(players[i2].peer_id, "msg2 "+players[index].charname+" "+string_replace(get_event_message(), "/social "+parsed[1]+" ", "", false), 0);
+		send_packet10(0, players[i2].charname, players[index].charname, "door17open.ogg "+players[i2].x+" "+players[i2].y, players[i2].map);
+}
+}
+				else if (parsed[0]=="/peak"||parsed[0]=="/recorde"){
+					send_reliable(event.peer_id,"msgsublinhado O_recorde_de_jogadores_é_de "+peak+" players.",0);
+				}
+else if(parsed[0]=="/pm2" and parsed.length()>2){
+if(players[index].dpm==1){
+send_reliable(players[index].peer_id, "msg2 ;no puedes enviar mensajes a un chat desactivado.;", 0);
+return;
+}
+if(!directory_exists("players/"+parsed[1])){
+send_reliable(players[index].peer_id, "msg2 ;qué curioso, un mensaje tratando de ser enviado a una persona inexistente.;", 0);
+return;
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;tu mensaje fue enviado a; "+parsed[1]+"!", 0);
+file f;
+f.open("players/"+parsed[1]+"/pm.md", "a");
+f.write("mensaje permanente no leído de "+players[index].charname+": "+string_replace(get_event_message(), "/pm2 "+parsed[1]+" ", "", false)+"\r\n");
+f.close();
+}
+}
+				else if(parsed[0]=="/pm" and parsed.length > 2){
+					int index2=get_player_index_from(parsed[1]);
+					if(index2>-1){
+if(players[index].dpm==1){
+send_reliable(players[index].peer_id, "msg2 ;no puedes enviar mensajes a un chat desactivado.;", 0);
+return;
+}
+						if(string_to_upper_case(parsed[1])==string_to_upper_case(players[index].charname)){send_reliable(players[index].peer_id, "msgnormal Com você???", 0);return;}
+						if(players[index2].has_muted(players[index].charname)==false){
+							if(players[index2].map=="tribunal"||players[index2].map=="prisão2"){send_reliable(players[index].peer_id, "msgdepois "+players[index2].charname+" não pode te ouvir.", 0);return;}
+	if(file_exists("players/"+players[index2].charname+"/silencio.usr")){send_reliable(players[index2].peer_id, "msgnormal Hmm. alguien te está intentando mandar un mensaje. por qué no le respondes?", 0);return;}
+	if(file_exists("players/"+players[index2].charname+"/silencio.usr")){send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" lamentablemente no te puede escuchar.", 0);return;}
+if(players[index2].dpm==1){
+send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" ;tiene sus mensajes privados desactivados.;", 0);
+return;
+}
+							players[index2].replyname=players[index].charname;
+							send_reliable(players[index2].peer_id, "pm de "+players[index].charname+": "+string_replace(get_event_message(), "/pm "+parsed[1]+" ", "", false), 0);
+							send_reliable(event.peer_id, "pm para "+players[index2].charname+": "+string_replace(get_event_message(), "/pm "+parsed[1]+" ", "", false), 0);
+						}
+						else send_reliable(event.peer_id,"msg2 ;no puedes hacer esto.;",0);
+					}
+					else{
+if(!directory_exists("players/"+parsed[1])){
+send_reliable(players[index].peer_id, "msg2 ;qué curioso, un mensaje tratando de ser enviado a una persona inexistente.;", 0);
+return;
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;tu mensaje fue enviado a; "+parsed[1]+"!", 0);
+file f;
+f.open("players/"+parsed[1]+"/pm.md", "a");
+f.write("mensaje permanente no leído de "+players[index].charname+": "+string_replace(get_event_message(), "/pm "+parsed[1]+" ", "", false)+"\r\n");
+f.close();
+}
+					}
+			}
+				else if(parsed[0]=="/reply" and parsed.length > 1 or parsed[0]=="/r" and parsed.length > 1){
+					int index2=get_player_index_from(players[index].replyname);
+					if(index2>-1){
+						if(players[index2].has_muted(players[index].charname)==false){
+if(players[index2].dpm==1){
+send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" ;tiene sus mensajes privados desactivados.;", 0);
+return;
+}
+							players[index2].replyname=players[index].charname;
+							send_reliable(players[index2].peer_id, "pm de "+players[index].charname+": "+string_replace(get_event_message(), "/r "+parsed[0]+" ", "", false), 0);
+							send_reliable(event.peer_id, "pm para "+players[index2].charname+": "+string_replace(get_event_message(), "/r "+parsed[0]+" ", "", false), 0);
+						}
+						else send_reliable(event.peer_id,"msg2 ;no puedes hacer esto.;",0);
+					}
+					else{
+						send_reliable(event.peer_id, "msgjogadornãoencontrado", 0);
+					}
+				}
+else if(parsed[0]=="/link"||parsed[0]=="/enlace"||parsed[0]=="/ligação"||parsed[0]=="/relier"){
+				send_reliable(players[index].peer_id, "http://mxgproductions.net/reino-elemental/RE_Setup.exe", 0);
+				}
+				else if(parsed[0]=="/rules"||parsed[0]=="/regras"||parsed[0]=="/reglas"||parsed[0]=="/règles"){
+					file rules;
+					rules.open("rules_"+players[index].idiomajogo+".txt", "r");
+string[] rule=string_split(rules.read(), "\r\n", false);
+rule.insert_at(0, "Estas son las reglas del juego."+bell+"null");
+send_reliable(players[index].peer_id, "menuleitura5 "+linear(rule), 0);
+					rules.close();
+					if(players[index].lregras==0)players[index].lregras=1;
+				}
+				else if(parsed[0]=="/s"){
+if(players[index].map=="portal_espiritual"){
+changemap(players[index].mapavoltar, index, 1, 0);
+}
+				}
+else if(parsed[0]=="/llamar"){
+if(players[index].cantidadcachorros>0){
+for(uint i=0; i<cachorromascotas.length(); i++){
+if(players[index].charname==cachorromascotas[i].dueno){
+if(players[index].map!="helicóptero_de_guerra"||players[index].map!="arena" && !is_game_disabled(players[index].x, players[index].y, players[index].map)){
+cachorromascotas[i].changemap(players[index].map, players[index].x, players[index].y);
+send_reliable(players[index].peer_id, "msg2 llamas a tu cachorrito.", 0);
+}
+}
+}
+}
+}
+				else if(parsed[0]=="/quest"){
+					file misiones;
+					misiones.open("misiones"+players[index].idiomajogo+".txt", "r");
+					string quest=misiones.read();
+					misiones.close();
+string[] quests=delinear(quest);
+quests.insert_at(0, "estas son las misiones disponibles actualmente:");
+send_reliable(players[index].peer_id, "menuleitura "+linear(quests), 0);
+				}
+				else if(players[index].is_admin()==true)comandosadm(index, parsed);
+				else if(players[index].moderador)mod_commands(index, parsed);
+			}
+		}
+		if(willsend==true){
+			if(players[index].map=="portal_espiritual")send_reliable(players[index].peer_id, "msgnormal Mas você está mort"+players[index].sexo2+"!", 0);
+			else if(players[index].idiomachat=="Desativado")send_reliable(players[index].peer_id, "msgnormal Seu chat está desativado.", 0);
+			else{
+				for(uint i=0;i<players.length();i++){
+					if(players[i].idiomachat==players[index].idiomachat&&players[i].map!="túnel"&&players[i].has_muted(players[index].charname)==false) send_reliable(players[i].peer_id, sendmes, 1);
+				}
+			}
+		}
+	}
+	else if(event.type==event_receive&&event.channel==2){
+		int index=get_player_index(event.peer_id);
+		if(index<0)return;
+		string[] parsed=string_split(get_event_message()," ",true);
+if(parsed[0]=="desc"){
+			string msg="Nenhuma descrição disponível para esse item.";
+			for(uint i=0;i<desc.length();i++){
+				string[] a=string_split(desc[i], "=", false);
+				if(a[0]==parsed[1]){
+					msg=a[1];
+					break;
+				}
+			}
+			if(parsed[1]=="anillo_dorado"){
+				send_reliable(players[index].peer_id, "msg2 un anillo de oro brillante, pareciera que un aura mágica sale de él. en un lado puedes ver un número grabado en rojo rubí:; "+players[index].anillodegradacion, 0);
+				msg="";
+			}
+			if(msg!="") {
+				if(string_contains(msg, "*g*", 1)>-1) msg  =string_replace(msg, "*g*", players[index].sexo2, true);
+				if(string_contains(msg, "*nick*", 1)>-1) msg  =string_replace(msg, "*nick*", players[index].charname, true);
+				send_reliable(players[index].peer_id, "msg2 "+msg, 0);
+			}
+		}
+		else if(parsed[0]=="enterrar"&&parsed.length()>=1&&players[index].afk==false&&players[index].paralisado==false&&players[index].paralisado2==false&&gamestopped==false){
+double value=players[index].inv_item_number(parsed[1]);
+			players[index].inv_add_item(parsed[1],-value);
+send_reliable(players[index].peer_id, value, 0);
+			double ganhar=random(10, 100)*value;
+			players[index].inv_add_item("mgerems",ganhar);
+			string msgg=string_replace(parsed[1], "corpo_de_", "", false);
+			send_reliable(players[index].peer_id, "msg2 Você enterra; "+value+" ;corpo_de_"+msgg+";. ;Ótimo trabalho!; +"+ganhar+" mgerems.", 0);
+		}
+		else if(parsed[0]=="mgeremsparaelementales"&&parsed.length()>1){
+			double converter=(string_to_number(parsed[1]));
+			if(converter<=0) return;
+			else if(converter==1) send_reliable(players[index].peer_id, "msgnormal muito pouco para ser convertido.", 0);
+			else if(players[index].inv_item_number("mgerems")>=converter){
+				players[index].inv_add_item("mgerems", -converter);
+				players[index].inv_add_item("elementales", converter*10);
+			}
+			else send_reliable(players[index].peer_id, "msgnormal Você não tem essa quantidade de mgerems.", 0);
+		}
+		else if(parsed[0]=="elementalesparamgerems"&&parsed.length()>1){
+			double converter=(string_to_number(parsed[1]));
+			if(converter<=0) return;
+			else if(converter==1) send_reliable(players[index].peer_id, "msgnormal muito pouco para ser convertido.", 0);
+			else if(players[index].inv_item_number("elementales")>=converter){
+				players[index].inv_add_item("elementales", -converter);
+				players[index].inv_add_item("mgerems", converter*2);
+			}
+			else send_reliable(players[index].peer_id, "msgnormal Você não tem essa quantidade de elementales.", 0);
+		}
+}
+else if(event.type==event_receive and event.channel==7){
+int index=get_player_index(event.peer_id);
+if(index>-1){
+string[] parsed=string_split(get_event_message(), " ", false);
+if(parsed[0]=="private_audio"&&parsed.length()>1){
+int index2=get_player_index_from(parsed[1]);
+if(index2>-1){
+if(file_exists("players/"+players[index].charname+"/silencio.usr")){send_reliable(players[index].peer_id, "msgnormal Por alguna razón, algo te impide hablar...", 0);return;}
+if(players[index].map=="prisão2"){
+send_reliable(players[index].peer_id, "msg2 no puedes hacer eso...", 0);
+return;
+}
+string content=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", true);
+send_reliable(players[index2].peer_id, "private_audio "+players[index].charname+" "+content,7);
+}
+}
+else if(parsed[0]=="map_audio"&&parsed.length()>1){
+string content=string_replace(get_event_message(), parsed[0]+" ", "", false);
+server_maps[players[index].mapindex].send_packet(7, "map_audio "+players[index].x+" "+players[index].y+" "+content, true);
+}
+else if(parsed[0]=="team_audio"&&parsed.length()>1){
+if(file_exists("players/"+players[index].charname+"/silencio.usr")){send_reliable(players[index].peer_id, "msgnormal Por alguna razón, algo te impide hablar...", 0);return;}
+if(players[index].map=="prisão2"){
+send_reliable(players[index].peer_id, "msg2 no puedes hacer eso...", 0);
+return;
+}
+for(uint i=0;i<players[index].nomesequipe.length();i++){
+int b=get_player_index_from(players[index].nomesequipe[i]);
+if(b>-1){
+string content=string_replace(get_event_message(), parsed[0]+" ", "", false);
+send_reliable(players[b].peer_id, "team_audio "+content, 7);
+send_reliable(players[b].peer_id, "msgvoz "+players[index].charname, 0);
+}
+}
+}
+}
+}
+	else if(event.type==event_receive and event.channel==4){
+		int index=get_player_index(event.peer_id);
+		string[] parsed=string_split(get_event_message()," ",true);
+		if(index>-1&&index<players.length){
+			if(parsed[0]=="a"&&pvp&&parsed.length()>1){
+				/*if(is_cheating(index, 25)) eadm(players[index].charname+" ;aparentemente está usando cheat engine, favor de corroborar esta información.;", "notify54.ogg");
+				players[index].tpackets.restart();*/
+				int windex=string_to_number(parsed[1]);
+				double degradation_value, absolute_degradation;
+				if(weapons[windex].degradation_point>0) {
+					degradation_value=random(1, weapons[windex].degradation_point);
+					absolute_degradation =weapons[windex].degradation_point;
+				}
+				if(degradation_value== absolute_degradation && windex>0) {
+					players[index].manage_degradation(weapons[windex].name, 0.1);
+				}
+				weapons[windex].shoot(index, windex, players[index].lado);
+				server_maps[players[index].mapindex].send_to_others(players[index].peer_id, 4, "f "+weapons[windex].sound_shoot+".ogg", players[index].x, players[index].y, 20, true);
+			}
+		}
+	}
+else if(event.type==event_receive and event.channel==13){
+int index=get_player_index(event.peer_id);
+string[] parsed=string_split(get_event_message(), "::", true);
+if(index>-1&&index<players.length){
+if(parsed[0]=="list_degrades"){
+string[] data, keys=players[index].degradation.get_keys();
+double value;
+data.insert_at(0, ";Este es el nivel actual de desgaste de tus armas.;");
+for(int x=0; x<keys.length(); x++){
+if(players[index].inv_item_number(keys[x])>0){
+int windex=get_weapon_index(keys[x]);
+if(windex>-1){
+players[index].degradation.get(keys[x], value);
+data.insert_last(";"+keys[x]+";, "+value+"%");
+}
+}
+}
+if(data.length()==1){
+send_reliable(players[index].peer_id, "msg2 ;Al darte cuenta de que estás intentando revisar el desgaste de un arma que ni siquiera posees, te comienzas a sentir bastante estúpid"+players[index].sexo2+".;", 0);
+return;
+}
+send_reliable(players[index].peer_id, "menuleitura "+linear(data), 0);
+}
+if(parsed[0]=="add_line"&&parsed.length()>1){
+int mapindex=players[index].mapindex;
+if(mapindex>-1){
+server_maps[mapindex].mapdata.insert_last(parsed[1]);
+save_map(server_maps[mapindex].name, "", false);
+insert_map(server_maps[mapindex].name);
+send_reliable(players[index].peer_id, "msg2 ;Línea agregada correctamente al mapa.;", 0);
+server_maps[mapindex].send_packet(6, "add_line_to_map "+parsed[1], true);
+}
+}
+if(parsed[0]=="answer_to"&&parsed.length()>2){
+file f;
+if(directory_exists("players/"+parsed[2])){
+f.open("players/"+parsed[2]+"/eagle_message.txt", "a");
+f.write(";Desde el cielo cae un rayo de fuego celestial, grabando un mensaje en tu retina en respuesta al pergamino con tu nombre, titulado; "+parsed[1]+": "+parsed[4]+"\r\n");
+f.close();
+f.open("eagle_messages.db", "r");
+string[] lines=delinear(f.read());
+f.close();
+int find=lines.find(parsed[3]);
+if(find>-1){
+lines.remove_at(find);
+f.open("eagle_messages.db", "w");
+f.write(linear(lines));
+f.close();
+eadm(players[index].charname+" ;utilizando el poder del fuego celestial responde al pergamino titulado; "+parsed[1]+": "+parsed[4], "magia13.ogg", 100, true);
+}
+}
+}
+if(parsed[0]=="get_eagle_messages"&&(players[index].is_admin()||players[index].is_mod())){
+file f;
+f.open("eagle_messages.db", "r");
+string content=f.read();
+f.close();
+send_reliable(players[index].peer_id, "show_eagle_messages "+content, 6);
+}
+if(parsed[0]=="crouched"&&parsed.length()>1){
+if(parsed[1]=="on"){
+players[index].crouched=1;
+}
+if(parsed[1]=="off"){
+players[index].crouched=0;
+}
+}
+if(parsed[0]=="arena"){
+if(ar.is_open==1&&(ar.fight==1||ar.fighting==0)){
+ar.add_player(index);
+}
+}
+if(parsed[0]=="list_crafts"){
+string[] final;
+file f;
+f.open("crafting.db", "r");
+string[] lines=delinear(f.read());
+f.close();
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data.length()>1){
+string[] item1=string_split(data[0], ".", false);
+string[] item2=string_split(data[1], ".", false);
+final.insert_last(item1[0]+" y "+item2[0]);
+}
+}
+final.insert_at(0, "estos son los crafteos disponibles actualmente. nota: solo se mostrarán los items requeridos, no se mostrará ni cuántos se necesitan ni lo que darán.");
+send_reliable(players[index].peer_id, "menuleitura "+linear(final), 0);
+}
+else if(parsed[0]=="pay_island"){
+if(players[index].have_island==0){
+send_reliable(players[index].peer_id, "msg2 ;no tienes ninguna isla como para pagar su renta, a menos de que quieras gastar tanto de este objeto tan valioso de forma estúpida.;", 0);
+return;
+}
+else if(players[index].payment==1){
+send_reliable(players[index].peer_id, "msg2 ;no sirve de nada intentar pagar algo que ya está pagado. bueno, solo para gastar objetos...;", 0);
+return;
+}
+else if(DATE_WEEKDAY_NAME!="Saturday"){
+send_reliable(players[index].peer_id, "msg2 ;no es momento para hacer esto, lamentablemente.;", 0);
+return;
+}
+else if(players[index].inv_item_number("perla_ndired")<500){
+send_reliable(players[index].peer_id, "msg2 ;no tienes lo necesario para pagar.;", 0);
+}
+else{
+players[index].inv_add_item("perla_ndired", -500);
+players[index].payment=1;
+players[index].payed=1;
+send_reliable(players[index].peer_id, "ps buy.ogg", 0);
+send_reliable(players[index].peer_id, "msg2 ;el acceso a tu isla ha sido restaurado y tu pago concluido.;", 0);
+sconfigs(index);
+}
+}
+if(parsed[0]=="get_news_categories"){
+file f;
+string dir;
+if(beta) dir="C:/www/mxgproductions/public_html/reino-elemental/news_test/"+players[index].idiomajogo;
+else dir="C:/www/mxgproductions/public_html/reino-elemental/news/"+players[index].idiomajogo;
+string[] final, files=find_files(dir+"/*.txt");
+if(files.length()==0){
+if(players[index].is_admin()){
+send_reliable(players[index].peer_id, "mtext ;Parece ser que no hay categorías creadas en este idioma. Ingresa un nombre para crear una.;|add_news_category|::|13", 0);
+}
+else{
+send_reliable(players[index].peer_id, "msg2 ;Quizá el águila celestial pueda ayudar para que haya algo aquí...;", 0);
+}
+}
+else{
+for(int x=0; x<files.length(); x++){
+f.open(dir+"/"+files[x], "r");
+string content=f.read();
+f.close();
+final.insert_last(string_replace(files[x], ".txt", "", true)+bell+content);
+}
+send_reliable(players[index].peer_id, "list_news_categories "+linear(final, "|"), 0);
+}
+}
+if(players[index].is_admin()&&is_enable_command(players[index].charname, parsed[0])){
+if(parsed[0]=="update_news"&&parsed.length()>1){
+file f;
+string dir;
+if(beta) dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news_test\\"+players[index].idiomajogo;
+else dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news\\"+players[index].idiomajogo;
+f.open(dir+"\\"+parsed[1]+".txt", "w");
+f.write(parsed[2]);
+f.close();
+eadm(players[index].charname+" ;actualizó las noticias del idioma; ;"+players[index].idiomajogo+";.", "notify5.ogg", 150, true);
+for(int x=0; x<players.length(); x++){
+if(players[x].idiomajogo==players[index].idiomajogo){
+send_reliable(players[x].peer_id, "ps notify32.ogg", 0);
+}
+}
+}
+if(parsed[0]=="add_news_category"&&parsed.length()>1){
+file f;
+string dir;
+if(beta) dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news_test\\"+players[index].idiomajogo;
+else dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news\\"+players[index].idiomajogo;
+if(file_exists(dir+"\\"+parsed[1]+".txt")){
+send_reliable(players[index].peer_id, "msg2 ;Esta categoría ya existe.;", 0);
+return;
+}
+f.open(dir+"\\"+parsed[1]+".txt", "w");
+f.write("Coming soon!");
+f.close();
+eadm(players[index].charname+" ;añadió la categoría; "+parsed[1]+" ;a las noticias del idioma; ;"+players[index].idiomajogo+";.", "notify5.ogg", 150);
+}
+if(parsed[0]=="remove_news_category"&&parsed.length()>1){
+string dir;
+if(beta) dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news_test\\"+players[index].idiomajogo;
+else dir="C:\\www\\mxgproductions\\public_html\\reino-elemental\\news\\"+players[index].idiomajogo;
+if(file_exists(dir+"\\"+parsed[1]+".txt")){
+file_delete(dir+"\\"+parsed[1]+".txt");
+eadm(players[index].charname+" ;eliminó la categoría; "+parsed[1]+" ;de las noticias del idioma; ;"+players[index].idiomajogo+";.", "notify5.ogg", 150);
+}
+}
+if(parsed[0]=="add_craft"&&parsed.length()>1){
+string[] line=string_split(parsed[1], "=", true);
+file f;
+string[] lines, item1, item2;
+if(line.length()>1){
+item1=string_split(line[0], ".", false);
+item2=string_split(line[1], ".", false);
+}
+f.open("crafting.db", "r");
+lines=delinear(f.read());
+f.close();
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data.length()>1){
+string[] itemname1=string_split(data[0], ".", false);
+string[] itemname2=string_split(data[1], ".", false);
+if(item1[0]==itemname1[0]&&item2[0]==itemname2[0]){
+send_reliable(players[index].peer_id, "msg2 ;ya hay un crafteo con los mismos items.;", 0);
+return;
+}
+}
+}
+lines.insert_last(parsed[1]);
+f.open("crafting.db", "w");
+f.write(linear(lines));
+f.close();
+load_craft_file();
+eadm(players[index].charname+" ;ha añadido un crafteo nuevo a la lista de crafteos posibles. para verlo, favor de revisar en la opción ver crafteos en el celular.;", "notify5.ogg", 150, true);
+}
+if(parsed[0]=="delete_craft"&&parsed.length()>2){
+bool deleted=false;
+file f;
+string[] lines;
+f.open("crafting.db", "r");
+lines=delinear(f.read());
+f.close();
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data.length()>1){
+string[] itemname1=string_split(data[0], ".", false);
+string[] itemname2=string_split(data[1], ".", false);
+if(parsed[1]==itemname1[0]&&parsed[2]==itemname2[0]){
+lines.remove_at(x);
+deleted=true;
+}
+}
+}
+if(deleted){
+f.open("crafting.db", "w");
+f.write(linear(lines));
+f.close();
+load_craft_file();
+eadm(players[index].charname+" ;eliminó el crafteo de los items; "+parsed[1]+" ;y; "+parsed[2]+".", "notify5.ogg", 150, true);
+}
+}
+if(parsed[0]=="create_weapon"&&parsed.length()>21){
+file f;
+string[] lines;
+f.open("weapons.db", "r");
+lines=delinear(f.read());
+f.close();
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", true);
+if(data[0]==parsed[1]){
+send_reliable(players[index].peer_id, "msg2 ;esta arma ya existe.;", 0);
+return;
+}
+}
+string line=string_replace(get_event_message(), parsed[0]+"::", "", true);
+string w_line=string_replace(line, "::", "=", true);
+lines.insert_last(w_line);
+f.open("weapons.db", "w");
+f.write(linear(lines));
+f.close();
+load_weapons();
+for(int x=0; x<players.length(); x++){
+send_weapons(x);
+}
+eadm(players[index].charname+" ;creó un arma, el nombre es:; "+parsed[1]+". ;es recomendable probar su funcionamiento.;", "notify5.ogg", 150, true);
+}
+else if(parsed[0]=="list_weapons"){
+string final;
+for(int x=0; x<weapons.length(); x++){
+final+=weapons[x].name+"\r\n";
+}
+send_reliable(players[index].peer_id, "show_weapons "+final, 0);
+}
+else if(parsed[0]=="delete_weapon"&&parsed.length()>1){
+file f;
+string[] lines;
+bool deleted=false;
+f.open("weapons.db", "r");
+lines=delinear(f.read());
+f.close();
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data[0]==parsed[1]&&deleted==false){
+lines.remove_at(x);
+deleted=true;
+}
+}
+if(deleted==true){
+f.open("weapons.db", "w");
+f.write(linear(lines));
+f.close();
+load_weapons();
+for(int x=0; x<players.length(); x++){
+send_weapons(x, true);
+}
+eadm(players[index].charname+" ;eliminó el arma llamada; "+parsed[1]+".", "notify5.ogg", 150, true);
+deleted=false;
+}
+}
+else if(parsed[0]=="new_clothe"&&parsed.length()>9){
+file f;
+string[] lines;
+f.open("clothes.db", "r");
+lines=delinear(f.read());
+f.close();
+if(clothe_exists(parsed[1])==1){
+send_reliable(players[index].peer_id, "msg2 ;esta prenda ya existe.;", 0);
+return;
+}
+lines.insert_last(parsed[1]+"="+parsed[2]+"="+parsed[3]+"="+parsed[4]+"="+parsed[5]+"="+parsed[6]+"="+parsed[7]+"="+parsed[8]+"="+parsed[9]);
+f.open("clothes.db", "w");
+f.write(linear(lines));
+f.close();
+eadm(";una nueva prenda de vestir fue creada por; "+players[index].charname+", ;su nombre es; ;"+parsed[1]+";.", "notify5.ogg", 150, true);
+load_clothes(true);
+}
+else if(parsed[0]=="list_clothes"){
+string final;
+for(int x=0; x<clothes.length(); x++){
+final+=clothes[x].name+"\r\n";
+}
+send_reliable(players[index].peer_id, "list_clothes "+final, 0);
+}
+else if(parsed[0]=="delete_clothe"&&parsed.length()>1){
+int find=get_clothing_index(parsed[1]);
+if(find>-1){
+for(int x=0; x<players.length(); x++){
+int find2=players[x].body_parts.find(clothes[find].body_part);
+if(find2>-1) players[x].body_parts.remove_at(find2);
+clothes[find].remove(x);
+}
+clothes.remove_at(find);
+save_clothes();
+load_clothes(true);
+for(int x=0; x<players.length(); x++){
+for(int x2=0; x2<players[x].clothing.length(); x2++){
+if(get_clothing_index(players[x].clothing[x2])<0){
+players[x].clothing.remove_at(x2);
+}
+}
+}
+eadm(players[index].charname+" ;eliminó la prenda llamada; "+parsed[1]+".", "notify5.ogg", 150, true);
+}
+}
+else if(parsed[0]=="newitem"&&parsed.length()>13){
+string nameitem=string_to_lower_case(parsed[1]);
+for(int x=0; x<item_in_invs.length(); x++){
+if(string_to_lower_case(item_in_invs[x].name)==nameitem){
+return;
+}
+}
+create_item(parsed[1], parsed[2], parsed[3], parsed[4], parsed[5], string_to_number(parsed[6]), string_to_number(parsed[7]), string_to_number(parsed[8]), string_to_number(parsed[9]), string_to_number(parsed[10]), string_to_number(parsed[11]), string_to_number(parsed[12]), string_to_number(parsed[13]), string_to_number(parsed[14]));
+save_items();
+eadm(players[index].charname+" creó el siguiente item: "+nameitem+".", "notify5.ogg", 150, true);
+}
+else if(parsed[0]=="list_items"){
+string final;
+for(int x=0; x<item_in_invs.length(); x++){
+final+=item_in_invs[x].name+"\r\n";
+}
+send_reliable(players[index].peer_id, "show_items "+final, 0);
+}
+else if(parsed[0]=="delete_item"&&parsed.length()>1){
+for(int x=0; x<item_in_invs.length(); x++){
+if(item_in_invs[x].name==parsed[1]){
+item_in_invs.remove_at(x);
+save_items();
+eadm(players[index].charname+" ;eliminó el item llamado; "+parsed[1]+".", "notify5.ogg", 150, true);
+break;
+}
+}
+}
+}
+}
+}
+}
