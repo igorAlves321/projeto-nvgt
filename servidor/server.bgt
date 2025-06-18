@@ -1704,9 +1704,8 @@ void usar(int index, string nitem){
 		if(players[index].healthfixed==0) {
 			players[index].healthfixed=1;
 			players[index].tvitalidad.restart();
-			players[index].vitalidad_time=43200*60;
-			players[index].maxhealth=players[index].saludfangelical;
-			players[index].health=players[index].saludfangelical;
+			players[index].vitalidad_time=43200*60;			// Mantemos a saúde máxima baseada apenas no nível, não na fase angelical
+			// Na inicialização do jogador, a saúde base é definida
 			players[index].inv_add_item(nitem, -1);
 			send_reliable(players[index].peer_id, "msg2 ;Sientes como un impulso de vida invade todo tu cuerpo.;", 0);
 			server_maps[players[index].mapindex].send_packet(0, "play tomandomagia3.ogg", players[index].x, players[index].y);
@@ -2157,73 +2156,46 @@ void enter(int index){
 }
 
 void subir_nivel(int index) {
-int niveles_subidos = 0;
-int fases_subidas = 0;
-int total_levels = 0;
-bool avisar = true;
-if(index <=-1)
-return;
-if(players[index].fangelical>100){
-			players[index].xprequerida=(players[index].level*10);
-}
-if(players[index].fangelical>500){
-			players[index].xprequerida=(players[index].level*100);
-}
-if(players[index].fangelical>2000){
-players[index].xprequerida=players[index].level*1000;
-}
-while(players[index].xp>=players[index].xprequerida){
-netloop();
-double restante = players[index].xp-players[index].xprequerida;
-niveles_subidos++;
-players[index].xp=restante;
-total_levels=players[index].level+1;
-players[index].level+=1;
-players[index].xprequerida = players[index].level*100;
-}
-// setamos el título del jugador.
-settitle(index);
-// Hemos subido ya todos los niveles. ahora comprobamos fases.
-while(total_levels>=30000){
-netloop();
-avisar = false;
-double levels2=total_levels-30000;
-total_levels = levels2;
-players[index].fangelical+=1;
-players[index].saludfangelical+=1000;
-players[index].baculofangelical+=50;
-players[index].level=1;
-players[index].level+=levels2;
-fases_subidas++;
-}
-// hemos subido fases angelicales. Notificamos.
-if(fases_subidas >= 1) {
-for(int x=0; x<players.length(); x++){
-if(players[x].avisafangelical==1){
-send_reliable(players[x].peer_id, "ps notifi22.ogg", 0);
-if(fases_subidas == 1)
-send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;ha sobrepasado una meta más, consiguiendo una nueva fase angelical!;", 0);
-else
-send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;ha sobrepasado una meta más, consiguiendo "+fases_subidas+" nuevas fases angelicales!;", 0);
-}
-}
-}
-// ¿Tenemos que avisar subidas de nivel?
-if(niveles_subidos==0)
-return;
+    int niveles_subidos = 0;
+    if(index <=-1)
+        return;
 
-if(avisar) {
-for(int x=0; x<players.length(); x++){
-if(players[x].avisanivel==1){
-send_reliable(players[x].peer_id, "ps notifi22.ogg", 0);
-if(niveles_subidos == 1)
-send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;subió un nivel, alcanzando así el nivel; "+players[index].level+".", 0);
-else
-send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;subió; "+niveles_subidos+" ;niveles alcanzando así el nivel; "+players[index].level+".", 0);
-}
-}
-}
-// cerramos función.
+    // Simplificamos a experiência necessária para subir de nível
+    players[index].xprequerida = players[index].level*100;
+
+    while(players[index].xp>=players[index].xprequerida){
+        netloop();
+        double restante = players[index].xp-players[index].xprequerida;
+        niveles_subidos++;
+        players[index].xp=restante;
+        players[index].level+=1;
+
+        // Verifica se o jogador atingiu um múltiplo de 10 níveis
+        if (players[index].level % 10 == 0) {
+            // Adiciona 10 de saúde a cada 10 níveis
+            players[index].maxhealth += 10;
+            players[index].health += 10;
+            send_reliable(players[index].peer_id, "msgnormal Você ganhou 10 pontos de saúde por atingir o nível "+players[index].level+"!", 0);
+        }
+        players[index].xprequerida = players[index].level*100;
+    }
+
+    // setamos el título del jugador.
+    settitle(index);
+
+    // ¿Tenemos que avisar subidas de nivel?
+    if(niveles_subidos==0)
+        return;
+
+    // Avisamos sobre subidas de nível
+    for(int x=0; x<players.length(); x++){
+        if(players[x].avisanivel==1){
+            send_reliable(players[x].peer_id, "ps notifi22.ogg", 0);
+            if(niveles_subidos == 1)                send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;subió un nivel, alcanzando así el nivel; "+players[index].level+".", 0);
+            else
+                send_reliable(players[x].peer_id, "msg2 "+players[index].charname+" ;subió; "+niveles_subidos+" ;niveles alcanzando así el nivel; "+players[index].level+".", 0);
+        }
+    }
 }
 void ganhaxp(string name, double xp, int moedas=0){
 int index=get_player_index_from(name);
