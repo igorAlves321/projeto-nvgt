@@ -1,0 +1,70 @@
+class crafting{
+string[] items;
+int attempts;
+crafting(){
+file craft_format;
+craft_format.open("crafting.db", "r");
+this.items=delinear(craft_format.read());
+craft_format.close();
+}
+void reset(){
+this.items.resize(0);
+file craft_format;
+craft_format.open("crafting.db", "r");
+this.items=delinear(craft_format.read());
+craft_format.close();
+}
+bool craft_exists(string item1, string item2){
+string[] data, data_name1, data_name2;
+for(int x=0; x<this.items.length(); x++){
+data=string_split(this.items[x], "=", false);
+if(data.length()>1){
+data_name1=string_split(data[0], ".", false);
+data_name2=string_split(data[1], ".", false);
+if(item1==data_name1[0]&&item2==data_name2[0]||item1==data_name2[0]&&item2==data_name1[0]){
+return true;
+}
+}
+}
+return false;
+}
+bool craft(string item1, string item2, int index){
+string[] data, data_name1, data_name2, item_gived, sounds_crafting;
+double attempts_craft_min_range, attempts_craft_max_range, attempt_random;
+string msg;
+for(int x=0; x<this.items.length(); x++){
+data=string_split(this.items[x], "=", false);
+if(data.length()>1){
+data_name1=string_split(data[0], ".", false);
+data_name2=string_split(data[1], ".", false);
+if(data_name1.length()>1&&data_name2.length()>1&&(players[index].inv_item_number(data_name1[0])>=string_to_number(data_name1[1])&&players[index].inv_item_number(data_name2[0])>=string_to_number(data_name2[1]))&&(item1==data_name1[0]&&item2==data_name2[0]||item1==data_name2[0]&&item2==data_name1[0])){
+item_gived=string_split(data[2], ",", false);
+sounds_crafting=string_split(data[4], ",", false);
+attempts_craft_min_range=string_to_number(data[5]);
+attempts_craft_max_range=string_to_number(data[6]);
+msg=data[7];
+attempt_random=random(attempts_craft_min_range, attempts_craft_max_range);
+this.attempts++;
+send_packet(0, "play "+sounds_crafting[random(0, sounds_crafting.length()-1)]+".ogg "+players[index].x+" "+players[index].y+" "+players[index].map, players[index].map);
+if(this.attempts>=attempt_random&& players[index].inv_item_number(data_name1[0])>=string_to_number(data_name1[1])&&players[index].inv_item_number(data_name2[0])>=string_to_number(data_name2[1])){
+for(int x=0; x<item_gived.length(); x++){
+string[] items_cantity=string_split(item_gived[x], ".", false);
+if(items_cantity.length()>1) players[index].inv_add_item(items_cantity[0], string_to_number(items_cantity[1]));
+}
+send_packet(0, "play "+data[3]+".ogg "+players[index].x+" "+players[index].y+" "+players[index].map, players[index].map);
+if(msg!="none") send_reliable(players[index].peer_id, "msg2 ;"+msg+";", 0);
+send_reliable(players[index].peer_id, "reset_items_selected", 6);
+this.attempts=0;
+return true;
+}
+}
+}
+}
+return false;
+}
+}
+void load_craft_file(){
+for(int x=0; x<players.length(); x++){
+players[x].c.reset();
+}
+}

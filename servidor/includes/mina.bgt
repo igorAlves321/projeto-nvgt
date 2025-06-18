@@ -1,0 +1,58 @@
+// mines
+class mine {
+	int x, y, damage, damage_range;
+	string owner, map, sound_activation, sound_explosion;
+	int mapindex;
+	bool active;
+	mine(int mx, int my, string mo, string mm) {
+		this.x=mx;
+		this.y=my;
+		this.damage=500000;
+		this.damage_range=25;
+		this.owner=mo;
+		this.map=mm;
+		this.sound_explosion ="mina.ogg";
+		this.sound_activation="mineplace.ogg";
+		this.mapindex =get_map_index_from(this.map);
+		server_maps[mapindex].send_packet(0, "play "+this.sound_activation, this.x, this.y);
+	}
+
+	int get_damage(int distance) {
+		int total_damage;
+		int final_damage;
+		if(distance>0) {
+			total_damage =damage/damage_range;
+			total_damage =round(total_damage, 0);
+			final_damage =damage-(total_damage*distance);
+			return final_damage;
+		}
+		return damage;
+	}
+}
+
+void spawnmine(int index, int x, int y, string owner, string map) {
+	if(players[index].pacifico==1 || players[index].antimina==1 || players[index].afk) return;
+	int mineindex;
+	int mapindex =get_map_index_from(map);
+	if(mapindex>-1) {
+		mineindex =server_maps[mapindex].have_mine(players[index].x, players[index].y);
+		if(mineindex>-1) {
+			send_reliable(players[index].peer_id, "msg2 ;¡esta casilla ya está minada!;", 0);
+			return;
+		}
+		string surface =server_maps[mapindex].get_tile_at(players[index].x, players[index].y);
+		if(surface=="" || string_contains(surface, "water", 1)>-1 || string_contains(surface, "shallow", 1)>-1 || !server_maps[mapindex].is_platform(players[index].x, players[index].y)) {
+			send_reliable(players[index].peer_id, "msg2 ;no es posible colocar minas aquí...;", 0);
+			return;
+		}
+		mine m1(x, y, owner, map);
+		server_maps[mapindex].mines.insert_last(m1);
+		players[index].inv_add_item("mina",-1);
+	}
+}
+
+void destroymines() {
+	for(int i=0; i<server_maps.length(); i++) {
+		if(server_maps[i].mines.length()>0) server_maps[i].mines.resize(0);
+	}
+}
