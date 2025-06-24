@@ -5,12 +5,16 @@ class add{
 	int pos;
 	string name, currently_buffer;
 	string[] items;
+	timer last_activity; // Para rastrear quando foi a última atividade
+	
 	add(string n){
 		name=n;
+		last_activity.restart(); // Inicializar o timer
 	}
 	add(string n, string[] items){
 		this.name=n;
 		this.items =items;
+		last_activity.restart(); // Inicializar o timer
 	}
 }
 
@@ -19,14 +23,24 @@ void create_add(string bname){
 	adds.insert_last(b1);
 }
 void firstadd(){
+	cleanup_empty_channels(); // Limpar canais vazios
+	reorder_channels(); // Garantir ordem fixa
 	addpos=0;
 	speakfocusedadd();
 }
 void lastadd(){
-	addpos=adds.length()-1;
+	cleanup_empty_channels(); // Limpar canais vazios
+	reorder_channels(); // Garantir ordem fixa
+	if (adds.length() > 0) {
+		addpos=adds.length()-1;
+	} else {
+		addpos=0;
+	}
 	speakfocusedadd();
 }
 void addleft(){
+	cleanup_empty_channels(); // Limpar canais vazios antes de navegar
+	reorder_channels(); // Garantir ordem fixa
 	if (addpos<=0)addpos=0;
 	else{
 		addpos-=1;
@@ -34,6 +48,8 @@ void addleft(){
 	}
 }
 void addright(){
+	cleanup_empty_channels(); // Limpar canais vazios antes de navegar
+	reorder_channels(); // Garantir ordem fixa
 	if (addpos>=(adds.length()-1)){
 		if (adds.length()>0)addpos=adds.length()-1;
 	}
@@ -63,9 +79,96 @@ void topadditem(){
 void bottomadditem(){
 	if (adds[addpos].items.length()>0){
 		adds[addpos].pos=(adds[addpos].items.length()-1);
-		speak(pu.get_value(adds[addpos].items[adds[addpos].pos]));
+		speak(pu.get_value(adds[addpos].items[adds[addpos].pos]));	}
+}
+
+// Função para verificar se um canal existe
+bool channel_exists(string addname) {
+	for (uint i=0; i<adds.length(); i++) {
+		if (adds[i].name==addname) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Função para criar canal dinamicamente se não existir
+void ensure_channel_exists(string addname) {
+	if (!channel_exists(addname)) {
+		create_add(addname);
+		// Reorganizar para manter "general" sempre em primeiro
+		reorder_channels();
 	}
 }
+
+// Função para garantir ordem fixa dos canais
+void reorder_channels() {
+	add@[] reordered;
+	
+	// Ordem fixa dos canais (por prioridade)
+	string[] fixed_order = {
+		"general",                    // 1º - tudo
+		"canal_principal",           // 2º - canal principal
+		"canal_local",               // 3º - canal local
+		"mensajes_del_equipo",       // 4º - chat de equipe
+		"conversaciones_privadas",   // 5º - conversas privadas
+		"mensajes_de_voz",          // 6º - mensagens de voz
+		"avisos",                   // 7º - avisos
+		"visiones_angelicales",     // 8º - administração
+		"ventas",                   // 9º - vendas
+		"avisos_de_muerte",         // 10º - avisos de morte
+		"notificaciones_de_conexiónes", // 11º - notificações de conexão
+		"conversaciones_con_la_pareja", // 12º - conversas com a pareja
+		"conversaciones_celestiales"    // 13º - conversas celestiais
+	};
+	
+	// Primeiro, adicionar canais na ordem fixa (apenas os que existem)
+	for (uint p = 0; p < fixed_order.length(); p++) {
+		for (uint i = 0; i < adds.length(); i++) {
+			if (adds[i].name == fixed_order[p]) {
+				reordered.insert_last(adds[i]);
+				break;
+			}
+		}
+	}
+	
+	// Depois, adicionar qualquer canal que não esteja na lista fixa (canais novos/desconhecidos)
+	for (uint i = 0; i < adds.length(); i++) {
+		bool found_in_fixed = false;
+		for (uint p = 0; p < fixed_order.length(); p++) {
+			if (adds[i].name == fixed_order[p]) {
+				found_in_fixed = true;
+				break;
+			}
+		}
+		if (!found_in_fixed) {
+			reordered.insert_last(adds[i]);
+		}
+	}
+	
+	// Ajustar posição atual
+	string current_channel = "";
+	if (addpos >= 0 && addpos < int(adds.length())) {
+		current_channel = adds[addpos].name;
+	}
+	
+	// Substituir array
+	adds = reordered;
+	
+	// Encontrar nova posição do canal atual
+	for (uint i = 0; i < adds.length(); i++) {
+		if (adds[i].name == current_channel) {
+			addpos = i;
+			break;
+		}
+	}
+	
+	// Se não encontrou o canal atual, voltar para o primeiro
+	if (addpos >= int(adds.length()) || addpos < 0) {
+		addpos = 0;
+	}
+}
+
 void add_add_item(string addname, string item,bool speakitem=true){
 if(logs==1){
 if(!directory_exists("logs"))directory_create("logs");
@@ -74,10 +177,14 @@ logfile.open("logs/log_"+DATE_YEAR+"_"+DATE_MONTH+"_"+DATE_DAY+".log", "a");
 logfile.write(item+"\r\n");
 logfile.close();
 }
+	// Garantir que o canal existe antes de adicionar a mensagem
+	ensure_channel_exists(addname);
+	
 	for (uint i=0; i<adds.length(); i++) {
 		if (adds[i].name==addname||adds[i].name=="general"){
 			if (speakitem&&adds[i].name!="general")speak(item, 0);
 			adds[i].items.insert_last(item);
+			adds[i].last_activity.restart(); // Atualizar timestamp da atividade
 		}
 	}
 }
@@ -104,21 +211,10 @@ void load_message_buffers() {
 		for(int x=0; x<buffers.length(); x++) {
 			create_add(buffers[x]);
 		}
-	}
-	else {
-		create_add("general");
-		create_add("canal_principal");
-		create_add("canal_local");
-		create_add("mensajes_del_equipo");
-		create_add("mensajes_de_voz");
-		create_add("conversaciones_privadas");
-		create_add("conversaciones_con_la_pareja");
-		create_add("conversaciones_celestiales");
-		create_add("avisos");
-		create_add("visiones_angelicales");
-		create_add("ventas");
-		create_add("avisos_de_muerte");
-		create_add("notificaciones_de_conexiónes");
+	}	else {
+		// Criar apenas o canal "tudo" inicialmente - ele recebe todas as mensagens
+		create_add("general"); // Canal "tudo" - sempre visível pois recebe todas as mensagens
+		// Os outros canais (incluindo "avisos") serão criados dinamicamente quando receberem mensagens
 	}
 	return;
 }
@@ -216,10 +312,76 @@ void copy_buffer() {
 	if(adds.length()>0) {
 		if(adds[addpos].items.length()>0) {
 			clipboard_copy_text(linear(adds[addpos].items));
-			speak(pu.get_value("Búfer de mensajes copiado al portapapeles."));
+			speak(pu.get_value("Búfer de mensagens copiado ao portapapeles."));
 		}
 		else {
-			speak(pu.get_value("Búfer de mensajes vacío."));
+			speak(pu.get_value("Búfer de mensagens vazio."));
 		}
 	}
 }
+
+// Função para remover canais vazios e inativos (exceto canais essenciais)
+void cleanup_empty_channels() {
+	string[] essential_channels = {"general"}; // Apenas o canal "tudo" sempre deve existir
+	int inactive_timeout = 300000; // 5 minutos em milissegundos
+	
+	for (int i = adds.length()-1; i >= 0; i--) {
+		bool is_essential = false;
+		
+		// Verificar se é um canal essencial
+		for (uint j = 0; j < essential_channels.length(); j++) {
+			if (adds[i].name == essential_channels[j]) {
+				is_essential = true;
+				break;
+			}
+		}
+		
+		// Condições para remover o canal:
+		// 1. Não é essencial E (está vazio OU inativo há mais de 5 minutos)
+		bool should_remove = !is_essential && 
+			(adds[i].items.length() == 0 || adds[i].last_activity.elapsed > inactive_timeout);
+		if (should_remove) {
+			// Criar um novo array sem este elemento
+			add@[] new_adds;
+			for (uint k = 0; k < adds.length(); k++) {
+				if (k != uint(i)) {
+					new_adds.insert_last(adds[k]);
+				}
+			}
+			adds = new_adds;
+			// Ajustar a posição atual se necessário
+			if (addpos >= i && addpos > 0) {
+				addpos--;
+			}
+		}
+	}
+	
+	// Garantir que addpos seja válido
+	if (addpos >= int(adds.length())) {
+		addpos = adds.length() - 1;
+	}
+	if (addpos < 0 && adds.length() > 0) {
+		addpos = 0;
+	}
+}
+
+// Função desativada - não é necessária limitar mensagens antigas
+/*
+void limit_channel_messages() {
+	int max_messages_per_channel = 100; // Máximo de 100 mensagens por canal
+	
+	for (uint i = 0; i < adds.length(); i++) {
+		if (adds[i].items.length() > max_messages_per_channel) {
+			// Manter apenas as mensagens mais recentes
+			int messages_to_remove = adds[i].items.length() - max_messages_per_channel;
+			for (int j = 0; j < messages_to_remove; j++) {
+				// Função removida - não é necessária limitar mensagens antigas
+			}
+			// Ajustar a posição se necessário
+			if (adds[i].pos >= int(adds[i].items.length())) {
+				adds[i].pos = adds[i].items.length() - 1;
+			}
+		}
+	}
+}
+*/
