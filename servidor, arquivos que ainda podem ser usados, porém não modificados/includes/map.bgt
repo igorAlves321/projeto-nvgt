@@ -1,0 +1,1466 @@
+#include "mina.bgt"
+#include "portals.bgt"
+#include "vehicles.bgt"
+#include "platforms.bgt"
+#include "safezones.bgt"
+#include "zones.bgt"
+file map_file;
+map@[] server_maps(0);
+class map {
+	int paused;
+	string name;
+	int max_x;
+	int max_y;
+	int mapindex;
+	string[] mapdata(0);
+	dictionary desactivados;
+	dictionary mapplayers_db;
+	int[] mapplayers(0);
+	bullet@[] bullets(0);
+	arbol@[] arbols(0);
+	arbol_data@[] arbols_data(0);
+	wall@[] walls (0);
+	wall_data@[] walls_data(0);
+	death@[] deaths (0);
+	game_disabled@[] disableds(0);
+	boladefogo@[]boladefogos(0);
+	mine@[] mines(0);
+	plasmabomb@[] plasmabombs(0);
+	portal@[] portals;
+	platform@[] platforms(0);
+	safezone@[] safezones(0);
+	zone@[] zones(0);
+	extract@[] extracts(0);
+	npc@[]npcs(0);
+	npc_data@[] npcs_data(0);
+	monstruo@[] monstruos(0);
+	monstruo_data@[] monstruos_data();
+	banheiro@[] banheiros(0);
+	pia@[] pias(0);
+	earthquake@[] earthquakes(0);
+	obj@[] objs(0);
+	obj_data@[] objs_data (0);
+	vehicle@[] vehicles();
+	msound@[] msounds (0);
+	map(string mapfile) {
+		this.name =string_replace(mapfile, ".map", "", true);
+		init_map(mapfile);
+	}
+
+	void init_map(string mapname) {
+	map_file.open("maps/"+mapname, "r");
+	string[] lines=delinear(map_file.read());
+	map_file.close();
+	for(int x=0; x<lines.length(); x++) {
+		mapdata.insert_last(lines[x]);
+		string[] parsed =string_split(lines[x], ":", false);
+		if(parsed[0] =="maxx") {
+			max_x =string_to_number(parsed[1]);
+			continue;
+		}
+		if(parsed[0] =="maxy") {
+			max_y =string_to_number(parsed[1]);
+			continue;
+		}
+		if(parsed[0] =="dv") {
+			desactivados.set(parsed[1], parsed[1]);
+		continue;
+	}
+	if(parsed[0] =="p" && parsed.length()==5) {
+		platform p1(parsed[0], string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[3]), parsed[4]);
+		platforms.insert_last(p1);
+		continue;
+	}
+	if(parsed[0] =="sc" && parsed.length()==6) {
+		platform p1(parsed[0], string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5]);
+		platforms.insert_last(p1);
+		continue;
+	}
+	if(parsed[0] =="w" && parsed.length()==5) {
+		platform p1(parsed[0], string_to_number(parsed[1]), string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), parsed[4]);
+		platforms.insert_last(p1);
+		continue;
+	}
+	if(parsed[0] =="z" && parsed.length() ==6) {
+		zone z1(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5]);
+		zones.insert_last(z1);
+		continue;
+	}
+	if(parsed[0] =="sz") {
+		safezone sz1(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]));
+		safezones.insert_last(sz1);
+		continue;
+	}
+	if(parsed[0]=="ex" && parsed.length()==11) {
+		extract e(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]), string_to_number(parsed[7]), parsed[8], parsed[9], parsed[10]);
+		extracts.insert_last(e);
+		continue;
+	}
+	if(parsed[0]=="npc"&&parsed.length()>25){
+		npc b(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]), string_to_number(parsed[7]), string_to_number(parsed[8]), string_to_number(parsed[9]), string_to_number(parsed[10]), string_to_number(parsed[11]), parsed[12], parsed[13], parsed[14], parsed[15], parsed[16], parsed[17], string_to_number(parsed[18]), string_to_number(parsed[19]), string_to_number(parsed[20]), this.name, parsed[21], string_to_number(parsed[22]), string_to_number(parsed[23]), parsed[24], string_to_number(parsed[25]));
+		npcs.insert_last(b);
+		continue;
+	}
+	if(parsed[0] =="monstruo" && parsed.length()==3) {
+		monstruo mn(string_to_number(parsed[1]), string_to_number(parsed[2]), this.name);
+		monstruos.insert_last(mn);
+	}
+	if(parsed[0]=="rt"&&parsed.length()>2){
+		banheiro b(string_to_number(parsed[1]), string_to_number(parsed[2]));
+		banheiros.insert_last(b);
+		continue;
+	}
+	if(parsed[0]=="lv"&&parsed.length()>2){
+		pia b(string_to_number(parsed[1]), string_to_number(parsed[2]), this.name);
+		pias.insert_last(b);
+		continue;
+	}
+	if(parsed[0]=="arbol"&&parsed.length()>8){
+		arbol a(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]), parsed[7], parsed[8], this.name);
+		arbols.insert_last(a);
+		continue;
+	}
+	if(parsed[0]=="wall"&&parsed.length()>9){
+		wall w(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]), parsed[7], parsed[8], parsed[9], parsed[10], this.name);
+		walls.insert_last(w);
+		continue;
+	}
+	if(parsed[0]=="death"&&parsed.length()>10){
+		death d(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]), string_to_number(parsed[7]), parsed[8], parsed[9], string_to_number(parsed[10]), string_to_number(parsed[11]));
+		deaths.insert_last(d);
+		continue;
+	}
+	if(parsed[0]=="disable_game"&&parsed.length()>4){
+		game_disabled g(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]));
+		disableds.insert_last(g);
+		continue;
+	}
+	if(parsed[0]=="item"&&parsed.length()>8){
+		spawn_obj(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), parsed[6], parsed[7], string_to_number(parsed[8]));
+		continue;
+	}
+	}
+}
+
+// This feature updates the players on the map. Read a dictionary, and if you find the players, update the mapplayers matrix with their respective indices of the general matrix of connected players, or update indexing directly from the player matrix checking if they exist. this after a map update for changes, for example
+	void update_players_on_map(bool normal=true) {
+	int value;
+	string[] mapplayers_keys;
+	if(!mapplayers_db.is_empty()) {
+		mapplayers_keys =mapplayers_db.get_keys();
+	}
+	if(mapplayers.length()>0) {
+		mapplayers.resize(0);
+	}
+	if(normal) {
+		for(int i=0; i<mapplayers_keys.length(); i++) {
+			mapplayers_db.set(mapplayers_keys[i], get_player_index_from(mapplayers_keys[i]));
+			mapplayers_db.get(mapplayers_keys[i], value);
+			mapplayers.insert_last(value);
+		}
+	return;
+	}
+	else {
+		mapplayers_db.delete_all();
+		for(int i=0; i<players.length(); i++) {
+			if(players[i].mapindex ==this.mapindex) {
+				mapplayers_db.set(players[i].charname, i);
+				mapplayers.insert_last(i);
+			}
+		}
+	}
+}
+
+	void maploop() {
+		if(mapplayers.length() ==0 && paused==0) {
+			paused =1;
+		}
+		if(arbols.length()>0){
+			arbolLoop();
+		}
+		if(arbols_data.length()>0){
+			arboldataloop();
+		}
+		if(walls.length()>0){
+			wallLoop();
+		}
+		if(walls_data.length()>0){
+			walldataloop();
+		}
+		if(deaths.length()>0){
+			deathloop();
+		}
+		if(bullets.length()>0) {
+			bulletloop();
+		}
+		if(boladefogos.length()>0){
+			boladefogoloop();
+		}
+		if(earthquakes.length()>0) {
+			earthquakeloop();
+		}
+		if(mines.length()>0) {
+			mineloop();
+		}
+		if(objs.length()>0){
+			objloop();
+		}
+		if(objs_data.length()>0){
+			objs_dataloop();
+		}
+		if(npcs.length()>0&&pvp){
+			npcLoop();
+		}
+		if(npcs_data.length()>0){
+			npcDataLoop();
+		}
+		if(monstruos.length()>0&&pvp) {
+			monstruoloop();
+		}
+		if(monstruos_data.length()>0) {
+			monstruo_dataloop();
+		}
+		if(plasmabombs.length()>0) {
+			plasmabomb_loop();
+		}
+		if(pias.length()>0){
+			pialoop();
+		}
+		if(portals.length()>0) {
+			portal_loop();
+		}
+	}
+
+void remove_line(string line){
+int find=mapdata.find(line);
+if(find>-1){
+mapdata.remove_at(find);
+}
+}
+
+void add_line(string line){
+mapdata.insert_last(line);
+}
+
+void replace_line(string line, string replace){
+int find=mapdata.find(line);
+if(find>-1){
+mapdata[find]=string_replace(mapdata[find], line, replace, true);
+}
+}
+
+	void update_moving_sound(int id, int x, int y){
+		for(int i=0; i<msounds.length; i++){
+			if(msounds[i].id==id){
+				msounds[i].updateme(x,y);
+			}
+			for(int j=0; j<mapplayers.length(); j++){
+				send_reliable(players[mapplayers[j]].peer_id, "um "+id+" "+x+" "+y+" "+this.name,0);
+			}
+		}
+	}
+
+	void destroy_moving_sound(int id){
+		for(int i=0; i<msounds.length; i++){
+			if(msounds[i].id==id){
+				send_reliable(0,"destroymsound "+id,0);
+				@msounds[i]=null;
+				msounds.remove_at(i);
+			}
+		}
+	}
+
+// loops for the map objects: bombs, npc, and more
+	void objloop(){
+		for (int x=0; x<objs.length(); x++){
+			if (objs[x].taked && objs[x].disable_respawn ==0) {
+				obj_data od(objs[x].x, objs[x].y, objs[x].time_out, objs[x].disable_respawn, objs[x].amount, objs[x].itemname, objs[x].map, objs[x].sound_get, objs[x].time_respawn);
+				objs_data.insert_last(od);
+				objs.remove_at(x);
+				break;
+			}
+			else {
+				if (objs[x].taked) {
+					objs.remove_at(x);
+					break;
+				}
+			}
+			if(objs[x].y>0&&get_tile_at(objs[x].x, objs[x].y)=="" && objs[x].tfall.elapsed>=90){
+				objs[x].tfall.restart();
+				objs[x].y--;
+				objs[x].tile=get_tile_at(objs[x].x, objs[x].y);
+			}
+			if(objs[x].tile.length()>0){
+				send_packet(0, "play3 "+objs[x].tile+"land.ogg "+objs[x].x+" "+objs[x].y+" 120", true);
+				objs[x].tile.resize(0);
+			}
+			if (objs[x].ttime_out.elapsed>=objs[x].time_out){
+				objs[x].taked=true;
+			}
+		}
+	}
+
+	void objs_dataloop(){
+		for (int x=0; x<objs_data.length(); x++){
+			if(objs_data[x].disable_respawn==0&&objs_data[x].trespawn.elapsed>=objs_data[x].time_respawn){
+				spawn_obj(objs_data[x].x_data, objs_data[x].y, objs_data[x].time_out, objs_data[x].disable_respawn, objs_data[x].amount, objs_data[x].itemname, objs_data[x].sound_get, objs_data[x].time_respawn);
+				objs_data.remove_at(x);
+			}
+		}
+	}
+
+void deathloop(){
+for(int i=0; i<mapplayers.length(); i++){
+if(players[mapplayers[i]].ndeath==1&&players[mapplayers[i]].tdeath.elapsed>=players[mapplayers[i]].death_time){
+players[mapplayers[i]].tdeath.restart();
+if(players[mapplayers[i]].watching==0){
+if(this.deaths[players[mapplayers[i]].death_index].require_item==1&&players[mapplayers[i]].inv_item_number(this.deaths[players[mapplayers[i]].death_index].item)<this.deaths[players[mapplayers[i]].death_index].item_cantity||this.deaths[players[mapplayers[i]].death_index].require_item==0){
+if(players[mapplayers[i]].progressive_death==1){
+players[mapplayers[i]].health-=players[mapplayers[i]].death_life;
+players[mapplayers[i]].lasthit=players[mapplayers[i]].death_reason;
+}
+else if(players[mapplayers[i]].progressive_death==0){
+players[mapplayers[i]].health=-1;
+players[mapplayers[i]].lasthit=players[mapplayers[i]].death_reason;
+}
+}
+}
+}
+}
+}
+
+	void arbolLoop() {
+		for(int i=0; i<arbols.length(); i++) {
+			if(arbols[i].vida<=0){
+				replace_line("arbol:"+arbols[i].x+":"+arbols[i].miny+":"+arbols[i].maxy+":"+arbols[i].vida_inicial+":"+arbols[i].trespawn+":"+arbols[i].enableitems+":"+arbols[i].items+":"+arbols[i].name, "arbol:"+arbols[i].x+":-1:-1:"+arbols[i].vida_inicial+":"+arbols[i].trespawn+":"+arbols[i].enableitems+":"+arbols[i].items+":"+arbols[i].name);
+				update2(this.name);
+				send_packet(5, "play_npc arbolcayendo.ogg", arbols[i].x, arbols[i].miny);
+				if(arbols[i].enableitems==1){
+					string[] items_tree=string_split(arbols[i].items, ",", false);
+					for(int x=0; x<items_tree.length(); x++){
+						string[] items_cantity=string_split(items_tree[x], ".", false);
+						if(items_cantity.length()>1) spawn_obj(arbols[i].x, arbols[i].miny, 60000, 1, string_to_number(items_cantity[1]), items_cantity[0], "get"+items_cantity[0]);
+					}
+				}
+				arbol_data ad(arbols[i].x, arbols[i].miny, arbols[i].maxy, arbols[i].vida_inicial, arbols[i].trespawn, arbols[i].enableitems, arbols[i].items, arbols[i].name);
+				@arbols[i] =null;
+				arbols.remove_at(i);
+				arbols_data.insert_last(ad);
+				break;
+			}
+		}
+	} // end arbol loop
+
+	void arboldataloop() {
+		bool have_tree=false;
+		for(int i=0; i<arbols_data.length(); i++) {
+			for(int x=0; x<arbols.length(); x++){
+				if(arbols[x].x==arbols_data[i].x){
+					have_tree=true;
+					break;
+				}
+			}
+			if(arbols_data[i].respawn.elapsed>=arbols_data[i].trespawn){
+				arbols_data[i].respawn.restart();
+				if(have_tree==false){
+					arbol a(arbols_data[i].x, arbols_data[i].miny, arbols_data[i].maxy, arbols_data[i].vida, arbols_data[i].trespawn, arbols_data[i].enableitems, arbols_data[i].items, arbols_data[i].name, this.name);
+					replace_line("arbol:"+arbols_data[i].x+":-1:-1:"+arbols_data[i].vida+":"+arbols_data[i].trespawn+":"+arbols_data[i].enableitems+":"+arbols_data[i].items+":"+arbols_data[i].name, "arbol:"+arbols_data[i].x+":"+arbols_data[i].miny+":"+arbols_data[i].maxy+":"+arbols_data[i].vida+":"+arbols_data[i].trespawn+":"+arbols_data[i].enableitems+":"+arbols_data[i].items+":"+arbols_data[i].name);
+					@arbols_data[i] =null;
+					arbols_data.remove_at(i);
+					update2(this.name);
+					arbols.insert_last(a);
+					break;
+				}
+			}
+		}
+	}
+
+	void wallLoop() {
+		for(int i=0; i<walls.length(); i++) {
+			if(walls[i].vida<=0){
+				replace_line("wall:"+walls[i].x+":"+walls[i].miny+":"+walls[i].maxy+":"+walls[i].vida_inicial+":"+walls[i].trespawn+":"+walls[i].enableitems+":"+walls[i].items+":"+walls[i].name+":"+walls[i].sound_wall+":"+walls[i].sound_fall, "wall:"+walls[i].x+":-1:-1:"+walls[i].vida_inicial+":"+walls[i].trespawn+":"+walls[i].enableitems+":"+walls[i].items+":"+walls[i].name+":"+walls[i].sound_wall+":"+walls[i].sound_fall);
+				update2(this.name);
+				send_packet(5, "play_npc "+walls[i].sound_fall+".ogg", walls[i].x, walls[i].miny);
+				if(walls[i].enableitems==1){
+					string[] items_wall=string_split(walls[i].items, ",", false);
+					for(int x=0; x<items_wall.length(); x++){
+						string[] items_cantity=string_split(items_wall[x], ".", false);
+						spawn_obj(walls[i].x, walls[i].miny, 30000, 1, string_to_number(items_cantity[1]), items_cantity[0], "get"+items_cantity[0]);
+					}
+				}
+				wall_data wd(walls[i].x, walls[i].miny, walls[i].maxy, walls[i].vida_inicial, walls[i].trespawn, walls[i].enableitems, walls[i].items, walls[i].name, walls[i].sound_wall, walls[i].sound_fall);
+				@walls[i] =null;
+				walls.remove_at(i);
+				walls_data.insert_last(wd);
+				break;
+			}
+		}
+	} // end wall loop
+
+	void walldataloop() {
+		bool have_wall=false;
+		for(int i=0; i<walls_data.length(); i++) {
+			if(walls_data[i].respawn.elapsed>=walls_data[i].trespawn){
+				walls_data[i].respawn.restart();
+				walls_data[i].respawn.pause();
+				for(int x=0; x<walls.length(); x++){
+					if(walls[x].x==walls_data[i].x){
+						have_wall=true;
+						break;
+					}
+				}
+				if(have_wall==false){
+					wall w(walls_data[i].x, walls_data[i].miny, walls_data[i].maxy, walls_data[i].vida, walls_data[i].trespawn, walls_data[i].enableitems, walls_data[i].items, walls_data[i].name, walls_data[i].sound_wall, walls_data[i].sound_fall, this.name);
+					replace_line("wall:"+walls_data[i].x+":-1:-1:"+walls_data[i].vida+":"+walls_data[i].trespawn+":"+walls_data[i].enableitems+":"+walls_data[i].items+":"+walls_data[i].name+":"+walls_data[i].sound_wall+":"+walls_data[i].sound_fall, "wall:"+walls_data[i].x+":"+walls_data[i].miny+":"+walls_data[i].maxy+":"+walls_data[i].vida+":"+walls_data[i].trespawn+":"+walls_data[i].enableitems+":"+walls_data[i].items+":"+walls_data[i].name+":"+walls_data[i].sound_wall+":"+walls_data[i].sound_fall);
+					update2(this.name);
+					@walls_data[i] =null;
+					walls_data.remove_at(i);
+					walls.insert_last(w);
+					break;
+				}
+			}
+		}
+	}
+
+	void boladefogoloop() {
+		for(uint i=0; i<boladefogos.length(); i++){
+			if(boladefogos[i].tremover.elapsed>=5000) {
+				destroy_moving_sound(boladefogos[i].s);
+				@boladefogos[i] =null;
+				boladefogos.remove_at(i);
+				break;
+			}
+			if(string_contains(this.get_tile_at(boladefogos[i].x, boladefogos[i].y), "wall", 1)>-1){
+				destroy_moving_sound(boladefogos[i].s);
+				send_packet(5, "play_npc boobytraphit1.ogg", boladefogos[i].x, boladefogos[i].y);
+				@boladefogos[i] =null;
+				boladefogos.remove_at(i);
+				break;
+			}
+			if(boladefogos[i].tandar.elapsed>=60){
+				boladefogos[i].tandar.restart();
+				switch(boladefogos[i].lado) {
+					case Right:
+					boladefogos[i].x++;
+					update_moving_sound(boladefogos[i].s, boladefogos[i].x, boladefogos[i].y);
+					break;
+					case Left:
+					boladefogos[i].x--;
+					update_moving_sound(boladefogos[i].s, boladefogos[i].x, boladefogos[i].y);
+					break;
+					case Back:
+					boladefogos[i].y--;
+					update_moving_sound(boladefogos[i].s, boladefogos[i].x, boladefogos[i].y);
+					case Forward:
+					boladefogos[i].y++;
+					update_moving_sound(boladefogos[i].s, boladefogos[i].x, boladefogos[i].y);
+					break;
+				}
+				for(int j=0; j<mapplayers.length(); j++){
+					if(players[mapplayers[j]].x==boladefogos[i].x && boladefogos[i].y ==players[mapplayers[j]].y && players[mapplayers[j]].watching==0 && players[mapplayers[j]].pacifico ==0 && players[mapplayers[j]].afk==false && !emequipe(boladefogos[i].nome, players[mapplayers[j]].charname)){
+						players[mapplayers[j]].health-=2000;
+						players[mapplayers[j]].lasthit="boladefogo_"+boladefogos[i].nome;
+						send_packet(0, "inithurt "+players[mapplayers[j]].voice, players[mapplayers[j]].x, players[mapplayers[j]].y);
+						destroy_moving_sound(boladefogos[i].s);
+						send_packet(5, "play_npc molotovatinge.ogg", players[mapplayers[j]].x, players[j].y);
+						if(players[mapplayers[j]].health>0) players[mapplayers[j]].spawn_playerfire(boladefogos[i].nome);
+						@boladefogos[i] =null;
+						boladefogos.remove_at(i);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+void bulletloop() {
+	for(uint i=0; i<bullets.length(); i++){
+		switch (bullets[i].facing) {
+			case Left:
+			bullets[i].x-=1;
+			bullets[i].distance+=1;
+			bulletcheck(i);
+			break;
+			case Right:
+			bullets[i].x+=1;
+			bullets[i].distance+=1;
+			bulletcheck(i);
+			break;
+			case Forward:
+			bullets[i].y+=1;
+			bullets[i].distance+=1;
+			bulletcheck(i);
+			break;
+			case Back: 
+			bullets[i].y-=1;
+			bullets[i].distance+=1;
+			bulletcheck(i);
+			break;
+		default:
+			bullets.remove_at(i);
+		}
+	}
+}
+
+
+void bulletcheck(int b){
+	bool safezone=get_safezone_at(bullets[b].x,bullets[b].y);
+	int j=get_player_index_from(bullets[b].owner);
+	if(safezone ||bullets[b].distance>=bullets[b].range||j<0 ||players[j].pacifico==1){
+		bullets.remove_at(b);
+		return;
+	}
+	int dano=bullets[b].damage;
+	int amount=(bullets[b].damage);
+	int pozic;
+	for(uint bu=0; bu < arbols.length(); bu++){
+		if(bullets[b].x==arbols[bu].x){
+			if(bullets[b].y==arbols[bu].miny)arbols[bu].vida-=dano;
+			send_packet(5, "play_wall "+weapons[bullets[b].weapon-1].sounds_impact[random(0, weapons[bullets[b].weapon-1].sounds_impact.length()-1)]+".ogg", bullets[b].x, bullets[b].y);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	for(int bu=0; bu<portals.length(); bu++) {
+		if(bullets[b].x==portals[bu].x && bullets[b].y==portals[bu].y) {
+			portals[bu].health-=dano;
+			send_packet(5, "play_wall "+portals[bu].sounds_impact[random(0, portals[bu].sounds_impact.length()-1)], portals[bu].x, portals[bu].y);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	for(uint bu=0; bu < walls.length(); bu++){
+		if(bullets[b].x==walls[bu].x){
+			if(bullets[b].y==walls[bu].miny)walls[bu].vida-=dano;
+			send_packet(5, "play_wall "+weapons[bullets[b].weapon-1].sounds_impact[random(0, weapons[bullets[b].weapon-1].sounds_impact.length()-1)]+".ogg", bullets[b].x, bullets[b].y);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	for(uint bu=0; bu < npcs.length(); bu++){
+		if(bullets[b].x==npcs[bu].x&&bullets[b].y==npcs[bu].y) {
+			if(npcs[bu].impactosbala!="default") send_packet(5, "play_body "+npcs[bu].impactos[random(0, npcs[bu].impactos.length()-1)]+".ogg", bullets[b].x, bullets[b].y);
+			else send_packet(5, "play_body "+weapons[bullets[b].weapon-1].sounds_impact_on_corpse[random(0, weapons[bullets[b].weapon-1].sounds_impact_on_corpse.length()-1)]+".ogg", bullets[b].x, bullets[b].y);
+			if(bu>npcs.length())return;
+			if(npcs[bu].danoquerecibira==0){
+				npcs[bu].vida-=dano;
+			}
+			else{
+				npcs[bu].vida-=npcs[bu].danoquerecibira;
+			}
+			npcs[bu].asesino=bullets[b].owner;
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	for(uint bu=0; bu < monstruos.length(); bu++){
+		if(bullets[b].x==monstruos[bu].x && bullets[b].y==monstruos[bu].y) {
+			monstruos[bu].golpeado=bullets[b].owner;
+			monstruos[bu].vida-=dano;
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	dano=amount;
+	j=get_player_index_from(bullets[b].owner);
+	for (uint i=0; i<mapplayers.length(); i++) {
+		if(bullets[b].x ==players[mapplayers[i]].x && bullets[b].y== players[mapplayers[i]].y && players[mapplayers[i]].invs==0 && !players[mapplayers[i]].afk && players[mapplayers[i]].pacifico==0 && mapplayers[i] !=j) {
+			for(uint bunda=0; bunda<players[j].nomesequipe.length(); bunda++) {
+				if(players[j].nomesequipe[bunda]==players[mapplayers[i]].charname){
+					return;
+				}
+			}
+			int d=2;
+			int pozic =random(1, 6);
+			if(pozic==2){
+				send_packet(5, "play_wall ba.ogg", bullets[b].x, bullets[b].y);
+				bullets.remove_at(b);
+				return;
+			}
+			if(players[mapplayers[i]].crouched==0&&players[mapplayers[i]].watching==0 && !players[mapplayers[i]].in_portal){
+				int c_i=-1;
+				if(players[mapplayers[i]].clothing_indexs.length()>0) c_i=random(0, players[mapplayers[i]].clothing_indexs.length()-1);
+				players[mapplayers[i]].lasthit=bullets[b].owner;
+				if(c_i>-1&&has_clothe(c_i, mapplayers[i])&&clothes[players[mapplayers[i]].clothing_indexs[c_i]].enable_degradation==1){
+					players[mapplayers[i]].manage_degradation(clothes[players[mapplayers[i]].clothing_indexs[c_i]].name, clothes[players[mapplayers[i]].clothing_indexs[c_i]].degradation);
+				}
+				if(players[mapplayers[i]].clothing_protection>0){
+					double new_damage, new_amount=amount*players[mapplayers[i]].clothing_protection;
+					new_damage=amount-new_amount;
+					players[mapplayers[i]].health-=new_damage;
+				}
+				else{
+					players[mapplayers[i]].health-=amount;
+				}
+				send_packet(5, "play_body "+weapons[bullets[b].weapon-1].sounds_impact_on_corpse[random(0, weapons[bullets[b].weapon-1].sounds_impact_on_corpse.length()-1)]+".ogg", bullets[b].x, bullets[b].y);
+				//send_packet(0, "inithurt "+players[mapplayers[i]].voice, players[mapplayers[i]].x, players[mapplayers[i]].y);
+				bullets.remove_at(b);
+				return;
+			}
+		}
+	}
+	if(is_wall(bullets[b].x, bullets[b].y)){
+		send_packet(5, "play_wall "+weapons[bullets[b].weapon-1].sounds_impact[random(0, weapons[bullets[b].weapon-1].sounds_impact.length()-1)]+".ogg", bullets[b].x, bullets[b].y, 20, true);
+		bullets.remove_at(b);
+		return;
+	}
+}
+
+	void earthquakeloop() {
+		for(int i=0; i<earthquakes.length(); i++) {
+			if(earthquakes[i].active  && earthquakes[i].damagetimer.elapsed>=5000){
+				earthquakes[i].damagetimer.restart();
+				for(int j=0; j<mapplayers.length(); j++) {
+					if(players[mapplayers[j]].health>0&&players[mapplayers[j]].watching==0){
+						players[mapplayers[j]].health-=random(30000, 40000);
+						players[mapplayers[j]].lasthit ="terremoto_"+" "+earthquakes[i].owner;
+						send_packet(0, "inithurt "+players[mapplayers[j]].voice, players[mapplayers[j]].x, players[mapplayers[j]].y);
+					}
+				}
+			}
+			if(earthquakes[i].duration.elapsed>=60000 && earthquakes[i].active==true) {
+				send_packet(0, "msg2 ;parece que el terremoto ha terminado.;", false);
+				earthquakes[i].active=false;
+			}
+			if(!earthquakes[i].active) {
+				destroy_moving_sound(earthquakes[i].earthquake_sound);
+				@earthquakes[i] =null;
+				earthquakes.remove_at(i);
+			}
+		}
+	}
+
+// mine loop
+	void mineloop() {
+		for(int i=0; i<mines.length(); i++) {
+			if(mines[i].active) {
+				int distance;
+				send_packet(0, "impact "+mines[i].sound_explosion, mines[i].x, mines[i].y);
+				for(int j=0; j<mapplayers.length(); j++) {
+					distance =get_distance(mines[i].x, players[mapplayers[j]].x, mines[i].y, players[mapplayers[j]].y);
+					if(players[mapplayers[j]].pacifico==0 && !players[mapplayers[j]].afk && !players[mapplayers[j]].newbie && players[mapplayers[j]].antimina==0 && !players[mapplayers[j]].in_portal) {
+						send_packet(0, "inithurt "+players[mapplayers[j]].voice, players[mapplayers[j]].x, players[mapplayers[j]].y);
+						players[mapplayers[j]].lasthit=mines[i].owner+"'s mina";
+						players[mapplayers[j]].health-=mines[i].get_damage(distance);
+					}
+				}
+				for(int j=0; j<arbols.length(); j++) {
+					distance =get_distance(mines[i].x, arbols[j].x, mines[i].y, arbols[j].miny);
+					arbols[j].vida-=mines[i].get_damage(distance);
+				}
+				for(int j=0; j<npcs.length(); j++) {
+					if(npcs[j].enablebombs!=0) {
+						distance =get_distance(mines[i].x, npcs[j].x, mines[i].y, npcs[j].y);
+						npcs[j].asesino=mines[i].owner;
+						npcs[j].vida-=mines[i].get_damage(distance);
+					}
+				}
+				for(int j=0; j<portals.length(); j++) {
+					distance =get_distance(mines[i].x, portals[j].x, mines[i].y, portals[j].y);
+					portals[j].health-=mines[i].get_damage(distance);
+				}
+				for(int j=0; j<walls.length(); j++) {
+					distance =get_distance(mines[i].x, walls[j].x, mines[i].y, walls[j].miny);
+					walls[j].vida-=mines[i].get_damage(distance);
+				}
+				mines.remove_at(i);
+				break;
+			}
+		}
+	}
+
+	void npcLoop() {
+		for(int i=0; i<npcs.length(); i++) {
+			if(npcs[i].mapindex==-1){
+				npcs[i].mapindex=get_map_index_from(this.name);
+			}
+			if(npcs[i].vida<=0){
+				npcs[i].die();
+				@npcs[i] =null;
+				npcs.remove_at(i);
+				break;
+			}
+			if(npcs[i].ttiempodelossonidos.elapsed>=npcs[i].tiempodelossonidos){
+				npcs[i].ttiempodelossonidos.restart();
+				send_packet(5, "play_npc "+npcs[i].sonidosnervioso[random(0, npcs[i].sonidosnervioso.length()-1)]+".ogg", npcs[i].x, npcs[i].y);
+			}
+			if(npcs[i].p_index>-1){
+				bool exists=npcs[i].exists_player_in_my_map();
+				if(!exists) npcs[i].p_index=-1;
+			}
+			if(npcs[i].p_index==-1){
+				npcs[i].p_index=npcs[i].select_player_to_attack();
+			}
+			if(npcs[i].update_player.elapsed>=50){
+				npcs[i].update_player.restart();
+				if(mapplayers.length()>1){
+					if(npcs[i].p_index>-1&&(players[npcs[i].p_index].pacifico==1||players[npcs[i].p_index].afk)) npcs[i].p_index=npcs[i].change_player(npcs[i].p_index);
+				}
+			}
+			if(npcs[i].ttiempoparacaminar.elapsed>=npcs[i].tiempoparacaminar&&npcs[i].p_index>-1){
+				npcs[i].ttiempoparacaminar.restart();
+				npcs[i].move();
+			}
+			if(npcs[i].ttiempoparaatacar.elapsed>=npcs[i].tiempoparaatacar){
+				npcs[i].ttiempoparaatacar.restart();
+				if(npcs[i].p_index>-1&&get_distance(npcs[i].x, players[npcs[i].p_index].x, npcs[i].y, players[npcs[i].p_index].y)>-1&&get_distance(npcs[i].x, players[npcs[i].p_index].x, npcs[i].y, players[npcs[i].p_index].y)<=npcs[i].distanciaataques&&!players[npcs[i].p_index].afk&&players[npcs[i].p_index].watching==0&&players[npcs[i].p_index].pacifico==0) npcs[i].attack();
+			}
+		}
+	} // end npc loop
+
+void npcDataLoop() {
+int npcs_total=0;
+for(int i=0; i<npcs_data.length(); i++) {
+if(npcs_data[i].respawn.elapsed>=npcs_data[i].tiempoaparicion){
+if(npcs_data[i].enablerespawn==0) {
+if(get_npc_index(npcs_data[i].nombrenpc)>-1) {
+npcs_total++;
+}
+if(npcs_total==0){
+npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida, npcs_data[i].xp, npcs_data[i].distanciaataques, npcs_data[i].danoquerecibira, npcs_data[i].danoquedara, npcs_data[i].danodelespejo, npcs_data[i].tiempoparaatacar, npcs_data[i].tiempoparacaminar, npcs_data[i].tiempodelossonidos, npcs_data[i].itemsadar, npcs_data[i].sonidoataque, npcs_data[i].sonidonervioso, npcs_data[i].sonidomuerte, npcs_data[i].nombrenpc, npcs_data[i].msgmuerte, npcs_data[i].tiempoaparicion, npcs_data[i].enablerespawn, npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc, npcs_data[i].left_range, npcs_data[i].right_range, npcs_data[i].impactosbala, npcs_data[i].degradation);
+@npcs_data[i] =null;
+npcs_data.remove_at(i);
+npcs.insert_last(n);
+break;
+}
+}
+else if(npcs_data[i].enablerespawn==1){
+npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida, npcs_data[i].xp, npcs_data[i].distanciaataques, npcs_data[i].danoquerecibira, npcs_data[i].danoquedara, npcs_data[i].danodelespejo, npcs_data[i].tiempoparaatacar, npcs_data[i].tiempoparacaminar, npcs_data[i].tiempodelossonidos, npcs_data[i].itemsadar, npcs_data[i].sonidoataque, npcs_data[i].sonidonervioso, npcs_data[i].sonidomuerte, npcs_data[i].nombrenpc, npcs_data[i].msgmuerte, npcs_data[i].tiempoaparicion, npcs_data[i].enablerespawn, npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc, npcs_data[i].left_range, npcs_data[i].right_range, npcs_data[i].impactosbala, npcs_data[i].degradation);
+@npcs_data[i] =null;
+npcs_data.remove_at(i);
+npcs.insert_last(n);
+break;
+}
+}
+}
+}
+
+	void monstruoloop() {
+		for(uint i=0; i<monstruos.length(); i++) {
+			if(monstruos[i].vida<=0) {
+				send_packet(5, "play_npc m_monstruo.ogg", monstruos[i].x, monstruos[i].y);
+				string golp=monstruos[i].golpeado;
+				send_reliable(0, "msgmuerte "+golp+"; ;ha derrotado al monstruo legendario!", 3);
+				int xx=get_player_index_from(golp);
+				if(xx>-1){
+					gc(players[xx].charname, random(20, 35));
+					players[xx].inv_add_item("hueso_del_monstruo", 1);					players[xx].inv_add_item("reais", 94525239);
+					players[xx].inv_add_item("dólares", 16592363);
+					ganhaxp(players[xx].charname, random(65000000, 75000000));
+				}
+				monstruo_data mnd(monstruos[i].x, monstruos[i].y);
+				@monstruos[i] =null;
+				monstruos.remove_at(i);
+				monstruos_data.insert_last(mnd);
+				break;
+			}
+			if(monstruos[i].tsom.elapsed>=monstruos[i].asom+random(1000, 3200)){
+				monstruos[i].tsom.restart();
+				string ss="monstruonervoso.ogg";
+				send_packet(5, "play_npc "+ss, monstruos[i].x, monstruos[i].y);
+			}
+			if(monstruos[i].monstruotimer.elapsed>=monstruos[i].monstruotime) {
+				monstruos[i].monstruotimer.restart();
+				for(int j=0; j<mapplayers.length(); j++) {
+					if(monstruos[i].x>players[mapplayers[j]].x+2 && players[mapplayers[j]].watching==0 && players[mapplayers[j]].newbie ==false && players[mapplayers[j]].afk==false) {
+						monstruos[i].x-=2;
+						string ss=get_tile_at(monstruos[i].x, monstruos[i].y);
+						send_packet(5, "play_step "+ss+"step"+random(1, 5)+".ogg", monstruos[i].x, monstruos[i].y);
+						monstruos[i].monstruotimer.restart();
+						break;
+					}
+					else if(monstruos[i].x<players[mapplayers[j]].x-2 && players[mapplayers[j]].watching==0 && players[mapplayers[j]].afk==false && players[mapplayers[j]].newbie==false) {
+						monstruos[i].x+=2;
+						string ss=get_tile_at(monstruos[i].x, monstruos[i].y);
+						send_packet(5, "play_step "+ss+"step"+random(1, 5)+".ogg", monstruos[i].x, monstruos[i].y);
+						monstruos[i].monstruotimer.restart();
+						break;
+					}
+					if(get_distance(monstruos[i].x, players[mapplayers[j]].x, monstruos[i].y, players[mapplayers[j]].y)>2 && players[mapplayers[j]].afk==false && players[mapplayers[j]].watching==0 && players[mapplayers[j]].pacifico==0 && players[mapplayers[j]].newbie==false && monstruos[i].tempoatirar.elapsed>=1500 && monstruos[i].tiros>0) {
+						monstruos[i].tempoatirar.restart();
+						string ss="monstruobater"+random(1, 4)+".ogg";
+						if(ss=="monstruobater2.ogg"){
+							send_packet(5, "play_npc "+ss, monstruos[i].x, monstruos[i].y);
+							send_reliable(players[mapplayers[j]].peer_id, "ataque", 0);
+							players[mapplayers[j]].centado=true;
+						}
+						else{
+							send_packet(5,"play_npc "+ss, monstruos[i].x, monstruos[i].y);
+						}
+						players[mapplayers[j]].health-=random(40000, 60000);
+						send_packet(0, "inithurt "+players[mapplayers[j]].voice, players[mapplayers[j]].x, players[mapplayers[j]].y);
+						players[mapplayers[j]].lasthit="monstruo";
+						monstruos[i].tiros--;
+						break;
+					}
+					if(monstruos[i].tiros<=0){
+						monstruos[i].tiros=1;
+						monstruos[i].tempoatirar.restart();
+					}
+				}
+			}
+		}
+	}
+
+	void monstruo_dataloop() {
+		for(int i=0; i<monstruos_data.length(); i++) {
+			if(monstruos_data[i].trespawn.elapsed>=monstruos_data[i].spawntime) {
+				monstruo mn(monstruos_data[i].x, monstruos_data[i].y, this.name);
+				@monstruos_data[i] =null;
+				monstruos_data.remove_at(i);
+				monstruos.insert_last(mn);
+				break;
+			}
+		}
+	}
+
+	void plasmabomb_loop() {
+		for(int i=0; i<plasmabombs.length(); i++) {
+			if(plasmabombs[i].explosiontime>0 && plasmabombs[i].objecttimer.elapsed>=1000) {
+				plasmabombs[i].objecttimer.restart();
+				plasmabombs[i].explosiontime-=1;
+			}
+			if(plasmabombs[i].explosiontime==0) {
+				send_packet(5, "play_npc "+plasmabombs[i].explosion_sound, plasmabombs[i].coor_x, plasmabombs[i].coor_y);
+				for(int j=0; j<mapplayers.length(); j++) {
+					if(!players[mapplayers[j]].afk && !players[mapplayers[j]].newbie && !players[mapplayers[j]].is_admin() && players[mapplayers[j]].watching==0 && players[mapplayers[j]].pacifico==0) {
+						players[mapplayers[j]].lasthit =plasmabombs[i].name+" "+"de"+" "+plasmabombs[i].owner;
+						players[mapplayers[j]].health =0;
+					}
+				}
+				plasmabombs.remove_at(i);
+				break;
+			}
+		}
+	} // end plasma bomb loop
+
+// pia loop
+	void pialoop() {
+		for(int i=0; i<pias.length(); i++) {
+			if(pias[i].aberta&&pias[i].fechar.elapsed>=7903) {
+				pias[i].aberta=false;
+				send_packet(0, "startmoving", pias[i].x, pias[i].y, 0);
+				pias[i].fechando.force(0);
+				pias[i].fechando.pause();
+				pias[i].fechar.force(0);
+				pias[i].fechar.pause();
+			}
+			if(pias[i].aberta&&pias[i].fechando.elapsed>=250){
+				pias[i].fechando.restart();
+				for(uint j=0; j<mapplayers.length(); j++){
+					if(pias[i].x ==players[mapplayers[j]].x && pias[i].y ==players[mapplayers[j]].y){
+						players[mapplayers[j]].sujo-=5;
+						if(players[mapplayers[j]].sujo<0) players[mapplayers[j]].sujo=0;
+					}
+				}
+			}
+		}
+	} // end pia loop
+
+// portal loop
+	void portal_loop() {
+		for(int i=0; i<portals.length(); i++) {
+			if(portals[i].time_wait>0 && portals[i].portaltimer.elapsed>=1000) {
+				portals[i].portaltimer.restart();
+				portals[i].time_wait-=1;
+				update_moving_sound(portals[i].sound_loop, portals[i].x, portals[i].y);
+			}
+			if(portals[i].health<=0) {
+				int distance;
+				destroy_moving_sound(portals[i].sound_loop);
+				send_packet(5, "play_npc "+portals[i].sound_explosion, portals[i].x, portals[i].y, portals[i].damage_range);
+				for(int j=0; j<mapplayers.length(); j++) {
+					distance =get_distance(portals[i].x, players[mapplayers[j]].x, portals[i].y, players[mapplayers[j]].y);
+					players[mapplayers[j]].lasthit ="portal_de_luz";
+					players[mapplayers[j]].health-=portals[i].get_damage(distance);
+				}
+				for(int j=0; j<arbols.length(); j++) {
+					distance =get_distance(portals[i].x, arbols[j].x, portals[i].y, arbols[j].miny);
+					arbols[j].vida-=portals[i].get_damage(distance);
+				}
+				for(int j=0; j<npcs.length(); j++) {
+					if(npcs[j].enablebombs!=0) {
+						distance =get_distance(portals[i].x, npcs[j].x, portals[i].y, npcs[j].y);
+						npcs[j].asesino=portals[i].owner;
+						npcs[j].vida-=portals[i].get_damage(distance);
+					}
+				}
+				for(int j=0; j<walls.length(); j++) {
+					distance =get_distance(portals[i].x, walls[j].x, portals[i].y, walls[j].miny);
+					walls[j].vida-=portals[i].get_damage(distance);
+				}
+				portals.remove_at(i);
+				break;
+			}
+			if(portals[i].time_wait==0) {
+				string[] portalplayers =portals[i].portalplayers.get_keys();
+				int restorehealth;
+				for(int j=portalplayers.length()-1; j>-1; j--) {
+					int index =get_player_index_from(portalplayers[j]);
+					if(index>-1) {
+						if(players[index].in_portal) {
+							changemap(portals[i].destination, index,  portals[i].destination_x, portals[i].destination_y);
+							portals[i].portalplayers.get(portalplayers[j], restorehealth);
+							players[index].health +=restorehealth;
+							portals[i].health -=restorehealth;
+							send_reliable(players[index].peer_id, "startmoving", 0);
+							players[index].in_portal=false;
+							portals[i].portalplayers.delete(j);
+						}
+					}
+				}
+				destroy_moving_sound(portals[i].sound_loop);
+				send_packet(5, "play_npc "+portals[i].sound_final, portals[i].x, portals[i].y);
+				server_maps[portals[i].mapindex2].send_packet(5, "play_npc "+portals[i].sound_appears, portals[i].destination_x, portals[i].destination_y);
+				portals.remove_at(i);
+				break;
+			}
+		}
+	} // end portal loop
+
+	void spawn_obj(string coors_x, int y, int time_out, int disable_respawn, double amount, string itemname, string sound_get, int time_respawn=0){
+		string[] data=string_split(coors_x, ",", false);
+		if(data.length()==1){
+			obj o(string_to_number(data[0]), y, time_out, disable_respawn, amount, itemname, this.name, sound_get, time_respawn);
+			objs.insert_last(o);
+		}
+		else if(data.length()>1){
+			obj o(random(string_to_number(data[0]), string_to_number(data[1])), y, time_out, disable_respawn, amount, itemname, this.name, sound_get, time_respawn);
+			objs.insert_last(o);
+		}
+	}
+
+	int have_extract(int x, int y){
+		for(int i=0; i<extracts.length(); i++){
+			int minx=extracts[i].minx;
+			int maxx=extracts[i].maxx;
+			int miny=extracts[i].miny;
+			int maxy=extracts[i].maxy;
+			if(minx>x) continue;
+			if(minx<=x && maxx>=x &&miny <=y && maxy>=y){
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int have_toilet(int x, int y){
+		for(int i=0; i<banheiros.length(); i++){
+			if(x==banheiros[i].x&&y==banheiros[i].y){
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int have_handwash(int x, int y){
+		for(int i=0; i<pias.length(); i++){
+			if(x==pias[i].x&&y==pias[i].y){
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int have_mine(int x, int y) {
+		for(int i=0; i<mines.length(); i++) {
+			if(mines[i].x==x && mines[i].y==y) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int have_obj(int x, int y) {
+		for(int i=0; i<objs.length(); i++) {
+			if(objs[i].x==x && objs[i].y==y) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	bool have_portal(int x, int y, int &out portalindex) {
+		for(int i=0; i<portals.length(); i++) {
+			if(portals[i].x==x && portals[i].y==y) {
+				portalindex =i;
+				return true;
+			}
+		}
+		portalindex =-1;
+		return false;
+	}
+
+	int get_npc_index(int id){
+		for(int x=0; x<npcs.length(); x++){
+			if(npcs[x].id==id){
+				return x;
+			}
+		}
+		return -1;
+	}
+
+	int get_npc_index(int x, int y){
+		for(int i=0; i<npcs.length(); i++){
+			if(npcs[i].x_inicial==x&&npcs[i].y_inicial==y){
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int get_npc_index(string name){
+		for(int x=0; x<npcs.length(); x++){
+			if(npcs[x].nombrenpc==name){
+				return x;
+			}
+		}
+		return -1;
+	}
+
+	int get_npc_quantity(string name) {
+	int quantity=0;
+	for(int x=0; x<npcs.length(); x++){
+		if(npcs[x].nombrenpc==name){
+			quantity++;
+		}
+		return quantity;
+	}
+	return 0;
+}
+
+	bool is_disabled(string item){
+		if(desactivados.exists(item)){
+			return true;
+		}
+		return false;
+	}
+
+	string get_tile_at(int x, int y) {
+		string outval;
+		int minx, maxx, miny, maxy;
+		for(uint i=0; i<platforms.length(); i++) {
+			minx =platforms[i].min_x;
+			maxx =platforms[i].max_x;
+			miny =platforms[i].min_y;
+			maxy =platforms[i].max_y;
+			if(minx>x)continue;
+			if(minx<=x && maxx>=x && miny<=y && maxy>=y) {
+				outval =platforms[i].tiles;
+				continue;
+			}
+		}
+		return outval;
+	}
+
+	bool is_platform(int x, int y) {
+		int minx, maxx, miny, maxy;
+		for(uint i=0; i<platforms.length(); i++) {
+			minx =platforms[i].min_x;
+			maxx =platforms[i].max_x;
+			miny =platforms[i].min_y;
+			maxy =platforms[i].max_y;
+			if(minx>x)continue;
+			if(minx<=x && maxx>=x && miny<=y && maxy>=y && platforms[i].is_platform) return platforms[i].is_platform;
+		}
+		return false;
+	}
+
+	bool is_staircase(int x, int y) {
+		bool is_staircase;
+		int minx, maxx, miny, maxy;
+		for(uint i=0; i<platforms.length(); i++) {
+			minx =platforms[i].min_x;
+			maxx =platforms[i].max_x;
+			miny =platforms[i].min_y;
+			maxy =platforms[i].max_y;
+			if(minx>x)continue;
+			if(minx<=x && maxx>=x && miny<=y && maxy>=y && platforms[i].is_staircase) return platforms[i].is_staircase;
+		}
+		return false;
+	}
+
+	bool is_wall(int x, int y) {
+		int minx, maxx, miny, maxy;
+		for(uint i=0; i<platforms.length(); i++) {
+			minx =platforms[i].min_x;
+			maxx =platforms[i].max_x;
+			miny =platforms[i].min_y;
+			maxy =platforms[i].max_y;
+			if(minx>x)continue;
+			if(minx<=x && maxx>=x && miny<=y && maxy>=y && platforms[i].is_wall) return platforms[i].is_wall;
+		}
+		return false;
+	}
+
+	string get_zone_at(int x, int y) {
+	string outval;
+		for(uint i=0; i<zones.length(); i++) {
+		if(zones.length()>0) {
+			int minx =zones[i].min_x;
+			int maxx =zones[i].max_x;
+			int miny =zones[i].min_y;
+			int maxy =zones[i].max_y;
+			if(minx>x)continue;
+				if(minx<=x && maxx>=x && miny<=y && maxy>=y)outval =zones[i].text;
+			}
+		}
+	return outval;
+}
+
+	string get_locate_at() {
+	string outval;
+		for(uint i=0; i<mapdata.length(); i++) {
+			string[] parsed=string_split(mapdata[i], ":", false);
+			if(parsed[0]=="where"&&parsed.length()>1) {
+				outval=parsed[1];
+			}
+		}
+	return outval;
+}
+
+	bool get_safezone_at(int x, int y) {
+	string outval;
+		for(uint i=0; i<safezones.length(); i++){
+		if(safezones.length()>0) {
+				int minx=safezones[i].min_x;
+				int maxx =safezones[i].max_x;
+				int miny =safezones[i].min_y;
+				int maxy =safezones[i].max_y;
+				if(minx>x)continue;
+				if(minx<=x&& maxx>=x&& miny<=y&& maxy>=y)return true;
+			}
+		}
+	return false;
+}
+
+	void view_items(int index){
+		string final;
+		int items_cantity=0;
+		for(int x=0; x<objs.length(); x++){
+			int coor_x=objs[x].x, coor_y=objs[x].y;
+			string direction_x, direction_y, name=objs[x].itemname;
+			double distance_min_x=players[index].x-coor_x, distance_max_x=coor_x-players[index].x, distance_min_y=players[index].y-coor_y, distance_max_y=coor_y-players[index].y;
+			if(distance_min_x<=30&&distance_min_y<=30&&distance_max_x<=30&&distance_max_y<=30){
+				if(coor_x<players[index].x) direction_x=distance_min_x+" ;pasos a tu izquierda;";
+				else if(coor_x>players[index].x) direction_x=distance_max_x+" ;pasos a tu derecha;";
+				else if(coor_x==players[index].x) direction_x=";justo al frente de ti;";
+				if(coor_y<players[index].y) direction_y=distance_min_y+" ;pasos hacia abajo;";
+				else if(coor_y>players[index].y) direction_y=distance_max_y+" ;pasos hacia arriba;";
+				items_cantity++;
+				if(direction_x!=""&&direction_y!="") final+=";"+name+";, "+direction_y+", "+direction_x+". ";
+				else if(direction_x!=""&&direction_y=="") final+=";"+name+";, "+direction_x+". ";
+				else if(direction_x==""&&direction_y!="") final+=";"+name+";, "+direction_y+". ";
+			}
+		}
+		if(items_cantity==0) final=";No hay objetos cerca de ti.;";
+		send_reliable(players[index].peer_id, "msg2 "+final, 0);
+	}
+
+	void view(int index) {
+		bool achou=false;
+		int distance;
+		int range =12;
+		string a="Cerca de ti se encuentra:;";
+		for(uint i=0; i<arbols.length(); i++){
+			distance =get_distance(players[index].x, arbols[i].x, players[index].y, arbols[i].miny);
+			if(distance<=range) {
+				a+=" ;"+arbols[i].name+";, ;con; "+arbols[i].vida+" ;de vida.;";
+					achou=true;
+			}
+		}
+		for(int i=0; i<walls.length(); i++){
+			distance =get_distance(players[index].x, walls[i].x, players[index].y, walls[i].miny);
+			if(distance<=range) {
+				a+=" ;"+walls[i].name+";, ;con; "+walls[i].vida+" ;de vida.;";
+				achou=true;
+			}
+		}
+		for(int i=0; i<npcs.length(); i++){
+			distance =get_distance(players[index].x, npcs[i].x, players[index].y, npcs[i].y);
+			if(distance<=range) {
+				a+=" ;"+npcs[i].nombrenpc+";, ;com; "+npcs[i].vida+"; ;de vida.";
+				achou=true;
+			}
+		}
+		for(int i=0; i<portals.length(); i++) {
+			distance =get_distance(players[index].x, portals[i].x, players[index].y, portals[i].y);
+			if(distance<=range) {
+				a+=" "+portals[i].getdesc();
+				achou=true;
+			}
+		}
+		for(int i=0;i<jaulas.length();i++){
+			distance =get_distance(players[index].x, jaulas[i].x, players[index].y, jaulas[i].y);
+			if(distance<=range && jaulas[i].map==this.name) {
+				a+=" ;jaula de; "+jaulas[i].dueno+", ;com; "+jaulas[i].vida+"; ;de vida.";
+				achou=true;
+			}
+		}
+		for(int i=0;i<cachorromascotas.length();i++){
+			distance =get_distance(players[index].x, cachorromascotas[i].x, players[index].y, cachorromascotas[i].y);
+			if(distance<=range && cachorromascotas[i].mapindex==this.mapindex) {
+				a +=" "+cachorromascotas[i].getdesc();
+				achou=true;
+			}
+		}
+		for(int i=0; i<monstruos.length(); i++) {
+			distance =get_distance(players[index].x, monstruos[i].x, players[index].y, monstruos[i].y);
+			if(distance<=range) {
+				a+=" ;el monstruo legendario;, ;com; "+monstruos[i].vida+"; ;de vida.;";
+				achou=true;
+			}
+		}
+		if(achou==false)send_reliable(players[index].peer_id, "msgnormal Nada por perto.", 0);
+		else if(achou==true)send_reliable(players[index].peer_id, "msg2 "+a, 0);
+	}
+
+	void send_packet(int channel, string packet, int x=-1, int y=-1, int range =20, bool reliable =true) {
+		for (int i=0; i<mapplayers.length(); i++){
+			if (get_distance(players[mapplayers[i]].x, x,  players[mapplayers[i]].y, y)<=range) {
+				if(reliable) send_reliable(players[mapplayers[i]].peer_id, packet+" "+x+" "+y, channel);
+				else send_unreliable(players[mapplayers[i]].peer_id, packet+" "+x+" "+y, channel);
+			}
+		}
+	}
+
+	void send_packet(int channel, string packet, bool reliable =true) {
+		for (int i=0; i<mapplayers.length(); i++){
+			if(reliable) send_reliable(players[mapplayers[i]].peer_id, packet, channel);
+			else send_unreliable(players[mapplayers[i]].peer_id, packet, channel);
+		}
+	}
+
+	void send_to_others(int peer, int channel, string packet, int x=0, int y=0, int range=20, bool reliable=false) {
+		if(mapplayers.length()<=1) return;
+		for (int i=0; i<mapplayers.length(); i++) {
+			if(players[mapplayers[i]].peer_id !=peer) {
+				if (get_distance(players[mapplayers[i]].x, x,  players[mapplayers[i]].y, y)<=range) {
+					if(reliable) send_reliable(players[mapplayers[i]].peer_id, packet+" "+x+" "+y, channel);
+					else send_unreliable(players[mapplayers[i]].peer_id, packet+" "+x+" "+y, channel);
+				}
+			}
+		}
+	}
+
+	void send_to_others(int peer, int channel, string packet, bool reliable=false) {
+		if(mapplayers.length()<=1) return;
+		for (int i=0; i<mapplayers.length(); i++) {
+			if(players[mapplayers[i]].peer_id !=peer) {
+				if(reliable) send_reliable(players[mapplayers[i]].peer_id, packet, channel);
+				else send_unreliable(players[mapplayers[i]].peer_id, packet, channel);
+			}
+		}
+	}
+} // end class
+
+void spawn_maps() {
+	string[] filemaps = find_files("maps/*.map");
+	if(filemaps.length()>0) {
+		for(int x=0; x<filemaps.length(); x++) {
+			map map1(filemaps[x]);
+			server_maps.insert_last(map1);
+			server_maps[x].mapindex=x;
+		}
+	}
+	else {
+		alert("Info", "No hay archivos en el directorio maps. Por favor asegúrese de tener por lo menos un archivo en el directorio, y ejecute el servidor de nuevo.");
+		exit();
+	}
+}
+
+void save_map(string map, string content="", bool send_all=true){
+file f;
+int mapindex=get_map_index_from(map);
+if(mapindex>-1){
+for(int i=0; i<server_maps[mapindex].arbols_data.length(); i++){
+server_maps[mapindex].replace_line("arbol:"+server_maps[mapindex].arbols_data[i].x+":-1:-1:"+server_maps[mapindex].arbols_data[i].vida+":"+server_maps[mapindex].arbols_data[i].trespawn+":"+server_maps[mapindex].arbols_data[i].enableitems+":"+server_maps[mapindex].arbols_data[i].items+":"+server_maps[mapindex].arbols_data[i].name, "arbol:"+server_maps[mapindex].arbols_data[i].x+":"+server_maps[mapindex].arbols_data[i].miny+":"+server_maps[mapindex].arbols_data[i].maxy+":"+server_maps[mapindex].arbols_data[i].vida+":"+server_maps[mapindex].arbols_data[i].trespawn+":"+server_maps[mapindex].arbols_data[i].enableitems+":"+server_maps[mapindex].arbols_data[i].items+":"+server_maps[mapindex].arbols_data[i].name);
+}
+for(int i=0; i<server_maps[mapindex].walls_data.length(); i++){
+server_maps[mapindex].replace_line("wall:"+server_maps[mapindex].walls_data[i].x+":-1:-1:"+server_maps[mapindex].walls_data[i].vida+":"+server_maps[mapindex].walls_data[i].trespawn+":"+server_maps[mapindex].walls_data[i].enableitems+":"+server_maps[mapindex].walls_data[i].items+":"+server_maps[mapindex].walls_data[i].name+":"+server_maps[mapindex].walls[i].sound_wall+":"+server_maps[mapindex].walls_data[i].sound_fall, "wall:"+server_maps[mapindex].walls_data[i].x+":"+server_maps[mapindex].walls_data[i].miny+":"+server_maps[mapindex].walls_data[i].maxy+":"+server_maps[mapindex].walls_data[i].vida+":"+server_maps[mapindex].walls_data[i].trespawn+":"+server_maps[mapindex].walls_data[i].enableitems+":"+server_maps[mapindex].walls_data[i].items+":"+server_maps[mapindex].walls_data[i].name+":"+server_maps[mapindex].walls[i].sound_wall+":"+server_maps[mapindex].walls_data[i].sound_fall);
+}
+if(content!="") server_maps[mapindex].mapdata=delinear(content);
+string mapcontent=linear(server_maps[mapindex].mapdata);
+f.open("maps/"+server_maps[mapindex].name+".map", "w");
+f.write(mapcontent);
+f.close();
+insert_map(map);
+if(send_all) update(map);
+}
+}
+
+void update_maps_mapindexes() {
+	for(int i=0; i<server_maps.length(); i++) {
+		server_maps[i].mapindex =get_map_index_from(server_maps[i].name);
+	}
+}
+
+void insert_map(string m) {
+	int mapindex =get_map_index_from(m);
+	if(file_exists("maps/"+m+".map") && mapindex>-1) {
+		map map1(m+".map");
+		@server_maps[mapindex] =null;
+		@server_maps[mapindex] =map1;
+		server_maps[mapindex].mapindex=mapindex;
+		server_maps[mapindex].update_players_on_map(false);
+		return;
+	}
+	else {
+		map map1(m+".map");
+		server_maps.insert_last(map1);
+		server_maps[server_maps.length()-1].mapindex =server_maps.length()-1;
+	}
+}
+
+void remove_map(string m, string change_players_to ="") {
+	int mapindex =get_map_index_from(m);
+	if(mapindex>-1) {
+		if(server_maps[mapindex].mapplayers.length()>0) {
+			for(int i=server_maps[mapindex].mapplayers.length()-1; i>-1; i--) {
+				if(change_players_to !="") changemap(change_players_to, server_maps[mapindex].mapplayers[i], players[server_maps[mapindex].mapplayers[i]].x, players[server_maps[mapindex].mapplayers[i]].y);
+				else changemap("parque", server_maps[mapindex].mapplayers[i], 1, 0);
+			}
+		}
+		server_maps.remove_at(mapindex);
+	}
+	for(int i=0; i<players.length(); i++) {
+		players[i].mapindex =get_map_index_from(players[i].map);
+	}
+	update_maps_mapindexes();
+	update_cachorros_mapindexes();
+}
+
+int have_extract(int x, int y, string mapname){
+	int id=get_map_index_from(mapname);
+	if(id>-1){
+		int extract_id=server_maps[id].have_extract(x, y);
+		if(extract_id>-1){
+			return extract_id;
+		}
+	}
+	return -1;
+}
+
+bool is_disabled(string item, string m) {
+	int id =get_map_index_from(m);
+	if(id>-1){
+		if(server_maps[id].is_disabled(item)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+string get_tile_at(int x, int y, string m) {
+	string outval;
+	int id =get_map_index_from(m);
+	if(id>-1) {
+		outval =server_maps[id].get_tile_at(x, y);
+	}
+return outval;
+}
+
+string get_zone_at(int x, int y, string mapname) {
+	string outval;
+	int id =get_map_index_from(mapname);
+	if(id>-1){
+			outval =server_maps[id].get_zone_at(x, y);
+	}
+return outval;
+}
+
+string get_locate_at(string mapname) {
+	string outval;
+	int id =get_map_index_from(mapname);
+	if(id>-1){
+		outval =server_maps[id].get_locate_at();
+	}
+	return outval;
+}
+
+bool get_safezone_at(int x, int y, string mapname) {
+	string outval;
+	int id =get_map_index_from(mapname);
+	if(id>-1){
+		if(server_maps[id].get_safezone_at(x, y)) {
+			return true;
+		}
+	}
+return false;
+}
+
+void create_tile(string type, int minx, int maxx, int miny, int maxy, string tile, string map){
+int mapindex=get_map_index_from(map);
+if(mapindex>-1){
+platform p1(type, minx, maxx, miny, maxy, tile);
+server_maps[mapindex].platforms.insert_last(p1);
+}
+}
+
+void remove_tile(string type, int minx, int maxx, int miny, int maxy, string map){
+int mapindex=get_map_index_from(map);
+if(mapindex>-1){
+int tileindex=get_tile_index_from(type, minx, maxx, miny, maxy, server_maps[mapindex].name);
+if(tileindex>-1){
+@server_maps[mapindex].platforms[tileindex]=null;
+server_maps[mapindex].platforms.remove_at(tileindex);
+}
+}
+}
+
+int get_tile_index_from(string type, int minx, int maxx, int miny, int maxy, string map){
+int mapindex=get_map_index_from(map);
+if(mapindex>-1){
+for(int x=0; x<server_maps[mapindex].platforms.length(); x++){
+if(server_maps[mapindex].platforms[x].plattype==type&&server_maps[mapindex].platforms[x].min_x==minx&&server_maps[mapindex].platforms[x].max_x==maxx&&server_maps[mapindex].platforms[x].min_y==miny&&server_maps[mapindex].platforms[x].max_y==maxy){
+return x;
+}
+}
+return -1;
+}
+return -1;
+}
+
+int get_zone_index_from(int minx, int maxx, int miny, int maxy, string map){
+int mapindex=get_map_index_from(map);
+if(mapindex>-1){
+for(int x=0; x<server_maps[mapindex].zones.length(); x++){
+if(server_maps[mapindex].zones[x].min_x==minx&&server_maps[mapindex].zones[x].max_x==maxx&&server_maps[mapindex].zones[x].min_y==miny&&server_maps[mapindex].zones[x].max_y==maxy){
+return x;
+}
+}
+return -1;
+}
+return -1;
+}
+
+int get_map_index_from(string m) {
+	for(int i=0; i<server_maps.length(); i++) {
+		if(server_maps[i].name==m) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+string linear(string[] a, string char_separator="\r\n"){
+	string final;
+	for(uint i=0; i<a.length(); i++)
+	{
+		final+=a[i]+char_separator;
+	}
+	return final;
+}
+
+string linear(uint[] data, string char_separator="\r\n"){
+	string final;
+	for(uint i=0; i<data.length(); i++)
+	{
+		final+=data[i]+char_separator;
+	}
+	return final;
+}
+
+string[] delinear(string a, string char_separator="\r\n"){
+	return string_split(a, char_separator, false);
+}

@@ -1,0 +1,247 @@
+//cachorromascota
+cachorromascota@[] cachorromascotas;
+class cachorromascota{
+	int x, y, ladoandar=2, owner_is_online=0, owner_index=-1, mapindex, active=0;
+	uint tiros=1;
+	double vida=random(2000, 2300);
+	string dueno, name;
+	string map;
+	timer cachorromascotatimer;
+	timer tsom;
+	timer tnecesidad, tnecesidad2;
+	int asom=4000;
+	int cachorromascotatime=200;
+	bool comida, subido;
+	int amarrado;
+	cachorromascota(int cx, int cy, string cmap, string dueno2, double vida2, int amarrado2, string name2){
+		x=cx;
+		y=cy;
+		map=cmap;
+		dueno=dueno2;
+		vida=vida2;
+		amarrado=amarrado2;
+		this.name=name2;
+		this.mapindex=get_map_index_from(this.map);
+	}
+
+	void cachorromascotaMuere() {
+		mapindex =get_map_index_from(this.map);
+		if(mapindex>-1) {
+			server_maps[mapindex].send_packet(5, "play_npc m_cachorro.ogg", this.x, this.y);
+		}
+		int index =get_player_index_from(this.dueno);
+		if(index>-1) {
+			send_reliable(players[index].peer_id, "msgmuerte el adorable cachorrito no pudo aguantar por mucho tiempo y ha muerto por falta de comida y bebida! si no eres capaz de cuidar a un lindo cachorro, por que lo adoptas? irresponsable!", 3);
+			send_reliable(players[index].peer_id, "msg2 has perdido 100 niveles por tu falta de responsabilidad.", 0);
+		}
+		if(players[index].level>100){
+			players[index].level-=100;
+			players[index].cantidadcachorros--;
+		}
+		if(players[index].cantidadcachorros<=0) {
+			players[index].cantidadcachorros=0;
+		}
+	}
+
+	void cachorromascotaloop(){
+		if(this.vida<=0) {
+			int index =get_cachorro_index(this.dueno);
+			if(index>-1) {
+				cachorromascotaMuere();
+				cachorromascotas.remove_at(index);
+			}
+		}
+		if(this.tsom.elapsed>=this.asom+random(1000, 3200)){
+			this.tsom.restart();
+			string ss="cachorronervoso"+random(1, 4)+".ogg";
+			send_packet(5, "play_npc "+ss, this.x, this.y, this.mapindex);
+		}
+		if(this.owner_is_online==0 && this.active==1) {
+			this.changemap("jaula_del_cachorro_de_"+this.dueno, 15, 0);
+			this.sleep();
+		}
+		int index2 =this.owner_index;
+		if(index2>-1){
+			if(this.mapindex!=players[index2].mapindex && this.amarrado==0 && !is_game_disabled(players[index2].x, players[index2].y, players[index2].mapindex)){
+				this.changemap(players[index2].map, players[index2].x, players[index2].y);
+			}
+			else if(this.x!=players[index2].x && this.amarrado==0 && this.subido || this.y!=players[index2].y && this.amarrado==0 && this.subido){
+				if(!is_game_disabled(players[index2].x, players[index2].y, players[index2].mapindex)){
+					this.x=players[index2].x;
+					this.y=players[index2].y;
+				}
+			}
+			if(this.cachorromascotatimer.elapsed>=this.cachorromascotatime) {
+				this.cachorromascotatimer.restart();
+				if(this.x>players[index2].x+2 && this.mapindex==players[index2].mapindex && !players[index2].afk && this.amarrado==0 && !this.subido && !is_game_disabled(this.x-1, this.y, this.mapindex)) {
+					this.x-=1;
+					string ss=get_tile_at(this.x, this.y, this.map);
+					send_packet(5, "play_npc "+ss+"step"+random(1, 5)+".ogg", this.x, this.y, this.mapindex);
+				}
+				else if(this.x<players[index2].x-2 && this.mapindex==players[index2].mapindex && !players[index2].afk && this.amarrado==0 && !this.subido && !is_game_disabled(this.x+1, this.y, this.mapindex)) {
+					this.x+=1;
+					string ss=get_tile_at(this.x, this.y, this.map);
+					send_packet(5, "play_npc "+ss+"step"+random(1, 5)+".ogg", this.x, this.y, this.mapindex);
+				}
+			}
+		}
+		if(this.tnecesidad.elapsed>=1800000){
+			int index=get_player_index_from(this.dueno);
+			if(index>-1&&players[index].afk==false){
+				send_reliable(players[index].peer_id, "msg2 tu cachorrito está necesitando comida y bebida!", 0);
+				send_reliable(players[index].peer_id, "ps alarm3.ogg", 0);
+				this.tnecesidad.force(0);
+				this.tnecesidad.pause();
+				this.comida=true;
+				this.tnecesidad2.restart();
+			}
+		}
+		if(this.comida && this.tnecesidad2.elapsed>=40000){
+			int index=get_player_index_from(this.dueno);
+			if(index>-1){
+				this.vida-=random(1000, 2000);
+				this.tnecesidad2.force(0);
+				this.tnecesidad2.pause();
+			}
+		}
+	}
+
+	void changemap(string mapname, int coor_x, int coor_y) {
+		int mapindex2 =get_map_index_from(mapname);
+		if(mapindex2>-1) {
+			this.map =mapname;
+			this.mapindex=mapindex2;
+			this.x =coor_x;
+			this.y =coor_y;
+		}
+	}
+
+	string getdesc() {
+		string desc;
+		if(this.active ==1) {
+			if(this.name!="default") {
+				desc =this.name+", ;con; "+this.vida+"; ;de vida.;";
+			}
+			else {
+				desc =";cachorrito de; "+this.dueno+", ;con; "+this.vida+"; ;de vida.;";
+			}
+		}
+		if(this.active ==0) {
+			if(this.name!="default") {
+				desc =this.name+", ;durmiendo;, ;con; "+this.vida+"; ;de vida.;";
+			}
+			else {
+				desc =";cachorrito de; "+this.dueno+", ;durmiendo;, ;con; "+this.vida+"; ;de vida.;";
+			}
+		}
+		return desc;
+	}
+
+	void sleep() {
+		this.active=0;
+		this.owner_index =-1;
+	}
+
+	void wake() {
+		this.owner_index =get_player_index_from(this.dueno);
+		if(this.owner_index>-1) {
+			this.owner_is_online =1;
+			this.active=1;
+		}
+	}
+}
+
+int get_cachorro_index(string name) {
+	for(int i=0; i<cachorromascotas.length(); i++) {
+		if(cachorromascotas[i].dueno==name) return i;
+	}
+	return -1;
+}
+
+void renombrar_cachorro(int index, string name) {
+	if(name.length()<3 || name.length()>20) {
+		send_reliable(players[index].peer_id, "msg2 ;El nombre de tu cachorro debe tener entre 3 y 20 caracteres.;", 0);
+		return;
+	}
+	if(name =="default") {
+		send_reliable(players[index].peer_id, "msg2 ;Nombre de cachorro inválido.;", 0);
+		return;
+	}	if(players[index].inv_item_number("reais")<500000000) {
+		send_reliable(players[index].peer_id, "msg2 ;No tienes dinero suficiente.;", 0);
+		return;
+	}
+	string dueno =players[index].charname;
+	int cachorro_index =get_cachorro_index(dueno);
+	if(cachorro_index>-1) {
+		if(cachorromascotas[cachorro_index].name ==name) {
+			send_reliable(players[index].peer_id, "msg2 ;Tu cachorro ya tiene ese nombre.;", 0);
+			return;
+		}
+		if(cachorromascotas[cachorro_index].name =="default") {
+			cachorromascotas[cachorro_index].name=name;
+			salvarcachorromascotas();
+			send_reliable(players[index].peer_id, "msg2 ;El nombre de tu cachorro ha sido cambiado a;"+" "+name, 0);
+		}
+		else {
+			cachorromascotas[cachorro_index].name=name;
+			players[index].inv_add_item("reais", -500000000);
+			salvarcachorromascotas();
+			send_reliable(players[index].peer_id, "msg2 ;El nombre de tu cachorro ha sido cambiado a;"+" "+name, 0);
+		}
+	}
+	else {
+		send_reliable(players[index].peer_id, "msg2 ;No tienes un cachorro.;", 0);
+	}
+}
+
+void update_cachorros_indexes() {
+	for(int i=0; i<cachorromascotas.length(); i++) {
+		if(cachorromascotas[i].active==1) {
+			cachorromascotas[i].owner_index =get_player_index_from(cachorromascotas[i].dueno);
+		}
+	}
+}
+
+void update_cachorros_mapindexes() {
+	for(int i=0; i<cachorromascotas.length(); i++) {
+		cachorromascotas[i].mapindex =get_map_index_from(cachorromascotas[i].map);
+	}
+}
+
+void spawn_cachorromascota(int x, int y, string map, string dueno, double vida, int amarrado, string name, bool wake=false){
+	cachorromascota c(x, y, map, dueno, vida, amarrado, name);
+	cachorromascotas.insert_last(c);
+	if(wake) {
+		cachorromascotas[cachorromascotas.length()-1].wake();
+		cachorromascotas[cachorromascotas.length()-1].owner_is_online =1;
+	}
+}
+void cargarcachorromascotas(){
+file tb;
+if(!tb.open("cachorromascotas.usr", "r")){
+return;
+}
+string tbdata=tb.read();
+tb.close();
+if(tbdata==""){
+return;
+}
+string[] tcachorromascotas=string_split(tbdata, "\r\n", false);
+if(tcachorromascotas.length()>0){
+for(uint i=0; i<tcachorromascotas.length(); i++){
+string[] parsed=string_split(tcachorromascotas[i], "=", false);
+spawn_cachorromascota(string_to_number(parsed[0]), string_to_number(parsed[1]), parsed[2], parsed[3], string_to_number(parsed[4]), string_to_number(parsed[5]), parsed[6]);
+}
+}
+return;
+}
+void salvarcachorromascotas(){
+string final;
+for(uint i=0; i<cachorromascotas.length(); i++){
+final+=cachorromascotas[i].x+"="+cachorromascotas[i].y+"="+cachorromascotas[i].map+"="+cachorromascotas[i].dueno+"="+cachorromascotas[i].vida+"="+cachorromascotas[i].amarrado+"="+cachorromascotas[i].name+"\r\n";
+}
+file f;
+f.open("cachorromascotas.usr", "w");
+f.write(final);
+f.close();
+}

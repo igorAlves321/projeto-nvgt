@@ -1,0 +1,169 @@
+class npc {
+int x, y, x_inicial, y_inicial, left_range, right_range;
+double vidainicial, vida;
+double xp, distanciaataques, degradation;
+int id=random(1000, 9999), my_index=-1, mapindex=-1, p_index=-1;
+string[] items, pasos, impactos, sonidosataque, sonidosnervioso;
+string map, sonidoataque, sonidonervioso, sonidomuerte, itemsadar, pasosnpc, impactosbala;
+double danoquerecibira, danoquedara, danodelespejo;
+string asesino, nombrenpc;
+string msgmuerte;
+int tiempoparaatacar, tiempoparacaminar, tiempodelossonidos, tiempoaparicion, enablerespawn;
+int enablebombs;
+timer ttiempoparaatacar, ttiempoparacaminar, ttiempodelossonidos, ttiempoaparicion, update_player;
+npc(int xx, int yy, double vida2, double xpquedara, double distanciaataque, double ddanoquerecibira, double ddanoquedara, double ddanodelespejo, int tttiempoparaatacar, int tttiempoparacaminar, int tttiempodelossonidos, string itemsquedara, string sonidoalatacar, string sonidocalmado, string sonidoalmorir, string nombredelbot, string mensajealmorir, int tttiempoaparicion, int enablerespawn2, int enablebombs2, string map, string pasosnpc2, int l_r, int r_r, string balas, double degradation2) {
+this.x=xx;
+this.y=yy;
+this.x_inicial=xx;
+this.y_inicial=yy;
+this.vidainicial=vida2;
+this.vida=vida2;
+this.xp=xpquedara;
+this.distanciaataques=distanciaataque;
+this.danoquerecibira=ddanoquerecibira;
+this.danoquedara=ddanoquedara;
+this.danodelespejo=ddanodelespejo;
+this.tiempoparaatacar=tttiempoparaatacar;
+this.tiempoparacaminar=tttiempoparacaminar;
+this.tiempodelossonidos=tttiempodelossonidos;
+this.itemsadar=itemsquedara;
+this.items=string_split(this.itemsadar, ",", false);
+this.sonidoataque=sonidoalatacar;
+this.sonidosataque=string_split(this.sonidoataque, ",", false);
+this.sonidonervioso=sonidocalmado;
+this.sonidosnervioso=string_split(this.sonidonervioso, ",", false);
+this.sonidomuerte=sonidoalmorir;
+this.nombrenpc=nombredelbot;
+this.msgmuerte=mensajealmorir;
+this.tiempoaparicion=tttiempoaparicion;
+this.enablerespawn=enablerespawn2;
+this.enablebombs=enablebombs2;
+this.map =map;
+this.pasosnpc=pasosnpc2;
+this.pasos=string_split(this.pasosnpc, ",", true);
+this.left_range=l_r;
+this.right_range=r_r;
+this.impactosbala=balas;
+this.impactos=string_split(this.impactosbala, ",", true);
+this.degradation=degradation2;
+}
+void die(){
+if(mapindex>-1){
+server_maps[mapindex].send_packet(5, "play_npc "+this.sonidomuerte+".ogg", this.x, this.y);
+string golp=this.asesino;
+int xx=get_player_index_from(golp);
+if(xx>-1){
+string msgmuerte=this.msgmuerte;
+msgmuerte=string_replace(msgmuerte, "*nick*", players[xx].charname, true);
+msgmuerte=string_replace(msgmuerte, "*g*", players[xx].sexo2, true);
+send_reliable(0, "msgmuerte "+msgmuerte, 3);
+for(uint i=0; i<this.items.length(); i++){
+string[] itemstotal=string_split(this.items[i], ".", false);
+if(itemstotal.length()>1) players[xx].inv_add_item(itemstotal[0], string_to_number(itemstotal[1]), true, true);
+}
+// Incrementar o contador de kills (mobs mortos)
+players[xx].kills++;
+// Verificar se o jogador atingiu o limite para o título
+if(players[xx].kills == 10) {
+    settitle(xx); // Atualiza o título quando chega a 10 kills
+    send_reliable(players[xx].peer_id, "msg2 ;Parabéns! Você recebeu a patente de Caçador por derrotar 10 monstros!;", 0);
+}
+ganhaxp(players[xx].charname, this.xp);
+}
+npc_data nd(this.x, this.y, this.vidainicial, this.xp, this.distanciaataques, this.danoquerecibira, this.danoquedara, this.danodelespejo, this.tiempoparaatacar, this.tiempoparacaminar, this.tiempodelossonidos, this.itemsadar, this.sonidoataque, this.sonidonervioso, this.sonidomuerte, this.nombrenpc, this.msgmuerte, this.tiempoaparicion, this.enablerespawn, this.enablebombs, this.pasosnpc, this.left_range, this.right_range, this.impactosbala, this.degradation);
+server_maps[mapindex].npcs_data.insert_last(nd);
+}
+}
+void move(){
+if(this.x>players[p_index].x+2&&players[p_index].watching==0&&players[p_index].newbie==false&&players[p_index].afk==false&&players[p_index].pacifico==0){
+if(this.left_range>0&&this.x>this.left_range){
+this.x-=2;
+string ss;
+if(this.pasos.length()==1&&this.pasos[0]=="default") ss=server_maps[mapindex].get_tile_at(this.x, this.y);
+else ss=this.pasos[random(0, this.pasos.length()-1)];
+server_maps[mapindex].send_packet(5, "play_step "+ss+"step"+random(1, 5)+".ogg", this.x, this.y);
+}
+}
+else if(this.x<players[p_index].x-2&&players[p_index].watching==0&&players[p_index].afk==false&&players[p_index].pacifico==0&&players[p_index].newbie==false){
+if(this.right_range>0&&this.x<this.right_range){
+this.x+=2;
+string ss;
+if(this.pasos.length()==1&&this.pasos[0]=="default") ss=server_maps[mapindex].get_tile_at(this.x, this.y);
+else ss=this.pasos[random(0, this.pasos.length()-1)];
+server_maps[mapindex].send_packet(5, "play_step "+ss+"step"+random(1, 5)+".ogg", this.x, this.y);
+}
+}
+int mineindex =server_maps[mapindex].have_mine(this.x, this.y);
+if(mineindex>-1) {
+server_maps[mapindex].mines[mineindex].active=true;
+}
+}
+void attack(){
+int degradation_point=300, degradation_value=random(1, degradation_point);
+if(degradation_value==degradation_point && players[p_index].weapon_index>-1) players[p_index].manage_degradation( weapons[players[p_index].weapon_index].name, this.degradation);
+server_maps[mapindex].send_packet(5, "play_npc "+this.sonidosataque[random(0, this.sonidosataque.length()-1)]+".ogg", this.x, this.y);
+if(players[p_index].clothing_protection>0){
+double new_damage, discount=this.danoquedara*players[p_index].clothing_protection;
+new_damage=this.danoquedara-discount;
+players[p_index].health-=new_damage;
+}
+else{
+players[p_index].health-=this.danoquedara;
+}
+send_packet(0, "inithurt "+players[p_index].voice, players[p_index].x, players[p_index].y);
+players[p_index].lasthit=this.nombrenpc+" ";
+}
+bool exists_player_in_my_map(){
+int find=server_maps[mapindex].mapplayers.find(p_index);
+if(find>-1) return true;
+else return false;
+}
+int change_player(int exclude){
+for(int x=0; x<server_maps[mapindex].mapplayers.length(); x++){
+if(server_maps[mapindex].mapplayers[x]==exclude){
+continue;
+}
+return x;
+}
+return exclude;
+}
+int select_player_to_attack(){
+if(server_maps[mapindex].mapplayers.length()==0) return -1;
+return server_maps[mapindex].mapplayers[random(0, server_maps[mapindex].mapplayers.length()-1)];
+}
+} // end npc class
+
+class npc_data{
+int x, y, left_range, right_range;
+double xp, distanciaataques, vida, danoquerecibira, danoquedara, danodelespejo, degradation;
+string sonidoataque, sonidonervioso, sonidomuerte, itemsadar, asesino, nombrenpc, msgmuerte, pasosnpc, impactosbala;
+int tiempoparaatacar, tiempoparacaminar, tiempodelossonidos, tiempoaparicion, enablerespawn, enablebombs;
+timer respawn;
+npc_data(int xx, int yy, double vida2, double xpquedara, double distanciaataque, double ddanoquerecibira, double ddanoquedara, double ddanodelespejo, int tttiempoparaatacar, int tttiempoparacaminar, int tttiempodelossonidos, string itemsquedara, string sonidoalatacar, string sonidocalmado, string sonidoalmorir, string nombredelbot, string mensajealmorir, int tttiempoaparicion, int enablerespawn2, int enablebombs2, string pasos, int l_r, int r_r, string balas, double degradation2){
+this.x=xx;
+this.y=yy;
+this.vida=vida2;
+this.xp=xpquedara;
+this.distanciaataques=distanciaataque;
+this.danoquerecibira=ddanoquerecibira;
+this.danoquedara=ddanoquedara;
+this.danodelespejo=ddanodelespejo;
+this.tiempoparaatacar=tttiempoparaatacar;
+this.tiempoparacaminar=tttiempoparacaminar;
+this.tiempodelossonidos=tttiempodelossonidos;
+this.itemsadar=itemsquedara;
+this.sonidoataque=sonidoalatacar;
+this.sonidonervioso=sonidocalmado;
+this.sonidomuerte=sonidoalmorir;
+this.nombrenpc=nombredelbot;
+this.msgmuerte=mensajealmorir;
+this.tiempoaparicion=tttiempoaparicion;
+this.enablerespawn=enablerespawn2;
+this.enablebombs=enablebombs2;
+this.pasosnpc=pasos;
+this.left_range=l_r;
+this.right_range=r_r;
+this.impactosbala=balas;
+this.degradation=degradation2;
+}
+} // end class npc data

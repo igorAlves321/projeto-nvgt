@@ -1,4 +1,4 @@
-reais=15962949
+reais=15962991
 espada=1
 teleportador=1
 gorra_azul=2
@@ -55,3 +55,4 @@ euro=20062018
 anillo_de_oro_con_un_diamante_en_el_centro=1
 beretta_m9=1
 9mm=111096
+dolares=73
