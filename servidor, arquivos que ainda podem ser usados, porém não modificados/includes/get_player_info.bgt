@@ -1,0 +1,70 @@
+void get_player_info(int index){
+	file f;
+	string invsec, final="set_player_info ";
+	if(file_exists("players/"+players[index].charname+"/mod.md")){
+players[index].moderador=true;
+}
+	if(file_exists("players/"+players[index].charname+"/constructor.usr"))players[index].constructor=true;
+		if(players[index].invs==1){
+			players[index].bipar=0;
+		final+="playerbeep "+players[index].charname+" "+players[index].bipar+"|";
+		}
+	players[index].load_inv();
+	send_reliable(players[index].peer_id, "inv "+players[index].getinv(), 0);
+	if(secondary_inventory.length()>0) {
+		invsec ="invsec "+linear(secondary_inventory);
+	}
+	if(players[index].is_admin()==true){
+		invsec +="buzón_celestial\r\n";
+		final+="djogador|";
+		players[index].nsede=0;players[index].nfome=0;players[index].ngripe=0;
+	}
+	if(players[index].moderador==true){
+		invsec +="buzón_celestial\r\n";
+		final+="dmoderador|";
+	}
+	if(players[index].constructor==true){
+		final+="dconstructor|";
+	}
+	if(file_exists("players/"+players[index].charname+"/enable_chat_adm.usr")){
+		final+="enablechatadm|";
+	}
+	if(file_exists("players/"+players[index].charname+"/translator.usr")){
+		final+="enabletranslate|";
+	}
+	if(players[index].whomarried!="") final+="set_married_variable "+players[index].whomarried+"|";
+	if(players[index].whoparabatai!="") final+="set_parabatai_variable "+players[index].whoparabatai+"|";
+	final+="set_team_members "+linear(players[index].nomesequipe)+"|";
+	if(file_exists("items_for_translate.txt")){
+		f.open("items_for_translate.txt", "r");
+final+="set_items_for_translate "+f.read()+"|";
+		f.close();
+	}
+	final +=invsec+"|";
+	insert_player(index, players[index].map);
+	settitle(index);
+	for(int x=0; x<server_maps[players[index].mapindex].msounds.length(); x++){
+		final+="cm "+server_maps[players[index].mapindex].msounds[x].id+" "+server_maps[players[index].mapindex].msounds[x].soundloop+" "+server_maps[players[index].mapindex].msounds[x].x+" "+server_maps[players[index].mapindex].msounds[x].y+" "+server_maps[players[index].mapindex].msounds[x].map+"|";
+	}
+	send_weapons(index);
+	send_reliable(players[index].peer_id, final, 5);
+	if(players[index].have_island==1&&players[index].payed==0&&DATE_WEEKDAY_NAME=="Saturday"){
+		players[index].payment=0;
+	}
+	if(players[index].have_island==1&&players[index].payment==0&&DATE_WEEKDAY_NAME=="Saturday"){
+		calendar pay;
+		pay.set(DATE_YEAR, DATE_MONTH, DATE_DAY, 23, 59, 0);
+		double hours=players[index].time.diff_hours(pay);
+		send_reliable(players[index].peer_id, "ps2 notify8.ogg 130", 0);
+		send_reliable(players[index].peer_id, "msg2 ;¡Alerta! Tienes; "+hours+" ;horas para pagar la renta de tu isla privada.;", 0);
+	}
+	send_reliable(players[index].peer_id, "ps notify_dingding.ogg", 0);
+	players[index].conectou=1;
+	players[index].load_degradation();
+	send_players(index);
+	if(players[index].needs_to_update()) send_reliable(players[index].peer_id, "set_lang_file lang/"+players[index].idiomajogo+".lang", 0);
+	int cachorro_index =get_cachorro_index(players[index].charname);
+	if(cachorro_index>-1) cachorromascotas[cachorro_index].wake();
+	netloop();
+}
+
