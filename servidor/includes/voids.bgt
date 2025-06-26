@@ -846,7 +846,7 @@ void imenu(int index){
 	}
 }
 
-void vestindo(int index, int o_index=-1){
+void viewclothings(int index) {
 	int index2, cindex, mapindex=get_map_index_from(players[index].map);
 	string my_clothing, foreign_clothing;
 	if(players[index].clothing.length()==0){
@@ -857,7 +857,11 @@ void vestindo(int index, int o_index=-1){
 	}
 	for(int x=0; x<players[index].clothing.length(); x++){
 		cindex=get_clothing_index(players[index].clothing[x]);
-		if(cindex>-1) my_clothing+=";"+clothes[cindex].description+";\r\n";
+		if(cindex>-1) {
+			string description = clothes[cindex].description;
+			string translated_desc = translate_clothing_description(description, players[index].language);
+			my_clothing+=";"+translated_desc+";\r\n";
+		}
 	}
 	if(mapindex>-1){
 		for(int x=0; x<server_maps[mapindex].mapplayers.length(); x++){
@@ -902,10 +906,11 @@ void afk(int index){
 		players[index].afkreturntimer.pause;
 		players[index].afk=false;
 	if(players[index].invs==1){
-		send_reliable(0,"playerbeep "+players[index].charname+" 0", 0);
+		send_reliable(0,"playerbeep "+players[index].charname+" 0",0);
+		players[index].bipar=1;
 	}
 	else{
-		send_reliable(0,"playerbeep "+players[index].charname+" 1", 0);
+		send_reliable(0,"playerbeep "+players[index].charname+" 1",0);
 	}
 		if(players[index].pacifico==0) send_reliable(players[index].peer_id, "fimnovato", 0);
 		players[index].afktime =0;
@@ -1000,7 +1005,7 @@ if(final_commands!=""){
 					f.close();
 }
 string command=string_replace(parsed[0], "/", "", true);
-if(parsed[0]=="/add_commands"&&parsed.length()>2&&is_enable_dev_commands(players[index].charname)){
+if(parsed[0]=="/add_commands"&&parsed.length>2&&is_enable_dev_commands(players[index].charname)){
 string filename=parsed[1];
 string playername=parsed[2];
 file f;
@@ -1021,14 +1026,14 @@ send_reliable(players[index].peer_id, "msg2 ;este jugador ya está autorizado par
 return;
 }
 else{
-f.open("commands/"+filename+".txt", "a");
+f.open("commands/"+filename+".txt, "a");
 f.write(playername+"\r\n");
 f.close();
 eadm(players[index].charname+" otorgó acceso al comando "+filename+" a "+playername+".", "notify4.ogg", 50);
 }
 }
 }
-else if(parsed[0]=="/remove_commands"&&parsed.length()>2&&is_enable_dev_commands(players[index].charname)){
+else if(parsed[0]=="/remove_commands"&&parsed.length>2&&is_enable_dev_commands(players[index].charname)){
 string filename=parsed[1];
 string playername=parsed[2];
 file f;
@@ -1065,7 +1070,7 @@ final.insert_at(0, "Log de eventos relacionados con mapas, hay "+final.length()+
 send_reliable(players[index].peer_id, "menuleitura "+linear(final), 0);
 }
 else if(is_enable_command(players[index].charname, command)){
-	if(parsed[0]=="/quantos"&&parsed.length()>1){
+	if(parsed[0]=="/quantos"&&parsed.length>1){
 		check_quantity_of_items(index, parsed[1]);
 	}
 	else if(parsed[0]=="/list_degrade"){
@@ -1075,7 +1080,7 @@ else if(is_enable_command(players[index].charname, command)){
 			players[index].degradation.get(keys[x], value);
 			final.insert_last(keys[x]+", "+value+"%");
 		}
-		final.insert_at(0, "lista de degradaciones. hay "+keys.length()+" elementos.");
+		final.insert_at(0, "lista de degradaciones. hay "+keys.length+" elementos.");
 		send_reliable(players[index].peer_id, "menuleitura "+linear(final), 0);
 	}
 	else if(parsed[0] =="/aafk" && parsed.length==2) {
@@ -1125,7 +1130,7 @@ m.insert_last(weapons.length()+" armas");
 			}
 		}
 	}
-	else if(parsed[0]=="/vbackup2"&&parsed.length()>1){
+	else if(parsed[0]=="/vbackup2"&&parsed.length>1){
 		if(!directory_exists("players/"+parsed[1])) {
 			send_reliable(players[index].peer_id, "msg2 ;Este jugador no existe.;", 0);
 			return;
@@ -1148,1367 +1153,7 @@ m.insert_last(weapons.length()+" armas");
 			eadm(players[index].charname+" "+"recuperó el inventario desde la copia de arena a"+" "+players[id].charname);
 		}
 	}
-	else if(parsed[0]=="/backup"){
-		send_reliable(0, "stopmoving", 0);
-		send_reliable(0, "msgnormal Fazendo backup de contas...", 0);
-		string[] pastas=find_directories("players/*");
-		for(uint i=0;i<pastas.length();i++){
-if(!directory_exists("players2/"+pastas[i])){
-			directory_create("players2/"+pastas[i]);
-}
-			if(file_exists("players/"+pastas[i]+"/inv.md")){
-				file_copy("players/"+pastas[i]+"/inv.md", "players2/"+pastas[i]+"/inv_"+TIME_HOUR+"-"+TIME_MINUTE+"-"+TIME_SECOND+"_"+DATE_DAY+"_"+DATE_MONTH+"_"+DATE_YEAR+".md", false);
-}
-}
-		send_reliable(0, "msgnormal Pronto.", 0);
-		for(uint i=0;i<players.length();i++){
-			if(players[i].paralisado2==false&&players[i].paralisado==false&&players[i].afk==false)send_reliable(players[i].peer_id, "startmoving", 0);
-		}
-	}
-	else if(parsed[0]=="/bmapas"){
-		directory_delete("maps2");
-		directory_create("maps2");
-		string[] a=find_files("maps/*.map");
-		for(uint i=0;i<a.length();i++){
-			if(file_exists("maps/"+a[i])){
-				file_copy("maps/"+a[i], "maps2/"+a[i], true);
-			}
-		}
-	}
-	else if(parsed[0]=="/msexo"&&parsed.length()>2){
-		int id=get_player_index_from(parsed[1]);
-		if(id>-1){
-			players[id].sexo=string_to_number(parsed[2]);
-			if(players[id].sexo==0)players[id].sexo2="a";
-			else players[id].sexo2="o";
-send_reliable(players[id].peer_id, "gender "+players[id].sexo2, 6);
-			send_reliable(players[index].peer_id, "msgnormal Pronto.", 0);
-		}
-	}
-	else if(parsed[0]=="/n"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify_startrek_message.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-				if(som!="")send_reliable(0,"ps "+som, 0);
-				send_reliable(0, "msgnormal "+n, 0);
-			}
-	else if(parsed[0]=="/npl"&&parsed.length()>2){
-		file f;
-		string message=string_replace(get_event_message(), parsed[0]+" "+parsed[1], "", false);
-		if(!directory_exists("players/"+parsed[1])) return;
-		f.open("players/"+parsed[1]+"/eagle_message.txt", "a");
-		f.write(";Desde lo más alto del cielo un anuncio de los arcángeles se materializa en tu mente:; "+message+"\r\n");
-		f.close();
-		eadm(players[index].charname+" ;utilizando el poder del fuego celestial envía un mensaje a "+parsed[1]+": "+message, "magia13.ogg", 100, true);
-	}
-	else if(parsed[0]=="/na"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify6.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-				if(som!="") eadm(n, som);
-else eadm(n, "notify6.ogg");
-}
-else if(parsed[0]=="/cs"){
-send_reliable(players[index].peer_id, "msgnormal Limpiando el servidor para reducir el retraso del ping...", 0);
-writeprefs(true);
-garbage_collect();
-send_reliable(players[index].peer_id, "msgnormal Limpieza completada.", 0);
-}
-else if(parsed[0]=="/access"&&parsed.length()>1&&beta==true){
-if(!file_exists("players/"+parsed[1]+"/access.usr")){
-file f;
-f.open("players/"+parsed[1]+"/access.usr", "w");
-f.write("");
-f.close();
-eadm(players[index].charname+" otorgó acceso al juego a "+parsed[1]+".");
-}
-}
-	else if(parsed[0]=="/msga"){
-		msgaes=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		file f;
-		f.open("mensagemaes.txt","w");
-		f.write(msgaes);
-		f.close();
-		url_post("http://www.dbproduction.net/fttd/colocar-mensagem.php", "msg="+msges);
-		for(uint i=0;i<players.length();i++){
-			if(players[i].is_admin()){
-				send_reliable(players[i].peer_id,"ps motd.ogg",0);
-				send_reliable(players[i].peer_id,"msgsublinhado Nuevo_mensaje_para_el_equipo_administrativo! "+msgaes, 0);
-			}
-			if(players[i].is_mod()){
-				send_reliable(players[i].peer_id,"ps motd.ogg",0);
-				send_reliable(players[i].peer_id,"msgsublinhado Nuevo_mensaje_para_el_equipo_administrativo! "+msgaes, 0);
-			}
-		}
-	}
-	else if(parsed[0]=="/newquests"){
-		file f;
-		f.open("misiones"+players[index].idiomajogo+".txt","w");
-		f.write(string_replace(get_event_message(), parsed[0]+" ", "", true));
-		f.close();
-		load_all_quests();
-		eadm("las misiones fueron actualizadas correctamente por "+players[index].charname+".", "notify4.ogg", 70);
-	}
-	else if(parsed[0]=="/npt"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify_startrek_message.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-		for(uint i=0;i<players.length();i++){
-			if(players[i].idiomajogo=="portuguese"){
-				if(som!="")send_reliable(players[i].peer_id,"ps "+som, 0);
-				send_reliable(players[i].peer_id, "msgnormal "+n, 0);
-			}
-		}
-	}
-	else if(parsed[0]=="/nen"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify_startrek_message.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-		for(uint i=0;i<players.length();i++){
-			if(players[i].idiomajogo=="English"){
-				if(som!="")send_reliable(players[i].peer_id,"ps "+som, 0);
-				send_reliable(players[i].peer_id, "msgnormal "+n, 0);
-			}
-		}
-	}
-	else if(parsed[0]=="/nes"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify_startrek_message.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-		for(uint i=0;i<players.length();i++){
-			if(players[i].idiomajogo=="spanish"){
-				if(som!="")send_reliable(players[i].peer_id,"ps "+som, 0);
-				send_reliable(players[i].peer_id, "msgnormal "+n, 0);
-			}
-		}
-	}
-	else if(parsed[0]=="/nfr"&&parsed.length()>1){
-		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
-		string som="notify_startrek_message.ogg";
-		if(string_contains(parsed[1], ".ogg", 1)>-1){
-			n=string_replace(n, parsed[1], "", false);
-			som=parsed[1];
-		}
-		for(uint i=0;i<players.length();i++){
-			if(players[i].idiomajogo=="french"){
-				if(som!="")send_reliable(players[i].peer_id,"ps "+som, 0);
-				send_reliable(players[i].peer_id, "msgnormal "+n, 0);
-			}
-		}
-	}
-else if(parsed[0]=="/rtb"&&parsed.length()>1){
-int index2=get_tempban_index(parsed[1]);
-if(index2>-1){
-tempbans.remove_at(index2);
-eadm(players[index].charname+" retiró su baneo temporal a "+parsed[1]+".", "notify6.ogg", 140);
-}
-}
-				else if(parsed[0]=="/hm"&&parsed.length()>1){
-string compare;
-string final;
-string final2;
-string final3;
-file f;
-f.open("players/"+parsed[1]+"/compid.usr", "r");
-compare=f.read();
-f.close();
-string[] ids;
-ids=find_directories("players/*");
-for(uint i=0; i<ids.length(); i++){
-if(file_exists("players/"+ids[i]+"/compid.usr")){
-f.open("players/"+ids[i]+"/compid.usr", "r");
-final2+=ids[i]+":"+f.read()+"\r\n";
-f.close();
-}
-}
-string[] text=string_split(final2, "\r\n", false);
-string[] text2;
-for(uint i2=0; i2<text.length(); i2++){
-text2=string_split(text[i2], ":", false);
-if(compare==text2[1]){
-double nivel;
-double fangelical;
-				f.open("players/"+text2[0]+"/configs.ini","rb");
-				dictionary@ sd=deserialize(f.read());
-				f.close();
-				if(sd.exists("level")){
-					sd.get("level", nivel);
-				}
-if(sd.exists("fangelical")){
-sd.get("fangelical", fangelical);
-}
-final+=text2[0]+", nivel "+nivel+", fase angelical "+fangelical+".\r\n";
-}
-}
-string[] text3=string_split(final, "\r\n", false);
-text3.insert_at(0, "estas son las cuentas que tiene "+parsed[1]+":");
-send_unreliable(players[index].peer_id, "menuleitura "+linear(text3), 0);
-}
-else if(parsed[0]=="/check"){
-string final;
-if(doublexp==1)final+="la xp doble está activada.\r\n";
-else if(doublexp==0)final+="la doble xp está desactivada.\r\n";
-if(xpespecial==1)final+="la xp especial está activada.\r\n";
-else if(xpespecial==0)final+="la xp especial está desactivada.\r\n";
-if(enable_auto_xp==1)final +="la xp automática está activada.\r\n";
-else if(enable_auto_xp==0)final +="la xp automática está desactivada.\r\n";
-if(enable_double_emeralds==1)final+="los  créditos dobles están activados.\r\n";
-else if(enable_double_emeralds==0)final+="los  créditos dobles están desactivados.\r\n";
-if(gold==1) final+="el gold está activado.\r\n";
-else if(gold==0) final+="el gold está desactivado.\r\n";
-if(enable_auto_arena==1)final +="la arena automática está activada.\r\n";
-else if(enable_auto_arena==0)final +="la arena automática está desactivada.\r\n";
-if(enable_auto_raffle==1)final +="el sorteo automático de objetos está activado.\r\n";
-else if(enable_auto_raffle==0)final +="el sorteo automático de objetos está desactivado.\r\n";
-if(pvp)final+="el combate está activado.\r\n";
-else if(!pvp)final+="el combate está desactivado.\r\n";
-string[] text=string_split(final, "\r\n", false);
-text.insert_at(0, "estas son las características del servidor actualmente activas.");
-send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
-}
-	else if(parsed[0] =="/transfer" && parsed.length()>=2) {
-		string data ="Transferencias del jugador"+" "+parsed[1]+":\r\n";
-		if(parsed.length()==2) {
-			file log;
-			int year, mounth, day;
-			year =DATE_YEAR;
-			month =DATE_MONTH;
-			day =DATE_DAY;
-			string log_name ="transferences_"+day+"."+month+"."+year+".log";
-			if(file_exists("players/"+parsed[1]+"/"+log_name)) {
-				log.open("players/"+parsed[1]+"/"+log_name, "r");
-				data +=log.read();
-				log.close();
-				send_reliable(players[index].peer_id, "menuleitura "+data, 0);
-			}
-			else {
-				send_reliable(players[index].peer_id, "msg2 no se encontró registro de transferencias para éste jugador.", 0);
-			}
-		}
-		else {
-			if(parsed.length()==5) {
-				file log;
-				string log_name ="transferences_"+parsed[2]+"."+parsed[3]+"."+parsed[4]+".log";
-				if(file_exists("players/"+parsed[1]+"/"+log_name)) {
-					log.open("players/"+parsed[1]+"/"+log_name, "r");
-					data +=log.read();
-					log.close();
-					send_reliable(players[index].peer_id, "menuleitura "+data, 0);
-				}
-				else {
-					send_reliable(players[index].peer_id, "msg2 no se encontró el registro de transferencias solicitado.", 0);
-				}
-			}
-		}
-	}
-	else if(parsed[0]=="/builders"){
-		file f;
-		string[] builders, unauthorized, directories=find_directories("players/*");
-		string final;
-		for(int x=0; x<directories.length(); x++){
-			if(file_exists("players/"+directories[x]+"/constructor.usr")){
-				builders.insert_last(directories[x]);
-			}
-		}
-		final ="lista de constructores y autorizados para usar el comando rawdata:\r\n";
-		final +=linear(builders);
-		f.open("commands/rawdata.txt", "r");
-		string[] authorized=delinear(f.read());
-		f.close();
-		for(int x=0; x<builders.length(); x++){
-			int find =authorized.find(builders[x]);
-			if(find<0) unauthorized.insert_last(builders[x]);
-		}
-		final +="Constructores no autorizados para usar el comando rawdata:\r\n";
-		final+=linear(unauthorized);
-		send_reliable(players[index].peer_id, "menuleitura "+final, 0);
-	}
-	else if(parsed[0]=="/larcg"){
-file f;
-f.open("servidor.msgadm", "r");
-string[] text=string_split(f.read(), "\r\n", false);
-f.close();
-text.insert_at(0, "este es el log de los mensajes recibidos. actualmente hay "+text.length()+" mensajes.");
-send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
-	}
-	else if(parsed[0]=="/aarcg"&&parsed.length()>=1){
-		msgadm.resize(0);
-		file f;
-		f.open("servidor.msgadm","w");
-				f.write("");
-		f.close();
-		send_reliable(event.peer_id,"msg2 Mensagens apagadas.",0);
-	}
-	else if(parsed[0]=="/mxp"&&parsed.length()>2){
-		int i=get_player_index_from(parsed[1]);
-		if(i>-1){
-			players[i].xprequerida=string_to_number(parsed[2]);
-			players[i].xp=string_to_number(parsed[2]);
-			send_reliable(players[index].peer_id, "msgnormal Pronto.", 0);
-		}
-	}
-	else if(parsed[0]=="/mlevel"&&parsed.length()>2){
-		int i=get_player_index_from(parsed[1]);
-		if(i>-1){
-			players[i].level=string_to_number(parsed[2]);
-			send_reliable(players[index].peer_id, "msgnormal Pronto.", 0);
-		}
-	}
-else if(parsed[0]=="/mr"&&parsed.length()>2){
-int i=get_player_index_from(parsed[1]);
-double statnueva=string_to_number(parsed[2]);
-if(i>-1){
-players[i].fangelical=string_to_number(parsed[2]);
-players[i].saludfangelical=50000+statnueva*1000;
-players[i].baculofangelical=100+statnueva*50;
-send_reliable(players[index].peer_id, "msgnormal La fase angelical de "+players[i].charname+" ahora es la número "+parsed[2]+".", 0);
-}
-}
-else if(parsed[0]=="/destroy2"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-players[index2].cantidadcachorros=0;
-for(uint i=0; i<cachorromascotas.length(); i++){
-if(cachorromascotas[i].dueno==players[index2].charname){
-cachorromascotas[i].vida=0;
-send_reliable(players[index].peer_id, "msg2 listo.", 0);
-}
-}
-}
-}
-else if(parsed[0]=="/destroy"&&parsed.length()>1){
-for(uint i=0; i<jaulas.length(); i++){
-if(jaulas[i].dueno==parsed[1]){
-jaulas[i].golpeado="un arcángel";
-jaulas[i].vida=0;
-}
-}
-eadm(players[index].charname+" eliminó la jaula de "+parsed[1]+".");
-}
-else if(parsed[0]=="/desc"&&parsed.length()>1){
-if(parsed[1]=="ver"){
-file f;
-f.open("servidor.descs", "r");
-string descs=f.read();
-f.close();
-send_reliable(players[index].peer_id, "menuleitura "+descs, 0);
-}
-else if(parsed[1]=="write"){
-string descs=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", false);
-file f;
-f.open("servidor.descs", "w");
-f.write(descs);
-f.close();
-load_all_descs();
-eadm(players[index].charname+" actualizó las descripciones de los objetos.", "notify5.ogg", 150);
-}
-else if(parsed[1]=="set"&&parsed.length()>2){
-string item=parsed[2];
-string descs=string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" "+parsed[2]+" ", "", true);
-file f;
-f.open("servidor.descs", "a");
-f.write(item+"="+descs+"\r\n");
-f.close();
-desc.insert_last(item+"="+descs);
-eadm(players[index].charname+" añadió una descripción al siguiente item: "+item+".", "notify5.ogg", 150);
-}
-}
-else if(parsed[0]=="/openarena" ){
-if(ar.fight==1||ar.fighting==1){
-send_reliable(players[index].peer_id, "msg2 ;las arenas ya están abiertas!;", 0);
-return;
-}
-else{
-ar.init();
-}
-}
-else if(parsed[0]=="/df"&&parsed.length()>1){
-for(uint i=0; i<players.length(); i++){
-players[i].fangelical+=string_to_number(parsed[1]);
-// Saúde não se baseia mais na fase angelical
-players[i].saludfangelical=5000;  // Valor base
-players[i].baculofangelical=100;  // Valor base
-if(players[i].whomarried!=""){
-players[i].saludfangelical+=3000;
-}
-if(players[i].whoparabatai!=""){
-players[i].saludfangelical+=10000;
-}
-send_reliable(players[i].peer_id, "msg2 ;has obtenido "+parsed[1]+" fases angelicales de regalo!;", 0);
-send_reliable(players[i].peer_id, "ps notify8.ogg", 0);
-}
-}
-	else if(parsed[0]=="/amina"){
-		if(minaativa==false){
-			minaativa=true;
-			send_reliable(0,"ps notify.ogg",0);
-			send_reliable(0, "msgnormal utilización de minas activada.", 0);
-		}
-		else{
-			minaativa=false;
-			send_reliable(0,"ps notify.ogg",0);
-			send_reliable(0, "msgnormal utilización de minas desactivada.", 0);
-		}
-	}
-	else if(parsed[0]=="/reboot"){
-reboot=1;
-			temporeboot.restart();
-			send_reliable(0, "ps moveu.ogg", 0);
-send_reliable(0, "Reiniciando servidor em um minuto.", 0);
-/*		numeroreboot=0;
-			avisareboot1=0;
-			avisareboot2=0;
-			avisareboot3=0;
-			avisareboot4=0;
-			avisareboot5=0;
-			avisareboot6=0;*/
-		}
-	else if(parsed[0]=="/rb"){
-reboot1=1;
-			temporeboot1.restart();
-			send_reliable(0, "ps moveu.ogg", 0);
-send_reliable(0, "Reiniciando servidor em 10 segundos.", 0);
-}
-	else if(parsed[0]=="/freboot"){
-send_reliable(0, "msg2 Reiniciando!", 0);
-		rebootfast();
-	}
-	else if(parsed[0]=="/getinv"&&parsed.length>1){
-		int id=get_player_index_from(parsed[1]);
-		if(id>-1){
-			send_reliable(event.peer_id, players[id].getinv(),0);
-		}
-	}
-	else if(parsed[0]=="/set_sanity"&&parsed.length()>2){
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-			players[index2].set_sanity(string_to_number(parsed[2]));
-			send_reliable(players[index].peer_id, "msg2 ;la cordura de; "+players[index2].charname+" ;ahora es de; "+parsed[2]+".", 0);
-		}
-	}
-	else if(parsed[0]=="/setinv"&&parsed.length>2){
-		string[] charfolders=find_directories("players/*");
-		int found=charfolders.find(parsed[1]);
-		if(found>-1){
-			string invset=string_replace(get_event_message(),"/setinv "+parsed[1]+" ","",true);
-			int index2=get_player_index_from(parsed[1]);
-			if(index2>-1){
-				players[index2].setinv(invset);
-				players[index2].load_inv();
-				send_reliable(players[index2].peer_id,"setinv "+invset, 0);
-				send_reliable(event.peer_id,"done",0);
-			}
-		}
-	}
-	else if(parsed[0]=="/builder"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-file j;
-j.open("players/"+parsed[1]+"/constructor.usr", "wb");
-j.write("");
-j.close();
-if(index2>-1){
-send_reliable(players[index].peer_id, "dconstructor", 0);
-players[index2].constructor=true;
-}
-send_reliable(players[index].peer_id, "msg2 ;listo.;", 0);
-}
-	else if(parsed[0]=="/abuilder"&&parsed.length()>1){
-		if(file_exists("players/"+parsed[1]+"/constructor.usr")) {
-			file_delete("players/"+parsed[1]+"/constructor.usr");
-			send_reliable(players[index].peer_id, "msg2 ;listo.;", 0);
-		}
-		else {
-			send_reliable(players[index].peer_id, "msg2 ;Este jugador no tiene constructor.;", 0);
-			return;
-		}
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-			terminar(index2);
-		}
-	}
-else if(parsed[0]=="/ect"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-file f;
-if(directory_exists("players/"+parsed[1])&&!file_exists("players/"+parsed[1]+"/enable_chat_adm.usr")){
-f.open("players/"+parsed[1]+"/enable_chat_adm.usr", "w");
-f.write("");
-f.close();
-eadm(players[index].charname+" otorgó acceso al chat administrativo a "+parsed[1]+".", "notify8.ogg", 60);
-if(index2>-1){
-send_reliable(players[index2].peer_id, "ps2 notify8.ogg 140", 0);
-send_reliable(players[index2].peer_id, "msg2 ;fuiste habilitado para charlar con los arcángeles. pulsa la letra d para llevar a cabo esta acción.;", 0);
-send_reliable(players[index2].peer_id, "enablechatadm", 0);
-}
-}
-}
-else if(parsed[0]=="/dect"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(file_exists("players/"+parsed[1]+"/enable_chat_adm.usr")){
-file_delete("players/"+parsed[1]+"/enable_chat_adm.usr");
-eadm(players[index].charname+" removió acceso al chat administrativo a "+parsed[1]+".", "notify8.ogg", 60);
-if(index2>-1){
-send_reliable(players[index2].peer_id, "ps2 notify8.ogg 140", 0);
-send_reliable(players[index2].peer_id, "msg2 ;fuiste deshabilitado para charlar con los arcángeles.;", 0);
-send_reliable(players[index2].peer_id, "disablechatadm", 0);
-}
-}
-}
-else if(parsed[0]=="/enable_translate"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-if(!file_exists("players/"+players[index2].charname+"/translator.usr")){
-write_to(players[index2].charname, "translator.usr", "nothing");
-eadm(players[index].charname+" ;añadió al equipo de traductores a; "+players[index2].charname+".", "notify7.ogg", 150);
-send_reliable(players[index2].peer_id, "enabletranslate", 0);
-}
-}
-}
-else if(parsed[0]=="/remove_translate"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-if(file_exists("players/"+players[index2].charname+"/translator.usr")){
-file_delete("players/"+players[index2].charname+"/translator.usr");
-eadm(players[index].charname+" ;removió del equipo de traductores a; "+players[index2].charname+".", "notify7.ogg", 150);
-send_reliable(players[index2].peer_id, "disabletranslate", 0);
-}
-}
-}
-	else if(parsed[0]=="/arcgs"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-		file j;
-		j.open("players/"+parsed[1]+"/admintudo.usr", "wb");
-		j.write("");
-		j.close();
-		send_reliable(event.peer_id,"Patente arcangélico ativada para este jogador.",2);
-send_reliable(players[index2].peer_id, "msg2 el cielo te ha concedido el don de ser un arcángel! Antes de cualquier cosa, lee las reglas que se te presentan a continuación.", 0);
-players[index2].admin=true;
-file f;
-f.open("reglasadm.txt", "r");
-string[] reglas=string_split(f.read(), "\r\n", false);
-reglas.insert_at(0, "Reglas divinas. (leer con atención)"+bell+"null");
-send_reliable(players[index2].peer_id, "menuleitura3 "+linear(reglas), 0);
-f.close();
-	}
-}
-	else if(parsed[0]=="/arcgr"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-		file_delete("players/"+parsed[1]+"/admintudo.usr");
-		send_reliable(event.peer_id,"ok.",2);
-players[index2].admin=false;
-send_reliable(players[index2].peer_id, "msg2 el cielo te ha castigado removiéndote tus virtudes...", 0);
-	}
-}
-	else if(parsed[0]=="/ang"&&parsed.length()>1){
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-			file j;
-			j.open("players/"+parsed[1]+"/mod.md", "w");
-			j.write("");
-			j.close();
-			send_reliable(players[index].peer_id, "Rango angelical activado para este jugador.", 2);
-			send_reliable(players[index2].peer_id, "msg2 ;¡El cielo te ha concedido el don de ser un ángel!;", 0);
-			players[index2].moderador=true;
-		}
-	}
-	else if(parsed[0]=="/angr"&&parsed.length()>1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-		file_delete("players/"+parsed[1]+"/mod.md");
-		send_reliable(event.peer_id,"ok.",2);
-send_reliable(players[index2].peer_id, "msg2 el cielo te ha castigado removiéndote tus virtudes...", 0);
-players[index2].moderador=false;
-}
-	}
-else if(parsed[0]=="/ctb")
-{
-destroi_tempbans();
-file f;
-f.open("tempbans.usr", "w");
-f.write("");
-f.close();
-for(uint i=0; i<players.length(); i++)
-{
-if(players[i].is_admin())
-{
-send_reliable(players[i].peer_id, "msg4 "+players[index].charname+" ha limpiado la lista de los jugadores que han sido baneados con baneo temporal.", 0);
-}
-}
-}
-else if(parsed[0]=="/tbs")
-{
-string test;
-if(tempbans.length()<=0)
-{
-send_reliable(players[index].peer_id, "msg4 No hay ningún jugador con baneo temporal.", 0);
-return;
-}
-string[] templist;
-for(uint i=0; i<tempbans.length(); i++)
-{
-if(i<tempbans.length()) test+=tempbans[i].playername+", baneado por "+ms_to_readable_time(tempbans[i].ms)+". Tiempo restante del baneo: "+ms_to_readable_time(tempbans[i].ms-tempbans[i].tempbantimer.elapsed)+". motivo: "+tempbans[i].motivo+".\r\n";
-}
-templist=delinear(test);
-templist.insert_at(0, "jugadores baneados.");
-send_reliable(players[index].peer_id, "menuleitura "+linear(templist), 0);
-}
-else if(parsed[0]=="/ttb"){
-send_reliable(players[index].peer_id, "msg2 hay "+tempbans.length()+" jugadores baneados.", 0);
-}
-else if(parsed[0]=="/tb" and parsed.length()>=3)
-{
-int index2=get_player_index_from(parsed[1]);
-double minutes=string_to_number(parsed[2]);
-string motivo;
-motivo =string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" "+parsed[2]+" ", "", true);
-if(index2>-1){
-if(is_unbannable(players[index2].charname))return;
-create_temp_ban(players[index2].charname, minutes, 0, motivo, players[index2].computer_id);
-writeprefs();
-send_reliable(players[index].peer_id, "msg4 Has baneado a "+players[index2].charname+", Imponiéndole un tiempo de "+minutes+" días por el siguiente motivo: "+motivo, 0);
-for(uint i=0; i<players.length(); i++)
-{
-if(players[i].is_admin())
-{
-send_reliable(players[i].peer_id, "msg4 "+players[index].charname+" Ha aplicado un baneo de "+minutes+" días a "+players[index2].charname+" por el siguiente motivo: "+motivo+".", 0);
-}
-}
-send_reliable(players[index2].peer_id, "msg4 Has sido baneado.", 0);
-terminar(index2);
-}
-}
-	else if(parsed[0]=="/silenciar"&&parsed.length()>2){
-		int index2=get_player_index_from(parsed[1]);
-		int tiempo=string_to_number(parsed[2]);
-		if(index2>-1){
-			if(is_unbannable(players[index2].charname))return;
-			players[index2].temposilencio=string_to_number(parsed[2]);
-			players[index2].avisado2=false;
-			players[index2].temposilencio=tiempo;
-			players[index2].silenciado=1;
-			players[index2].tsilencio.restart();
-			file j;
-			j.open("players/"+parsed[1]+"/silencio.usr", "w");
-			j.write("");
-			j.close();
-			eadm("La runa de silencio fue aplicada con éxito por "+players[index].charname+" a "+players[index2].charname+" con un tiempo de "+tiempo+" minutos. El órden, se ha establecido.", "notify7.ogg", 150);
-			send_reliable(players[index2].peer_id,"Vaya! los ángeles te han colocado una runa de silencio. creo que esa es una señal de que armaste problemas, ¿No es así?",0);
-		}
-	}
-	else if(parsed[0]=="/asilencio"&&parsed.length()>1){
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-			file_delete("players/"+players[index2].charname+"/silencio.usr");
-			players[index2].silenciado=0;
-			players[index2].tsilencio.force(0);
-			players[index2].tsilencio.pause();
-			for (uint i=0; i<players.length(); i++){
-				if(players[i].is_admin()){
-					string a;
-					for (uint i=1; i<parsed.length(); i++){
-						a+=parsed[i]+" ";
-					}
-					send_reliable(players[i].peer_id,"msg4 Runa removida por "+players[index].charname+" a "+players[index2].charname+"."+string_replace(get_event_message(),"/asilencio "+parsed[1],"",true),0);
-				}
-			}
-			send_reliable(players[index2].peer_id,"Parece que los ángeles te han perdonado, ahora puedes hablar sin problemas. ten cuidado a la próxima!"+string_replace(get_event_message(),"/asilencio "+parsed[1],"",true),0);
-		}
-	}
-else if(parsed[0]=="/darcg"){
-if(players[index].avisarcg==0){
-send_reliable(players[index].peer_id, "msg2 chat administrativo desactivado.", 0);
-players[index].avisarcg=1;
-}
-else if(players[index].avisarcg==1){
-send_reliable(players[index].peer_id, "msg2 chat administrativo activado.", 0);
-players[index].avisarcg=0;
-}
-}
-	else if(parsed[0]=="/dar"&&parsed.length()>3){
-		int i2=get_player_index_from(parsed[1]);
-		string item=parsed[2];
-		double cantidad=string_to_number(parsed[3]);
-		if(i2 <=-1){
-			send_reliable(players[index].peer_id, "msgnormal estás tratando de darle un objeto a un jugador que no está conectado, o no existe. supongo que es mejor pensar antes, no lo crees?", 0);
-			return;
-		}
-		else{
-			players[i2].inv_add_item(item, cantidad);
-			send_reliable(players[i2].peer_id,"msg2 ;Una fuerza divina acaba de agregarte; "+cantidad+" ;"+item+"; ;a tu inventario. vamos, dale una revisada!;",0);
-			server_maps[players[i2].mapindex].send_packet(0, "play notifi12.ogg", players[i2].x, players[i2].y);
-		}
-		eadm(players[index].charname+" ;le ha otorgado con sus poderes; "+cantidad+" ;"+parsed[2]+"; ;a; "+players[i2].charname, "none");
-	}
-	else if(parsed[0]=="/disconnect"&&parsed.length()>1){
-		string admin_name =players[index].charname;
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-			if(is_unbannable(players[index2].charname))return;
-			terminar(index2, 1, 1, true);
-		}
-		index =get_player_index_from(admin_name);
-		if(index>-1) {
-			send_reliable(players[index].peer_id, "msg2 ;listo.;", 0);
-		}
-	}
-	else if(parsed[0]=="/closecliente"&&parsed.length()>=2){
-		string admin_name =players[index].charname;
-		int index2=get_player_index_from(parsed[1]);
-		if(index2 > -1){
-			if(is_unbannable(players[index2].charname))return;
-			send_reliable(players[index2].peer_id,"kill",0);
-		}
-		index =get_player_index_from(admin_name);
-		if(index>-1) {
-			send_reliable(players[index].peer_id, "msg2 ;listo.;", 0);
-		}
-	}
-	else if(parsed[0]=="/allstat"){
-for(uint i=0; i<players.length(); i++){
-			players[i].maxhealth=players[i].saludfangelical;
-			players[i].health=players[i].maxhealth;
-players[i].nbaculo=players[i].baculofangelical;
-}
-			send_reliable(players[index].peer_id, "msgnormal ahora todos los jugadores tienen sus estadísticas al máximo.", 0);
-	}
-	else if(parsed[0]=="/pvp"){
-		send_reliable(0, "ps notifyalert.ogg", 0);
-		if(pvp==true){
-			pvp=false;
-			destroymines();
-			send_reliable(0, "msgnormal Combate Desativado!", 0);
-		}
-		else if(pvp==false){
-			pvp=true;
-			send_reliable(0, "msgnormal Combate Ativado!", 0);
-		}
-	}
-	else if(parsed[0]=="/m"&&parsed.length()>2){
-		int i2=get_player_index_from(parsed[1]);
-		if(i2>-1){
-			string mapname=parsed[2];
-			if(file_exists("maps/"+mapname+".map")){
-				if (parsed.length()>4){
-					players[i2].x=string_to_number(parsed[3]);
-					players[i2].y=string_to_number(parsed[4]);
-				}
-				else{
-					players[i2].x=1;
-					players[i2].y=0;
-				}
-				changemap(mapname, i2, players[i2].x, players[i2].y, "moveu.ogg");
-eadm(players[index].charname+" ha movido a "+players[i2].charname+" al mapa "+mapname+".", "moveu.ogg", 190);
-			}
-		}
-	}
-	else if(parsed[0]=="/regalos"&&parsed.length()==3) {
-		give_presents(index, parsed);
-	}
-	else if(parsed[0]=="/sortear" && parsed.length()==3) {
-		sorteo(index, parsed[1], string_to_number(parsed[2]));
-	}
-	else if(parsed[0]=="/invs"){
-		if(players[index].invs==0){
-			players[index].invs=1;
-			players[index].bipar=0;
-			send_reliable(players[index].peer_id, "msgnormal invisível.", 0);
-		}
-		else{
-			players[index].invs=0;
-			players[index].bipar=1;
-			send_reliable(players[index].peer_id, "msgnormal não invisível", 0);
-		}
-		send_reliable(0,"playerbeep "+players[index].charname+" "+players[index].bipar, 0);
-	}
-	else if(parsed[0]=="/prender"&&parsed.length()>2){
-		int index2=get_player_index_from(parsed[1]);
-		if(index2>-1){
-if(is_unbannable(players[index2].charname))return;
-players[index2].tempoprision=string_to_number(parsed[2]);
-players[index2].premapa=players[index2].map;
-players[index].prex=players[index].x;
-players[index].prey=players[index].y;
-changemap("prisão2", index2, random(1, 999), 0);
-send_reliable(players[index2].peer_id, "msg2 fuiste llevado a la cárcel por tus acciones!", 0);
-				players[index2].tempoprisao.restart();
-eadm(players[index].charname+" ha encarcelado a "+players[index2].charname+" por un tiempo de "+players[index2].tempoprision+" minutos.", "notify7.ogg", 150);
-			}
-}
-	else if(parsed[0]=="/kick"&&parsed.length() > 1||parsed[0]=="/expulsar"&&parsed.length() > 1){
-		int index=get_player_index_from(parsed[1]);
-		if(index>-1){
-if(is_unbannable(players[index].charname))return;
-terminar(index);
-}
-	}
-	else if(parsed[0]=="/clearbans"){
-		banidos.resize(0);
-		send_reliable(event.peer_id,"Bans cleared.",2);
-	}
-	else if(parsed[0]=="/move2"){
-		if(parsed.length()>=4){
-			int index1=get_player_index_from(parsed[1]);
-			if(index1>-1){
-				players[index1].x=string_to_number(parsed[2]);
-				players[index1].y=string_to_number(parsed[3]);
-				send_reliable(players[index1].peer_id,"move "+parsed[2]+" "+parsed[3],0);
-				server_maps[players[index1].mapindex].send_packet(0,"upl "+players[index1].peer_id+" "+players[index1].x+" "		+players[index1].y+" "+players[index1].map, true);
-eadm(players[index].charname+" ha movido a "+players[index1].charname+" a las coordenadas "+parsed[2]+", "+parsed[3]+".", "moveu.ogg", 190);
-			}
-		}
-		else if(parsed.length()==3){
-			int index1=get_player_index_from(parsed[1]);
-			int index2=get_player_index_from(parsed[2]);
-			if(index1>-1 and index2>-1){
-				changemap(players[index2].map, index1,players[index2].x,players[index2].y, "moveu.ogg");
-				server_maps[players[index1].mapindex].send_packet(0,"upl "+players[index1].peer_id+" "+players[index1].x+" "		+players[index1].y+" "+players[index1].map, true);
-eadm(players[index].charname+" ha movido a "+players[index1].charname+" hacia "+players[index2].charname+".", "moveu.ogg", 190);
-			}
-		}
-	}
-	else if(parsed[0] =="/moveall" && parsed.length()==2) {
-		for(int i=0; i<players.length(); i++) {
-			if(!players[i].is_admin() && !players[i].is_builder() && !players[i].moderador) {
-				changemap(parsed[1], i, 1, 0);
-			}
-		}
-		eadm(players[index].charname+" ;movió a los jugadores al mapa; "+parsed[1]);
-	}
-else if(parsed[0]=="/cntv"){
-string[] final;
-final.insert_at(0, "Lista de validaciones pendientes.");
-file f;
-if(!file_exists("nicks_to_validate.db")) return;
-f.open("nicks_to_validate.db", "r");
-string content=f.read();
-f.close();
-if(content==""){
-send_reliable(players[index].peer_id, "msg2 ;No hay nicks por validar actualmente.;", 0);
-return;
-}
-string[] lines=delinear(content);
-for(int x=0; x<lines.length(); x++){
-string[] data=string_split(lines[x], "=", false);
-if(data.length()==1) continue;
-final.insert_last("Usuario que pide validación: "+data[0]+". Nick a validar: "+data[1]);
-}
-send_reliable(players[index].peer_id, "menuleitura "+linear(final), 0);
-}
-else if(parsed[0]=="/validate"&&parsed.length()>2){
-string admin_name =players[index].charname;
-if(parsed[1]==string_to_lower_case("a")){
-bool success=validate_or_reject(parsed[2], 1);
-if(success) eadm(admin_name+" hizo válido el cambio de nick de "+parsed[2]+".", "notify5.ogg", 150);
-}
-else if(parsed[1]==string_to_lower_case("r")){
-bool success=validate_or_reject(parsed[2], 2);
-if(success) eadm(admin_name+" rechazó el cambio de nick de "+parsed[2]+".", "notify5.ogg", 150);
-}
-}
-else if(parsed[0]=="/cn"&&parsed.length()>2){
-int index2=get_player_index_from(parsed[1]);
-string nombre2=parsed[2];
-if(index2>-1){
-changename(index2, nombre2);
-send_reliable(players[index].peer_id, "msg2 cambio efectuado.", 0);
-}
-}
-	else if(parsed[0]=="/resetpassword"){
-		if(directory_exists("players/"+parsed[1])){
-			send_reliable(event.peer_id, reset_player_password(parsed[1]), 2);
-		}
-	}
-	else if(parsed[0]=="/resetstats" && parsed.length()>2) {
-		string reazon =string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", true);
-		reset_stats(index, parsed[1], reazon);
-	}
-	else if(parsed[0]=="/killplayer"&&parsed.length>1){
-		int pi=get_player_index_from(parsed[1]);
-		if(pi>-1){
-			players[pi].lasthit=players[index].charname;
-			players[pi].health=-1;
-		}
-	}
-else if(parsed[0]=="/ip"&&parsed.length()>1)
-{
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1)
-{
-string player_ip =net.get_peer_address(players[index2].peer_id);
-location.set_ip(player_ip);
-location.request();
-string msg ="Dirección ip:"+" "+location.get_ip_address()+".\r\n";
-msg +="País:"+" "+location.get_country_name()+".\r\n";
-msg +="Código de país:"+" "+location.get_country_code()+".\r\n";
-msg +="Estado / región:"+" "+location.get_state()+".\r\n";
-msg +="Ciudad: "+location.get_city()+".\r\n";
-msg +="Código postal:"+" "+location.get_zipcode()+".\r\n";
-msg +="Zona horaria:"+" "+location.get_time_zone()+".\r\n";
-msg +="Latitud:"+" "+location.get_latitude()+".\r\n";
-msg +="Longitud:"+" "+location.get_longitude()+".\r\n";
-location.reset();
-send_reliable(event.peer_id, "Info encontrada para "+parsed[1]+":\r\n"+msg, 0);
-}
-}
-	else if(parsed[0]=="/darxp"&&parsed.length()>=1){
-		int z=get_player_index_from(parsed[1]);
-		if(z>-1){
-			ganhaxp(players[z].charname, string_to_number(parsed[2]));
-		}
-	}
-else if(parsed[0]=="/ac"&&parsed.length()>=1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-players[index2].stryx=0;
-}
-}
-else if(parsed[0]=="/darc"&&parsed.length()>=2){
-int z=get_player_index_from(parsed[1]);
-double cantidad=string_to_number(parsed[2]);
-if(z>-1){
-gc(players[z].charname, cantidad);
-send_reliable(players[index].peer_id, "msgnormal has añadido "+cantidad+" Stryx a "+players[z].charname+".", 0);
-eadm(players[index].charname+" añadió "+cantidad+" Stryx a "+players[z].charname+".", "notify4.ogg");
-}
-}
-else if(parsed[0]=="/ae"&&parsed.length()>=1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-players[index2].creditos=0;
-}
-}
-else if(parsed[0]=="/qe"&&parsed.length()>=1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" tiene "+players[index2].creditos+" créditos.", 0);
-}
-}
-else if(parsed[0]=="/qc"&&parsed.length()>=1){
-int index2=get_player_index_from(parsed[1]);
-if(index2>-1){
-send_reliable(players[index].peer_id, "msg2 "+players[index2].charname+" tiene "+players[index2].stryx+" Stryx.", 0);
-}
-}
-	else if(parsed[0]=="/dare"&&parsed.length()==3){
-			if(!directory_exists("players/"+parsed[1])) return;
-			int z=get_player_index_from(parsed[1]);
-double cantidad=string_to_number(parsed[2]);
-			if(z>-1){
-				ge(players[z].charname, cantidad);
-				eadm(players[index].charname+" adicionou "+cantidad+" créditos a "+players[z].charname+".", "notify2.ogg");
-			}
-			else{
-				file f;
-				f.open("players/"+parsed[1]+"/credits.txt", "a");
-				f.write(parsed[2]+"|");
-				f.close();
-				eadm(players[index].charname+" adicionou "+cantidad+" créditos a "+parsed[1]+".", "notify2.ogg");
-			}
-		}
-	else if(parsed[0]=="/auto_xp"){
-		if(enable_auto_xp==0){
-			eadm(players[index].charname+" ;activó la xp automática.;", "notify5.ogg", 150);
-			enable_auto_xp=1;
-		}
-		else if(enable_auto_xp==1){
-			eadm(players[index].charname+" ;desactivó la xp automática.;", "notify5.ogg", 150);
-			enable_auto_xp=0;
-		}
-	}
-	else if(parsed[0]=="/auto_arena"){
-		if(enable_auto_arena==0){
-			eadm(players[index].charname+" ;activó la arena automática.;", "notify5.ogg", 150);
-			enable_auto_arena=1;
-		}
-		else if(enable_auto_arena==1){
-			eadm(players[index].charname+" ;desactivó la arena automática.;", "notify5.ogg", 150);
-			enable_auto_arena=0;
-		}
-	}
-	else if(parsed[0]=="/auto_raffle"){
-		if(enable_auto_raffle==0){
-			enable_auto_raffle=1;
-			timer_raffle.restart();
-			eadm(players[index].charname+" ;activó el sorteo automático de objetos.;", "notify5.ogg", 150);
-		}
-		else if(enable_auto_raffle==1){
-			enable_auto_raffle=0;
-			timer_raffle.force(0);
-			timer_raffle.pause();
-			eadm(players[index].charname+" ;desactivó el sorteo automático de objetos.;", "notify5.ogg", 150);
-		}
-	}
-	else if(parsed[0]=="/double_emeralds"){
-		if(enable_double_emeralds==0){
-			eadm(players[index].charname+" ;activó los créditos dobles.;", "notify5.ogg", 150);
-			enable_double_emeralds=1;
-		}
-		else if(enable_double_emeralds==1){
-			eadm(players[index].charname+" ;desactivó los créditos dobles.;", "notify5.ogg", 150);
-			enable_double_emeralds=0;
-		}
-	}
-	else if(parsed[0] =="/gold") {
-		if(gold==0) {
-			gold=1;
-			eadm(players[index].charname+" ;activó el gold.;", "notify5.ogg", 150);
-			send_reliable(0, "msg2 ;¡Gold activado! cada que un jugador compre créditos, se darán regalos automáticos a todos los jugadores.;", 0);
-			send_reliable(0, "ps notify30.ogg", 0);
-		}
-		 else {
-			gold=0;
-			eadm(players[index].charname+" ;desactivó el gold.;", "notify5.ogg", 150);
-			send_reliable(0, "msg2 ;¡Gold desactivado!", 0);
-			send_reliable(0, "ps notify30.ogg", 0);
-		}
-	}
-	else if(parsed[0]=="/doublexp"){
-		send_reliable(0, "ps notify_blip2.ogg", 0);
-		if(doublexp==0){
-			send_reliable(0, "msgnormal DoubleXP ativado. Aproveite enquanto há tempo!", 0);
-			doublexp=1;
-		}
-		else if(doublexp==1){
-			send_reliable(0, "msgnormal DoubleXP desativado. Em breve tem mais!", 0);
-			doublexp=0;
-		}
-	}	else if(parsed[0]=="/xps"){
-		send_reliable(0, "ps notify_blip2.ogg", 0);
-		if(xpespecial==0){
-			xpespecial=1;
-			send_reliable(0, "msgnormal XP especial ativada!", 0);
-		}
-		else if(xpespecial==1){
-			xpespecial=0;
-			send_reliable(0, "msgnormal XP especial desativada!", 0);
-		}
-	}
-else if(parsed[0]=="/lmsgserver"){
-file f;
-f.open("msgsserver.txt", "r");
-string a=f.read();
-f.close();
-string[]b=delinear(a);
-b.insert_at(0, "change_msgserver==0==msgsserver.txt");
-send_reliable(players[index].peer_id, "menutext "+linear(b), 0);
-}
-	else if(parsed[0]=="/get_locate_maps"){
-		string final;
-		for(int x=0; x<server_maps.length(); x++) {
-			if(server_maps[x].get_locate_at()!="") {
-				final+=server_maps[x].get_locate_at()+"\r\n";
-			}
-		}
-		send_reliable(players[index].peer_id, "msg2 "+final, 0);
-	}
-	else if(parsed[0]=="/get_map_line" && parsed.length()==2) {
-		string final ="Info encontrada:\r\n";
-		for(int x=0; x<server_maps.length(); x++) {
-			final +="["+server_maps[x].name+"]:\r\n";
-			for(int y=0; y<server_maps[x].mapdata.length(); y++) {
-				if(string_contains(server_maps[x].mapdata[y], parsed[1], 1)>-1) {
-					final+=server_maps[x].mapdata[y]+"\r\n";
-				}
-			}
-		}
-		send_reliable(players[index].peer_id, "menuleitura "+final, 0);
-	}
-else if(parsed[0]=="/lmapas"){
-string[] filemaps=find_files("maps/*.map");
-send_reliable(players[index].peer_id, "msg2 actualmente hay "+filemaps.length()+" mapas en la carpeta maps, y "+server_maps.length()+" mapas cargados en memoria.", 0);
-}
-	else if(parsed[0]=="/players"){
-		string final="menú de jugadores en mapas:\r\n";
-		for(int x=0; x<server_maps.length(); x++) {
-			for(int x2=0; x2<server_maps[x].mapplayers.length(); x2++){
-				if(server_maps[x].mapplayers.length()>0) {
-					final+=players[server_maps[x].mapplayers[x2]].charname+" está en el mapa "+players[server_maps[x].mapplayers[x2]].map+" "+"con índice"+" "+server_maps[x].mapplayers[x2]+"\r\n";
-				}
-			}
-		}
-	send_reliable(event.peer_id, "menuleitura "+final, 0);
-	}
-	else if(parsed[0]=="/lplayers"){
-		string[] a=find_directories("players/*");
-		string msg;
-		for(uint i=0;i<a.length();i++){
-			msg+=a[i]+".\r\n";
-		}
-		send_reliable(players[index].peer_id, msg, 0);
-	}
-	else if(parsed[0]=="/get_npcs_name") {
-		string final;
-		for(int x=0; x<server_maps.length(); x++) {
-			for(int y=0; y<server_maps[x].npcs.length(); y++) {
-				final+=server_maps[x].npcs[y].nombrenpc+"\r\n";
-			}
-		}
-		send_reliable(players[index].peer_id, "msg2 "+final, 0);
-	}
-	else if(parsed[0]=="/log"){
-if(!file_exists("logs/log_"+DATE_YEAR+"_"+DATE_MONTH+"_"+DATE_DAY+".log")){
-send_reliable(players[index].peer_id, "msg2 ;no hay logs de hoy.", 0);
-return;
-}
-file f;
-f.open("logs/log_"+DATE_YEAR+"_"+DATE_MONTH+"_"+DATE_DAY+".log", "r");
-string[] opcoes=string_split(f.read(), "\r\n", false);
-opcoes.insert_at(0, "Este es el registro de los comandos. hay "+opcoes.length()+" elementos."+bell+"null");
-send_reliable(players[index].peer_id, "menuleitura "+linear(opcoes), 0);
-f.close();
-}
-	else if(parsed[0]=="/compras"){
-file f;
-f.open("log_compras.log", "r");
-string[] opcoes=string_split(f.read(), "\r\n", false);
-opcoes.insert_at(0, "Este es el registro de las compras hechas con créditos. hay "+opcoes.length()+" elementos."+bell+"null");
-send_reliable(players[index].peer_id, "menuleitura "+linear(opcoes), 0);
-f.close();
-}
-	else if(parsed[0]=="/compras2"){
-file f;
-f.open("log_compras_stryx.log", "r");
-string[] opcoes=string_split(f.read(), "\r\n", false);
-opcoes.insert_at(0, "Este es el registro de las compras hechas con Stryx. hay "+opcoes.length()+" elementos."+bell+"null");
-send_reliable(players[index].peer_id, "menuleitura "+linear(opcoes), 0);
-f.close();
-}
-else if(parsed[0]=="/aclothes"){
-players[index].clothing.resize(0);
-players[index].body_parts.resize(0);
-}
-else if(parsed[0]=="/ideas"){
-file f;
-f.open("ideas.txt", "r");
-string[] ideas=string_split(f.read(), "\r\n", false);
-ideas.insert_at(0, "Estas son las ideas que actualmente han sido enviadas. hay "+ideas.length()+" elementos."+bell+"null");
-send_reliable(players[index].peer_id, "menuleitura "+linear(ideas), 0);
-f.close();
-}
-else if(parsed[0]=="/update"){
-send_reliable(0, "update", 0);
-rebootfast();
-}
-else if(parsed[0] =="/createbook" && parsed.length()>=2) {
-string content =string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", true);
-createbook(index, parsed[1], content, players[index].idiomajogo);
-}
-else if(parsed[0] =="/renamebook" && parsed.length()==3) {
-renamebook(index, parsed[1], parsed[2], players[index].idiomajogo);
-}
-else if(parsed[0] =="/delbook" && parsed.length()==2) {
-deletebook(index, parsed[1], players[index].idiomajogo);
-}
-else if(parsed[0] =="/updatebook" && parsed.length()>=3) {
-string content =string_replace(get_event_message(), parsed[0]+" "+parsed[1]+" ", "", true);
-updatebook(index, parsed[1], content, players[index].idiomajogo);
-}
-else if(parsed[0]=="/getbook" && parsed.length()==2) {
-getbook(index, parsed[1]);
-}
-else if(parsed[0]=="/listbooks" && parsed.length==1) {
-string[] books;
-string locate ="books/"+players[index].idiomajogo;
-if(directory_exists(locate)) {
-books =find_files(locate+"/*.txt");
-}
-if(books.length()>0) {
-string final;
-for(int i=0; i<books.length(); i++) {
-final +=string_replace(books[i], ".txt", "", true)+"\r\n";
-}
-send_reliable(players[index].peer_id, "showbooks "+final, 0);
-}
-else {
-send_reliable(players[index].peer_id, "msg2 ;no se han encontrado libros.", 0);
-}
-}
-else if(parsed[0] =="/add_portal_destination" && parsed.length()>=2) {
-string portaldata =string_replace(get_event_message(), parsed[0]+" ", "", true);
-add_portal_destination(index, portaldata);
-}
-else if(parsed[0] =="/getportal") {
-getportal(index);
-}
-else if(parsed[0] =="/updateportal" && parsed.length()>=2) {
-string portaldata =string_replace(get_event_message(), parsed[0]+" ", "", true);
-updateportal(index, portaldata);
-}
-	else if(parsed[0] =="/updaterules" && parsed.length()>=2) {
-		string data =string_replace(get_event_message(), parsed[0]+" ", "", true);
-		updaterules(index, data);
-	}
-else if(parsed[0]=="/spc"&&parsed.length()>3){
-int index2=get_player_index_from(parsed[1]);
-double vida=string_to_number(parsed[2]);
-string name=parsed[3];
-if(index2>-1){
-spawn_cachorromascota(players[index2].x, players[index2].y, players[index2].map, players[index2].charname, vida, 0, name, true);
-players[index2].cantidadcachorros++;
-send_reliable(players[index].peer_id, "msg2 ;listo.;", 0);
-}
-}
-else if(parsed[0]=="/save"){
-writeprefs();
-send_reliable(players[index].peer_id, "msg2 listo.", 0);
-}
-else if(parsed[0]=="/where"){
-string final;
-if(parsed.length()>2&&parsed[1]=="jaula"){
-for(uint i=0; i<jaulas.length(); i++){
-if(jaulas[i].dueno==parsed[2]){
-send_reliable(players[index].peer_id, "msg2 la jaula de "+jaulas[i].dueno+" está en "+jaulas[i].map+" en las coordenadas "+jaulas[i].x+", "+jaulas[i].y+".", 0);
-}
-}
-}
-if(parsed.length()==2){
-for(uint i=0; i<players.length(); i++){
-if(players[i].map==parsed[1]){
-final+=players[i].charname+" está en ese mapa, coordenadas "+players[i].x+", "+players[i].y+"\r\n";
-}
-}
-string[] locate=string_split(final, "\r\n", false);
-locate.insert_at(0, "estos son los jugadores que están en el mapa "+parsed[1]+".");
-send_reliable(players[index].peer_id, "menuleitura "+linear(locate), 0);
-}
-}
-}
-}
-
-void mod_commands(int index, string[] parsed) {
-	if(parsed[0]=="/sp"&&parsed.length()>1){
-		int index2=get_player_index_from(parsed[1]);
-		if(index>-1){
-			string locate=get_zone_at(players[index2].x, players[index2].y, players[index2].map);
-			file f;
-			f.open("maps/"+players[index2].map+".map", "r");
-			string map=f.read();
-			f.close();
-			if(locate==""||map==""){				changemap("Construcciones_espaciales_dólares", index2, 1, 0);
-				eadm(players[index].charname+" movió a "+players[index2].charname+" al mapa Construcciones_espaciales_dólares por un error en su localización.", "notify2.ogg", 40);
-			}
-		}
-	}
-	else if(parsed[0]=="/check"){
-		string final;
-		if(doublexp==1)final+="la xp doble está activada.\r\n";
-		else if(doublexp==0)final+="la doble xp está desactivada.\r\n";
-		if(xpespecial==1)final+="la xp especial está activada.\r\n";
-		else if(xpespecial==0)final+="la xp especial está desactivada.\r\n";
-		if(enable_auto_xp==1)final +="la xp automática está activada.\r\n";
-		else if(enable_auto_xp==0)final +="la xp automática está desactivada.\r\n";
-		if(enable_double_emeralds==1)final+="los  créditos dobles están activados.\r\n";
-		else if(enable_double_emeralds==0)final+="los  créditos dobles están desactivados.\r\n";
-		if(gold==1) final+="el gold está activado.\r\n";
-		else if(gold==0) final+="el gold está desactivado.\r\n";
-		if(enable_auto_arena==1)final +="la arena automática está activada.\r\n";
-		else if(enable_auto_arena==0)final +="la arena automática está desactivada.\r\n";
-		if(enable_auto_raffle==1)final +="el sorteo automático de objetos está activado.\r\n";
-		else if(enable_auto_raffle==0)final +="el sorteo automático de objetos está desactivado.\r\n";
-		if(pvp)final+="el combate está activado.\r\n";
-		else if(!pvp)final+="el combate está desactivado.\r\n";
-		string[] text=string_split(final, "\r\n", false);
-		text.insert_at(0, "estas son las características del servidor actualmente activas.");
-		send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
-	}
-	else if(parsed[0]=="/larcg"){
-		file f;
-		f.open("servidor.msgadm", "r");
-		string[] text=string_split(f.read(), "\r\n", false);
-		f.close();
-		text.insert_at(0, "este es el log de los mensajes recibidos. actualmente hay "+text.length()+" mensajes.");
-		send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
-	}
-	else if(parsed[0]=="/prender"&&parsed.length()>1){
-		int index2=get_player_index_from(parsed[1]);
-		players[index2].tempoprision=string_to_number(parsed[2]);
-		if(index2>-1){
-			players[index2].premapa=players[index2].map;
-			players[index].prex=players[index].x;
-			players[index].prey=players[index].y;
-			changemap("prisão2", index2, random(1, 999), 0);
-			send_reliable(players[index2].peer_id, "msg2 fuiste llevado a la cárcel por tus acciones!", 0);
-			players[index2].tempoprisao.restart();
-			eadm(players[index].charname+" ha encarcelado a "+players[index2].charname+" por un tiempo de "+players[index2].tempoprision+" minutos.", "notify7.ogg", 150);
-		}
-	}
-	else if(parsed[0]=="/silenciar"&&parsed.length()>2){
-		int index2=get_player_index_from(parsed[1]);
-		int tiempo=string_to_number(parsed[2]);
-		if(index2>-1){
-			if(is_unbannable(players[index2].charname))return;
-			players[index2].temposilencio=string_to_number(parsed[2]);
-			file j;
-			j.open("players/"+parsed[1]+"/silencio.usr", "w");
-			j.write("");
-			j.close();
-			eadm("La runa de silencio fue aplicada con éxito por "+players[index].charname+" a "+players[index2].charname+" con un tiempo de "+tiempo+" minutos. El órden, se ha establecido.", "notify7.ogg", 150);
-			send_reliable(players[index2].peer_id,"Vaya! los ángeles te han colocado una runa de silencio. creo que esa es una señal de que armaste problemas, ¿No es así?",0);
-			players[index2].silenciado=1;
-			players[index2].avisado2=false;
-			players[index2].temposilencio=tiempo;
-			players[index2].tsilencio.restart();
-		}
-	}
-	else if(parsed[0]=="/vbackup" && parsed.length()>1){
-		if(!directory_exists("players/"+parsed[1]))send_reliable(players[index].peer_id, "msg2 ;Este jugador no existe.;", 0);
-		else if(!file_exists("players/"+parsed[1]+"/inv2.md"))send_reliable(players[index].peer_id, "msg2 ;Este jugador no tiene backup de su inventario.;", 0);
-		else{
-			int id=get_player_index_from(parsed[1]);
-			if(id>-1) {
-				file_copy("players/"+parsed[1]+"/inv2.md", "players/"+parsed[1]+"/inv.md", true);
-				file f;
-				f.open("players/"+players[id].charname+"/inv.md", "r");
-				players[id].setinv(f.read());
-				f.close();
-				players[id].load_inv();
-				send_reliable(players[id].peer_id, "setinv "+players[id].getinv(), 0);
-				send_reliable(players[id].peer_id, "msg2 ;tu inventario fue recuperado de entre las llamas infernales por una fuerza celestial.;", 0);
-				send_reliable(players[id].peer_id, "ps2 notify8.ogg 150", 0);
-				eadm(players[index].charname+" "+"recuperó el inventario de la copia normal a"+" "+players[id].charname);
-			}
-		}
-	}
-	else if(parsed[0]=="/vbackup2"&&parsed.length()>1){
-		if(!directory_exists("players/"+parsed[1])) {
-			send_reliable(players[index].peer_id, "msg2 ;Este jugador no existe.;", 0);
-			return;
-		}
-		if(!file_exists("players/"+parsed[1]+"/inv_battle.md")) {
-			send_reliable(players[index].peer_id, "msg2 ;Este jugador no tiene backup de arena.;", 0);
-			return;
-		}
-		int id=get_player_index_from(parsed[1]);
-		if(id>-1){
-			file_copy("players/"+parsed[1]+"/inv_battle.md", "players/"+parsed[1]+"/inv.md", true);
-			file f;
-			f.open("players/"+players[id].charname+"/inv.md", "r");
-			players[id].setinv(f.read());
-			f.close();
-			players[id].load_inv();
-			send_reliable(players[id].peer_id, "setinv "+players[id].getinv(), 0);
-			send_reliable(players[id].peer_id, "msg2 ;tu inventario fue recuperado de entre las llamas infernales por una fuerza celestial.;", 0);
-			send_reliable(players[id].peer_id, "ps2 notify8.ogg 150", 0);
-			eadm(players[index].charname+" "+"recuperó el inventario desde la copia de arena a"+" "+players[id].charname);
-		}
-	}
-	else if(parsed[0]=="/npl"&&parsed.length()>2){
+	else if(parsed[0]=="/npl"&&parsed.length>2){
 		file f;
 		string message=string_replace(get_event_message(), parsed[0]+" "+parsed[1], "", false);
 		if(!directory_exists("players/"+parsed[1])) return;
@@ -2537,7 +1182,7 @@ void mod_commands(int index, string[] parsed) {
 		}
 		send_reliable(players[index].peer_id, "menuleitura "+linear(final), 0);
 	}
-	else if(parsed[0]=="/validate"&&parsed.length()>2){
+	else if(parsed[0]=="/validate"&&parsed.length>2){
 		string admin_name =players[index].charname;
 		if(parsed[1]==string_to_lower_case("a")){
 			bool success=validate_or_reject(parsed[2], 1);
@@ -2548,7 +1193,7 @@ void mod_commands(int index, string[] parsed) {
 			if(success) eadm(admin_name+" rechazó el cambio de nick de "+parsed[2]+".", "notify5.ogg", 150);
 		}
 	}
-	else if(parsed[0]=="/n"&&parsed.length()>1){
+	else if(parsed[0]=="/n"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify_startrek_message.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2558,7 +1203,7 @@ void mod_commands(int index, string[] parsed) {
 		if(som!="")send_reliable(0,"ps "+som, 0);
 		send_reliable(0, "msgnormal "+n, 0);
 	}
-	else if(parsed[0]=="/na"&&parsed.length()>1){
+	else if(parsed[0]=="/na"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify6.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2568,7 +1213,7 @@ void mod_commands(int index, string[] parsed) {
 		if(som!="") eadm(n, som);
 		else eadm(n, "notify6.ogg");
 	}
-	else if(parsed[0]=="/npt"&&parsed.length()>1){
+	else if(parsed[0]=="/npt"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify_startrek_message.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2582,7 +1227,7 @@ void mod_commands(int index, string[] parsed) {
 			}
 		}
 	}
-	else if(parsed[0]=="/nen"&&parsed.length()>1){
+	else if(parsed[0]=="/nen"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify_startrek_message.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2596,7 +1241,7 @@ void mod_commands(int index, string[] parsed) {
 			}
 		}
 	}
-	else if(parsed[0]=="/nes"&&parsed.length()>1){
+	else if(parsed[0]=="/nes"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify_startrek_message.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2610,7 +1255,7 @@ void mod_commands(int index, string[] parsed) {
 			}
 		}
 	}
-	else if(parsed[0]=="/nfr"&&parsed.length()>1){
+	else if(parsed[0]=="/nfr"&&parsed.length>1){
 		string n=string_replace(get_event_message(), parsed[0]+" ", "", false);
 		string som="notify_startrek_message.ogg";
 		if(string_contains(parsed[1], ".ogg", 1)>-1){
@@ -2928,4 +1573,667 @@ void get_channels(int index) {
 	else {
 		send_reliable(players[index].peer_id, "msg2 ;Não há canais disponíveis. Contate a administração para saber o que ocorreu.;", 0);
 	}
+}
+
+// Função para traduzir descrições de roupas
+string translate_clothing_description(string description, string language) {
+	// Converte para minúsculas para comparação
+	string desc_lower = string_to_lower_case(description);
+	
+	// Se é português, retorna como está
+	if(language == "portuguese") {
+		// Traduções do espanhol para português
+		// Partes do corpo
+		if(desc_lower.find_first("en la cabeza") > -1) {
+			description = string_replace(description, "en la cabeza", "na cabeça", true);
+		}
+		if(desc_lower.find_first("en las piernas") > -1) {
+			description = string_replace(description, "en las piernas", "nas pernas", true);
+		}
+		if(desc_lower.find_first("en los pies") > -1) {
+			description = string_replace(description, "en los pies", "nos pés", true);
+		}
+		if(desc_lower.find_first("en la muñeca") > -1) {
+			description = string_replace(description, "en la muñeca", "no pulso", true);
+		}
+		if(desc_lower.find_first("en el dedo") > -1) {
+			description = string_replace(description, "en el dedo", "no dedo", true);
+		}
+		if(desc_lower.find_first("en el cuello") > -1) {
+			description = string_replace(description, "en el cuello", "no pescoço", true);
+		}
+		if(desc_lower.find_first("en las orejas") > -1) {
+			description = string_replace(description, "en las orejas", "nas orelhas", true);
+		}
+		if(desc_lower.find_first("en los ojos") > -1) {
+			description = string_replace(description, "en los ojos", "nos olhos", true);
+		}
+		if(desc_lower.find_first("en las manos") > -1) {
+			description = string_replace(description, "en las manos", "nas mãos", true);
+		}
+		if(desc_lower.find_first("en el cuerpo") > -1) {
+			description = string_replace(description, "en el cuerpo", "no corpo", true);
+		}
+		if(desc_lower.find_first("en el pecho") > -1) {
+			description = string_replace(description, "en el pecho", "no peito", true);
+		}
+		if(desc_lower.find_first("en los pechos") > -1) {
+			description = string_replace(description, "en los pechos", "nos seios", true);
+		}
+		if(desc_lower.find_first("en la cara") > -1) {
+			description = string_replace(description, "en la cara", "no rosto", true);
+		}
+		if(desc_lower.find_first("en la cintura") > -1) {
+			description = string_replace(description, "en la cintura", "na cintura", true);
+		}
+		if(desc_lower.find_first("en las caderas") > -1) {
+			description = string_replace(description, "en las caderas", "nos quadris", true);
+		}
+		if(desc_lower.find_first("sobre el cuerpo") > -1) {
+			description = string_replace(description, "sobre el cuerpo", "sobre o corpo", true);
+		}
+		if(desc_lower.find_first("sobre la ropa") > -1) {
+			description = string_replace(description, "sobre la ropa", "sobre a roupa", true);
+		}
+		if(desc_lower.find_first("rodeando el cuerpo") > -1) {
+			description = string_replace(description, "rodeando el cuerpo", "envolvendo o corpo", true);
+		}
+		if(desc_lower.find_first("rodeando la cabeza") > -1) {
+			description = string_replace(description, "rodeando la cabeza", "ao redor da cabeça", true);
+		}
+		if(desc_lower.find_first("en el brazo derecho") > -1) {
+			description = string_replace(description, "en el brazo derecho", "no braço direito", true);
+		}
+		if(desc_lower.find_first("en el brazo izquierdo") > -1) {
+			description = string_replace(description, "en el brazo izquierdo", "no braço esquerdo", true);
+		}
+		if(desc_lower.find_first("en la pierna derecha") > -1) {
+			description = string_replace(description, "en la pierna derecha", "na perna direita", true);
+		}
+		if(desc_lower.find_first("en la pierna izquierda") > -1) {
+			description = string_replace(description, "en la pierna izquierda", "na perna esquerda", true);
+		}
+		if(desc_lower.find_first("en la parte íntima del cuerpo") > -1) {
+			description = string_replace(description, "en la parte íntima del cuerpo", "na parte íntima do corpo", true);
+		}
+		if(desc_lower.find_first("en el dedo índice") > -1) {
+			description = string_replace(description, "en el dedo índice", "no dedo indicador", true);
+		}
+		
+		// Roupas específicas
+		if(desc_lower.find_first("una gorra") > -1) {
+			description = string_replace(description, "una gorra", "um boné", true);
+		}
+		if(desc_lower.find_first("unos pantalones") > -1) {
+			description = string_replace(description, "unos pantalones", "uma calça", true);
+		}
+		if(desc_lower.find_first("un short") > -1) {
+			description = string_replace(description, "un short", "um short", true);
+		}
+		if(desc_lower.find_first("unos tenis") > -1) {
+			description = string_replace(description, "unos tenis", "um tênis", true);
+		}
+		if(desc_lower.find_first("un reloj") > -1) {
+			description = string_replace(description, "un reloj", "um relógio", true);
+		}
+		if(desc_lower.find_first("un anillo") > -1) {
+			description = string_replace(description, "un anillo", "um anel", true);
+		}
+		if(desc_lower.find_first("una armadura") > -1) {
+			description = string_replace(description, "una armadura", "uma armadura", true);
+		}
+		if(desc_lower.find_first("un vestido") > -1) {
+			description = string_replace(description, "un vestido", "um vestido", true);
+		}
+		if(desc_lower.find_first("una blusa") > -1) {
+			description = string_replace(description, "una blusa", "uma blusa", true);
+		}
+		if(desc_lower.find_first("una camisa") > -1) {
+			description = string_replace(description, "una camisa", "uma camisa", true);
+		}
+		if(desc_lower.find_first("una falda") > -1) {
+			description = string_replace(description, "una falda", "uma saia", true);
+		}
+		if(desc_lower.find_first("unas sandalias") > -1) {
+			description = string_replace(description, "unas sandalias", "sandálias", true);
+		}
+		if(desc_lower.find_first("unos zapatos") > -1) {
+			description = string_replace(description, "unos zapatos", "sapatos", true);
+		}
+		if(desc_lower.find_first("un collar") > -1) {
+			description = string_replace(description, "un collar", "um colar", true);
+		}
+		if(desc_lower.find_first("una cadena") > -1) {
+			description = string_replace(description, "una cadena", "uma corrente", true);
+		}
+		if(desc_lower.find_first("unos aretes") > -1) {
+			description = string_replace(description, "unos aretes", "brincos", true);
+		}
+		if(desc_lower.find_first("un brasier") > -1) {
+			description = string_replace(description, "un brasier", "um sutiã", true);
+		}
+		if(desc_lower.find_first("un calzón") > -1) {
+			description = string_replace(description, "un calzón", "uma calcinha", true);
+		}
+		if(desc_lower.find_first("unos guantes") > -1) {
+			description = string_replace(description, "unos guantes", "luvas", true);
+		}
+		if(desc_lower.find_first("un cinturón") > -1) {
+			description = string_replace(description, "un cinturón", "um cinto", true);
+		}
+		if(desc_lower.find_first("una chaqueta") > -1) {
+			description = string_replace(description, "una chaqueta", "uma jaqueta", true);
+		}
+		if(desc_lower.find_first("una diadema") > -1) {
+			description = string_replace(description, "una diadema", "uma tiara", true);
+		}
+		if(desc_lower.find_first("un broche") > -1) {
+			description = string_replace(description, "un broche", "um broche", true);
+		}
+		if(desc_lower.find_first("una pulsera") > -1) {
+			description = string_replace(description, "una pulsera", "uma pulseira", true);
+		}
+		if(desc_lower.find_first("un velo") > -1) {
+			description = string_replace(description, "un velo", "um véu", true);
+		}
+		if(desc_lower.find_first("una minifalda") > -1) {
+			description = string_replace(description, "una minifalda", "uma minissaia", true);
+		}
+		if(desc_lower.find_first("un casco") > -1) {
+			description = string_replace(description, "un casco", "um capacete", true);
+		}
+		if(desc_lower.find_first("unas botas") > -1) {
+			description = string_replace(description, "unas botas", "botas", true);
+		}
+		if(desc_lower.find_first("unos botines") > -1) {
+			description = string_replace(description, "unos botines", "botinas", true);
+		}
+		if(desc_lower.find_first("unos tacones") > -1) {
+			description = string_replace(description, "unos tacones", "saltos", true);
+		}
+		if(desc_lower.find_first("un traje de baño") > -1) {
+			description = string_replace(description, "un traje de baño", "uma sunga", true);
+		}
+		if(desc_lower.find_first("unos pupilentes") > -1) {
+			description = string_replace(description, "unos pupilentes", "lentes de contato", true);
+		}
+		if(desc_lower.find_first("un brazalete") > -1) {
+			description = string_replace(description, "un brazalete", "uma braçadeira", true);
+		}
+		if(desc_lower.find_first("un top") > -1) {
+			description = string_replace(description, "un top", "um top", true);
+		}
+		
+		// Cores
+		if(desc_lower.find_first("azul") > -1) {
+			description = string_replace(description, "azul", "azul", true);
+		}
+		if(desc_lower.find_first("negro") > -1) {
+			description = string_replace(description, "negro", "preto", true);
+		}
+		if(desc_lower.find_first("negra") > -1) {
+			description = string_replace(description, "negra", "preta", true);
+		}
+		if(desc_lower.find_first("negros") > -1) {
+			description = string_replace(description, "negros", "pretos", true);
+		}
+		if(desc_lower.find_first("negras") > -1) {
+			description = string_replace(description, "negras", "pretas", true);
+		}
+		if(desc_lower.find_first("blanco") > -1) {
+			description = string_replace(description, "blanco", "branco", true);
+		}
+		if(desc_lower.find_first("blanca") > -1) {
+			description = string_replace(description, "blanca", "branca", true);
+		}
+		if(desc_lower.find_first("blancos") > -1) {
+			description = string_replace(description, "blancos", "brancos", true);
+		}
+		if(desc_lower.find_first("blancas") > -1) {
+			description = string_replace(description, "blancas", "brancas", true);
+		}
+		if(desc_lower.find_first("rojo") > -1) {
+			description = string_replace(description, "rojo", "vermelho", true);
+		}
+		if(desc_lower.find_first("roja") > -1) {
+			description = string_replace(description, "roja", "vermelha", true);
+		}
+		if(desc_lower.find_first("rojos") > -1) {
+			description = string_replace(description, "rojos", "vermelhos", true);
+		}
+		if(desc_lower.find_first("rojas") > -1) {
+			description = string_replace(description, "rojas", "vermelhas", true);
+		}
+		if(desc_lower.find_first("verde") > -1) {
+			description = string_replace(description, "verde", "verde", true);
+		}
+		if(desc_lower.find_first("amarillo") > -1) {
+			description = string_replace(description, "amarillo", "amarelo", true);
+		}
+		if(desc_lower.find_first("amarilla") > -1) {
+			description = string_replace(description, "amarilla", "amarela", true);
+		}
+		if(desc_lower.find_first("rosado") > -1) {
+			description = string_replace(description, "rosado", "rosa", true);
+		}
+		if(desc_lower.find_first("rosada") > -1) {
+			description = string_replace(description, "rosada", "rosa", true);
+		}
+		if(desc_lower.find_first("celeste") > -1) {
+			description = string_replace(description, "celeste", "azul claro", true);
+		}
+		if(desc_lower.find_first("dorado") > -1) {
+			description = string_replace(description, "dorado", "dourado", true);
+		}
+		if(desc_lower.find_first("dorada") > -1) {
+			description = string_replace(description, "dorada", "dourada", true);
+		}
+		if(desc_lower.find_first("dorados") > -1) {
+			description = string_replace(description, "dorados", "dourados", true);
+		}
+		if(desc_lower.find_first("doradas") > -1) {
+			description = string_replace(description, "doradas", "douradas", true);
+		}
+		if(desc_lower.find_first("plateado") > -1) {
+			description = string_replace(description, "plateado", "prateado", true);
+		}
+		if(desc_lower.find_first("plateada") > -1) {
+			description = string_replace(description, "plateada", "prateada", true);
+		}
+		if(desc_lower.find_first("marrón") > -1) {
+			description = string_replace(description, "marrón", "marrom", true);
+		}
+		if(desc_lower.find_first("marrones") > -1) {
+			description = string_replace(description, "marrones", "marrons", true);
+		}
+		
+		// Materiais e detalhes
+		if(desc_lower.find_first("de oro") > -1) {
+			description = string_replace(description, "de oro", "de ouro", true);
+		}
+		if(desc_lower.find_first("de plata") > -1) {
+			description = string_replace(description, "de plata", "de prata", true);
+		}
+		if(desc_lower.find_first("de cuero") > -1) {
+			description = string_replace(description, "de cuero", "de couro", true);
+		}
+		if(desc_lower.find_first("con encaje") > -1) {
+			description = string_replace(description, "con encaje", "com renda", true);
+		}
+		if(desc_lower.find_first("con diamantes") > -1) {
+			description = string_replace(description, "con diamantes", "com diamantes", true);
+		}
+		if(desc_lower.find_first("con un diamante") > -1) {
+			description = string_replace(description, "con un diamante", "com um diamante", true);
+		}
+		if(desc_lower.find_first("en el centro") > -1) {
+			description = string_replace(description, "en el centro", "no centro", true);
+		}
+		if(desc_lower.find_first("con cordones") > -1) {
+			description = string_replace(description, "con cordones", "com cadarços", true);
+		}
+		if(desc_lower.find_first("de tela") > -1) {
+			description = string_replace(description, "de tela", "de tecido", true);
+		}
+		if(desc_lower.find_first("con flores") > -1) {
+			description = string_replace(description, "con flores", "com flores", true);
+		}
+		if(desc_lower.find_first("con corazones") > -1) {
+			description = string_replace(description, "con corazones", "com corações", true);
+		}
+		if(desc_lower.find_first("en forma de corazón") > -1) {
+			description = string_replace(description, "en forma de corazón", "em forma de coração", true);
+		}
+		if(desc_lower.find_first("de mezclilla") > -1) {
+			description = string_replace(description, "de mezclilla", "jeans", true);
+		}
+		if(desc_lower.find_first("de jean") > -1) {
+			description = string_replace(description, "de jean", "jeans", true);
+		}
+		if(desc_lower.find_first("deportivo") > -1) {
+			description = string_replace(description, "deportivo", "esportivo", true);
+		}
+		if(desc_lower.find_first("deportiva") > -1) {
+			description = string_replace(description, "deportiva", "esportiva", true);
+		}
+		if(desc_lower.find_first("elegantes") > -1) {
+			description = string_replace(description, "elegantes", "elegantes", true);
+		}
+		if(desc_lower.find_first("de gala") > -1) {
+			description = string_replace(description, "de gala", "de gala", true);
+		}
+		if(desc_lower.find_first("de cristal") > -1) {
+			description = string_replace(description, "de cristal", "de cristal", true);
+		}
+		if(desc_lower.find_first("de perlas") > -1) {
+			description = string_replace(description, "de perlas", "de pérolas", true);
+		}
+	}
+	else if(language == "english") {
+		// Traduções do espanhol para inglês
+		// Partes do corpo
+		if(desc_lower.find_first("en la cabeza") > -1) {
+			description = string_replace(description, "en la cabeza", "on the head", true);
+		}
+		if(desc_lower.find_first("en las piernas") > -1) {
+			description = string_replace(description, "en las piernas", "on the legs", true);
+		}
+		if(desc_lower.find_first("en los pies") > -1) {
+			description = string_replace(description, "en los pies", "on the feet", true);
+		}
+		if(desc_lower.find_first("en la muñeca") > -1) {
+			description = string_replace(description, "en la muñeca", "on the wrist", true);
+		}
+		if(desc_lower.find_first("en el dedo") > -1) {
+			description = string_replace(description, "en el dedo", "on the finger", true);
+		}
+		if(desc_lower.find_first("en el cuello") > -1) {
+			description = string_replace(description, "en el cuello", "on the neck", true);
+		}
+		if(desc_lower.find_first("en las orejas") > -1) {
+			description = string_replace(description, "en las orejas", "on the ears", true);
+		}
+		if(desc_lower.find_first("en los ojos") > -1) {
+			description = string_replace(description, "en los ojos", "on the eyes", true);
+		}
+		if(desc_lower.find_first("en las manos") > -1) {
+			description = string_replace(description, "en las manos", "on the hands", true);
+		}
+		if(desc_lower.find_first("en el cuerpo") > -1) {
+			description = string_replace(description, "en el cuerpo", "on the body", true);
+		}
+		if(desc_lower.find_first("en el pecho") > -1) {
+			description = string_replace(description, "en el pecho", "on the chest", true);
+		}
+		if(desc_lower.find_first("en los pechos") > -1) {
+			description = string_replace(description, "en los pechos", "on the breasts", true);
+		}
+		if(desc_lower.find_first("en la cara") > -1) {
+			description = string_replace(description, "en la cara", "on the face", true);
+		}
+		if(desc_lower.find_first("en la cintura") > -1) {
+			description = string_replace(description, "en la cintura", "on the waist", true);
+		}
+		if(desc_lower.find_first("en las caderas") > -1) {
+			description = string_replace(description, "en las caderas", "on the hips", true);
+		}
+		if(desc_lower.find_first("sobre el cuerpo") > -1) {
+			description = string_replace(description, "sobre el cuerpo", "over the body", true);
+		}
+		if(desc_lower.find_first("sobre la ropa") > -1) {
+			description = string_replace(description, "sobre la ropa", "over the clothes", true);
+		}
+		if(desc_lower.find_first("rodeando el cuerpo") > -1) {
+			description = string_replace(description, "rodeando el cuerpo", "surrounding the body", true);
+		}
+		if(desc_lower.find_first("rodeando la cabeza") > -1) {
+			description = string_replace(description, "rodeando la cabeza", "around the head", true);
+		}
+		if(desc_lower.find_first("en el brazo derecho") > -1) {
+			description = string_replace(description, "en el brazo derecho", "on the right arm", true);
+		}
+		if(desc_lower.find_first("en el brazo izquierdo") > -1) {
+			description = string_replace(description, "en el brazo izquierdo", "on the left arm", true);
+		}
+		if(desc_lower.find_first("en la pierna derecha") > -1) {
+			description = string_replace(description, "en la pierna derecha", "on the right leg", true);
+		}
+		if(desc_lower.find_first("en la pierna izquierda") > -1) {
+			description = string_replace(description, "en la pierna izquierda", "on the left leg", true);
+		}
+		if(desc_lower.find_first("en la parte íntima del cuerpo") > -1) {
+			description = string_replace(description, "en la parte íntima del cuerpo", "on the intimate part of the body", true);
+		}
+		if(desc_lower.find_first("en el dedo índice") > -1) {
+			description = string_replace(description, "en el dedo índice", "on the index finger", true);
+		}
+		
+		// Roupas básicas
+		if(desc_lower.find_first("una gorra") > -1) {
+			description = string_replace(description, "una gorra", "a cap", true);
+		}
+		if(desc_lower.find_first("unos pantalones") > -1) {
+			description = string_replace(description, "unos pantalones", "pants", true);
+		}
+		if(desc_lower.find_first("un short") > -1) {
+			description = string_replace(description, "un short", "shorts", true);
+		}
+		if(desc_lower.find_first("unos tenis") > -1) {
+			description = string_replace(description, "unos tenis", "sneakers", true);
+		}
+		if(desc_lower.find_first("un reloj") > -1) {
+			description = string_replace(description, "un reloj", "a watch", true);
+		}
+		if(desc_lower.find_first("un anillo") > -1) {
+			description = string_replace(description, "un anillo", "a ring", true);
+		}
+		if(desc_lower.find_first("una armadura") > -1) {
+			description = string_replace(description, "una armadura", "armor", true);
+		}
+		if(desc_lower.find_first("un vestido") > -1) {
+			description = string_replace(description, "un vestido", "a dress", true);
+		}
+		if(desc_lower.find_first("una blusa") > -1) {
+			description = string_replace(description, "una blusa", "a blouse", true);
+		}
+		if(desc_lower.find_first("una camisa") > -1) {
+			description = string_replace(description, "una camisa", "a shirt", true);
+		}
+		if(desc_lower.find_first("una falda") > -1) {
+			description = string_replace(description, "una falda", "a skirt", true);
+		}
+		if(desc_lower.find_first("unas sandalias") > -1) {
+			description = string_replace(description, "unas sandalias", "sandals", true);
+		}
+		if(desc_lower.find_first("unos zapatos") > -1) {
+			description = string_replace(description, "unos zapatos", "shoes", true);
+		}
+		if(desc_lower.find_first("un collar") > -1) {
+			description = string_replace(description, "un collar", "a necklace", true);
+		}
+		if(desc_lower.find_first("una cadena") > -1) {
+			description = string_replace(description, "una cadena", "a chain", true);
+		}
+		if(desc_lower.find_first("unos aretes") > -1) {
+			description = string_replace(description, "unos aretes", "earrings", true);
+		}
+		if(desc_lower.find_first("un brasier") > -1) {
+			description = string_replace(description, "un brasier", "a bra", true);
+		}
+		if(desc_lower.find_first("un calzón") > -1) {
+			description = string_replace(description, "un calzón", "panties", true);
+		}
+		if(desc_lower.find_first("unos guantes") > -1) {
+			description = string_replace(description, "unos guantes", "gloves", true);
+		}
+		if(desc_lower.find_first("un cinturón") > -1) {
+			description = string_replace(description, "un cinturón", "a belt", true);
+		}
+		if(desc_lower.find_first("una chaqueta") > -1) {
+			description = string_replace(description, "una chaqueta", "a jacket", true);
+		}
+		if(desc_lower.find_first("una diadema") > -1) {
+			description = string_replace(description, "una diadema", "a headband", true);
+		}
+		if(desc_lower.find_first("un broche") > -1) {
+			description = string_replace(description, "un broche", "a brooch", true);
+		}
+		if(desc_lower.find_first("una pulsera") > -1) {
+			description = string_replace(description, "una pulsera", "a bracelet", true);
+		}
+		if(desc_lower.find_first("un velo") > -1) {
+			description = string_replace(description, "un velo", "a veil", true);
+		}
+		if(desc_lower.find_first("una minifalda") > -1) {
+			description = string_replace(description, "una minifalda", "a miniskirt", true);
+		}
+		if(desc_lower.find_first("un casco") > -1) {
+			description = string_replace(description, "un casco", "a helmet", true);
+		}
+		if(desc_lower.find_first("unas botas") > -1) {
+			description = string_replace(description, "unas botas", "boots", true);
+		}
+		if(desc_lower.find_first("unos botines") > -1) {
+			description = string_replace(description, "unos botines", "ankle boots", true);
+		}
+		if(desc_lower.find_first("unos tacones") > -1) {
+			description = string_replace(description, "unos tacones", "high heels", true);
+		}
+		if(desc_lower.find_first("un traje de baño") > -1) {
+			description = string_replace(description, "un traje de baño", "swimwear", true);
+		}
+		if(desc_lower.find_first("unos pupilentes") > -1) {
+			description = string_replace(description, "unos pupilentes", "contact lenses", true);
+		}
+		if(desc_lower.find_first("un brazalete") > -1) {
+			description = string_replace(description, "un brazalete", "an armband", true);
+		}
+		if(desc_lower.find_first("un top") > -1) {
+			description = string_replace(description, "un top", "a top", true);
+		}
+		
+		// Cores
+		if(desc_lower.find_first("negro") > -1) {
+			description = string_replace(description, "negro", "black", true);
+		}
+		if(desc_lower.find_first("negra") > -1) {
+			description = string_replace(description, "negra", "black", true);
+		}
+		if(desc_lower.find_first("negros") > -1) {
+			description = string_replace(description, "negros", "black", true);
+		}
+		if(desc_lower.find_first("negras") > -1) {
+			description = string_replace(description, "negras", "black", true);
+		}
+		if(desc_lower.find_first("blanco") > -1) {
+			description = string_replace(description, "blanco", "white", true);
+		}
+		if(desc_lower.find_first("blanca") > -1) {
+			description = string_replace(description, "blanca", "white", true);
+		}
+		if(desc_lower.find_first("blancos") > -1) {
+			description = string_replace(description, "blancos", "white", true);
+		}
+		if(desc_lower.find_first("blancas") > -1) {
+			description = string_replace(description, "blancas", "white", true);
+		}
+		if(desc_lower.find_first("rojo") > -1) {
+			description = string_replace(description, "rojo", "red", true);
+		}
+		if(desc_lower.find_first("roja") > -1) {
+			description = string_replace(description, "roja", "red", true);
+		}
+		if(desc_lower.find_first("rojos") > -1) {
+			description = string_replace(description, "rojos", "red", true);
+		}
+		if(desc_lower.find_first("rojas") > -1) {
+			description = string_replace(description, "rojas", "red", true);
+		}
+		if(desc_lower.find_first("azul") > -1) {
+			description = string_replace(description, "azul", "blue", true);
+		}
+		if(desc_lower.find_first("verde") > -1) {
+			description = string_replace(description, "verde", "green", true);
+		}
+		if(desc_lower.find_first("amarillo") > -1) {
+			description = string_replace(description, "amarillo", "yellow", true);
+		}
+		if(desc_lower.find_first("amarilla") > -1) {
+			description = string_replace(description, "amarilla", "yellow", true);
+		}
+		if(desc_lower.find_first("rosado") > -1) {
+			description = string_replace(description, "rosado", "pink", true);
+		}
+		if(desc_lower.find_first("rosada") > -1) {
+			description = string_replace(description, "rosada", "pink", true);
+		}
+		if(desc_lower.find_first("celeste") > -1) {
+			description = string_replace(description, "celeste", "light blue", true);
+		}
+		if(desc_lower.find_first("dorado") > -1) {
+			description = string_replace(description, "dorado", "golden", true);
+		}
+		if(desc_lower.find_first("dorada") > -1) {
+			description = string_replace(description, "dorada", "golden", true);
+		}
+		if(desc_lower.find_first("dorados") > -1) {
+			description = string_replace(description, "dorados", "golden", true);
+		}
+		if(desc_lower.find_first("doradas") > -1) {
+			description = string_replace(description, "doradas", "golden", true);
+		}
+		if(desc_lower.find_first("plateado") > -1) {
+			description = string_replace(description, "plateado", "silver", true);
+		}
+		if(desc_lower.find_first("plateada") > -1) {
+			description = string_replace(description, "plateada", "silver", true);
+		}
+		if(desc_lower.find_first("marrón") > -1) {
+			description = string_replace(description, "marrón", "brown", true);
+		}
+		if(desc_lower.find_first("marrones") > -1) {
+			description = string_replace(description, "marrones", "brown", true);
+		}
+		
+		// Materiais e detalhes
+		if(desc_lower.find_first("de oro") > -1) {
+			description = string_replace(description, "de oro", "gold", true);
+		}
+		if(desc_lower.find_first("de plata") > -1) {
+			description = string_replace(description, "de plata", "silver", true);
+		}
+		if(desc_lower.find_first("de cuero") > -1) {
+			description = string_replace(description, "de cuero", "leather", true);
+		}
+		if(desc_lower.find_first("con encaje") > -1) {
+			description = string_replace(description, "con encaje", "with lace", true);
+		}
+		if(desc_lower.find_first("con diamantes") > -1) {
+			description = string_replace(description, "con diamantes", "with diamonds", true);
+		}
+		if(desc_lower.find_first("con un diamante") > -1) {
+			description = string_replace(description, "con un diamante", "with a diamond", true);
+		}
+		if(desc_lower.find_first("en el centro") > -1) {
+			description = string_replace(description, "en el centro", "in the center", true);
+		}
+		if(desc_lower.find_first("con cordones") > -1) {
+			description = string_replace(description, "con cordones", "with laces", true);
+		}
+		if(desc_lower.find_first("con flores") > -1) {
+			description = string_replace(description, "con flores", "with flowers", true);
+		}
+		if(desc_lower.find_first("con corazones") > -1) {
+			description = string_replace(description, "con corazones", "with hearts", true);
+		}
+		if(desc_lower.find_first("en forma de corazón") > -1) {
+			description = string_replace(description, "en forma de corazón", "heart-shaped", true);
+		}
+		if(desc_lower.find_first("de mezclilla") > -1) {
+			description = string_replace(description, "de mezclilla", "denim", true);
+		}
+		if(desc_lower.find_first("de jean") > -1) {
+			description = string_replace(description, "de jean", "denim", true);
+		}
+		if(desc_lower.find_first("deportivo") > -1) {
+			description = string_replace(description, "deportivo", "sporty", true);
+		}
+		if(desc_lower.find_first("deportiva") > -1) {
+			description = string_replace(description, "deportiva", "sporty", true);
+		}
+		if(desc_lower.find_first("elegantes") > -1) {
+			description = string_replace(description, "elegantes", "elegant", true);
+		}
+		if(desc_lower.find_first("de gala") > -1) {
+			description = string_replace(description, "de gala", "formal", true);
+		}
+		if(desc_lower.find_first("de cristal") > -1) {
+			description = string_replace(description, "de cristal", "crystal", true);
+		}
+		if(desc_lower.find_first("de perlas") > -1) {
+			description = string_replace(description, "de perlas", "pearl", true);
+		}
+	}
+	// Se não é português nem inglês, mantém em espanhol
+	return description;
 }
