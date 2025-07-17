@@ -290,7 +290,7 @@ centar();
 			star=false;
 		}
 		else if(parsed[0]=="mtester") mtester(string_replace(pegar_mensagem(),"mtester ","",true));
-else if(parsed[0]=="use_portal"&&parsed.length()>1){
+else if(parsed[0]=="use_portal"&&parsed.length>1){
 string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 telemenu(delinear(content));
 }
@@ -322,7 +322,7 @@ load_inv(pegar_mensagem());
 			if (parsed[1]!=un and parsed[4]==mapname)
 			p.play_2d("turn.ogg",me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 		}
-		else if(parsed[0]=="rico"&&parsed.length()>3){
+		else if(parsed[0]=="rico"&&parsed.length>3){
 			if(parsed[1]!="")p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 		}
 		else if(parsed[0]=="djogador") desenvolvedordm=1;
@@ -467,13 +467,62 @@ add_add_item("mensajes_de_voz", pu.get_value("mensaje de voz de")+" "+a+".");
 			add_add_item(parsed[1], m);
 }
 		else if(parsed[0]=="msg2"){
-			string m;
-			string a=pegar_mensagem();
-			a=string_replace(a, parsed[0]+" ", "", false);
-			string[] b=string_split(a, ";", false);
-			for(uint i=0;i<b.length();i++){
-				m+=pu.get_value(b[i]);
+			string m = "";
+			string a = pegar_mensagem();
+			a = string_replace(a, parsed[0]+" ", "", false);
+			
+			// Primeiro traduzimos os prefixos e mensagens de estado de vestimenta
+			// Esta substituição deve ocorrer antes das outras para garantir que apareça corretamente
+			a = string_replace(a, ";estás vistiendo:", ";[CLOTHING_MARKER]Você está vestindo:", false);
+			a = string_replace(a, ";está vistiendo:", ";[CLOTHING_MARKER]Está vestindo:", false);
+			a = string_replace(a, ";estás desnudo.;", ";[CLOTHING_MARKER]Você está nu!;", false);
+			a = string_replace(a, ";estás desnuda.;", ";[CLOTHING_MARKER]Você está nua!;", false);
+			a = string_replace(a, ";está desnudo.;", ";[CLOTHING_MARKER]Está nu!;", false);
+			a = string_replace(a, ";está desnuda.;", ";[CLOTHING_MARKER]Está nua!;", false);
+			
+			// Traduzir mensagens específicas sobre roupas
+			if (string_contains(a, "No tienes puesta esta prenda, ¿por qué habrías de querer quitártela?", 1) > -1) {
+				a = string_replace(a, "No tienes puesta esta prenda, ¿por qué habrías de querer quitártela?", "[CLOTHING_MARKER]Você não está usando esta peça de roupa, por que você iria querer tirá-la?", false);
 			}
+			
+			// Abordagem 1: Traduzir frases completas de partes do corpo
+			// Esta parte procura por padrões completos de descrições de roupa
+			if (string_contains(a, "en la cabeza, una gorra azul", 1) > -1) {
+				a = string_replace(a, "en la cabeza, una gorra azul", "[CLOTHING_MARKER]na cabeça, um boné azul", false);
+			}
+			if (string_contains(a, "en el dedo, un anillo de oro con un diamante en el centro", 1) > -1) {
+				a = string_replace(a, "en el dedo, un anillo de oro con un diamante en el centro", "[CLOTHING_MARKER]no dedo, um anel de ouro com um diamante no centro", false);
+			}
+			if (string_contains(a, "envolver el cuerpo, una grande armadura dorada", 1) > -1) {
+				a = string_replace(a, "envolver el cuerpo, una grande armadura dorada", "[CLOTHING_MARKER]envolvendo o corpo, uma grande armadura dourada", false);
+			}
+			if (string_contains(a, "en los pies, unos tenis blancos", 1) > -1) {
+				a = string_replace(a, "en los pies, unos tenis blancos", "[CLOTHING_MARKER]nos pés, um tênis branco", false);
+			}
+			if (string_contains(a, "en las piernas, un short en color negro", 1) > -1) {
+				a = string_replace(a, "en las piernas, un short en color negro", "[CLOTHING_MARKER]nas pernas, um short preto", false);
+			}
+			if (string_contains(a, "en la muñeca, un reloj de oro", 1) > -1) {
+				a = string_replace(a, "en la muñeca, un reloj de oro", "[CLOTHING_MARKER]no pulso, um relógio de ouro", false);
+			}
+			
+			// Abordagem 2: Traduzir frases usando o sistema de tradução integrado
+			// Separar a mensagem por ponto-e-vírgula e traduzir cada parte
+			string[] b = string_split(a, ";", false);
+			
+			for (uint i = 0; i < b.length(); i++) {
+				if (b[i] != "") {
+					// Se já temos uma tradução marcada da primeira abordagem
+					if (string_contains(b[i], "[CLOTHING_MARKER]", 1) > -1) {
+						m += string_replace(b[i], "[CLOTHING_MARKER]", "", false);
+					} else {
+						// Traduzir normalmente usando o sistema de tradução
+						string translated = pu.get_value(b[i]);
+						m += translated;
+					}
+				}
+			}
+			
 			add_add_item("avisos", m);
 }
 		else if(parsed[0]=="msg3"){
@@ -573,7 +622,7 @@ add_add_item("mensajes_de_voz", pu.get_value("mensaje de voz de")+" "+a+".");
 		}
 		else if(parsed[0]=="msgcaiunamina"){
 			string m=parsed[1]+" "+pu.get_value("caiu na mina de")+" "+parsed[2]+" "+pu.get_value("no mapa")+" "+parsed[3];
-			add_add_item("avisos_de_muerte", m);
+			add_add_item("avisos_de_morte", m);
 		}
 		else if(parsed[0]=="msgvocêganhou"){
 			string m=pu.get_value("Você ganhou")+" "+parsed[1]+" xp!";
@@ -1180,7 +1229,7 @@ f.close();
 			p.play_stationary("armarockimpact.ogg",false);
 			if(parsed[0]=="msgmortanaarena"){
 				string m=parsed[1]+" "+pu.get_value("foi morta na arena por")+" "+parsed[2];
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 				else if(parsed[0]=="msgmuerte"){
 				string m;
@@ -1190,64 +1239,81 @@ f.close();
 				for(uint i=0;i<b.length();i++){
 					m+=pu.get_value(b[i]);
 				}
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 				else if(parsed[0]=="msg2"){
 				string m;
 				string a=pegar_mensagem();
 				a=string_replace(a, parsed[0]+" ", "", false);
+				
+				// Pré-processamento para traduzir mensagens de roupas
+				a=string_replace(a, "estás desnudo.", "Estás desnudo!", false);
+				a=string_replace(a, "estás desnuda.", "Estás desnuda!", false);
+				a=string_replace(a, "estás vistiendo:", "Estas vistiendo:", false);
+				a=string_replace(a, "está desnudo.", "Estás desnudo!", false);
+				a=string_replace(a, "está desnuda.", "Estás desnuda!", false);
+				a=string_replace(a, "está vistiendo:", "Estas vistiendo:", false);
+				
+				// Pré-processamento para traduzir descrições de partes do corpo
+				a=string_replace(a, "en la cabeza, ", "en la cabeza, ", false);
+				a=string_replace(a, "en el dedo, ", "en el dedo, ", false);
+				a=string_replace(a, "en los pés, ", "en los pies, ", false);
+				a=string_replace(a, "en las piernas, ", "en las piernas, ", false);
+				a=string_replace(a, "en la muñeca, ", "en la muñeca, ", false);
+				a=string_replace(a, "envolver el cuerpo, ", "envolver el cuerpo, ", false);
+				
 				string[] b=string_split(a, ";", false);
 				for(uint i=0;i<b.length();i++){
 					m+=pu.get_value(b[i]);
 				}
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos", m);
 			}
 			else if(parsed[0]=="msgtrampa"){
 				string m=parsed[1]+" "+pu.get_value("murió!");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgcayu1"){
 				string m=parsed[1]+" "+pu.get_value("estoura sua coluna ao cair e bater com muita força no chão.");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgcayu2"){
 				string m=parsed[1]+" "+pu.get_value("quebra sua perna ao cair de lado e atingir o chão com um estrondo horrível!");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgmorreuqueimada"){
 				string m=parsed[1]+" "+pu.get_value("morreu queimada!");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgmorreuqueimado"){
 				string m=parsed[1]+" "+pu.get_value("morreu queimado!");
 			}
 			else if(parsed[0]=="msgcongelada"){
 				string m=parsed[1]+" "+pu.get_value("morreu congelada!");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgcongelado"){
 				string m=parsed[1]+" "+pu.get_value("morreu congelado!");
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgbombarelogio"){
 				string m=pu.get_value("O tempo acabou, e")+" "+parsed[1]+" "+pu.get_value("se estourou na bomba relógio de")+" "+parsed[2]+".";
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgmaxbomba"){
 				string m=parsed[1]+" "+pu.get_value("não teve a mínima chance de sobreviver à maxbomba de")+" "+parsed[2]+"!";
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgbombaatomicam"){
 				string m=parsed[1]+" "+pu.get_value("foi multilada em massa pela destruição causada por")+" "+parsed[2]+"!";
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgbombaatomicah"){
 				string m=parsed[1]+" "+pu.get_value("foi multilado em massa pela destruição causada por")+" "+parsed[2]+"!";
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msgmaxbomba"){
 				string m=parsed[1]+" "+pu.get_value("Não teve a mínima chance contra a max_bomba de")+" "+parsed[2]+".";
-				add_add_item("avisos_de_muerte", m);
+				add_add_item("avisos_de_morte", m);
 			}
 			else if(parsed[0]=="msga"){
 				string a=pegar_mensagem();
@@ -1320,11 +1386,11 @@ f.close();
 	}
 	if(event.type==event_receive and event.channel==6 and event.peer_id==peer_id){
 		string[] parsed=string_split(pegar_mensagem(), " ", false);
-		if(parsed[0]=="show_eagle_messages"&&parsed.length()>1){
+		if(parsed[0]=="show_eagle_messages"&&parsed.length>1){
 			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 			show_eagle_messages(delinear(content));
 		}
-		else if(parsed[0]=="gender"&&parsed.length()>1){
+		else if(parsed[0]=="gender"&&parsed.length>1){
 			gender=parsed[1];
 		}
 		else if(parsed[0]=="reset_all_weapons_ammo"){
@@ -1332,10 +1398,10 @@ f.close();
 				weapons[x].ammo_load=0;
 			}
 		}
-		else if(parsed[0]=="add_team_member"&&parsed.length()>1){
+		else if(parsed[0]=="add_team_member"&&parsed.length>1){
 			if(team_members.find(parsed[1])<0) team_members.insert_last(parsed[1]);
 		}
-		else if(parsed[0]=="remove_team_member"&&parsed.length()>1){
+		else if(parsed[0]=="remove_team_member"&&parsed.length>1){
 			int find=team_members.find(parsed[1]);
 			if(find>-1) team_members.remove_at(find);
 		}
@@ -1347,7 +1413,7 @@ f.close();
 			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 			team_members=delinear(content);
 		}
-		else if(parsed[0]=="set_map_players"&&parsed.length()>1){
+		else if(parsed[0]=="set_map_players"&&parsed.length>1){
 			if(parsed[1]=="none") players.resize(0);
 			else{
 				string[] content=string_split(string_replace(pegar_mensagem(), parsed[0]+" ", "", false), "\r\n", false);
@@ -1357,19 +1423,19 @@ f.close();
 				}
 			}
 		}
-		else if(parsed[0]=="add_player_to_map"&&parsed.length()>1){
+		else if(parsed[0]=="add_player_to_map"&&parsed.length>1){
 			if(get_player(parsed[1])<0) newplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6])); 
 		}
-		else if(parsed[0]=="remove_player_from_map"&&parsed.length()>1){
+		else if(parsed[0]=="remove_player_from_map"&&parsed.length>1){
 			int find=get_player(parsed[1]);
 			if(find>-1) players.remove_at(find);
 		}
-		else if(parsed[0]=="add_line_to_map"&&parsed.length()>1){
+		else if(parsed[0]=="add_line_to_map"&&parsed.length>1){
 			string line=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 			map2.insert_at(map2.length()-2, line);
 			init_data(line);
 		}
-		else if(parsed[0]=="remove_line_from_map"&&parsed.length()>1){
+		else if(parsed[0]=="remove_line_from_map"&&parsed.length>1){
 			string line=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 			int find=map2.find(line);
 			if(find>-1) map2.remove_at(find);
@@ -1377,7 +1443,7 @@ f.close();
 		else if(parsed[0]=="reset_items_selected"){
 			items_selected.resize(0);
 		}
-		else if(parsed[0]=="select_items"&&parsed.length()>1){
+		else if(parsed[0]=="select_items"&&parsed.length>1){
 			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
 			items_selected=delinear(content);
 		}
