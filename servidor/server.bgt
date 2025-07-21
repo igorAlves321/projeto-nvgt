@@ -216,30 +216,35 @@ if(tempbans.length()>0) tempbanloop();
 
 bool have_acount(string id){
 string compare=id;
-string final;
-string final2;
-string final3;
+int account_count=0;
 file f;
-string[] ids ();
-ids=find_directories("players/*");
+string[] ids = find_directories("players/*");
+
+// Verifica quantas contas existem para este computer ID
 for(uint i=0; i<ids.length(); i++){
 if(file_exists("players/"+ids[i]+"/compid.usr")){
 f.open("players/"+ids[i]+"/compid.usr", "r");
-final2+=ids[i]+":"+f.read()+"\r\n";
+string comp_id = f.read();
 f.close();
-}
-}
-string[] text=string_split(final2, "\r\n", false);
-string[] text2;
-for(uint i2=0; i2<text.length(); i2++){
-text2=string_split(text[i2], ":", false);
-if(compare==text2[1]){
-final+=text2[1]+"\r\n";
-}
-}
-string[] test3=delinear(final);
-if(test3.length()>1){
+
+// Remove quebras de linha e espa?os extras
+comp_id = string_replace(comp_id, "\r\n", "", true);
+comp_id = string_replace(comp_id, "\n", "", true);
+comp_id = string_replace(comp_id, "\r", "", true);
+comp_id = string_replace(comp_id, " ", "", true);
+compare = string_replace(compare, "\r\n", "", true);
+compare = string_replace(compare, "\n", "", true);
+compare = string_replace(compare, "\r", "", true);
+compare = string_replace(compare, " ", "", true);
+
+if(comp_id == compare){
+account_count++;
+// Se j? tem 2 ou mais contas, retorna true
+if(account_count >= 2){
 return true;
+}
+}
+}
 }
 return false;
 }
@@ -1434,7 +1439,12 @@ void usar(int index, string nitem){
 			item_in_invs[x].use(index);
 		}
 	}
-		if(nitem =="bomba_de_plasma" && players[index].inv_item_number(nitem)>0) {
+		if(nitem =="bomba_nuclear" && players[index].inv_item_number(nitem)>0) {
+			// Usa a bomba nuclear que mata todos os jogadores
+			players[index].inv_add_item("bomba_nuclear", -1);
+			nuclear_explosion(index);
+		}
+		else if(nitem =="bomba_de_plasma" && players[index].inv_item_number(nitem)>0) {
 			spawn_plasma_bomb(players[index].charname, players[index].x, players[index].y, players[index].map);
 		}
 		if(nitem=="mina"&&players[index].inv_item_number("mina")>0&&players[index].minatimer.elapsed>players[index].minaplacetime){
@@ -2152,13 +2162,18 @@ void enter(int index){
 	}
 }
 
+// Fun??o para calcular o XP necess?rio para um n?vel espec?fico
+double calcular_xp_para_nivel(double nivel) {
+    return 50 * (nivel * nivel) - (150 * nivel) + 250;
+}
+
 void subir_nivel(int index) {
     int niveles_subidos = 0;
     if(index <=-1)
         return;
 
-    // Simplificamos a experiência necessária para subir de nível
-    players[index].xprequerida = players[index].level*100;
+    // C?lculo do XP necess?rio usando a fun??o auxiliar
+    players[index].xprequerida = calcular_xp_para_nivel(players[index].level);
 
     while(players[index].xp>=players[index].xprequerida){
         netloop();
@@ -2174,7 +2189,8 @@ void subir_nivel(int index) {
             players[index].health += 10;
             send_reliable(players[index].peer_id, "msgnormal Você ganhou 10 pontos de saúde por atingir o nível "+players[index].level+"!", 0);
         }
-        players[index].xprequerida = players[index].level*100;
+        // C?lculo atualizado do XP necess?rio ap?s subir de n?vel
+        players[index].xprequerida = calcular_xp_para_nivel(players[index].level);
     }
 
     // setamos el título del jugador.
@@ -2350,4 +2366,68 @@ void reboot10(){
 		run(SCRIPT_EXECUTABLE, "", false, false);
 		exit();
 	}
+}
+
+// Fun??o que destr?i todos os jogadores e NPCs no servidor com a bomba nuclear
+void nuclear_explosion(int triggering_player_index) {
+    string player_name = players[triggering_player_index].charname;
+    int npc_kill_count = 0;
+    
+    // Envia uma mensagem para todos os jogadores sobre a explos?o nuclear
+    for(uint i=0; i<players.length(); i++) {
+        // Usa o som de explos?o mais forte dispon?vel no sistema
+        send_reliable(players[i].peer_id, "ps explosion.ogg", 0);
+        // Reproduz novamente com volume alto para simular uma explos?o enorme
+        send_reliable(players[i].peer_id, "ps2 explosion.ogg 100", 0);
+        send_reliable(players[i].peer_id, "msg2 ;ALERTA M?XIMO!; "+player_name+" ;detonou uma BOMBA NUCLEAR! O mundo inteiro est? sendo destru?do!;", 0);
+    }
+    
+    // Espera dram?tica para a explos?o
+    wait(3000);
+    
+    // Mata todos os NPCs em todos os mapas
+    for(uint map_idx=0; map_idx < server_maps.length(); map_idx++) {
+        for(int npc_idx=server_maps[map_idx].npcs.length()-1; npc_idx >= 0; npc_idx--) {
+            // Define o assassino do NPC como o jogador que usou a bomba nuclear
+            server_maps[map_idx].npcs[npc_idx].asesino = player_name;
+            
+            // Mata o NPC
+            server_maps[map_idx].npcs[npc_idx].vida = 0;
+            npc_kill_count++;
+            
+            // Os NPCs ser?o processados automaticamente pelo loop principal do servidor
+        }
+    }
+    
+    // Mata todos os jogadores (incluindo quem detonou a bomba)
+    for(uint i=0; i<players.length(); i++) {
+        // Se o jogador n?o estiver no modo Deus (admin)
+        if(!players[i].is_admin()) {
+            // Mata o jogador e d? um motivo para a morte
+            players[i].health = 0;
+            players[i].death_reason = "Destru?do pela explos?o nuclear detonada por " + player_name;
+            
+            // D? XP para quem usou o item (mesmo ele morrendo tamb?m)
+            if(i != triggering_player_index) {
+                players[triggering_player_index].xp += 50000;
+                players[triggering_player_index].matou += 1;
+            }
+            
+            // Teleporta para o mapa de morte
+            send_reliable(players[i].peer_id, "map portal_espiritual", 0);
+        } else {
+            // Avisa os admins que eles sobreviveram
+            send_reliable(players[i].peer_id, "msgnormal Voc? sobreviveu ? explos?o nuclear por ser administrador.", 0);
+        }
+    }
+    
+    // Adiciona o XP pelos NPCs mortos e atualiza o contador de kills
+    players[triggering_player_index].kills += npc_kill_count;
+    players[triggering_player_index].xp += npc_kill_count * 1000; // 1000 XP por NPC
+    
+    // Envia uma mensagem com o resumo da destrui??o
+    send_reliable(players[triggering_player_index].peer_id, "msg2 ;Sua bomba nuclear causou destrui??o em massa!; ;Voc? eliminou; "+npc_kill_count+" ;NPCs e; "+(players.length() - 1)+" ;jogadores!;", 0);
+    
+    // Ap?s matar todos, verifica XP do jogador que usou a bomba
+    subir_nivel(triggering_player_index);
 }
