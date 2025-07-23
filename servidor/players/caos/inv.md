@@ -7,3 +7,5 @@ beretta_m9=1
 9mm=111097
 mgerems=10000
 piel_de_serpiente=2
+mana=43
+portal_de_luz=78
