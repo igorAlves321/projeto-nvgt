@@ -1,5 +1,6 @@
 void netloop(){
-	event=net.request();
+string[] soundsmenu={"ma208.ogg", "ma205.ogg", "ma147.ogg"};
+event=net.request();
 	if(event.type==0) return;
 	if(event.type==event_disconnect){
 		int index=get_player_index(event.peer_id);
@@ -291,8 +292,7 @@ send_reliable(players[index].peer_id, "gender "+players[index].sexo2, 6);
 			if(parsed[1]=="relogin") {
 				send_reliable(players[index].peer_id, "terminate relogin", 0);
 			}
-			// Não zerar matou para manter a contagem de jogadores mortos
-			// players[index].matou=0;
+			players[index].matou=0;
 			if(players[index].healthfixed>=1){
 				players[index].maxhealth=players[index].saludfangelical;
 				players[index].health=players[index].saludfangelical;
@@ -334,7 +334,7 @@ send_reliable(players[index].peer_id, "is_married casado "+players[index].whomar
 }
 }
 else if(parsed[0]=="parabatai"&&parsed.length()>1){
-string[] soundsmenu={"ma208.ogg", "ma205.ogg", "ma147.ogg"};
+
 if(parsed[1]=="check"&&players[index].whoparabatai.length()==0){
 if(parabataying){
 send_reliable(players[index].peer_id, "msg2 ;no puedes hacer esto.;", 0);
@@ -549,12 +549,22 @@ send_reliable(players[index].peer_id, "menuleitura "+linear(text), 0);
 		create_gift(index, parsed);
 	}
 else if(parsed[0]=="celular"&&parsed.length()>1){
-string option=parsed[1];
-if(option=="sanity"){
-send_reliable(players[index].peer_id, "msg2 ;De un lado del celular sale una pequeña aguja la cuál extrae unas cuantas gotas de sangre de tu mano para conectar con tu organismo, revelando así en un examen rápido tu nivel de cordura. Actualmente es de; "+players[index].sanity+"%.", 0);
-players[index].health-=2000;
-players[index].maxhealth-=2000;
-}
+	string option=parsed[1];
+	// Adiciona a opção "Escolher chat" ao menu de serviços do celular
+	if(option=="servicos"){
+		string[] opcoes = {"Sanidade=sanity", "Escolher chat=escolherchat"};
+		send_menu(index, ";Menu de serviços do celular. Escolha uma opção:", "celular_servicos", 0, opcoes, soundsmenu);
+	}
+	else if(option=="sanity"){
+		send_reliable(players[index].peer_id, "msg2 ;De un lado do celular sale una pequeña aguja la cuál extrae unas cuantas gotas de sangre de tu mano para conectar con tu organismo, revelando así en un examen rápido tu nivel de cordura. Actualmente es de; "+players[index].sanity+"%.", 0);
+		players[index].health-=2000;
+		players[index].maxhealth-=2000;
+	}
+	else if(option=="escolherchat"){
+		// Abre o menu de chats usando os sons do menu do celular
+		string[] chats = {"Global=global", "Equipe=equipe", "Desativado=Desativado"};
+		send_menu(index, ";Escolha o chat desejado:", "escolher_chat", 0, chats, soundsmenu);
+	}
 }
 	else if(parsed[0]=="monster"){
 		vermonstruo(index);
@@ -606,11 +616,13 @@ send_reliable(players[index].peer_id, "msg2 enciendes la televisión.", 0);
 else if(parsed[0]=="iamadev"){
 if(players[index].invs==0){
 if(players[index].sexo==1){
-send_reliable(0, "msg4 "+players[index].charname+" ;es un desarrollador de Projeto Ig.;", 0);
+			// send_reliable(0, "msg4 "+players[index].charname+" ;es un desarrollador de Projeto Ig.;", 0);
+			// Mensagem de saudação de desenvolvedor removida
 send_reliable(0, "ps notify_packman.ogg", 0);
 }
 else if(players[index].sexo==0){
-send_reliable(0, "msg4 "+players[index].charname+" ;es una desarrolladora de Projeto Ig.;", 0);
+			// send_reliable(0, "msg4 "+players[index].charname+" ;es una desarrolladora de Projeto Ig.;", 0);
+			// Mensagem de saudação de desenvolvedora removida
 send_reliable(0, "ps notify_packman.ogg", 0);
 }
 }
@@ -844,7 +856,13 @@ eadm(";reporte de; "+players[index].charname+": "+string_replace(get_event_messa
 			}
 			else if(parsed[0]=="/afk")afk(index);
 			else if(parsed[0]=="frasesbarra"&&parsed.length()>2)frasesbarra(index, string_to_number(parsed[1]), parsed[2]);
-			else if(parsed[0]=="idiomachat"&&parsed.length()>1)players[index].idiomachat=parsed[1];
+else if(parsed[0]=="idiomachat"&&parsed.length()>1)players[index].idiomachat=parsed[1];
+
+// Handler para seleção do chat pelo menu do celular
+else if(parsed[0]=="escolher_chat"&&parsed.length()>1){
+	players[index].idiomachat=parsed[1];
+	send_reliable(players[index].peer_id, "msg2 ;Chat alterado para: ;"+parsed[1], 0);
+}
 			else if(parsed[0]=="idiomajogo"&&parsed.length()>1)players[index].idiomajogo=parsed[1];
 			else if(parsed[0]=="get_maps"){
 				string filename="maps_of_portal.txt";
@@ -868,13 +886,9 @@ eadm(";reporte de; "+players[index].charname+": "+string_replace(get_event_messa
 				players[index].thack.restart();
 				send_reliable(players[index].peer_id, "stopmoving", 0);
 			}
-			else if(parsed[0]=="lc"&&players[index].afk==false)send_reliable(players[index].peer_id, "msg2 Você está no nível; "+players[index].level+", ;e na patente; ;"+players[index].title+";. ;Você está com; ;"+players[index].nsede+"% ;de sede;, "+players[index].nfome+"% ;de fome,; ;"+players[index].sujo+"% ;suj"+players[index].sexo2+", e; ;"+players[index].doente+"% ;doente;.", 0);
+			else if(parsed[0]=="lc"&&players[index].afk==false)send_reliable(players[index].peer_id, "msg2 Você está no nível; "+players[index].level+", ;e na patente; ;"+players[index].title+";. ;Você está com; ;"+players[index].nsede+"% ;de sede;, "+players[index].nfome+"% ;de fome,; ;"+players[index].sujo+"% ;suj"+players[index].sexo2+", e; ;"+players[index].doente+"% ;enferm"+players[index].sexo2+";", 0);
 else if(parsed[0]=="reencarn"&&players[index].afk==false){
-// Calcula próximo nível usando diretamente a fórmula
-double xp_proximo_nivel = 50 * (players[index].level * players[index].level) - (150 * players[index].level) + 250;
-double xp_faltante = xp_proximo_nivel - players[index].xp;
-
-send_reliable(players[index].peer_id, "msg2 ;Você está no nível; ;"+players[index].level+".; ;Atualmente você tem; ;"+players[index].xp+"; ;pontos de experiência e para chegar ao próximo nível você precisa de; ;"+xp_faltante+"; ;dos mesmos.; ;Sua energia elemental é de; "+players[index].elemental_energy+"%", 0);
+send_reliable(players[index].peer_id, "msg2 ;Você está no nível; ;"+players[index].level+".; ;Atualmente você tem; ;"+players[index].xp+"; ;pontos de experiência e para chegar ao próximo nível você precisa de; ;"+(players[index].xprequerida-players[index].xp)+"; ;dos mesmos.; ;Sua energia elemental é de; "+players[index].elemental_energy+"%", 0);
 }
 else if(parsed[0]=="stryx"&&players[index].afk==false){
 send_reliable(players[index].peer_id, "msg2 ;Atualmente você tem; "+players[index].stryx+" Stryx.", 0);
