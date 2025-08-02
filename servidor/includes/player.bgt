@@ -442,9 +442,14 @@ timer tmuerte;
 			}
 			if(gamestopped==false)send_reliable(this.peer_id,"startmoving",0);
 			if(get_player_index_from(this.lasthit)>-1){
-				players[get_player_index_from(this.lasthit)].matou+=1;
-				players[get_player_index_from(this.lasthit)].sanity-=random(1, 5);
-				if(players[get_player_index_from(this.lasthit)].map=="arena"){
+				int killer_index = get_player_index_from(this.lasthit);
+				players[killer_index].matou+=1;
+				players[killer_index].sanity-=random(1, 5);
+				
+				// Processa recompensa se a v?tima tiver uma
+				process_bounty_kill(killer_index, get_player_index_from(this.charname));
+				
+				if(players[killer_index].map=="arena"){
 					bool killed=false;
 					int fightindex=get_player_index_from(this.lasthit);
 					if(fightindex>-1){
@@ -479,7 +484,11 @@ timer tmuerte;
 				int pid=get_player_index_from(pname);				if(pid>-1){
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
-						// Verificar se o jogador atingiu o limite para o título de mercenário
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+						
+						// Verificar se o jogador atingiu o limite para o t?tulo de mercen?rio
 						if(players[pid].matou == 10) {
 							settitle(pid); // Atualiza o título quando chega a 10 jogadores mortos
 							send_reliable(players[pid].peer_id, "msg2 ;Parabéns! Você recebeu a patente de Mercenário por derrotar 10 jogadores!;", 0);
@@ -512,6 +521,10 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+						
 						ganhaxp(players[pid].charname, random(30000, 100000));
 					}
 				}
@@ -524,6 +537,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -535,6 +551,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -546,6 +565,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -557,6 +579,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -568,6 +593,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -579,6 +607,9 @@ timer tmuerte;
 					pname=players[pid].charname;
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -591,6 +622,9 @@ timer tmuerte;
 					send_reliable(0, "msgmuerte "+this.charname+" ;no fue capaz de sobrevivir a la onda expansiva causada por la explosión de la mina colocada por; "+pname+".", 3);
 					if(players[pid].charname!=this.charname){
 						players[pid].matou+=1;
+						
+						// Processa recompensa se a v?tima tiver uma
+						process_bounty_kill(pid, get_player_index_from(this.charname));
 					}
 				}
 			}
@@ -1501,6 +1535,13 @@ file sstatus;
 				if(this.atpacifistasegundos<0){
 					this.atpacifista=false;
 					if(this.pacifico==0){
+						// Verifica se tem recompensa na cabe?a
+						if(this.bounty_on_head == 1){
+							send_reliable(this.peer_id, "msg2 ;Voc? n?o pode usar modo pacifista com recompensa na cabe?a.;", 0);
+							this.atpacifistasegundos = 10; // Reset o timer
+							return;
+						}
+						
 						this.pacifico=1;
 						send_reliable(this.peer_id,"ininovato", 0);
 						for(int x=0; x<players.length(); x++){
@@ -1698,6 +1739,58 @@ void getplayers(int index) {
 	send_reliable(players[index].peer_id, "listplayers "+data, 0);
 }
 
+void getplayers_for_bounty(int index) {
+	if(players[index].afk) return;
+	
+	// Debug para confirmar que a fun??o est? sendo chamada
+	send_reliable(players[index].peer_id, "msg2 ;FUN??O GETPLAYERS_FOR_BOUNTY CHAMADA - NOVA IMPLEMENTA??O - VERS?O 2.0;", 0);
+	
+	// Debug para verificar quantos jogadores est?o online
+	send_reliable(players[index].peer_id, "msg2 ;DEBUG BOUNTY: Total de jogadores: " + players.length() + ";", 0);
+	
+	// Verifica??es b?sicas antes de processar
+	int nivel_int = int(players[index].level);
+	send_reliable(players[index].peer_id, "msg2 ;DEBUG: Seu n?vel: " + players[index].level + " (int: " + nivel_int + ");", 0);
+	
+	if(nivel_int <= 10){
+		send_reliable(players[index].peer_id, "msg2 ;Voc? precisa estar no m?nimo no n?vel 11 para colocar recompensas. Seu n?vel: " + nivel_int + ";", 0);
+		return;
+	}
+	
+	if(players[index].bounty_active == 1){
+		send_reliable(players[index].peer_id, "msg2 ;Voc? j? tem uma recompensa ativa. Aguarde ela expirar ou ser coletada.;", 0);
+		return;
+	}
+	
+	// Cria lista de jogadores eleg?veis para recompensa baseada na mesma l?gica do getplayers
+	string[] jogadores_disponiveis;
+	for(int i = 0; i < players.length(); i++){
+		// Debug para cada jogador
+		string debug_info = "Player " + i + ": ";
+		if(i == index) debug_info += "? voc? mesmo, ";
+		if(players[i].peer_id <= 0) debug_info += "peer_id inv?lido (" + players[i].peer_id + "), ";
+		if(players[i].bounty_on_head > 0) debug_info += "j? tem recompensa (" + players[i].bounty_on_head + "), ";
+		if(players[i].invs == 1) debug_info += "invis?vel, ";
+		debug_info += "Nome: " + players[i].charname;
+		send_reliable(players[index].peer_id, "msg2 ;" + debug_info + ";", 0);
+		
+		if(i != index && players[i].peer_id > 0 && players[i].bounty_on_head == 0 && players[i].invs != 1){
+			jogadores_disponiveis.insert_last(players[i].charname + " (N?vel " + int(players[i].level) + ")" + "=" + players[i].charname);
+		}
+	}
+	
+	send_reliable(players[index].peer_id, "msg2 ;DEBUG BOUNTY: Jogadores dispon?veis encontrados: " + jogadores_disponiveis.length() + ";", 0);
+	
+	if(jogadores_disponiveis.length() == 0){
+		send_reliable(players[index].peer_id, "msg2 ;NOVA IMPLEMENTA??O: N?o h? jogadores dispon?veis para colocar recompensa.;", 0);
+		return;
+	}
+	
+	// Usa send_menu igual ao menu do celular
+	string[] soundsmenu = {"menumove.ogg", "menuitem.ogg", "menuaccept.ogg", "menuback.ogg"};
+	send_menu(index, ";Escolha o jogador para colocar recompensa::", "bounty_select_player", 0, jogadores_disponiveis, soundsmenu);
+}
+
 void remove_player(string playername, string map) {
 	int mapindex=get_map_index_from(map);
 	int peer=-1, index=get_player_index_from(playername);
@@ -1800,4 +1893,44 @@ void send_players(int index, bool to_others=true){
 	}
 	send_reliable(players[index].peer_id, final, 6);
 	if(to_others) server_maps[players[index].mapindex].send_to_others(players[index].peer_id, 6, "add_player_to_map "+players[index].charname+" "+players[index].x+" "+players[index].y+" "+players[index].bipar+" "+players[index].pacifico+" "+players[index].peer_id, true);
+}
+
+// Fun??o para processar coleta de recompensa quando um jogador mata outro
+void process_bounty_kill(int killer_index, int victim_index) {
+	// Verifica se a v?tima tem recompensa na cabe?a
+	if(players[victim_index].bounty_on_head == 1) {
+		// Transfere o valor da recompensa para o assassino
+		players[killer_index].inv_add_item("reais", players[victim_index].bounty_value);
+		
+		// Remove 1 n?vel da v?tima
+		if(players[victim_index].level > 1) {
+			players[victim_index].level -= 1;
+			players[victim_index].xp = (players[victim_index].level - 1) * 1000000;
+			if(players[victim_index].xp < 0) players[victim_index].xp = 0;
+		}
+		
+		// Mensagem global sobre a coleta da recompensa
+		send_reliable(0, "msg2 " + players[killer_index].charname + " ;coletou a recompensa de; " + players[victim_index].bounty_value + " ;reais por matar; " + players[victim_index].charname + "!", 3);
+		
+		// Som de recompensa coletada
+		send_packet(0, "play notifi14.ogg", 0, 0, 0);
+		
+		// Limpa todas as vari?veis de recompensa da v?tima
+		players[victim_index].bounty_on_head = 0;
+		players[victim_index].bounty_value = 0;
+		players[victim_index].bounty_owner = "";
+		players[victim_index].bounty_online_time = 0;
+		
+		// Limpa vari?veis ativas do sistema se a v?tima era o alvo
+		for(int i = 0; i < players.length(); i++) {
+			if(players[i].bounty_target == players[victim_index].charname) {
+				players[i].bounty_active = 0;
+				players[i].bounty_target = "";
+				break;
+			}
+		}
+		
+		// Atualiza t?tulo da v?tima (remove "Recompensado")
+		settitle(victim_index);
+	}
 }

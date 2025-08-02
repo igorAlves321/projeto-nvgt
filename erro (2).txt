@@ -1,0 +1,18 @@
+calma, vou fazer o fluxo com você, me ajude, olha, eu entro no meu, eclico na opção de jogar, o jogo inicia, acho que o reponsavel mseria o net.bgt não?
+antes ele tava funcionando, parou de funcionar depois que implementamos o sistema de recompenssas, falei pra você usar como referencia, para achar o netref.bgt
+olha isso, tauvez ajude.
+Isso geralmente indica que a conexão inicial pode estar ocorrendo, mas o processo de autenticação ou a resposta esperada do servidor não está sendo concluída.
+Com base nos arquivos fornecidos, o que pode estar acontecendo é o seguinte:
+• Onde a Conexão Começa: A lógica principal para a conexão do cliente com o servidor reside no arquivo net.bgt (referenciado como net.txt nos excertos fornecidos) [P1].
+• Processo de Conexão no Cliente:
+    1. Ao clicar em "Jogar" (logar no menu), a função main_menu() chama game() [P1, 228].
+    2. Se o cliente não estiver conectado (!connected), game() invoca a função login() [P1, 12].
+    3. Dentro de login():
+        ▪ O cliente tenta conectar-se ao servidor usando net.connect(serveraddress, serverport);1. O endereço padrão é "localhost" e a porta é 7890 [163, P1].
+        ▪ O jogo entra em um loop while(true) aguardando eventos de rede1.
+        ▪ Se um event_connect é recebido (indicando que a conexão TCP foi estabelecida), o peer_id é definido e o cliente imediatamente envia os dados de login (nome de usuário, hash da senha, versão do cliente e ID do computador) ao servidor através de send_reliable(peer_id, "h33j "+un+" "+pwh+" "+ver+" "+banned, 0);2. A variável connected é então definida como true2.
+• Onde o "Carregando" Pode Estar Travando:
+    ◦ Uma vez que connected é true (após o event_connect), a função login() continua em seu loop while(true)1. Ela está aguardando uma mensagem do servidor que indique que o login foi bem-sucedido (geralmente uma mensagem como "loggedin" que permitiria à função login() retornar true e avançar para set_player_info() [13, P1]).
+    ◦ Ausência de Erro Explícito: A descrição "não dá erro" é crucial. Se o servidor estivesse cheio3, a senha estivesse errada4, o usuário não existisse3 ou a versão do cliente estivesse desatualizada35, o servidor enviaria uma mensagem de "erro" ou "block"5, que seria processada pelo cliente e resultaria em uma mensagem de alerta. O fato de não haver erro aparente sugere que o servidor pode estar recebendo a requisição h33j mas não está respondendo com o "loggedin" ou qualquer outra mensagem de feedback esperada para concluir o login.
+    ◦ Timeout da Conexão: Embora exista um connecttime de 5 segundos para a conexão inicial (net.connect) que resultaria em "Servidor indisponível" se não houvesse resposta2, não há um timeout explícito dentro da função login() para a resposta de autenticação (loggedin) após a conexão inicial ser estabelecida e a variável connected ser definida como true. Isso significa que o cliente pode ficar aguardando indefinidamente se o servidor não enviar a resposta "loggedin".
+Em resumo, o jogo provavelmente está: Conectando-se com sucesso ao servidor (passando do connecttime), enviando suas credenciais de login, mas não recebendo a confirmação final de "loggedin" do servidor, fazendo com que o cliente permaneça em um estado de espera.
