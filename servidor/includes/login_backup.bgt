@@ -1,0 +1,161 @@
+void login (int id, string un, string pw, string ver, string compid="") {
+	file f;
+	string charfolder;
+	bool cont=true;
+	string ip=net.get_peer_address(id);
+	if(tempbancheck(un, compid)) {
+		int t=get_tempban_index(un);
+		if(t>-1) {
+			cont=false;
+			send_reliable(id,"block Sua conta foi banida temporariamente. Este banimento terminar� em "+ms_to_readable_time(tempbans[t].ms-tempbans[t].tempbantimer.elapsed)+". Motivo: "+tempbans[t].motivo+".", 0);
+			return;
+		}
+		else {
+			cont=false;
+			send_reliable(id,"block "+pu.get_value("Seu dispositivo foi banido temporariamente. Se isto for um erro, por favor, entre em contato com a administra��o."), 0);
+			return;
+		}
+	}
+	if (version!=ver) {
+		cont=false;
+		send_reliable(id,"updatenow",0);
+		return;
+	}
+	if(players.length()>=playerlimit) {
+		cont=false;
+		send_reliable(id,pu.get_value("Erro: O servidor est� cheio no momento. Por favor, tente mais tarde. O n�mero m�ximo de jogadores � ")+playerlimit+".",0);
+		return;
+	}
+	int encontered_account =get_accounts(un);
+	switch(encontered_account) {
+		case 1:
+		charfolder="players/"+un;
+		cont =true;
+		break;
+		case 2:
+		charfolder="players2/"+un;
+		cont =true;
+		break;
+		default:
+		send_reliable(id, "erro: "+pu.get_value("Personagem inexistente ou mal configurado. Certifique-se de escrever seu nome de usu�rio exatamente como foi criado e tente novamente."), 0);
+		return;
+	}
+	if(beta) {
+		if(!file_exists(charfolder+"/access.usr")) {
+			cont=false;
+			send_reliable(id, "block "+pu.get_value("Esta � uma vers�o de testes do Projeto Ig. Por favor, pe�a acesso aos administradores."), 0);
+			return;
+		}
+	}
+	f.open(charfolder+"/senha.usr","r");
+	string pass=f.read();
+	f.close();
+	if(pw!=pass) {
+		cont=false;
+		send_reliable(id,"erro: "+pu.get_value("Senha errada."),0);
+		return;
+	}
+	if(cont==true) {
+		if(encontered_account==2) {
+			directory_copy(charfolder, "players/"+un, true);
+			directory_delete(charfolder);
+			charfolder="players/"+un;
+		}
+		for (uint i=0; i<players.length(); i++) {
+			if(string_to_lower_case(players[i].charname)==string_to_lower_case(un)) {
+				int index=get_player_index_from(players[i].charname);
+				if(index>-1) {
+					terminar(index);
+					return;
+				}
+			}
+		}
+	}
+	f.open(charfolder+"/compid.usr", "w");
+	f.write(compid);
+	f.close();
+	f.open(charfolder+"/connected.usr", "w");
+	f.write(DATE_YEAR+":"+DATE_MONTH+":"+DATE_DAY+":"+TIME_HOUR+":"+TIME_MINUTE+":"+TIME_SECOND);
+	f.close();
+	spawn_player(id, un,ver,compid);
+	int index=get_player_index(id);
+	players[index].create_v_m();
+	string test;
+	charfolder="players/"+players[index].charname;
+	int teste;
+	f.open(charfolder+"/configs.ini","rb");
+	dictionary@ sd=deserialize(f.read());
+	f.close();
+	if(sd.exists("x")) {
+		sd.get("x", players[index].x);
+		send_reliable(id,"x:"+players[index].x,0);
+	}
+	if(sd.exists("y")) {
+		sd.get("y", players[index].y);
+		send_reliable(id,"y:"+players[index].y,0);
+	}
+	send_reliable(id,"loggedin",0);
+	file ipf;
+	ipf.open(charfolder+"/ip.usr","w");
+	ipf.write(net.get_peer_address(players[index].peer_id));
+	ipf.close();
+	load_configs(index);
+	if(file_exists(charfolder+"/admintudo.usr")==true) players[index].dev=true;
+	if(players[index].pacifico==1) {
+		send_reliable(players[index].peer_id,"ininovato", 0);
+		send_reliable(0, "pp "+players[index].charname+" "+players[index].pacifico, 0);
+	}
+	if(players[index].pacifico==0) {
+		send_reliable(players[index].peer_id,"fimnovato", 0);
+		send_reliable(0, "pp "+players[index].charname+" "+players[index].pacifico, 0);
+	}
+	if(players[index].paralisado==true)send_reliable(players[index].peer_id, "stopmoving", 0);
+	if(players[index].paralisado==true)players[index].tparalisado.restart();
+	if(players[index].sexo==0) players[index].sexo2="a";
+	else if(players[index].sexo==1) players[index].sexo2="o";
+	f.open("mapsclient.txt", "r");
+	string[] mapsclient;
+	mapsclient =string_split(f.read(), "\r\n", false);
+	f.close();
+	if(mapsclient.length()>0) {
+		string wtext;
+		int encontered =mapsclient.find(players[index].map);
+		if(encontered>-1) {
+			wtext ="changemap local "+mapsclient[encontered]+" "+players[index].x+" "+players[index].y;
+			send_reliable(players[index].peer_id, wtext, 0);
+			send_packet(0,"upl "+players[index].peer_id+" "+players[index].x+" "+players[index].y+" "+players[index].map,players[index].map);
+		}
+		else {
+			int mapindex=get_map_index_from(players[index].map);
+			if(mapindex>-1) wtext =linear(server_maps[mapindex].mapdata);
+			send_reliable(players[index].peer_id, "changemap "+wtext+"\r\nx:"+players[index].x+"\r\ny:"+players[index].y+"\r\n", 0);
+			send_packet(0,"upl "+players[index].peer_id+" "+players[index].x+" "+players[index].y+" "+players[index].map,players[index].map);
+		}
+		if(players[index].map=="c�psula_interestelar") {
+			players[index].destino4="isla_de_rignie";
+		}
+		if(players[index].map=="nave_1") {
+			players[index].destino5="ciudad_de_stalwalquer";
+		}
+		if(players[index].map=="c�psula_estrellas_apagadas") {
+			players[index].destino6="estaci�n_espacial";
+		}
+		if(players[index].map=="nave_tur�stica_scorpion") {
+			players[index].destino13="planeta_banjab�bic";
+		}
+	}
+	int mostrarconectou=1;
+	for(uint coca=0; coca<tempocaiu.length(); coca++) {
+		if(tempocaiu[coca].nome==players[index].charname) {
+			if(players[index].invs==0 && !players[index].is_admin()) send_reliable(0, "msgconexoes ;"+pu.get_value("A conex�o de")+" "+players[index].charname+" "+pu.get_value("com esta dimens�o foi reestabelecida.")+";", 0);
+			mostrarconectou=0;
+			tempocaiu.remove_at(coca);
+		}
+	}
+	if(players[index].invs==0&&mostrarconectou==1) send_reliable(0,"on "+players[index].charname, 0);
+	if (players.length()>peak) {
+		send_reliable(0, "msgchegamosaumnovorecorde "+players.length(), 0);
+		send_reliable(0,"ps notify3.ogg",0);
+		peak=players.length();
+	}
+}
