@@ -1,0 +1,260 @@
+// Basic TCP network wrapper for NVGT - replacing BGT network class
+// This provides BGT-compatible interface over NVGT TCP sockets
+
+#include "db.nvgt"
+#include "readable_time.nvgt"
+
+// Network event types - matching BGT constants
+const int event_none = 0;
+const int event_connect = 1;
+const int event_disconnect = 2;
+const int event_receive = 3;
+
+// Network event structure
+class network_event {
+	int type = event_none;
+	int peer_id = -1;
+	int channel = 0;
+	string message = "";
+	
+	network_event() {
+		type = event_none;
+		peer_id = -1;
+		channel = 0;
+		message = "";
+	}
+	
+	network_event(int evt_type, int peer, int ch, string msg) {
+		type = evt_type;
+		peer_id = peer;
+		channel = ch;
+		message = msg;
+	}
+}
+
+// Client connection info
+class client_connection {
+	int peer_id;
+	tcp_socket@ socket;
+	bool connected = false;
+	string buffer = "";
+	
+	client_connection(int id, tcp_socket@ sock) {
+		peer_id = id;
+		@socket = sock;
+		connected = true;
+	}
+}
+
+// Main network manager class - BGT compatible interface
+class network {
+	private tcp_server server;
+	private client_connection@[] clients;
+	private network_event@[] event_queue;
+	private int next_peer_id = 1;
+	private bool is_server = false;
+	private tcp_socket client_socket; // For client mode
+	private bool client_connected = false;
+	
+	network() {
+		// Constructor
+	}
+	
+	// Server mode: start listening on port
+	bool host(int port, int max_clients = 100) {
+		is_server = true;
+		return server.listen(port, max_clients);
+	}
+	
+	// Client mode: connect to server
+	bool connect(string host, int port) {
+		is_server = false;
+		client_connected = client_socket.connect(host, port);
+		if(client_connected) {
+			// Add connect event
+			network_event@ evt = network_event(event_connect, 1, 0, "");
+			event_queue.insert_last(evt);
+		}
+		return client_connected;
+	}
+	
+	// Get next network event (BGT compatible)
+	network_event@ request() {
+		// Process incoming connections (server mode)
+		if(is_server) {
+			process_server_events();
+		} else {
+			process_client_events();
+		}
+		
+		// Return next event from queue
+		if(event_queue.length() > 0) {
+			network_event@ evt = event_queue[0];
+			event_queue.remove_at(0);
+			return evt;
+		}
+		
+		// Return empty event
+		return network_event();
+	}
+	
+	// Send reliable message (BGT compatible)
+	bool send_reliable(int peer_id, string message, int channel) {
+		if(is_server) {
+			// Server mode - send to specific client
+			for(int i = 0; i < clients.length(); i++) {
+				if(clients[i].peer_id == peer_id && clients[i].connected) {
+					return clients[i].socket.write(message + "\n") > 0;
+				}
+			}
+			// If peer_id is 0, broadcast to all clients
+			if(peer_id == 0) {
+				bool success = true;
+				for(int i = 0; i < clients.length(); i++) {
+					if(clients[i].connected) {
+						if(clients[i].socket.write(message + "\n") <= 0) {
+							success = false;
+						}
+					}
+				}
+				return success;
+			}
+		} else {
+			// Client mode - send to server
+			if(client_connected) {
+				return client_socket.write(message + "\n") > 0;
+			}
+		}
+		return false;
+	}
+	
+	// Disconnect a client
+	void disconnect_peer(int peer_id) {
+		if(is_server) {
+			for(int i = 0; i < clients.length(); i++) {
+				if(clients[i].peer_id == peer_id) {
+					clients[i].socket.close();
+					clients[i].connected = false;
+					// Add disconnect event
+					network_event@ evt = network_event(event_disconnect, peer_id, 0, "");
+					event_queue.insert_last(evt);
+					break;
+				}
+			}
+		} else {
+			// Client mode
+			client_socket.close();
+			client_connected = false;
+			network_event@ evt = network_event(event_disconnect, 1, 0, "");
+			event_queue.insert_last(evt);
+		}
+	}
+	
+	// Get peer count
+	int get_peer_count() {
+		if(is_server) {
+			int count = 0;
+			for(int i = 0; i < clients.length(); i++) {
+				if(clients[i].connected) count++;
+			}
+			return count;
+		}
+		return client_connected ? 1 : 0;
+	}
+	
+	private void process_server_events() {
+		// Accept new connections
+		tcp_socket@ new_client = server.accept();
+		if(new_client !is null) {
+			client_connection@ conn = client_connection(next_peer_id++, new_client);
+			clients.insert_last(conn);
+			
+			// Add connect event
+			network_event@ evt = network_event(event_connect, conn.peer_id, 0, "");
+			event_queue.insert_last(evt);
+		}
+		
+		// Process existing client messages
+		for(int i = 0; i < clients.length(); i++) {
+			if(!clients[i].connected) continue;
+			
+			string data = clients[i].socket.read();
+			if(data.length() > 0) {
+				clients[i].buffer += data;
+				process_client_buffer(clients[i]);
+			} else if(clients[i].socket.error_code != 0) {
+				// Client disconnected
+				clients[i].connected = false;
+				network_event@ evt = network_event(event_disconnect, clients[i].peer_id, 0, "");
+				event_queue.insert_last(evt);
+			}
+		}
+		
+		// Clean up disconnected clients
+		for(int i = clients.length() - 1; i >= 0; i--) {
+			if(!clients[i].connected) {
+				clients.remove_at(i);
+			}
+		}
+	}
+	
+	private void process_client_events() {
+		if(!client_connected) return;
+		
+		string data = client_socket.read();
+		if(data.length() > 0) {
+			// Process received data - split by newlines
+			string[] lines = string_split(data, "\n", false);
+			for(int i = 0; i < lines.length(); i++) {
+				if(lines[i].length() > 0) {
+					network_event@ evt = network_event(event_receive, 1, 0, lines[i]);
+					event_queue.insert_last(evt);
+				}
+			}
+		} else if(client_socket.error_code != 0) {
+			// Disconnected
+			client_connected = false;
+			network_event@ evt = network_event(event_disconnect, 1, 0, "");
+			event_queue.insert_last(evt);
+		}
+	}
+	
+	private void process_client_buffer(client_connection@ client) {
+		// Split buffer by newlines and create events
+		string[] lines = string_split(client.buffer, "\n", false);
+		
+		// Keep last incomplete line in buffer
+		if(lines.length() > 0 && !client.buffer.ends_with("\n")) {
+			client.buffer = lines[lines.length() - 1];
+			lines.remove_at(lines.length() - 1);
+		} else {
+			client.buffer = "";
+		}
+		
+		// Create events for complete lines
+		for(int i = 0; i < lines.length(); i++) {
+			if(lines[i].length() > 0) {
+				network_event@ evt = network_event(event_receive, client.peer_id, 0, lines[i]);
+				event_queue.insert_last(evt);
+			}
+		}
+	}
+}
+
+// Global network instance and event (BGT compatible)
+network net;
+network_event@ event;
+
+// Helper function to get event message (BGT compatible)
+string get_event_message() {
+	if(event !is null) {
+		return event.message;
+	}
+	return "";
+}
+
+// Helper function to send packet to area (will need position system later)
+void send_packet(int peer_id, string message, int x, int y, int map_index) {
+	// For now, just send to specific peer or broadcast
+	net.send_reliable(peer_id, message, 0);
+}

@@ -1,0 +1,415 @@
+/* db module, version 2.0 - NVGT SQLite port
+Originally written by Andrés Torres.
+Modernized for NVGT by GitHub Copilot - now using native SQLite for better performance.
+This class provides the same BGT-compatible interface but uses SQLite database instead of arrays.
+Maintains order preservation and all original functionality while adding ACID transactions. */
+
+#pragma plugin nvgt_sqlite
+
+// SQLite constants (if not defined by the plugin)
+const int SQLITE_OK = 0;
+const int SQLITE_ERROR = 1;
+const int SQLITE_ROW = 100;
+const int SQLITE_DONE = 101;
+
+// Global database instance for BGT compatibility
+sqlite3@ global_db;
+
+class db {
+	private sqlite3@ sqlite_db;
+	private string db_filename;
+	private bool initialized = false;
+
+	// Constructor. Initialize SQLite database
+	db() {
+		@sqlite_db = sqlite3();
+		db_filename = ":memory:"; // In-memory database by default
+		init_database();
+	}
+	
+	// Constructor with custom filename
+	db(const string&in filename) {
+		@sqlite_db = sqlite3();
+		db_filename = filename;
+		init_database();
+	}
+	
+	// Initialize the SQLite database with our table structure
+	private bool init_database() {
+		if(sqlite_db.open(db_filename) != SQLITE_OK) {
+			return false;
+		}
+		
+		// Create table with order preservation
+		string create_sql = "CREATE TABLE IF NOT EXISTS kv_store ("
+			"id INTEGER PRIMARY KEY AUTOINCREMENT, "
+			"key TEXT UNIQUE NOT NULL, "
+			"value TEXT NOT NULL, "
+			"created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+			")";
+		
+		if(sqlite_db.execute(create_sql) != SQLITE_OK) {
+			return false;
+		}
+		
+		initialized = true;
+		return true;
+	}
+	
+	// BGT compatible method: set a key-value pair (string)
+	void set(const string&in key, const string&in value) {
+		if(!initialized) return;
+		
+		string sql = "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return;
+		
+		stmt.bind_text(1, key);
+		stmt.bind_text(2, value);
+		stmt.step();
+	}
+	
+	// BGT compatible method: set a key-value pair (double)
+	void set(const string&in key, double value) {
+		set(key, string(value));
+	}
+	
+	// BGT compatible method: get a value by key - returns success boolean
+	bool get(const string&in key, string&out value) {
+		if(!initialized) return false;
+		
+		string sql = "SELECT value FROM kv_store WHERE key = ? LIMIT 1";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return false;
+		
+		stmt.bind_text(1, key);
+		if(stmt.step() == SQLITE_ROW) {
+			value = stmt.column_text(0);
+			return true;
+		}
+		
+		return false;
+	}
+	
+	// BGT compatible method: get a value by key - returns success boolean for double
+	bool get(const string&in key, double&out value) {
+		string str_value;
+		if(get(key, str_value)) {
+			value = parse_double(str_value);
+			return true;
+		}
+		return false;
+	}
+	
+	// BGT compatible method: get a value by key with default
+	string get(const string&in key, const string&in default_value = "") {
+		if(!initialized) return default_value;
+		
+		string sql = "SELECT value FROM kv_store WHERE key = ? LIMIT 1";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return default_value;
+		
+		stmt.bind_text(1, key);
+		if(stmt.step() == SQLITE_ROW) {
+			return stmt.column_text(0);
+		}
+		
+		return default_value;
+	}
+	
+	// BGT compatible method: check if key exists
+	bool exists(const string&in key) {
+		if(!initialized) return false;
+		
+		string sql = "SELECT 1 FROM kv_store WHERE key = ? LIMIT 1";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return false;
+		
+		stmt.bind_text(1, key);
+		return stmt.step() == SQLITE_ROW;
+	}
+	
+	// BGT compatible method: delete a key
+	bool delete(const string&in key) {
+		if(!initialized) return false;
+		
+		string sql = "DELETE FROM kv_store WHERE key = ?";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return false;
+		
+		stmt.bind_text(1, key);
+		return stmt.step() == SQLITE_DONE;
+	}
+	
+	// BGT compatible method: get all keys
+	string[]@ get_keys() {
+		string[] keys;
+		if(!initialized) return @keys;
+		
+		string sql = "SELECT key FROM kv_store ORDER BY id";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return @keys;
+		
+		while(stmt.step() == SQLITE_ROW) {
+			keys.insert_last(stmt.column_text(0));
+		}
+		
+		return @keys;
+	}
+	
+	// BGT compatible method: get number of entries
+	uint get_size() {
+		if(!initialized) return 0;
+		
+		string sql = "SELECT COUNT(*) FROM kv_store";
+		sqlite3statement@ stmt = sqlite_db.prepare(sql);
+		if(@stmt == null) return 0;
+		
+		if(stmt.step() == SQLITE_ROW) {
+			return stmt.column_int(0);
+		}
+		
+		return 0;
+	}
+	
+	// BGT compatible method: check if database is empty
+	bool is_empty() {
+		return get_size() == 0;
+	}
+	
+	// BGT compatible method: reset/clear all data
+	void reset() {
+		clear();
+	}
+	
+	// BGT compatible method: delete all data (alias for reset)
+	bool delete_all() {
+		if(is_empty()) return false;
+		clear();
+		return true;
+	}
+	
+	// BGT compatible method: sort/move a key to a new position
+	bool sort(const string&in key, int range) {
+		if(!initialized || !exists(key)) return false;
+		
+		// Get current keys in order
+		string[]@ keys = get_keys();
+		int current_index = -1;
+		
+		// Find current position
+		for(uint i = 0; i < keys.length(); i++) {
+			if(keys[i] == key) {
+				current_index = i;
+				break;
+			}
+		}
+		
+		if(current_index == -1) return false;
+		
+		// Calculate new position
+		int new_position = current_index + range;
+		if(new_position < 0 || new_position >= int(keys.length())) {
+			return false;
+		}
+		
+		// Get the value to move
+		string value = get(key);
+		
+		// Start transaction for atomicity
+		begin_transaction();
+		
+		// Clear and rebuild in new order
+		clear();
+		
+		// Create new order
+		string[] new_keys;
+		string[] new_values;
+		
+		// Copy all keys except the one we're moving
+		for(uint i = 0; i < keys.length(); i++) {
+			if(i != uint(current_index)) {
+				new_keys.insert_last(keys[i]);
+				new_values.insert_last(get_backup_value(keys[i]));
+			}
+		}
+		
+		// Insert at new position
+		new_keys.insert_at(new_position, key);
+		new_values.insert_at(new_position, value);
+		
+		// Restore all data in new order
+		for(uint i = 0; i < new_keys.length(); i++) {
+			set(new_keys[i], new_values[i]);
+		}
+		
+		commit_transaction();
+		return true;
+	}
+	
+	// Helper function for sort operation
+	private string get_backup_value(const string&in key) {
+		return get(key);
+	}
+	
+	// BGT compatible method: clear all data
+	void clear() {
+		if(!initialized) return;
+		
+		sqlite_db.execute("DELETE FROM kv_store");
+	}
+	
+	// BGT compatible method: close database
+	void close() {
+		if(@sqlite_db != null) {
+			sqlite_db.close();
+			initialized = false;
+		}
+	}
+	
+	// Save to file (for in-memory databases)
+	bool save_to_file(const string&in filename) {
+		if(!initialized) return false;
+		
+		// Simple backup by copying data to a new database
+		sqlite3@ backup_db = sqlite3();
+		if(backup_db.open(filename) != SQLITE_OK) {
+			return false;
+		}
+		
+		// Create table in backup
+		string create_sql = "CREATE TABLE IF NOT EXISTS kv_store ("
+			"id INTEGER PRIMARY KEY AUTOINCREMENT, "
+			"key TEXT UNIQUE NOT NULL, "
+			"value TEXT NOT NULL, "
+			"created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+			")";
+		
+		if(backup_db.execute(create_sql) != SQLITE_OK) {
+			backup_db.close();
+			return false;
+		}
+		
+		// Copy data
+		string[]@ keys = get_keys();
+		for(uint i = 0; i < keys.length(); i++) {
+			string value = get(keys[i]);
+			string sql = "INSERT INTO kv_store (key, value) VALUES (?, ?)";
+			sqlite3statement@ stmt = backup_db.prepare(sql);
+			if(@stmt != null) {
+				stmt.bind_text(1, keys[i]);
+				stmt.bind_text(2, value);
+				stmt.step();
+			}
+		}
+		
+		backup_db.close();
+		return true;
+	}
+	
+	// Advanced: execute raw SQL
+	bool execute_sql(const string&in sql) {
+		if(!initialized) return false;
+		return sqlite_db.execute(sql) == SQLITE_OK;
+	}
+	
+	// Get last error message
+	string get_last_error() {
+		if(@sqlite_db == null) return "Database not initialized";
+		return sqlite_db.get_last_error_text();
+	}
+	
+	// Transaction support
+	bool begin_transaction() {
+		if(!initialized) return false;
+		return sqlite_db.execute("BEGIN TRANSACTION") == SQLITE_OK;
+	}
+	
+	bool commit_transaction() {
+		if(!initialized) return false;
+		return sqlite_db.execute("COMMIT") == SQLITE_OK;
+	}
+	
+	bool rollback_transaction() {
+		if(!initialized) return false;
+		return sqlite_db.execute("ROLLBACK") == SQLITE_OK;
+	}
+}
+
+// Global database functions for BGT compatibility
+void db_set_global_file(const string&in filename) {
+	if(@global_db != null) {
+		global_db.close();
+	}
+	@global_db = sqlite3();
+	global_db.open(filename);
+	
+	// Initialize table
+	string create_sql = "CREATE TABLE IF NOT EXISTS kv_store ("
+		"id INTEGER PRIMARY KEY AUTOINCREMENT, "
+		"key TEXT UNIQUE NOT NULL, "
+		"value TEXT NOT NULL, "
+		"created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+		")";
+	global_db.execute(create_sql);
+}
+
+void db_set_global(const string&in key, const string&in value) {
+	if(@global_db == null) {
+		@global_db = sqlite3();
+		global_db.open(":memory:");
+		
+		string create_sql = "CREATE TABLE IF NOT EXISTS kv_store ("
+			"id INTEGER PRIMARY KEY AUTOINCREMENT, "
+			"key TEXT UNIQUE NOT NULL, "
+			"value TEXT NOT NULL, "
+			"created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+			")";
+		global_db.execute(create_sql);
+	}
+	
+	string sql = "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)";
+	sqlite3statement@ stmt = global_db.prepare(sql);
+	if(@stmt == null) return;
+	
+	stmt.bind_text(1, key);
+	stmt.bind_text(2, value);
+	stmt.step();
+}
+
+string db_get_global(const string&in key, const string&in default_value = "") {
+	if(@global_db == null) return default_value;
+	
+	string sql = "SELECT value FROM kv_store WHERE key = ? LIMIT 1";
+	sqlite3statement@ stmt = global_db.prepare(sql);
+	if(@stmt == null) return default_value;
+	
+	stmt.bind_text(1, key);
+	if(stmt.step() == SQLITE_ROW) {
+		return stmt.column_text(0);
+	}
+	
+	return default_value;
+}
+
+bool db_exists_global(const string&in key) {
+	if(@global_db == null) return false;
+	
+	string sql = "SELECT 1 FROM kv_store WHERE key = ? LIMIT 1";
+	sqlite3statement@ stmt = global_db.prepare(sql);
+	if(@stmt == null) return false;
+	
+	stmt.bind_text(1, key);
+	return stmt.step() == SQLITE_ROW;
+}
+
+void db_delete_global(const string&in key) {
+	if(@global_db == null) return;
+	
+	string sql = "DELETE FROM kv_store WHERE key = ?";
+	sqlite3statement@ stmt = global_db.prepare(sql);
+	if(@stmt == null) return;
+	
+	stmt.bind_text(1, key);
+	stmt.step();
+}

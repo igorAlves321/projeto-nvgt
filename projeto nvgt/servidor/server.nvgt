@@ -1,0 +1,149 @@
+// Basic NVGT server - Phase 1 foundation
+// Tests our converted modules: db.nvgt, net.nvgt, config-test.nvgt
+
+#include "config-test.nvgt"
+#include "servidor/includes/db.nvgt"
+#include "servidor/includes/net.nvgt"
+#include "servidor/includes/readable_time.nvgt"
+
+// Global variables matching BGT server structure
+network net;
+network_event@ event;
+db channels; // BGT compatibility - channels database
+
+// Global parsed_data for language files
+parsed_data pu;
+
+void main() {
+	print("=== Projeto IG NVGT Server - Phase 1 ===");
+	print("Game: " + GAME_NAME + " v" + version);
+	print("Server starting on port: " + port);
+	
+	// Initialize language parser
+	if(!pu.set_arquivo("lang/português.lang")) {
+		print("Warning: Could not load language file, using defaults");
+	}
+	
+	// Initialize channels database
+	channels.set("global", "1");
+	channels.set("admin", "1");
+	channels.set("trade", "1");
+	
+	// Start network server
+	if(!net.host(port, 100)) {
+		print("ERROR: Could not start server on port " + port);
+		return;
+	}
+	
+	print("Server started successfully!");
+	print("Listening on port " + port);
+	print("Max clients: 100");
+	print("Press Ctrl+C to stop server\n");
+	
+	// Main server loop
+	bool running = true;
+	int tick_count = 0;
+	
+	while(running) {
+		// Process network events
+		@event = net.request();
+		
+		if(event.type != event_none) {
+			handle_network_event();
+		}
+		
+		// Basic server maintenance every 1000 ticks
+		tick_count++;
+		if(tick_count >= 1000) {
+			tick_count = 0;
+			print("Server running - " + net.get_peer_count() + " clients connected");
+			
+			// Test our database every 1000 ticks
+			test_database_operations();
+		}
+		
+		// Small delay to prevent 100% CPU usage
+		wait(5);
+	}
+}
+
+void handle_network_event() {
+	if(event.type == event_connect) {
+		print("Client connected - Peer ID: " + event.peer_id);
+		
+		// Send welcome message
+		string welcome = "welcome " + GAME_NAME + " " + version;
+		net.send_reliable(event.peer_id, welcome, 0);
+		
+	} else if(event.type == event_disconnect) {
+		print("Client disconnected - Peer ID: " + event.peer_id);
+		
+	} else if(event.type == event_receive) {
+		print("Message from " + event.peer_id + ": " + event.message);
+		
+		// Basic echo server for testing
+		handle_client_message();
+	}
+}
+
+void handle_client_message() {
+	string message = get_event_message();
+	string[] parsed = string_split(message, " ", true);
+	
+	if(parsed.length() == 0) return;
+	
+	string command = parsed[0];
+	
+	if(command == "ping") {
+		net.send_reliable(event.peer_id, "pong", 0);
+		
+	} else if(command == "test_db") {
+		// Test database operations
+		channels.set("test_key_" + event.peer_id, "test_value_" + random(1, 1000));
+		int db_size = channels.get_size();
+		net.send_reliable(event.peer_id, "db_test_result " + db_size, 0);
+		
+	} else if(command == "get_time") {
+		string time_str = ms_to_readable_time(60000); // 1 minute test
+		net.send_reliable(event.peer_id, "time_result " + time_str, 0);
+		
+	} else if(command == "get_channels") {
+		string[] keys = channels.get_keys();
+		string result = "channels ";
+		for(int i = 0; i < keys.length(); i++) {
+			result += keys[i] + " ";
+		}
+		net.send_reliable(event.peer_id, result, 0);
+		
+	} else if(command == "echo") {
+		// Echo back the message
+		string echo_msg = "echo " + string_replace(message, "echo ", "", true);
+		net.send_reliable(event.peer_id, echo_msg, 0);
+		
+	} else {
+		// Unknown command
+		net.send_reliable(event.peer_id, "unknown_command " + command, 0);
+	}
+}
+
+void test_database_operations() {
+	// Test our SQLite database periodically
+	static int test_counter = 0;
+	test_counter++;
+	
+	// Add a test entry
+	channels.set("server_tick_" + test_counter, "value_" + test_counter);
+	
+	// Clean up old entries (keep only last 10)
+	if(test_counter > 10) {
+		channels.delete("server_tick_" + (test_counter - 10));
+	}
+	
+	// Verify database integrity
+	if(!channels.exists("global")) {
+		print("WARNING: Database integrity issue - restoring defaults");
+		channels.set("global", "1");
+		channels.set("admin", "1");
+		channels.set("trade", "1");
+	}
+}

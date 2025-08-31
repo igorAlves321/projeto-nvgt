@@ -1,0 +1,127 @@
+// Simple NVGT client for testing Phase 1 server
+// Tests network connectivity and basic protocol
+
+#include "../config-test.nvgt"
+#include "../servidor/includes/net.nvgt"
+
+network net;
+network_event@ event;
+bool connected = false;
+
+void main() {
+	print("=== Projeto IG NVGT Test Client ===");
+	print("Connecting to: " + serveraddress + ":" + port);
+	
+	// Connect to server
+	if(!net.connect(serveraddress, port)) {
+		print("ERROR: Could not connect to server");
+		print("Make sure the server is running on " + serveraddress + ":" + port);
+		wait_key();
+		return;
+	}
+	
+	print("Connection initiated...");
+	
+	// Main client loop
+	bool running = true;
+	int tick_count = 0;
+	
+	while(running) {
+		// Process network events
+		@event = net.request();
+		
+		if(event.type != event_none) {
+			handle_network_event();
+		}
+		
+		// Send periodic test commands
+		tick_count++;
+		if(connected && tick_count % 5000 == 0) { // Every 25 seconds
+			send_test_commands();
+		}
+		
+		// Check for user input (simple commands)
+		if(key_pressed(KEY_ESCAPE)) {
+			print("Disconnecting...");
+			running = false;
+		}
+		
+		if(key_pressed(KEY_T)) {
+			if(connected) {
+				print("Sending test commands...");
+				send_test_commands();
+			}
+		}
+		
+		if(key_pressed(KEY_P)) {
+			if(connected) {
+				print("Sending ping...");
+				net.send_reliable(1, "ping", 0);
+			}
+		}
+		
+		wait(5);
+	}
+	
+	print("Client shutting down...");
+}
+
+void handle_network_event() {
+	if(event.type == event_connect) {
+		print("Connected to server successfully!");
+		connected = true;
+		
+		// Send initial test
+		net.send_reliable(1, "echo Hello from NVGT client!", 0);
+		
+	} else if(event.type == event_disconnect) {
+		print("Disconnected from server");
+		connected = false;
+		
+	} else if(event.type == event_receive) {
+		string message = get_event_message();
+		print("Server: " + message);
+		
+		// Handle specific responses
+		if(message.starts_with("welcome")) {
+			print("Received welcome message from server");
+			
+		} else if(message.starts_with("pong")) {
+			print("Ping successful!");
+			
+		} else if(message.starts_with("db_test_result")) {
+			print("Database test completed successfully");
+			
+		} else if(message.starts_with("time_result")) {
+			print("Time utility test successful");
+			
+		} else if(message.starts_with("channels")) {
+			print("Channels list received");
+		}
+	}
+}
+
+void send_test_commands() {
+	if(!connected) return;
+	
+	// Test different server capabilities
+	print("Testing server capabilities...");
+	
+	// Test 1: Database operations
+	net.send_reliable(1, "test_db", 0);
+	wait(100);
+	
+	// Test 2: Time utilities
+	net.send_reliable(1, "get_time", 0);
+	wait(100);
+	
+	// Test 3: Channel listing
+	net.send_reliable(1, "get_channels", 0);
+	wait(100);
+	
+	// Test 4: Echo test
+	net.send_reliable(1, "echo Testing BGT compatibility layer", 0);
+	wait(100);
+	
+	print("Test commands sent!");
+}

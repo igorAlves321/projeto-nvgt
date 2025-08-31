@@ -1,46 +1,194 @@
-Para corrigir o bug onde jogadores de nível 22 não conseguem usar a funcionalidade de recompensa (bounty), sendo informados de que precisam ser de nível "mais do que 10", e para garantir a correta exibição das mensagens de validação, siga as instruções abaixo.
-
-**Análise do Problema:**
-O problema central reside no fato de que, mesmo com o jogador estando no nível 22 (que é superior ao nível 10), o sistema ainda impede a ação, exibindo a mensagem "Apenas jogadores acima do n?vel 10 podem usar esta fun??o." [1]. Isso indica uma inconsistência de dados: o valor do nível do jogador (`players[index].level`) pode não estar sendo corretamente atualizado ou recuperado no servidor no momento da verificação.
-
-**Plano de Ação para Correção (para o Claude Code):**
-
-1.  **Verificação e Sincronização do Nível do Jogador (Prioridade Máxima):**
-    *   **Localização Relevante no Código:** A validação do nível ocorre no arquivo `net.bgt`, dentro do bloco de processamento do comando "bounty":
-        ```bgt
-        if(parsed=="bounty"&&parsed.length()>2){
-            // ... (código existente)
-            if(players[index].level<=10){
-                send_reliable(players[index].peer_id, "msg2 ;Apenas jogadores acima do nível 10 podem usar esta função.", 0); [1]
-// no nosso essa mensagem pode ta um pouco diferente
-                return;
-            }
-
-        }
-        ```
-    *   **Ação Recomendada:**
-        *   **Validação em Tempo Real:** Antes da linha `if(players[index].level<=10){`, insira um log temporário para verificar o nível do jogador que está tentando usar o comando. Use `eadm` para administradores
-            Exemplo de adição de log (apenas para depuração):
-            ```bgt
-            // Adicionar esta linha temporariamente para depuração
-            eadm("DEBUG: Jogador "+players[index].charname+" (ID: "+players[index].peer_id+") Nivel: "+players[index].level, "notify.ogg", 100);
-            if(players[index].level<=10){
-                send_reliable(players[index].peer_id, "msg2 ;Apenas jogadores acima do nível 10 podem usar esta função.", 0);
-                return;
-// dinovo no nosso tauvez teja meio diferente essa parte
-            }
-            ```
-        *   **Verificar Ciclo de Vida do Nível:**
-            *   **Subida de Nível:** Assegure-se de que a função `subir_nivel` em `player.bgt` [4, 5] esteja persistindo o nível atualizado do jogador no arquivo de configuração (`sconfigs.bgt` [6]) de forma eficaz e que este seja o valor usado pelo servidor. Pode haver um atraso na atualização do nível do jogador em memória após uma subida de nível.
-
-2.  **Verificação das Mensagens de Validação (Codificação):**
-    *   **Mensagem em Questão:** `Apenas jogadores acima do nível 10 podem usar esta função.` [1]
-    *   **Análise:** A frase "acima do nível 10" está logicamente consistente com a condição de código (`level <= 10`). O problema com caracteres como `n?vel` e `fun??o` é um forte indicativo de problema de codificação.
-    *   **Ação:**
-        *   **Consistência de Codificação:** É fundamental que todos os arquivos de código-fonte (`.bgt`) e arquivos de dados que contêm texto (como `.lang`, `.usr`, `.md`, `.db`, etc.) sejam salvos com a codificação **ANSI**. A instrução para "manter a codificação dos arquivos em anci" [7] é essencial.
-        *   **Processo de Edição:** Ao abrir e salvar esses arquivos, use um editor de texto (como Notepad++) que permita especificar a codificação e **salve explicitamente como ANSI (Windows-1252 1)**.  o vs code já tem a configuração correta pra isso, só estamos deixando claro mesmo
-
-
-**Próximo Passo Sugerido:**
-Comece por implementar o log de depuração do nível do jogador no servidor, conforme descrito no Ponto 1. Isso confirmará se o problema é que o servidor está lendo um nível desatualizado para o jogador. Com essa confirmação, o foco pode ser direcionado para o fluxo de atualização e persistência do nível do jogador no lado do servidor.
-também caso não exista, implemente as mensagens corretas, tipo, caso não aja ninguem além do jogador no servidor, fala só a você a qui, ou algo assim, se isso não existir!
+Atue como um desenvolvedor sênior de audio games, especialista em BGT e NVGT. Sua missão é planejar (sem alterar código neste momento) a migração completa de um projeto existente em BGT para NVGT, seguindo estritamente a documentação oficial do NVGT.
+Importante: Nesta primeira fase, não escreva nem modifique código-fonte. Foque em análise e planejamento. Toda recomendação deve citar a seção correspondente da documentação do NVGT (use links/seções quando disponíveis).
+Entradas e Premissas
+• 
+Repositório raiz: [REPO_ROOT] (use o ambiente do Claude Code para ler todos os arquivos).
+• 
+Documentação NVGT: [DOC_URL_NVGT] ou /docs do repositório (se houver).
+• 
+Linguagem de saída: Português do Brasil (pt-BR).
+• 
+Contexto: projeto possivelmente com cliente/servidor (se existir, identificar claramente limites e contratos entre eles).
+Entregáveis desta fase (apenas texto/artefatos de análise)
+Produza um relatório em Markdown com as seções abaixo, nesta ordem:
+1. 
+Resumo Executivo do Projeto
+• 
+Finalidade do jogo/sistema.
+• 
+Plataformas-alvo (Windows/Linux/macOS).
+• 
+Principais features de áudio, TTS, entrada, rede, filesystem, timers, UI, etc.
+• 
+Pontos sensíveis (performance de áudio/latência, dependências nativas, etc.).
+2. 
+Inventário do Código
+• 
+Árvore de diretórios e arquivos relevantes (com extensões), destacando scripts BGT, módulos/utilitários, assets (áudio, configs), build scripts.
+• 
+Tamanho aproximado (linhas por módulo).
+• 
+Grafo de dependências entre arquivos/módulos (quem importa/usa quem).
+• 
+Mapa de camadas (ex.: Core, Áudio/TTS, Input, Rede, Gameplay, Persistência, UI/CLI).
+3. 
+Contratos e Fronteiras (Cliente/Servidor) (se aplicável)
+• 
+Identifique onde está o cliente e o servidor.
+• 
+Protocolo de comunicação (TCP/UDP/WebSocket/etc.), portas, handshake, autenticação, serialização (texto/binário/JSON).
+• 
+Esquema de mensagens (tipos, campos, direção, frequência).
+• 
+Dependências específicas do ambiente (bibliotecas, SO, permissões).
+4. 
+Matriz de Migração BGT → NVGT (por capacidade)
+Crie uma tabela com colunas:
+• 
+Capacidade (Áudio, TTS, Entrada/Teclado/Mouse, Rede/Socket, Temporização, Arquivos/FS, Threads/Concorrência, Aleatoriedade, Log/Diagnóstico, Build/Distribuição, Configuração, Internacionalização, etc.)
+• 
+API/uso atual em BGT (funções, módulos, padrões de uso, pontos de entrada)
+• 
+Equivalente recomendado em NVGT (classe/função/módulo NVGT) com referência à documentação (seção/link)
+• 
+Notas de compatibilidade (diferenças de comportamento, limites, deprecações)
+• 
+Risco (Baixo/Médio/Alto) e complexidade (1–5)
+5. 
+Lacunas e Adaptações Necessárias
+• 
+Onde não existe equivalente direto no NVGT, proponha adapters/shims e descreva a interface.
+• 
+Itens que exigem refatoração de arquitetura (ex.: loop principal, modelo de eventos, threading).
+• 
+Restrições do NVGT citando documentação.
+6. 
+Plano de Ação Detalhado e Ordem Lógica de Conversão
+Apresente um roadmap sequencial, com justificativa técnica para a ordem. Inclua:
+• 
+Ponto de partida: cliente ou servidor (explique a escolha considerando dependências, risco e testabilidade).
+• 
+Fases (exemplo):
+1. 
+Preparação do ambiente NVGT (build, tooling, lint, CI)
+2. 
+Camada de Fundamentos (logging, configuração, utilitários, adapters)
+3. 
+Infra de Áudio/TTS (provar que reproduz/loca e fala com latência adequada)
+4. 
+Entrada/Controles
+5. 
+Temporização/Loop de Jogo
+6. 
+Persistência/FS
+7. 
+Rede (protocolos, reconexão, heartbeat, compressão se houver)
+8. 
+Gameplay/Regra de Negócio
+9. 
+UI/CLI
+10. 
+Empacotamento/Distribuição
+• 
+Para cada fase, liste arquivos afetados, dependências precedentes, critérios de pronto e testes mínimos.
+• 
+Aponte arquivos/ módulos que bloqueiam outros (nós críticos do grafo) para definir a sequência.
+7. 
+Checklist de Conformidade com a Documentação NVGT
+• 
+Para cada capacidade usada, cite a seção exata da doc NVGT que será seguida.
+• 
+Itens de segurança/estabilidade (tratamento de erros, limites de buffer, threads seguros).
+• 
+Itens de performance (latência de áudio, uso de threads, timers).
+• 
+APIs NVGT deprecadas a evitar.
+8. 
+Estratégia de Testes e Paridade de Comportamento
+• 
+Testes de fumaça por capacidade (áudio reproduz?, TTS fala?, eventos de input?), com exemplos de casos.
+• 
+Testes de contrato cliente↔servidor (validação de payload e ordem de mensagens).
+• 
+Oráculos de paridade: como verificar que o comportamento migrado é idêntico ao do BGT (logs comparáveis, gravações de áudio, scripts de simulação de input).
+• 
+Métricas de aceitação (latência máxima, taxa de erro, estabilidade por N minutos).
+9. 
+Riscos, Mitigações e Plano de Rollback
+• 
+Riscos técnicos por área (rede, áudio, TTS, loop, assets).
+• 
+Mitigações propostas e pontos de controle.
+• 
+Como isolar mudanças (branches/feature flags/adapters) e rollback.
+10. 
+Próximas Ações Concretas
+• 
+Lista numerada das 3–7 primeiras tarefas imediatamente executáveis (ex.: “Gerar grafo de dependências”, “Levantar APIs NVGT para áudio”, “Escrever adapters de logging”).
+• 
+Cada tarefa com objetivo, insumos, saída esperada.
+Método de Trabalho (como você deve proceder)
+1. 
+Varrer o repositório
+• 
+Liste todos os arquivos e classifique por papel (cliente, servidor, comum, assets, build, docs).
+• 
+Identifique pontos de entrada (main/loop) e inicializações de subsistemas (áudio, TTS, input, rede).
+• 
+Extraia assinaturas de funções e chamadas cruzadas importantes para o grafo.
+2. 
+Ler a documentação NVGT
+• 
+Para cada capacidade usada no BGT, localize o equivalente NVGT e anote requisitos/limitações.
+• 
+Registre links/seções específicos a serem citados no relatório.
+3. 
+Construir a Matriz BGT→NVGT (Seção 4)
+• 
+Preencher com exemplos concretos do projeto (trechos/identificadores e caminhos de arquivo).
+4. 
+Definir Ordem de Conversão (Seção 6)
+• 
+Baseie-se no grafo de dependências e na testabilidade.
+• 
+Se cliente e servidor existirem, prefira começar por aquele que:
+• 
+Possui menos dependências externas;
+• 
+Permite testes isolados mais cedo;
+• 
+Destrava mais módulos dependentes.
+• 
+Justifique a decisão com dados do inventário.
+5. 
+Produzir o Relatório Final
+• 
+Entregar as 10 seções acima, em Markdown, com tabelas quando couber.
+• 
+Sem alterações de código nesta fase.
+• 
+Inclua um sumário no topo com links âncora para cada seção.
+Formato e Qualidade da Saída
+• 
+Use títulos #, ##, ###, listas, tabelas e blocos de código para trechos curtos de exemplo (sem alterar arquivos).
+• 
+Cite caminhos absolutos/relativos dos arquivos ao mencioná-los.
+• 
+Ao referenciar a documentação do NVGT, inclua link/ seção entre parênteses.
+• 
+Seja objetivo, técnico e verificável.
+• 
+Sinalize incertezas/lacunas explicitamente.
+Critérios de Aceitação
+• 
+Todas as 10 seções entregues, completas e coerentes.
+• 
+Matriz BGT→NVGT com pelo menos 1 mapeamento por capacidade usada no projeto.
+• 
+Ordem de conversão justificada pelo grafo de dependências.
+• 
+Pelo menos 5 testes de fumaça e 3 testes de contrato propostos.
+• 
+Checklist de conformidade com doc NVGT com referências explícitas.
+ 
+Quando terminar, apresente o relatório completo. Se algum insumo estiver ausente (ex.: link exato da doc NVGT), cite as lacunas na seção “Lacunas e Adaptações Necessárias” e prossiga com o melhor 
