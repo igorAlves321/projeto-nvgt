@@ -3,20 +3,36 @@
 
 #include "../config-test.nvgt"
 #include "../servidor/includes/net.nvgt"
+#include "../servidor/include/bgt_compat.nvgt"
 
 network net;
-network_event@ event;
+enhanced_network_event@ event;
 bool connected = false;
 
 void main() {
 	print("=== Projeto IG NVGT Test Client ===");
 	print("Connecting to: " + serveraddress + ":" + port);
 	
+	// Initialize networking using our new system
+	if(!initialize_global_network()) {
+		print("ERROR: Could not initialize network system");
+		return;
+	}
+	
+	network_manager.add(@net);
+	
+	// Setup client first
+	if(!setup_client()) {
+		print("ERROR: Could not setup client");
+		cleanup_networking();
+		return;
+	}
+	
 	// Connect to server
-	if(!net.connect(serveraddress, port)) {
+	if(!connect(serveraddress, port)) {
 		print("ERROR: Could not connect to server");
 		print("Make sure the server is running on " + serveraddress + ":" + port);
-		wait_key();
+		cleanup_networking();
 		return;
 	}
 	
@@ -27,10 +43,11 @@ void main() {
 	int tick_count = 0;
 	
 	while(running) {
-		// Process network events
-		@event = net.request();
+		// Process network events using our new system
+		netloop();
+		@event = request(); // Use our wrapper function
 		
-		if(event.type != event_none) {
+		if(@event != null && event.type != event_none) {
 			handle_network_event();
 		}
 		
@@ -56,13 +73,14 @@ void main() {
 		if(key_pressed(KEY_P)) {
 			if(connected) {
 				print("Sending ping...");
-				net.send_reliable(1, "ping", 0);
+				send_reliable(uint64(1), "ping", 0);
 			}
 		}
 		
 		wait(5);
 	}
 	
+	cleanup_networking();
 	print("Client shutting down...");
 }
 
@@ -72,14 +90,14 @@ void handle_network_event() {
 		connected = true;
 		
 		// Send initial test
-		net.send_reliable(1, "echo Hello from NVGT client!", 0);
+		send_reliable(uint64(1), "echo Hello from NVGT client!", 0);
 		
 	} else if(event.type == event_disconnect) {
 		print("Disconnected from server");
 		connected = false;
 		
 	} else if(event.type == event_receive) {
-		string message = get_event_message();
+		string message = event.message;
 		print("Server: " + message);
 		
 		// Handle specific responses
@@ -108,19 +126,19 @@ void send_test_commands() {
 	print("Testing server capabilities...");
 	
 	// Test 1: Database operations
-	net.send_reliable(1, "test_db", 0);
+	send_reliable(uint64(1), "test_db", 0);
 	wait(100);
 	
 	// Test 2: Time utilities
-	net.send_reliable(1, "get_time", 0);
+	send_reliable(uint64(1), "get_time", 0);
 	wait(100);
 	
 	// Test 3: Channel listing
-	net.send_reliable(1, "get_channels", 0);
+	send_reliable(uint64(1), "get_channels", 0);
 	wait(100);
 	
 	// Test 4: Echo test
-	net.send_reliable(1, "echo Testing BGT compatibility layer", 0);
+	send_reliable(uint64(1), "echo Testing BGT compatibility layer", 0);
 	wait(100);
 	
 	print("Test commands sent!");

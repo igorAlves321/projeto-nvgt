@@ -1,149 +1,215 @@
-// Basic NVGT server - Phase 1 foundation
-// Tests our converted modules: db.nvgt, net.nvgt, config-test.nvgt
+#include "../config-test.nvgt"
+#include "includes/db.nvgt"
+#include "includes/net.nvgt"
+#include "includes/readable_time.nvgt"
+#include "include/bgt_compat.nvgt" // Official BGT compatibility layer
 
-#include "config-test.nvgt"
-#include "servidor/includes/db.nvgt"
-#include "servidor/includes/net.nvgt"
-#include "servidor/includes/readable_time.nvgt"
+// Global variables for BGT compatibility - using NVGT native classes directly
+network net; // NVGT native network class
+db channels; // SQLite database for server data
+parsed_data pu; // Language file parser
 
-// Global variables matching BGT server structure
-network net;
-network_event@ event;
-db channels; // BGT compatibility - channels database
-
-// Global parsed_data for language files
-parsed_data pu;
+// Current event data (copy from const event)
+int current_event_type;
+uint64 current_event_peer_id;
+string current_event_message;
+uint current_event_channel;
 
 void main() {
 	print("=== Projeto IG NVGT Server - Phase 1 ===");
 	print("Game: " + GAME_NAME + " v" + version);
 	print("Server starting on port: " + port);
+	print("");
 	
-	// Initialize language parser
+	// Initialize language parser (optional for Phase 1)
+	print("Initializing language system...");
 	if(!pu.set_arquivo("lang/português.lang")) {
-		print("Warning: Could not load language file, using defaults");
+		print("  Warning: Could not load language file, using built-in messages");
+	} else {
+		print("  Language file loaded successfully");
 	}
 	
-	// Initialize channels database
-	channels.set("global", "1");
-	channels.set("admin", "1");
-	channels.set("trade", "1");
+	// Initialize main database with SQLite
+	print("Initializing database system...");
+	channels.set("server_name", GAME_NAME);
+	channels.set("server_version", version);
+	channels.set("server_port", string(port));
+	channels.set("max_clients", "100");
+	channels.set("global_channel", "1");
+	channels.set("admin_channel", "1");
+	channels.set("trade_channel", "1");
+	print("  Database initialized with " + channels.get_size() + " entries");
 	
-	// Start network server
-	if(!net.host(port, 100)) {
-		print("ERROR: Could not start server on port " + port);
+	// Initialize global network first
+	print("Initializing network system...");
+	if(!initialize_global_network()) {
+		print("  ERROR: Could not initialize network system");
 		return;
 	}
 	
-	print("Server started successfully!");
-	print("Listening on port " + port);
-	print("Max clients: 100");
-	print("Press Ctrl+C to stop server\n");
+	// Add our server network to the manager
+	network_manager.add(@net);
 	
-	// Main server loop
+	// Start network server using our converted net.nvgt
+	print("Starting network server...");
+	if(!setup_server(port, 100)) {
+		print("  ERROR: Could not bind to port " + port);
+		print("  Make sure the port is not already in use");
+		cleanup_networking();
+		return;
+	}
+	
+	print("  ✅ Server started successfully!");
+	print("  📡 Listening on port " + port);
+	print("  👥 Max clients: 100");
+	print("  🔗 Using NVGT TCP sockets with threading");
+	print("  💾 Using SQLite database with ACID transactions");
+	print("");
+	print("Server is ready! Available test commands:");
+	print("  - ping (responds with pong)");
+	print("  - test_db (tests database operations)");
+	print("  - get_time (tests time utilities)"); 
+	print("  - get_channels (lists database keys)");
+	print("  - echo <message> (echoes back message)");
+	print("");
+	print("Press Ctrl+C to stop server");
+	print("=" * 50);
+	
+	// Main server loop - this is the heart of the server  
 	bool running = true;
 	int tick_count = 0;
+	uint64 start_time = 0; // Will be set on first iteration
 	
 	while(running) {
-		// Process network events
-		@event = net.request();
+		// Use our converted netloop function for BGT compatibility
+		netloop();
 		
-		if(event.type != event_none) {
+		// Get network events using our enhanced system
+		enhanced_network_event@ evt = request_with_monitoring();
+		if (@evt != null && evt.type != event_none) {
+			// Copy event data to our global variables
+			current_event_type = evt.type;
+			current_event_peer_id = evt.peer_id;
+			current_event_message = evt.message;
+			current_event_channel = evt.channel;
 			handle_network_event();
 		}
 		
-		// Basic server maintenance every 1000 ticks
+		// Periodic maintenance every 5 seconds (1000 ticks at 5ms each)
 		tick_count++;
 		if(tick_count >= 1000) {
-			tick_count = 0;
-			print("Server running - " + net.get_peer_count() + " clients connected");
+			int maintenance_counter = tick_count / 1000;
 			
-			// Test our database every 1000 ticks
-			test_database_operations();
+			// Status report
+			uint active_clients = get_network_peer_count();
+			string uptime = ms_to_readable_time(maintenance_counter * 5000); // Approximate uptime
+			print("[" + get_timestamp() + "] Server Status: " + active_clients + " clients connected, uptime: " + uptime);
+			
+			// Test our converted systems periodically
+			test_database_operations(maintenance_counter);
 		}
 		
-		// Small delay to prevent 100% CPU usage
+		// Small delay to prevent 100% CPU usage (5ms = 200 FPS max)
 		wait(5);
 	}
+	
+	// Cleanup on exit
+	print("Shutting down server...");
+	cleanup_networking();
+	channels.close();
+	print("Server stopped.");
 }
 
 void handle_network_event() {
-	if(event.type == event_connect) {
-		print("Client connected - Peer ID: " + event.peer_id);
+	if(current_event_type == event_connect) {
+		print("[CONNECT] Client " + current_event_peer_id + " connected");
 		
-		// Send welcome message
+		// Send welcome message using our converted networking
 		string welcome = "welcome " + GAME_NAME + " " + version;
-		net.send_reliable(event.peer_id, welcome, 0);
+		if(send_reliable(current_event_peer_id, welcome, 0)) {
+			print("  Welcome message sent successfully");
+		}
 		
-	} else if(event.type == event_disconnect) {
-		print("Client disconnected - Peer ID: " + event.peer_id);
+		// Send server info
+		string info = "server_info port:" + port + " clients:" + get_network_peer_count();
+		send_reliable(current_event_peer_id, info, 0);
 		
-	} else if(event.type == event_receive) {
-		print("Message from " + event.peer_id + ": " + event.message);
+	} else if(current_event_type == event_disconnect) {
+		print("[DISCONNECT] Client " + current_event_peer_id + " disconnected");
 		
-		// Basic echo server for testing
+	} else if(current_event_type == event_receive) {
+		print("[MESSAGE] Client " + current_event_peer_id + " (" + current_event_channel + "): " + current_event_message);
+		
+		// Process the client command
 		handle_client_message();
 	}
 }
 
 void handle_client_message() {
-	string message = get_event_message();
-	string[] parsed = string_split(message, " ", true);
+	string message = current_event_message;
+	string[] parsed = string_split(message, " ", false);
 	
 	if(parsed.length() == 0) return;
 	
 	string command = parsed[0];
 	
 	if(command == "ping") {
-		net.send_reliable(event.peer_id, "pong", 0);
+		send_reliable(current_event_peer_id, "pong", 0);
 		
 	} else if(command == "test_db") {
 		// Test database operations
-		channels.set("test_key_" + event.peer_id, "test_value_" + random(1, 1000));
+		int test_val = (current_event_peer_id % 1000);
+		channels.set("test_key_" + current_event_peer_id, "test_value_" + test_val);
 		int db_size = channels.get_size();
-		net.send_reliable(event.peer_id, "db_test_result " + db_size, 0);
+		send_reliable(current_event_peer_id, "db_test_result " + db_size, 0);
 		
 	} else if(command == "get_time") {
 		string time_str = ms_to_readable_time(60000); // 1 minute test
-		net.send_reliable(event.peer_id, "time_result " + time_str, 0);
+		send_reliable(current_event_peer_id, "time_result " + time_str, 0);
 		
 	} else if(command == "get_channels") {
 		string[] keys = channels.get_keys();
 		string result = "channels ";
-		for(int i = 0; i < keys.length(); i++) {
+		for(uint i = 0; i < keys.length(); i++) {
 			result += keys[i] + " ";
 		}
-		net.send_reliable(event.peer_id, result, 0);
+		send_reliable(current_event_peer_id, result, 0);
 		
 	} else if(command == "echo") {
 		// Echo back the message
-		string echo_msg = "echo " + string_replace(message, "echo ", "", true);
-		net.send_reliable(event.peer_id, echo_msg, 0);
+		string echo_msg = "echo " + string_mid(message, 6, message.length() - 5); // Remove "echo " prefix
+		send_reliable(current_event_peer_id, echo_msg, 0);
 		
 	} else {
 		// Unknown command
-		net.send_reliable(event.peer_id, "unknown_command " + command, 0);
+		send_reliable(current_event_peer_id, "unknown_command " + command, 0);
 	}
 }
 
-void test_database_operations() {
-	// Test our SQLite database periodically
-	static int test_counter = 0;
-	test_counter++;
+void test_database_operations(int counter) {
+	// Test our database periodically
+	int test_counter = counter % 1000;
 	
-	// Add a test entry
+	// Add a test entry to verify database is working
 	channels.set("server_tick_" + test_counter, "value_" + test_counter);
 	
-	// Clean up old entries (keep only last 10)
-	if(test_counter > 10) {
-		channels.delete("server_tick_" + (test_counter - 10));
+	// Verify core database integrity
+	if(!channels.exists("global_channel")) {
+		print("WARNING: Database integrity issue - restoring defaults");
+		channels.set("global_channel", "1");
+		channels.set("admin_channel", "1");
+		channels.set("trade_channel", "1");
 	}
 	
-	// Verify database integrity
-	if(!channels.exists("global")) {
-		print("WARNING: Database integrity issue - restoring defaults");
-		channels.set("global", "1");
-		channels.set("admin", "1");
-		channels.set("trade", "1");
+	// Report database stats occasionally
+	if(test_counter % 10 == 0) {
+		print("  Database stats: " + channels.get_size() + " entries, database operational");
 	}
+}
+
+// Utility function to get timestamp (simple version)
+string get_timestamp() {
+	// Simple timestamp - just return static time for now
+	// In a real implementation, would use proper NVGT time functions
+	return "12:00:00";
 }

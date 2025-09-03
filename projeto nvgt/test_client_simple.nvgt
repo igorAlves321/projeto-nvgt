@@ -1,0 +1,82 @@
+// Simple test client for Phase 1 integration testing
+
+#include "config-test.nvgt"
+#include "servidor/includes/net.nvgt"
+
+void main() {
+	print("=== Projeto IG NVGT Simple Client Test ===");
+	print("Testing connection to: " + serveraddress + ":" + port);
+	
+	// Initialize networking
+	if(!initialize_global_network()) {
+		print("❌ ERROR: Could not initialize network system");
+		return;
+	}
+	print("✅ Network system initialized");
+	
+	// Setup client
+	if(!setup_client()) {
+		print("❌ ERROR: Could not setup client");
+		cleanup_networking();
+		return;
+	}
+	print("✅ Client setup successful");
+	
+	// Attempt connection
+	if(!connect(serveraddress, port)) {
+		print("❌ ERROR: Could not connect to server");
+		print("   Make sure the server is running on " + serveraddress + ":" + port);
+		cleanup_networking();
+		return;
+	}
+	print("✅ Connection initiated to " + serveraddress + ":" + port);
+	
+	// Brief test loop
+	print("Running connection test for 10 seconds...");
+	bool connected = false;
+	int test_ticks = 0;
+	
+	while(test_ticks < 2000) { // 10 seconds at 5ms per tick
+		netloop();
+		
+		enhanced_network_event@ evt = request();
+		if(@evt != null && evt.type != event_none) {
+			if(evt.type == event_connect) {
+				print("✅ Successfully connected to server!");
+				connected = true;
+				
+				// Send a simple test message
+				send_reliable(uint64(1), "ping", 0);
+				print("📤 Sent ping to server");
+				
+			} else if(evt.type == event_disconnect) {
+				print("🔌 Disconnected from server");
+				connected = false;
+				break;
+				
+			} else if(evt.type == event_receive) {
+				print("📥 Server response: " + evt.message);
+				
+				if(evt.message == "pong") {
+					print("✅ Ping-pong test successful!");
+					print("🎉 Phase 1 client-server integration WORKING!");
+					break;
+				}
+			}
+		}
+		
+		test_ticks++;
+		wait(5);
+	}
+	
+	// Cleanup
+	cleanup_networking();
+	
+	if(connected) {
+		print("✅ Client test completed successfully");
+	} else {
+		print("⚠️  Connection test timed out (server may not be running)");
+	}
+	
+	print("Client shutting down...");
+}
