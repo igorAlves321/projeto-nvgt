@@ -1,0 +1,71 @@
+// mercenario.nvgt - Sistema de Mercenário do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+#include "network.nvgt"
+
+mercenario@[] mercenarios_ativos;
+
+class mercenario {
+	int x, y;
+	uint tiros = 30;
+	int vida = 5000;
+	string golpeado;
+	string map;
+	timer mercenariotimer;
+	timer tempoatirar;
+	timer tempocarregar;
+	int mercenariotime = 500;
+	
+	mercenario(int cx, int cy, string cmap) {
+		x = cx;
+		y = cy;
+		map = cmap;
+	}
+}
+
+void mercenarioloop() {
+	for (uint i = 0; i < mercenarios_ativos.length(); i++) {
+		if (mercenarios_ativos[i].mercenariotimer.elapsed >= mercenarios_ativos[i].mercenariotime) {
+			string l = get_zone_at(mercenarios_ativos[i].x, mercenarios_ativos[i].y, mercenarios_ativos[i].map);
+			
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				string ll = get_zone_at(players[i2].x, players[i2].y, players[i2].map);
+				
+				// Atirar em jogadores na mesma zona
+				if (players[i2].newbie == false && mercenarios_ativos[i].tempoatirar.elapsed >= 450 && 
+					mercenarios_ativos[i].tiros > 0 && players[i2].insz == false && l == ll && 
+					mercenarios_ativos[i].tempocarregar.elapsed >= 1600) {
+					mercenarios_ativos[i].tempoatirar.restart();
+					net.send_packet(0, "play helicopteroarma" + random(1, 3) + ".ogg " + mercenarios_ativos[i].x + " " + mercenarios_ativos[i].y + " " + mercenarios_ativos[i].map, mercenarios_ativos[i].map);
+					players[i2].health -= random(100, 130);
+					net.send_packet(0, "inithurt " + players[i2].charname + " " + players[i2].x + " " + players[i2].y + " " + players[i2].voice + " " + players[i2].pitch + " " + players[i2].map, players[i2].map);
+					players[i2].lasthit = "mercenario";
+					mercenarios_ativos[i].tiros--;
+					break;
+				}
+
+				// Recarregar munição quando acabar
+				if (mercenarios_ativos[i].tiros <= 0) {
+					mercenarios_ativos[i].tiros = 30;
+					mercenarios_ativos[i].tempocarregar.restart();
+					mercenarios_ativos[i].tempoatirar.restart();
+					net.send_packet(0, "play carregar_m60.ogg " + mercenarios_ativos[i].x + " " + mercenarios_ativos[i].y + " " + mercenarios_ativos[i].map, mercenarios_ativos[i].map);
+				}
+				
+				// Verificar se mercenário foi morto
+				if (mercenarios_ativos[i].vida <= 0) {
+					// net.send_reliable(0, "play notifykills.ogg " + mercenarios_ativos[i].x + " " + mercenarios_ativos[i].y + " " + mercenarios_ativos[i].map);
+					// net.send_reliable(0, "msgdepois " + mercenarios_ativos[i].golpeado + " matou um mercenário!", 0);
+					mercenarios_ativos.remove_at(i);
+					break;
+				}
+			}
+		}
+	}
+}
+
+void spawn_mercenario(int x, int y, string map) {
+	if (!pvp) return;
+	mercenario c(x, y, map);
+	mercenarios_ativos.insert_last(c);
+}

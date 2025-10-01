@@ -1,0 +1,60 @@
+// canhao.nvgt - Sistema de Canhão do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+#include "network.nvgt"
+
+canhao@[] canhaos_ativos;
+
+class canhao {
+	int x, y;
+	string map;
+	string somcanhao;
+	timer canhaotimer;
+	int canhaotime;
+	
+	canhao(int cx, int cy, string cmap, int ct) {
+		x = cx;
+		y = cy;
+		map = cmap;
+		canhaotime = ct;
+		somcanhao = spawn_moving_sound("rocketloop.ogg", x, y, map);
+	}
+}
+
+void canhaoloop() {
+	for (uint i = 0; i < canhaos_ativos.length(); i++) {
+		// Se canhão saiu do mapa (y < 0), respawn com tempo reduzido
+		if (canhaos_ativos[i].y < 0) {
+			destroy_moving_sound(canhaos_ativos[i].somcanhao);
+			spawn_canhao(random(1, 20), 10, canhaos_ativos[i].map, (canhaos_ativos[i].canhaotime - 10));
+			canhaos_ativos.remove_at(i);
+			break;
+		}
+		
+		if (canhaos_ativos[i].canhaotimer.elapsed >= canhaos_ativos[i].canhaotime) {
+			// Verificar colisão com jogadores
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				if (canhaos_ativos[i].y == players[i2].y && players[i2].map == canhaos_ativos[i].map && 
+					players[i2].x == canhaos_ativos[i].x) {
+					players[i2].health = 0;
+					// net.send_reliable(0, "play bazucahit.ogg " + players[i2].x + " " + players[i2].y + " " + players[i2].map);
+					// net.send_reliable(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y);
+					players[i2].lasthit = "canhão";
+				}
+			}
+			
+			// Movimento do projétil do canhão
+			if (canhaos_ativos[i].y >= 0) {
+				canhaos_ativos[i].y--;
+				update_moving_sound(canhaos_ativos[i].somcanhao, canhaos_ativos[i].x, canhaos_ativos[i].y);
+				canhaos_ativos[i].canhaotimer.restart();
+			}
+		}
+	}
+}
+
+void spawn_canhao(int x, int y, string map, int tempo) {
+	if (tempo < 50) tempo = 50;
+	canhao c(x, y, map, tempo);
+	canhaos_ativos.insert_last(c);
+}

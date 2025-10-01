@@ -1,0 +1,140 @@
+// voids.nvgt - Sistema de Funções Utilitárias do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT - Parte 1: Funções Básicas
+
+// Função para verificar se jogador é admin do apartamento
+bool adm_apartamento(string nome, string mapa) {
+	string n1 = nome.upper();
+	string n2 = mapa.upper();
+	n1 = n1.replace("apartamento_de_", "");
+	n2 = n2.replace("apartamento_de_", "");
+	n1 = n1.replace("\r\n", "");
+	n2 = n2.replace("\r\n", "");
+	
+	if (n1 == n2) {
+		int index = get_player_index_from(n1);
+		if (index > -1) {
+			return players[index].is_admin();
+		}
+	}
+	return false;
+}
+
+// Função para comparar strings ignorando case
+bool igual(string n1, string n2) {
+	if (n1.lower() == n2.lower()) return true;
+	return false;
+}
+
+// Função para dar item a um jogador
+void daritem(string nome, string item, int quantidade) {
+	int index = get_player_index_from(nome);
+	if (index < 0) return;
+	
+	if (item != "xp") {
+		players[index].inv_add_item(item, quantidade);
+		// net.send_reliable(players[index].peer_id, "msgpegouitem " + quantidade + " " + item, 0);
+		
+		if (doublegold == 1) {
+			if (item == "reais" || item == "coins") {
+				players[index].inv_add_item(item, quantidade);
+				// net.send_reliable(players[index].peer_id, "msgvocêganhamais " + quantidade, 0);
+			}
+		}
+	}
+	else if (item == "xp") {
+		players[index].xp += quantidade;
+		// net.send_reliable(players[index].peer_id, "msgvocêganhou " + quantidade, 0);
+		
+		if (doublexp == 1) {
+			players[index].xp += quantidade;
+			// net.send_reliable(players[index].peer_id, "msgvocêganhou2 " + quantidade, 0);
+		}
+	}
+}
+
+// Função para pegar lancha do jogador
+string pegarlancha(int index) {
+	string[] dd = players[index].inv.split("\r\n");
+	for (uint i = 0; i < dd.length(); i++) {
+		string[] d = dd[i].split("=");
+		if (d[0].find("chave_da_lancha_de_") != -1) {
+			string it = d[0].replace("chave_da_lancha_de_", "");
+			return it;
+		}
+	}
+	return "";
+}
+
+// Função para mostrar tempo de atividade do servidor
+void ctime(int index) {
+	string upstring;
+	
+	if (upw() == 1) upstring += "uma semana, ";
+	if (upw() == 2) upstring += "duas semanas, ";
+	if (upw() > 2) upstring += upw() + " semanas, ";
+
+	if (upd() == 1) upstring += "um dia, ";
+	if (upd() == 2) upstring += "dois dias, ";
+	if (upd() > 2) upstring += upd() + " dias, ";
+	
+	if (uph() == 1) upstring += "uma hora, ";
+	if (uph() == 2) upstring += "duas horas, ";
+	if (uph() > 2) upstring += uph() + " horas, ";
+
+	if (upm() == 1) upstring += "um minuto, ";
+	if (upm() > 1) upstring += upm() + " minutos, ";
+
+	if (ups() == 1) upstring += "um segundo";
+	if (ups() > 1) upstring += ups() + " segundos";
+	
+	// net.send_reliable(event.peer_id, "msgservidorativo " + upstring + ".", 0);
+}
+
+// Função para enviar mensagem para administradores
+void eadm(string msg) {
+	msgadm_array.insert_at(0, msg);
+	for (uint i = 0; i < players.length(); i++) {
+		if (players[i].is_admin()) {
+			// net.send_reliable(players[i].peer_id, "ps notify_startrek_pa.ogg", 0);
+			// net.send_reliable(players[i].peer_id, "msg2 " + msg, 0);
+		}
+		if (players[i].moderador == true) {
+			// net.send_reliable(players[i].peer_id, "ps notify_startrek_pa.ogg", 0);
+			// net.send_reliable(players[i].peer_id, "msg2 " + msg, 0);
+		}
+	}
+}
+
+// Função para processar comandos OPC
+void opc(int index, string[] parsed) {
+	string msg = get_event_message().replace(parsed[0] + " " + parsed[1] + " ", "");
+	if (parsed[1] == "ideia") {
+		if (msg.length() < 120) {
+			// net.send_reliable(players[index].peer_id, "msgnormal A mensagem é muito curta.", 0);
+		} else {
+			// net.send_reliable(players[index].peer_id, "msgnormal Ideia enviada!", 0);
+			eadm("Ideia de " + players[index].charname + ": " + msg);
+		}
+	}
+}
+
+// Função para verificar comando customizado
+bool dcomando(int index, string[] parsed) {
+	string v = parsed[0].replace("/", "");
+	if (file_exists("qcomandos/" + v + ".md")) {
+		file f;
+		f.open("qcomandos/" + v + ".md", "r");
+		string[] vv = f.read().split("\r\n");
+		f.close();
+		
+		bool r = false;
+		for (uint i = 0; i < vv.length(); i++) {
+			if (vv[i].lower() == players[index].charname.lower()) {
+				r = true;
+				break;
+			}
+		}
+		return r;
+	}
+	return false;
+}

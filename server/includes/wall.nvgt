@@ -1,0 +1,77 @@
+// wall.nvgt - Sistema de Paredes do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+// Remover declaração duplicada - usar array local ou namespace
+namespace walls_system {
+    wall@[] walls_array;
+}
+
+class wall {
+	int x, miny = 0, maxy = 50, vida = 600000;
+	string map;
+	
+	wall(int cx, string cmap, int cvida) {
+		x = cx;
+		map = cmap;
+		vida = cvida;
+	}
+}
+
+void colocar_wall(int x, string map, int vida = 600000) {
+	file z;
+	z.open("maps/" + map + ".map", "r");
+	string[] m = z.read().split("\r\n");
+	z.close();
+	
+	m.push_back("pwall:" + x + ":0:50:wallnone");
+	z.open("maps/" + map + ".map", "w");
+	z.write(join(m, "\r\n"));
+	z.close();
+	
+	update(map);
+	wall c(x, map, vida);
+	walls_system::walls_array.push_back(c);
+}
+
+void wallloop() {
+	for (uint i = 0; i < walls.length(); i++) {
+		if (walls[i].vida <= 0) {
+			if (walls[i].map == "caverna") tmina2.restart();
+			retirar_wall(walls[i].map, walls[i].x);
+			break;
+		}
+	}
+}
+
+void retirar_wall(string map, int x) {
+	file z;
+	z.open("maps/" + map + ".map", "r");
+	string[] m = z.read().split("\r\n");
+	z.close();
+	
+	for (uint i = 0; i < walls.length(); i++) {
+		if (walls[i].map == map && walls[i].x == x) {
+			while (true) {
+				bool t = false;
+				for (uint i2 = 0; i2 < m.length(); i2++) {
+					if (m[i2].find("pwall") != -1) {
+						string[] bla = m[i2].split(":");
+						if (parse_int(bla[1]) == x) {
+							t = true;
+							m.remove_at(i2);
+						}
+					}
+				}
+				if (!t) break;
+			}
+			
+			// server_// net.send_reliable(0, "play dparede.ogg " + walls[i].x + " " + walls[i].miny);
+			walls.remove_at(i);
+			
+			z.open("maps/" + map + ".map", "w");
+			z.write(join(m, "\r\n"));
+			z.close();
+			update2(map);
+		}
+	}
+}

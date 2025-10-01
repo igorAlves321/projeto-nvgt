@@ -1,0 +1,416 @@
+// bullet.nvgt - Sistema de Balas/Projéteis do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+bullet@[] bullets;
+
+class bullet {
+	int distance;
+	string owner, somarma, mapname, loopid, loopsound;
+	int sx, sy, weapon, x, y, facing, range, dano, velocidade;
+	
+	bullet(int d, int r, int s1, int s2, int fa, string own, int weap, string map, int spee = 2, string sarm = "", string lsound = "") {
+		this.velocidade = spee;
+		this.loopid = lsound;
+		mapname = map;
+		facing = fa;
+		sx = s1;
+		sy = s2;
+		x = s1;
+		y = s2;
+		if (this.loopid != "") this.loopid = spawn_moving_sound(this.loopid, this.x, this.y, this.mapname);
+		dano = d;
+		range = r;
+		owner = own;
+		weapon = weap;
+		somarma = sarm;
+	}
+}
+
+void bulletloop() {
+	if (!pvp) return;
+	if (canhaos_ativos.length() > 0) canhaoloop();
+	
+	for (uint ie5 = 0; ie5 < bullets.length(); ie5++) {
+		if (bullets[ie5].facing == Left) {
+			bullets[ie5].x -= 1;
+			bullets[ie5].distance += 1;
+			if (bullets[ie5].loopid != "") update_moving_sound(bullets[ie5].loopid, bullets[ie5].x, bullets[ie5].y);
+			if (bullets[ie5].dano > 2) bullets[ie5].dano -= 3;
+			bulletcheck(ie5);
+		}
+		else if (bullets[ie5].facing == Right) {
+			bullets[ie5].x += 1;
+			bullets[ie5].distance += 1;
+			if (bullets[ie5].loopid != "") update_moving_sound(bullets[ie5].loopid, bullets[ie5].x, bullets[ie5].y);
+			if (bullets[ie5].dano > 2) bullets[ie5].dano -= 3;
+			bulletcheck(ie5);
+		}
+		else if (bullets[ie5].facing == Forward) {
+			bullets[ie5].y += 1;
+			bullets[ie5].distance += 1;
+			if (bullets[ie5].loopid != "") update_moving_sound(bullets[ie5].loopid, bullets[ie5].x, bullets[ie5].y);
+			if (bullets[ie5].dano > 2) bullets[ie5].dano -= 3;
+			bulletcheck(ie5);
+		}
+		else if (bullets[ie5].facing == Back) {
+			bullets[ie5].y -= 1;
+			bullets[ie5].distance += 1;
+			if (bullets[ie5].loopid != "") update_moving_sound(bullets[ie5].loopid, bullets[ie5].x, bullets[ie5].y);
+			if (bullets[ie5].dano > 2) bullets[ie5].dano -= 3;
+			bulletcheck(ie5);
+		}
+	}
+}
+
+void bulletcheck(int b) {
+	string surface = get_tile_at(bullets[b].x, bullets[b].y, bullets[b].mapname);
+	string loc = get_zone_at(bullets[b].x, bullets[b].y, bullets[b].mapname);
+	int ba2 = get_player_index_from(bullets[b].owner);
+	string srico;
+	
+	if (loc.find("safe") > -1 || bullets[b].distance >= bullets[b].range || ba2 < 0 || 
+		players[ba2].map == "túnel" || players[ba2].pacifico == 1) {
+		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+		bullets.remove_at(b);
+		return;
+	}
+	
+	// Determinar som de ricochete baseado na arma
+	if (bullets[b].weapon == 1 || bullets[b].weapon == 0) {
+		srico = "chuterico.ogg";
+	}
+	else if (bullets[b].weapon == 2) {
+		srico = "kniferico.ogg";
+	}
+	else if (bullets[b].weapon == 6) {
+		srico = "arcorico.ogg";
+	}
+	else if (bullets[b].weapon == 8) {
+		srico = "m240rico.ogg";
+	}
+	else if (bullets[b].weapon == 9) {
+		srico = "rocketmiss.ogg";
+	}
+	else if (bullets[b].weapon == 12) {
+		srico = "laserrico.ogg";
+	}
+	else if (bullets[b].weapon == 13) {
+		srico = "bazucarico.ogg";
+	}
+	else if (bullets[b].weapon == 14) {
+		srico = "grenaderico.ogg";
+	}
+	else if (bullets[b].weapon == 15) {
+		srico = "sniperrico.ogg";
+	}
+	else if (bullets[b].weapon == 18) {
+		if (players[ba2].rajada == 1) {
+			players[ba2].rajada = 0;
+			srico = "ricothree.ogg";
+		}
+		else srico = "rico" + random(1, 7) + ".ogg";
+	}
+	else if (bullets[b].weapon == 26) {
+		if (players[ba2].rajada == 1) {
+			players[ba2].rajada = 0;
+			srico = "ricofive.ogg";
+		}
+		else srico = "rico" + random(1, 7) + ".ogg";
+	}
+	else if (bullets[b].weapon == 19) {
+		srico = "m60rico.ogg";
+	}
+	else if (bullets[b].weapon == 20 || bullets[b].weapon == 29 || bullets[b].weapon == 30) {
+		srico = "espadarico.ogg";
+	}
+	else if (bullets[b].weapon == 21) {
+		srico = "remingtonrico.ogg";
+	}
+	else if (bullets[b].weapon == 22) {
+		srico = "dozerico.ogg";
+	}
+	else if (bullets[b].weapon == 23) {
+		srico = "vulcanrico.ogg";
+	}
+	else if (bullets[b].weapon == 28) {
+		srico = "chuterico.ogg";
+	}
+	else if (bullets[b].weapon == 34) srico = "molotovexplode.ogg";
+	else if (bullets[b].weapon == 35) srico = "";
+	else {
+		srico = "rico" + random(1, 7) + ".ogg";
+	}
+	
+	int dano = bullets[b].dano;
+	
+	// Verificar colisão com paredes (walls)
+	for (uint bu = 0; bu < walls.length(); bu++) {
+		if (bullets[b].x == walls[bu].x && walls[bu].map == bullets[b].mapname) {
+			if (bullets[b].y == 0) walls[bu].vida -= dano;
+			if (srico != "") /* net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y); */
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	
+	// Verificar colisão com projéteis
+	for (uint bu = 0; bu < projeteis_ativos.length(); bu++) {
+		if (bullets[b].x == projeteis_ativos[bu].x && bullets[b].y == projeteis_ativos[bu].y && bullets[b].mapname == projeteis_ativos[bu].map) {
+			destroy_moving_sound(projeteis_ativos[bu].somprojetei);
+			projeteis_ativos.remove_at(bu);
+			// server_net.send_unreliable(0, "rs 18 " + bullets[b].x + " " + bullets[b].y, 0);
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	
+	// Extintor de fogo
+	if (bullets[b].weapon == 35) {
+		for (uint n = 0; n < fogoqueimars.length(); n++) {
+			if (fogoqueimars[n].x == bullets[b].x && fogoqueimars[n].y == bullets[b].y && fogoqueimars[n].map == bullets[b].mapname) {
+				destroy_moving_sound(fogoqueimars[n].somfogo);
+				fogoqueimars.remove_at(n);
+			}
+		}
+	}
+	
+	int amount = (bullets[b].dano);
+	int pozic;
+	
+	// Verificar colisões com NPCs
+	check_npc_collisions(b, dano);
+	
+	// Verificar colisões com jogadores (PvP)
+	if (pvp == false) return;
+	
+	dano = amount;
+	for (uint ie4 = 0; ie4 < players.length(); ie4++) {
+		ba2 = get_player_index_from(bullets[b].owner);
+		
+		// Condições complexas de hit
+		bool can_hit = false;
+		
+		// Bazuca com área de efeito
+		if (bullets[b].weapon == 13 && bullets[b].x == players[ie4].x && bullets[b].owner != players[ie4].charname && 
+			!players[ie4].insz && bullets[b].mapname == players[ie4].map && !players[ie4].newbie && 
+			!players[ie4].afk && bullets[b].mapname != mapainicial && players[ie4].map != mapainicial && 
+			get_bala_y_distance(bullets[b], players[ie4]) > -1 && get_bala_y_distance(bullets[b], players[ie4]) <= 3 && 
+			(ba2 > -1 && players[ba2].x != players[ie4].x)) {
+			can_hit = true;
+		}
+		
+		// Hit direto
+		if (bullets[b].x == players[ie4].x && bullets[b].y == players[ie4].y && bullets[b].owner != players[ie4].charname && 
+			!players[ie4].insz && bullets[b].mapname == players[ie4].map && !players[ie4].newbie && 
+			!players[ie4].afk && bullets[b].mapname != mapainicial && players[ie4].map != mapainicial) {
+			can_hit = true;
+		}
+		
+		if (!can_hit) continue;
+		
+		// Verificar equipe
+		for (uint bunda = 0; bunda < players[ba2].nomesequipe.length(); bunda++) {
+			if (players[ba2].nomesequipe[bunda] == players[ie4].charname) {
+				return;
+			}
+		}
+		
+		// Verificar equipe no mapa de desafio
+		for (uint bunda = 0; bunda < players.length(); bunda++) {
+			if (players[bunda].charname != bullets[b].owner && bullets[b].x == players[bunda].x && 
+				bullets[b].y == players[bunda].y && bullets[b].mapname == players[bunda].map && 
+				players[bunda].equipedesafio == players[ba2].equipedesafio && 
+				players[bunda].equipemortal == players[ba2].equipemortal && 
+				bullets[b].mapname == "desafio_constante") return;
+		}
+		
+		if (players[ie4].pacifico == 1) return;
+		
+		// Proteção estrela
+		if (players[ie4].star == true) {
+			net.send_packet(0, "play lih.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+		
+		// Calcular posição do hit
+		int d = 2;
+		if (players[ie4].tarma.find("mp7") > -1 || players[ie4].tarma.find("ak48") > -1 || 
+			players[ie4].tarma.find("bazuca") > -1 || players[ie4].tarma.find("galil") > -1) d = 1;
+		pozic = random(d, 6);
+		
+		// Modificadores de dano por equipamento
+		if (pozic == 2 && players[ie4].capacetepolicia == 0) amount = (amount * 4);
+		else if (pozic == 3 && players[ie4].coturnomilitar == 0) amount = (amount * 3);
+		else if (pozic >= 4 && players[ie4].coletemilitar == 0 && players[ie4].coletecamuflado == 0) amount = (amount * 2 - 5);
+		
+		// Proteção estrela 2 (contra-ataque)
+		if (players[ie4].star2) {
+			ba2 = get_player_index_from(bullets[b].owner);
+			if (ba2 < 0) return;
+			if (pozic == 1) {
+				if (bullets[b].weapon == 10 || bullets[b].weapon == 15) amount = 999999;
+			}
+			net.send_packet(0, "play lih.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+			players[ba2].health -= amount;
+			// net.send_reliable(0, "inithurt " + players[ba2].voice + " " + players[ba2].x + " " + players[ba2].y);
+			players[ba2].lasthit = players[ie4].charname;
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+		
+		// Miss (pozic == 1)
+		if (pozic == 1) {
+			// server_net.send_unreliable(0, "play ba.ogg " + bullets[b].x + " " + bullets[b].y, 0);
+			if (ie4 > players.length()) return;
+			
+			// Quebrar armas
+			if (bullets[b].weapon == 13) {
+				if (players[ie4].bazuca > 0) players[ie4].bazuca -= 1;
+				else {
+					net.send_packet(0, "play arma_quebrada.ogg " + players[ie4].x + " " + players[ie4].y + " " + players[ie4].map, players[ie4].map);
+					players[ie4].inv_add_item("bazuca", -1, false);
+					players[ie4].inv_add_item("bazuca_quebrada", 1);
+					players[ie4].bazuca = 50000;
+				}
+			}
+			else if (bullets[b].weapon == 31) {
+				if (players[ie4].mp7 > 0) players[ie4].mp7 -= 1;
+				else {
+					net.send_packet(0, "play arma_quebrada.ogg " + players[ie4].x + " " + players[ie4].y + " " + players[ie4].map, players[ie4].map);
+					players[ie4].inv_add_item("mp7", -1, false);
+					players[ie4].inv_add_item("mp7_quebrada", 1);
+					players[ie4].mp7 = 50000;
+				}
+			}
+			else if (bullets[b].weapon == 36) {
+				if (players[ie4].galil > 0) players[ie4].galil -= 1;
+				else {
+					net.send_packet(0, "play arma_quebrada.ogg " + players[ie4].x + " " + players[ie4].y + " " + players[ie4].map, players[ie4].map);
+					players[ie4].inv_add_item("galil", -1, false);
+					players[ie4].inv_add_item("galil_quebrada", 1);
+					players[ie4].galil = 50000;
+				}
+			}
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+		
+		// Proteção colete à prova de balas
+		else if (pozic >= 4 && players[ie4].colete_aprova_de_balas == 1 && players[ie4].ncolete > 0 && 
+				bullets[b].weapon != 13 && bullets[b].weapon != 14 && bullets[b].weapon != 9 && 
+				bullets[b].weapon != 12 && bullets[b].weapon != 34 && bullets[b].weapon != 23 && 
+				bullets[b].weapon != 27 && bullets[b].weapon != 28 && bullets[b].weapon != 29 && 
+				bullets[b].weapon != 30 && bullets[b].weapon != 20 && bullets[b].weapon != 6 && 
+				bullets[b].weapon != 1 && bullets[b].weapon != 2 && bullets[b].weapon != 35) {
+			net.send_packet(0, "rs 59 " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+			players[ie4].ncolete -= 1;
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+		
+		// Efeitos especiais de armas
+		else if (bullets[b].weapon == 6 && players[ba2].flecha == 1) {
+			players[ba2].flecha = 0;
+			players[ie4].nveneno += 6;
+			players[ie4].envenenado = true;
+		}
+		else if (bullets[b].weapon == 18) {
+			if (players[ba2].rajada == 1) {
+				players[ba2].rajada = 0;
+			}
+		}
+		else if (bullets[b].weapon == 26) {
+			if (players[ba2].rajada == 1) {
+				players[ba2].rajada = 0;
+			}
+		}
+		else if (bullets[b].weapon == 27) {
+			// net.send_reliable(players[ie4].peer_id, "stopmoving", 0);
+			players[ie4].paralisado = true;
+			players[ie4].nparalisado += 15000;
+			players[ie4].tparalisado.restart();
+		}
+		else if (bullets[b].weapon == 28) {
+			if (bullets[b].facing == Left) players[ie4].x -= 1;
+			else if (bullets[b].facing == Right) players[ie4].x += 1;
+			// net.send_reliable(0, "update_player2 " + players[ie4].charname + " " + players[ie4].x + " " + players[ie4].y + " " + players[ie4].map);
+		}
+		else if (bullets[b].weapon == 34) {
+			// Molotov - criar fogo baseado na superfície
+			if (surface.find("wood") > -1 || surface.find("carpet") > -1 || surface.find("bransh") > -1 || 
+				surface.find("bridge") > -1 || surface.find("deck") > -1 || surface.find("plank") > -1 || 
+				surface.find("stairs") > -1) {
+				colocar_fogoqueimar(bullets[b].x, bullets[b].y, 70000, bullets[b].mapname);
+			}
+			else if (surface.find("water") > -1 || surface.find("brejo") > -1 || surface.find("mud") > -1 || 
+					surface.find("shallow") > -1 || surface.find("snow") > -1) {
+				colocar_fogoqueimar(bullets[b].x, bullets[b].y, 2000, bullets[b].mapname);
+			}
+			else if (surface.find("ice") > -1) {
+				colocar_fogoqueimar(bullets[b].x, bullets[b].y, 22000, bullets[b].mapname);
+			}
+			else {
+				colocar_fogoqueimar(bullets[b].x, bullets[b].y, 40000, bullets[b].mapname);
+			}
+			amount = (players[ie4].health / 10);
+		}
+		
+		// Aplicar dano final
+		string a = bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y;
+		// net.send_reliable(0, "finalhit " + a);
+		players[ie4].lasthit = bullets[b].owner;
+		
+		if (pozic == 2) {
+			if (bullets[b].weapon == 10 || bullets[b].weapon == 15) amount = 999999;
+		}
+		
+		if (amount <= 2) amount = random(20, 30);
+		players[ie4].health -= amount;
+		
+		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+		bullets.remove_at(b);
+		return;
+	}
+	
+	// Verificar colisão com paredes do mapa
+	surface = get_tile_at(bullets[b].x, bullets[b].y, bullets[b].mapname);
+	if (surface.find("wall") > -1 || surface.find("pwall") > -1) {
+		if (srico != "") /* net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y); */
+		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+		bullets.remove_at(b);
+		return;
+	}
+}
+
+// Função auxiliar para verificar colisões com NPCs
+void check_npc_collisions(int b, int dano) {
+	// Dragonsauros
+	for (uint bu = 0; bu < dragonsauros.length(); bu++) {
+		if (bullets[b].x == dragonsauros[bu].x && bullets[b].y == dragonsauros[bu].y && bullets[b].mapname == dragonsauros[bu].map) {
+			net.send_packet(0, "rico dragonsauroapanhando.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+			if (bu > dragonsauros.length()) return;
+			net.send_packet(0, "rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+			if (bu > dragonsauros.length()) return;
+			dragonsauros[bu].vida -= dano;
+			dragonsauros[bu].golpeado = bullets[b].owner;
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	
+	// Continue com outros NPCs...
+	// (Implementar conforme necessário: megadragonsauros, robo_coletores, tubaraos, etc.)
+}
+
+void spawn_bullet(int p1, int p2, int p3, int p4, int p5, string p6, int p7, string p8, int p9 = 20, string p11 = "", string p10 = "") {
+	bullet b1(p1, p2, p3, p4, p5, p6, p7, p8, p9, p11, p10);
+	bullets.insert_last(b1);
+}

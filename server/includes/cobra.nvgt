@@ -1,0 +1,63 @@
+// cobra.nvgt - Sistema de Cobra do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+cobra@[] cobras;
+
+class cobra {
+	int x, y, landar = 1;
+	string mapa, s;
+	timer t;
+	
+	cobra(int cx, int cy, string cm) {
+		x = cx;
+		y = cy;
+		mapa = cm;
+		s = spawn_moving_sound("cobraloop.ogg", x, y, mapa);
+	}
+	
+	~cobra() {
+		destroy_moving_sound(s);
+	}
+}
+
+void ccobra(int x, int y, string mapa) {
+	cobra c(x, y, mapa);
+	cobras.insert_last(c);
+}
+
+void cobraloop() {
+	for (uint i = 0; i < cobras.length(); i++) {
+		if (cobras[i].t.elapsed >= 150) {
+			// Verificar colisão com jogadores para atacar
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				if (cobras[i].x == players[i2].x && cobras[i].y == players[i2].y && 
+					cobras[i].mapa == players[i2].map && cobras[i].t.elapsed >= 150) {
+					// net.send_reliable(0, "play cobramorde.ogg " + cobras[i].x + " " + cobras[i].y);
+					// net.send_reliable(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y);
+					players[i2].health -= random(1000, 2000);
+					players[i2].lasthit = "cobra";
+					cobras[i].t.restart();
+					break;
+				}
+			}
+			
+			// Movimento da cobra
+			if (cobras[i].landar == 1) {
+				cobras[i].t.restart();
+				cobras[i].x--;
+				update_moving_sound(cobras[i].s, cobras[i].x, cobras[i].y);
+			}
+			else if (cobras[i].landar == 2) {
+				cobras[i].t.restart();
+				cobras[i].y++;
+				update_moving_sound(cobras[i].s, cobras[i].x, cobras[i].y);
+			}
+		}
+		
+		// Verificar colisões para mudança de direção
+		if (cobras[i].landar == 1 && get_tile_at(cobras[i].x - 1, cobras[i].y, cobras[i].mapa).find("walldirt") != -1) 
+			cobras[i].landar = 2;
+		else if (cobras[i].landar == 2 && get_tile_at(cobras[i].x + 1, cobras[i].y, cobras[i].mapa).find("walldirt") != -1) 
+			cobras[i].landar = 1;
+	}
+}

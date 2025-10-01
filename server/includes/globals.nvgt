@@ -1,0 +1,262 @@
+// Globals para servidor NVGT - Utilitários base
+// Convertido para usar APIs nativas NVGT
+
+#include "../../include/instance.nvgt"
+#include "../../include/file_contents.nvgt"
+#include "../../config.nvgt"
+
+// Função para gerar strings aleatórias (compatibilidade BGT→NVGT)
+string randomstring(int length = 16) {
+    string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    string result = "";
+    for (int i = 0; i < length; i++) {
+        result += chars[random(0, chars.length() - 1)];
+    }
+    return result;
+}
+
+// Constantes de direção (usando prefixo DIR_ para evitar conflitos)
+const int DIR_Left = 1;
+const int DIR_Right = 2;
+const int DIR_Forward = 3;
+const int DIR_Back = 4;
+
+// Variáveis globais do servidor
+bool pvp = true;
+string mapainicial = "escola";
+int doublegold = 0;
+int doublexp = 0;
+
+// Arrays de sistema
+string[] what;
+timer ondatempo;
+timer tovo;
+
+// Arrays de NPCs e entidades (declarados aqui para uso global)
+class wall_entity {
+    int x, y;
+    string map;
+    int vida;
+    wall_entity(int wx, int wy, string wmap, int wvida) {
+        x = wx; y = wy; map = wmap; vida = wvida;
+    }
+}
+
+class projetei_entity {
+    int x, y;
+    string map;
+    string somprojetei;
+    projetei_entity(int px, int py, string pmap, string psom) {
+        x = px; y = py; map = pmap; somprojetei = psom;
+    }
+}
+
+class fogoqueimar_entity {
+    int x, y;
+    string map;
+    string somfogo;
+    fogoqueimar_entity(int fx, int fy, string fmap, string fsom) {
+        x = fx; y = fy; map = fmap; somfogo = fsom;
+    }
+}
+
+class npc_entity {
+    int x, y;
+    string map, mapa;
+    int vida;
+    string golpeado;
+    bool morreu = false, morrendo = false, nasceu = true;
+    // Propriedades para sons e movimento
+    timer tsom, tandar, tatirar, tmorreu;
+    int nsom = 1000;
+    int natirar = 2000;
+    string njogador = "";
+    npc_entity(int nx, int ny, string nmap, int nvida) {
+        x = nx; y = ny; map = nmap; mapa = nmap; vida = nvida; golpeado = "";
+        tsom.restart(); tandar.restart(); tatirar.restart(); tmorreu.restart();
+    }
+}
+
+// Arrays globais de entidades
+wall_entity@[] walls;
+projetei_entity@[] projeteis;
+fogoqueimar_entity@[] fogoqueimars;
+npc_entity@[] dragonsauros;
+npc_entity@[] megadragonsauros;
+npc_entity@[] robo_coletores;
+npc_entity@[] tubaraos;
+npc_entity@[] bebesauros;
+npc_entity@[] hcavernas;
+npc_entity@[] carrosfortes;
+npc_entity@[] helicopteros;
+npc_entity@[] guardasandar;
+npc_entity@[] ratos;
+npc_entity@[] macacos;
+npc_entity@[] lobos;
+npc_entity@[] cachorros;
+npc_entity@[] coelhos;
+npc_entity@[] zumbis;
+npc_entity@[] sequestrador2s;
+npc_entity@[] sequestradors;
+npc_entity@[] mercenarios;
+npc_entity@[] ursos;
+npc_entity@[] canhaos;
+
+// Funções de compatibilidade BGT para sons
+// Funções auxiliares para NPCs
+// Nota: Esta função será redefinida em player.nvgt onde o array players existe
+/*
+int get_player_index_from(string playername) {
+    for (uint i = 0; i < players.length(); i++) {
+        if (players[i].charname == playername) {
+            return i;
+        }
+    }
+    return -1;
+}
+*/
+
+void colocar_fogoqueimar(int x, int y, int duracao, string mapname) {
+    // FIXME: spawn_moving_sound será definido em msound.nvgt
+    fogoqueimar_entity@ fogo = fogoqueimar_entity(x, y, mapname, ""); // spawn_moving_sound("fire.wav", x, y, mapname)
+    fogoqueimars.push_back(fogo);
+}
+
+// Função write_to para salvar dados de jogador
+void write_to(string playername, string filename, string content) {
+    string filepath = "server/players/" + playername + "_" + filename;
+    file f;
+    if (f.open(filepath, "w")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// Funções utilitárias usando NVGT nativo
+string[] nvgt_split(string str, string delimiter) {
+    return str.split(delimiter);
+}
+
+string[] delinear(string text) {
+    // BGT delinear() equivalent usando NVGT split
+    return text.split("\r\n");
+}
+
+string linear(string[] a) {
+    string final;
+    for (uint i = 0; i < a.length(); i++) {
+        final += (a[i] + "\r\n");
+    }
+    return final;
+}
+
+uint64 get_time_stamp() {
+    // NVGT equivalent to get_ticks() ou timestamp
+    return ticks();
+}
+
+void debug_log(string message) {
+    datetime dt;
+    string time_str = "[" + dt.format("%Y-%m-%d %H:%M:%S") + "] ";
+    file f;
+    if (f.open("log.md", "a")) {
+        f.write(time_str + message + "\n");
+        f.close();
+    }
+}
+
+// Funções de compatibilidade BGT→NVGT
+int string_to_number(string str) {
+    return parse_int(str);
+}
+
+double string_to_float(string str) {
+    return parse_float(str);
+}
+
+string number_to_string(int num) {
+    return "" + num;
+}
+
+bool string_contains(string text, string search, int pos = 0) {
+    return text.find(search, pos) >= 0;
+}
+
+// Timer wrapper para compatibilidade
+class game_timer {
+    timer t;
+    void restart() { t.restart(); }
+    uint64 elapsed() { return t.elapsed; }
+    void force(uint64 time) { t.force(time); }
+    void pause() { t.pause(); }
+}
+
+// Instância wrapper
+class game_instance {
+    instance inst;
+    game_instance(string name) {
+        inst = instance(name);
+    }
+    bool is_already_running() {
+        return inst.is_already_running;
+    }
+}
+
+// Funções de arquivo usando NVGT nativo
+string file_read_all(string filename) {
+    file f;
+    string content = "";
+    if (f.open(filename, "r")) {
+        content = f.read();
+        f.close();
+    }
+    return content;
+}
+
+void file_write_all(string filename, string content) {
+    file f;
+    if (f.open(filename, "w")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// Função para gerar strings aleatórias
+string generate_random_string(int length) {
+    string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    string result = "";
+    for(int i = 0; i < length; i++) {
+        result += chars[random(0, int(chars.length()) - 1)];
+    }
+    return result;
+}
+
+// Função de sleep compatível
+void server_wait(int milliseconds) {
+    wait(milliseconds);
+}
+
+// Variáveis globais do servidor (compatibilidade BGT)
+const string bell = ascii_to_character(7);
+const string bell2 = ascii_to_character(9);
+
+// Arrays para compatibilidade
+string[] weapons(39);
+string[] weapons2(39);
+
+// Função join para arrays de strings (compatibilidade BGT)
+string join(string[] array, string delimiter) {
+    if(array.length() == 0) return "";
+
+    string result = array[0];
+    for(uint i = 1; i < array.length(); i++) {
+        result += delimiter + array[i];
+    }
+    return result;
+}
+
+// Função datetime_now para timestamps
+string datetime_now() {
+    datetime dt;
+    return dt.format("%Y-%m-%d %H:%M:%S");
+}

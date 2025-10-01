@@ -1,0 +1,566 @@
+// Sistema de itens do servidor NVGT
+// Usando banco de dados SQLite para persistência
+
+#include "globals.nvgt"
+#include "network.nvgt"
+#include "shared_globals.nvgt"
+// items.nvgt - Sistema de Itens do EVM Server (convertido de BGT)
+// Conversão completa: BGT → NVGT
+
+// Estrutura de item
+class GameItem {
+    int id;
+    string name;
+    string display_name;
+    string description;
+    string item_type;      // weapon, armor, consumable, misc
+    string category;       // sword, bow, potion, etc.
+    
+    // Estatísticas
+    int damage;
+    int defense;
+    int heal_amount;
+    int mp_restore;
+    
+    // Propriedades
+    bool stackable;
+    int max_stack;
+    float weight;
+    int value;             // preço base
+    
+    // Raridade
+    string rarity;         // common, uncommon, rare, epic, legendary
+    float drop_rate;
+    bool craftable;
+    bool sellable;
+    bool tradeable;
+    
+    // Som
+    string sound_file;
+    string use_sound;
+    
+    GameItem() {
+        id = 0;
+        name = "";
+        display_name = "";
+        description = "";
+        item_type = "misc";
+        category = "";
+        
+        damage = 0;
+        defense = 0;
+        heal_amount = 0;
+        mp_restore = 0;
+        
+        stackable = true;
+        max_stack = 99;
+        weight = 1.0;
+        value = 1;
+        
+        rarity = "common";
+        drop_rate = 1.0;
+        craftable = false;
+        sellable = true;
+        tradeable = true;
+        
+        sound_file = "";
+        use_sound = "";
+    }
+}
+
+// Item no mundo
+class WorldItem {
+    int id;
+    int item_id;
+    string map_name;
+    int x, y, z;
+    int quantity;
+    string spawned_by;
+    bool is_active;
+    int respawn_time;
+    timer spawn_timer;
+    
+    WorldItem() {
+        id = 0;
+        item_id = 0;
+        map_name = "";
+        x = 0; y = 0; z = 0;
+        quantity = 1;
+        spawned_by = "system";
+        is_active = true;
+        respawn_time = 0;
+        spawn_timer.restart();
+    }
+}
+
+// Sistema global de itens
+dictionary items_database;        // id -> GameItem
+dictionary items_by_name;         // name -> GameItem
+WorldItem@[] world_items;         // Itens no mundo
+dictionary world_items_by_map;    // map_name -> WorldItem[]
+
+// Referência ao banco de dados - declaração global
+// Estas variáveis são definidas em server.nvgt
+
+// Criar tabelas de itens no banco
+void create_items_tables() {
+    if(!database_initialized) return;
+    
+    // Tabela de definições de itens
+    string create_items = """
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
+            description TEXT,
+            item_type TEXT NOT NULL DEFAULT 'misc',
+            category TEXT,
+            
+            -- Estatísticas
+            damage INTEGER DEFAULT 0,
+            defense INTEGER DEFAULT 0,
+            heal_amount INTEGER DEFAULT 0,
+            mp_restore INTEGER DEFAULT 0,
+            
+            -- Propriedades
+            stackable BOOLEAN DEFAULT TRUE,
+            max_stack INTEGER DEFAULT 99,
+            weight REAL DEFAULT 1.0,
+            value INTEGER DEFAULT 1,
+            
+            -- Raridade e disponibilidade
+            rarity TEXT DEFAULT 'common',
+            drop_rate REAL DEFAULT 1.0,
+            craftable BOOLEAN DEFAULT FALSE,
+            sellable BOOLEAN DEFAULT TRUE,
+            tradeable BOOLEAN DEFAULT TRUE,
+            
+            -- Som e efeitos
+            sound_file TEXT,
+            use_sound TEXT,
+            
+            -- Metadados
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    
+    // Tabela de itens no mundo
+    string create_world_items = """
+        CREATE TABLE IF NOT EXISTS world_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            map_name TEXT NOT NULL,
+            x INTEGER NOT NULL,
+            y INTEGER NOT NULL,
+            z INTEGER DEFAULT 0,
+            quantity INTEGER DEFAULT 1,
+            
+            -- Spawn info
+            spawned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME,
+            spawned_by TEXT DEFAULT 'system',
+            
+            -- Estado
+            is_active BOOLEAN DEFAULT TRUE,
+            respawn_time INTEGER DEFAULT 0,
+            
+            FOREIGN KEY (item_id) REFERENCES items(id)
+        );
+    """;
+    
+    // Tabela de inventários de jogadores
+    string create_inventories = """
+        CREATE TABLE IF NOT EXISTS player_inventories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            
+            -- Localização no inventário
+            slot_type TEXT DEFAULT 'inventory',
+            slot_position INTEGER,
+            
+            -- Propriedades do item específico
+            durability REAL DEFAULT 100.0,
+            enchantments TEXT,
+            custom_name TEXT,
+            
+            -- Histórico
+            acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            acquired_from TEXT DEFAULT 'unknown',
+            
+            UNIQUE(player_id, slot_type, slot_position),
+            FOREIGN KEY (player_id) REFERENCES players(id),
+            FOREIGN KEY (item_id) REFERENCES items(id)
+        );
+    """;
+    
+    // Executar criação
+    if(bancoJogo.execute(create_items) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela items: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_world_items) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela world_items: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_inventories) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela player_inventories: " + bancoJogo.get_last_error_text());
+    }
+    
+    debug_log("Tabelas de itens criadas com sucesso");
+}
+
+// Carregar itens do banco de dados
+void load_items_from_database() {
+    if(!database_initialized) return;
+    
+    string query = "SELECT * FROM items ORDER BY id;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de itens: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    int count = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        GameItem@ item = GameItem();
+        
+        item.id = stmt.column_int(0);
+        item.name = stmt.column_text(1);
+        item.display_name = stmt.column_text(2);
+        item.description = stmt.column_text(3);
+        item.item_type = stmt.column_text(4);
+        item.category = stmt.column_text(5);
+        
+        item.damage = stmt.column_int(6);
+        item.defense = stmt.column_int(7);
+        item.heal_amount = stmt.column_int(8);
+        item.mp_restore = stmt.column_int(9);
+        
+        item.stackable = stmt.column_int(10) > 0;
+        item.max_stack = stmt.column_int(11);
+        item.weight = stmt.column_double(12);
+        item.value = stmt.column_int(13);
+        
+        item.rarity = stmt.column_text(14);
+        item.drop_rate = stmt.column_double(15);
+        item.craftable = stmt.column_int(16) > 0;
+        item.sellable = stmt.column_int(17) > 0;
+        item.tradeable = stmt.column_int(18) > 0;
+        
+        item.sound_file = stmt.column_text(19);
+        item.use_sound = stmt.column_text(20);
+        
+        // Adicionar aos dicionários
+        items_database["" + item.id] = item;
+        items_by_name[item.name] = item;
+        
+        count++;
+    }
+    
+    debug_log("Carregados " + count + " itens do banco de dados");
+}
+
+// Inserir itens padrão no banco
+void seed_default_items() {
+    if(!database_initialized) return;
+    
+    // Verificar se já existem itens
+    string check_query = "SELECT COUNT(*) FROM items;";
+    sqlite3statement@ check_stmt = bancoJogo.prepare(check_query);
+    
+    if(@check_stmt != null && check_stmt.step() == SQLITE_ROW) {
+        int existing_count = check_stmt.column_int(0);
+        if(existing_count > 0) {
+            debug_log("Itens já existem no banco (" + existing_count + "), ignorando seed");
+            return;
+        }
+    }
+    
+    debug_log("Inserindo itens padrão no banco de dados...");
+    
+    // Itens básicos
+    create_item("potion", "Poção de Vida", "Restaura 50 de vida", "consumable", "potion", 
+                0, 0, 50, 0, true, 20, 0.5, 10, "common", 0.8, false, true, true, "potion_use.wav", "");
+    
+    create_item("mana_potion", "Poção de Mana", "Restaura 30 de mana", "consumable", "potion",
+                0, 0, 0, 30, true, 20, 0.5, 15, "common", 0.7, false, true, true, "potion_use.wav", "");
+    
+    create_item("bread", "Pão", "Alimento básico que restaura 20 de vida", "consumable", "food",
+                0, 0, 20, 0, true, 50, 0.2, 2, "common", 1.0, true, true, true, "eat.wav", "");
+    
+    // Armas básicas
+    create_item("wooden_sword", "Espada de Madeira", "Uma espada simples feita de madeira", "weapon", "sword",
+                15, 0, 0, 0, false, 1, 2.0, 20, "common", 0.9, true, true, true, "", "sword_swing.wav");
+    
+    create_item("iron_sword", "Espada de Ferro", "Uma espada resistente de ferro", "weapon", "sword",
+                30, 0, 0, 0, false, 1, 3.5, 100, "uncommon", 0.5, true, true, true, "", "sword_swing.wav");
+    
+    create_item("wooden_bow", "Arco de Madeira", "Um arco básico para ataques à distância", "weapon", "bow",
+                20, 0, 0, 0, false, 1, 1.5, 50, "common", 0.7, true, true, true, "", "bow_shoot.wav");
+    
+    // Armaduras
+    create_item("leather_armor", "Armadura de Couro", "Proteção básica de couro", "armor", "chest",
+                0, 10, 0, 0, false, 1, 3.0, 40, "common", 0.8, true, true, true, "", "");
+    
+    create_item("iron_armor", "Armadura de Ferro", "Proteção sólida de ferro", "armor", "chest",
+                0, 25, 0, 0, false, 1, 8.0, 200, "uncommon", 0.4, true, true, true, "", "");
+    
+    // Materiais
+    create_item("wood", "Madeira", "Material básico para construção", "misc", "material",
+                0, 0, 0, 0, true, 64, 0.5, 1, "common", 1.0, false, true, true, "", "");
+    
+    create_item("iron_ore", "Minério de Ferro", "Minério para forjar itens de ferro", "misc", "material",
+                0, 0, 0, 0, true, 32, 2.0, 5, "common", 0.6, false, true, true, "", "");
+    
+    create_item("gold_coin", "Moeda de Ouro", "Moeda padrão do reino", "misc", "currency",
+                0, 0, 0, 0, true, 999, 0.01, 1, "common", 1.0, false, true, true, "coin.wav", "");
+    
+    debug_log("Itens padrão inseridos no banco de dados");
+}
+
+// Criar novo item no banco
+bool create_item(string name, string display_name, string description, string item_type, string category,
+                 int damage, int defense, int heal_amount, int mp_restore,
+                 bool stackable, int max_stack, float weight, int value,
+                 string rarity, float drop_rate, bool craftable, bool sellable, bool tradeable,
+                 string sound_file, string use_sound) {
+    if(!database_initialized) return false;
+    
+    string query = """
+        INSERT INTO items (name, display_name, description, item_type, category,
+                          damage, defense, heal_amount, mp_restore,
+                          stackable, max_stack, weight, value,
+                          rarity, drop_rate, craftable, sellable, tradeable,
+                          sound_file, use_sound)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar inserção de item: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    stmt.bind_text(1, name);
+    stmt.bind_text(2, display_name);
+    stmt.bind_text(3, description);
+    stmt.bind_text(4, item_type);
+    stmt.bind_text(5, category);
+    stmt.bind_int(6, damage);
+    stmt.bind_int(7, defense);
+    stmt.bind_int(8, heal_amount);
+    stmt.bind_int(9, mp_restore);
+    stmt.bind_int(10, stackable ? 1 : 0);
+    stmt.bind_int(11, max_stack);
+    stmt.bind_double(12, weight);
+    stmt.bind_int(13, value);
+    stmt.bind_text(14, rarity);
+    stmt.bind_double(15, drop_rate);
+    stmt.bind_int(16, craftable ? 1 : 0);
+    stmt.bind_int(17, sellable ? 1 : 0);
+    stmt.bind_int(18, tradeable ? 1 : 0);
+    stmt.bind_text(19, sound_file);
+    stmt.bind_text(20, use_sound);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao inserir item " + name + ": " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    debug_log("Item " + name + " criado com sucesso");
+    return true;
+}
+
+// Buscar item por nome
+GameItem@ get_item_by_name(string name) {
+    if(items_by_name.exists(name)) {
+        GameItem@ item;
+        items_by_name.get(name, @item);
+        return item;
+    }
+    return null;
+}
+
+// Buscar item por ID
+GameItem@ get_item_by_id(int id) {
+    string id_str = "" + id;
+    if(items_database.exists(id_str)) {
+        GameItem@ item;
+        items_database.get(id_str, @item);
+        return item;
+    }
+    return null;
+}
+
+// Spawnar item no mundo
+bool spawn_item_at(string item_name, string map_name, int x, int y, int z, int quantity = 1, string spawned_by = "system") {
+    GameItem@ item = get_item_by_name(item_name);
+    if(item is null) {
+        debug_log("ERRO: Item " + item_name + " não encontrado para spawn");
+        return false;
+    }
+    
+    if(!database_initialized) return false;
+    
+    string query = """
+        INSERT INTO world_items (item_id, map_name, x, y, z, quantity, spawned_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar spawn de item: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    stmt.bind_int(1, item.id);
+    stmt.bind_text(2, map_name);
+    stmt.bind_int(3, x);
+    stmt.bind_int(4, y);
+    stmt.bind_int(5, z);
+    stmt.bind_int(6, quantity);
+    stmt.bind_text(7, spawned_by);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao spawnar item: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    // Adicionar à lista de itens no mundo
+    WorldItem@ world_item = WorldItem();
+    world_item.id = bancoJogo.last_insert_rowid;
+    world_item.item_id = item.id;
+    world_item.map_name = map_name;
+    world_item.x = x; world_item.y = y; world_item.z = z;
+    world_item.quantity = quantity;
+    world_item.spawned_by = spawned_by;
+    
+    world_items.insert_last(world_item);
+    
+    debug_log("Item " + item_name + " (x" + quantity + ") spawnado em " + map_name + " (" + x + "," + y + "," + z + ")");
+    return true;
+}
+
+// Pegar item do mundo
+bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
+    // Buscar item na posição
+    for(uint i = 0; i < world_items.length(); i++) {
+        WorldItem@ world_item = world_items[i];
+        if(world_item.map_name == map_name && world_item.x == x && world_item.y == y && world_item.z == z && world_item.is_active) {
+            
+            GameItem@ item = get_item_by_id(world_item.item_id);
+            if(item is null) continue;
+            
+            // TODO: Adicionar item ao inventário do jogador
+            // Por agora, apenas remover do mundo
+            
+            // Remover do banco
+            string delete_query = "DELETE FROM world_items WHERE id = ?;";
+            sqlite3statement@ stmt = bancoJogo.prepare(delete_query);
+            if(@stmt != null) {
+                stmt.bind_int(1, world_item.id);
+                stmt.step();
+            }
+            
+            // Remover da lista
+            world_items.remove_at(i);
+            
+            debug_log("Jogador " + player_name + " pegou " + item.display_name + " (x" + world_item.quantity + ")");
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Carregar itens do mundo do banco
+void load_world_items_from_database() {
+    if(!database_initialized) return;
+    
+    string query = "SELECT * FROM world_items WHERE is_active = 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de world_items: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    int count = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        WorldItem@ world_item = WorldItem();
+        
+        world_item.id = stmt.column_int(0);
+        world_item.item_id = stmt.column_int(1);
+        world_item.map_name = stmt.column_text(2);
+        world_item.x = stmt.column_int(3);
+        world_item.y = stmt.column_int(4);
+        world_item.z = stmt.column_int(5);
+        world_item.quantity = stmt.column_int(6);
+        world_item.spawned_by = stmt.column_text(9);
+        world_item.is_active = stmt.column_int(10) > 0;
+        world_item.respawn_time = stmt.column_int(11);
+        
+        world_items.insert_last(world_item);
+        count++;
+    }
+    
+    debug_log("Carregados " + count + " itens do mundo do banco de dados");
+}
+
+// Obter itens em um mapa específico
+WorldItem@[] get_items_in_map(string map_name) {
+    WorldItem@[] items_here;
+    
+    for(uint i = 0; i < world_items.length(); i++) {
+        if(world_items[i].map_name == map_name && world_items[i].is_active) {
+            items_here.push_back(world_items[i]);
+        }
+    }
+    
+    return items_here;
+}
+
+// Obter item na posição específica
+WorldItem@ get_item_at_position(string map_name, int x, int y, int z) {
+    for(uint i = 0; i < world_items.length(); i++) {
+        WorldItem@ item = world_items[i];
+        if(item.map_name == map_name && item.x == x && item.y == y && item.z == z && item.is_active) {
+            return item;
+        }
+    }
+    return null;
+}
+
+// Inicializar sistema de itens
+void init_items_system() {
+    debug_log("Inicializando sistema de itens...");
+    
+    // Criar tabelas
+    create_items_tables();
+    
+    // Inserir itens padrão se necessário
+    seed_default_items();
+    
+    // Carregar itens do banco
+    load_items_from_database();
+    
+    // Carregar itens do mundo
+    load_world_items_from_database();
+    
+    debug_log("Sistema de itens inicializado com " + items_database.get_size() + " tipos de itens e " + world_items.length() + " itens no mundo");
+}
+
+// Limpar itens expirados (executar periodicamente)
+void cleanup_expired_items() {
+    if(!database_initialized) return;
+    
+    // Remover itens expirados do banco
+    string cleanup_query = "DELETE FROM world_items WHERE expires_at IS NOT NULL AND expires_at < DATETIME('now');";
+    bancoJogo.execute(cleanup_query);
+    
+    // TODO: Recarregar world_items ou implementar sistema de expiração em memória
+}

@@ -1,0 +1,401 @@
+// combat.nvgt - Sistema de combate para servidor EVM
+// Conversão BGT → NVGT - Sistema completo de combate
+
+#include "globals.nvgt"
+
+// Classe para gerenciar um combate ativo
+class CombatInstance {
+    string attacker_id;
+    string defender_id;
+    bool in_progress;
+    uint64 start_time;
+    uint64 last_action_time;
+    string battle_status; // ongoing, victory, defeat, flee
+    
+    CombatInstance() {
+        in_progress = false;
+        start_time = 0;
+        last_action_time = 0;
+        battle_status = "inactive";
+    }
+    
+    CombatInstance(string att_id, string def_id) {
+        attacker_id = att_id;
+        defender_id = def_id;
+        in_progress = true;
+        start_time = get_time_stamp();
+        last_action_time = start_time;
+        battle_status = "ongoing";
+    }
+    
+    bool is_expired() {
+        // Combate expira após 30 segundos de inatividade
+        return (get_time_stamp() - last_action_time) > 30000;
+    }
+    
+    void update_action_time() {
+        last_action_time = get_time_stamp();
+    }
+}
+
+// Sistema global de combate
+dictionary combat_instances; // player_id -> CombatInstance
+
+// Funções de combate
+
+bool is_player_in_combat(string player_id) {
+    if(!combat_instances.exists(player_id)) return false;
+    
+    CombatInstance@ combat = cast<CombatInstance@>(combat_instances[player_id]);
+    if(combat is null) return false;
+    
+    if(combat.is_expired()) {
+        end_combat(player_id, "timeout");
+        return false;
+    }
+    
+    return combat.in_progress;
+}
+
+bool start_combat(string attacker_id, string defender_id) {
+    // Verificar se algum dos jogadores já está em combate
+    if(is_player_in_combat(attacker_id) || is_player_in_combat(defender_id)) {
+        return false;
+    }
+    
+    // Criar instância de combate para ambos os jogadores
+    CombatInstance@ combat_att = CombatInstance(attacker_id, defender_id);
+    CombatInstance@ combat_def = CombatInstance(defender_id, attacker_id);
+    
+    combat_instances[attacker_id] = @combat_att;
+    combat_instances[defender_id] = @combat_def;
+    
+    // Log do início do combate
+    log_combat_action(attacker_id, defender_id, "combat_start", "", 0, 0, 
+                     get_player_hp(attacker_id), get_player_hp(attacker_id),
+                     get_player_hp(defender_id), get_player_hp(defender_id), "ongoing");
+    
+    // Notificar players
+    player@ att = get_player_by_id(attacker_id);
+    player@ def = get_player_by_id(defender_id);
+    
+    if(att !is null && def !is null) {
+        att.send_message("say Combate iniciado contra " + def.name + "!");
+        def.send_message("say " + att.name + " iniciou um combate contra você!");
+        
+        // Notificar players próximos
+        string[] nearby = get_nearby_players(att.map_name, att.x, att.y, att.z, 10);
+        for(uint i = 0; i < nearby.length(); i++) {
+            if(nearby[i] != attacker_id && nearby[i] != defender_id) {
+                player@ observer = get_player_by_id(nearby[i]);
+                if(observer !is null) {
+                    observer.send_message("say " + att.name + " iniciou combate contra " + def.name + "!");
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
+void end_combat(string player_id, string reason) {
+    if(!combat_instances.exists(player_id)) return;
+    
+    CombatInstance@ combat = cast<CombatInstance@>(combat_instances[player_id]);
+    if(combat is null) return;
+    
+    string opponent_id = combat.attacker_id == player_id ? combat.defender_id : combat.attacker_id;
+    
+    // Remover combate de ambos os jogadores
+    combat_instances.delete(player_id);
+    if(combat_instances.exists(opponent_id)) {
+        combat_instances.delete(opponent_id);
+    }
+    
+    // Log do fim do combate
+    log_combat_action(player_id, opponent_id, "combat_end", reason, 0, 0,
+                     get_player_hp(player_id), get_player_hp(player_id),
+                     get_player_hp(opponent_id), get_player_hp(opponent_id), reason);
+    
+    // Notificar players
+    player@ player = get_player_by_id(player_id);
+    player@ opponent = get_player_by_id(opponent_id);
+    
+    if(player !is null && opponent !is null) {
+        string message = "";
+        if(reason == "victory") {
+            message = "Você venceu o combate contra " + opponent.name + "!";
+        } else if(reason == "defeat") {
+            message = "Você foi derrotado por " + opponent.name + "!";
+        } else if(reason == "flee") {
+            message = "Você fugiu do combate!";
+        } else {
+            message = "Combate finalizado (" + reason + ").";
+        }
+        
+        player.send_message("say " + message);
+        opponent.send_message("say Combate com " + player.name + " finalizado (" + reason + ").");
+    }
+}
+
+int calculate_damage(string attacker_id, string defender_id, string weapon_type = "") {
+    player@ attacker = get_player_by_id(attacker_id);
+    player@ defender = get_player_by_id(defender_id);
+    
+    if(attacker is null || defender is null) return 0;
+    
+    // Damage base do atacante
+    int base_damage = attacker.player_level * 2 + 10;
+    
+    // Modificadores de arma (se especificado)
+    if(weapon_type != "") {
+        GameItem@ weapon = get_item_by_name(weapon_type);
+        if(weapon !is null) {
+            base_damage += weapon.damage;
+        }
+    }
+    
+    // Defesa do defensor
+    int defense = defender.player_level + 5;
+    
+    // Adicionar defesa de equipamentos (simplificado)
+    // TODO: Implementar sistema de equipamentos detalhado
+    
+    // Calcular damage final
+    int final_damage = base_damage - defense;
+    if(final_damage < 1) final_damage = 1;
+    
+    // Chance de crítico (5%)
+    if(random(1, 100) <= 5) {
+        final_damage *= 2;
+    }
+    
+    // Variação aleatória (±20%)
+    int variation = random(-20, 20);
+    final_damage = final_damage + (final_damage * variation / 100);
+    
+    return final_damage;
+}
+
+bool execute_attack(string attacker_id, string defender_id, string weapon_type = "") {
+    if(!is_player_in_combat(attacker_id)) {
+        return false;
+    }
+    
+    player@ attacker = get_player_by_id(attacker_id);
+    player@ defender = get_player_by_id(defender_id);
+    
+    if(attacker is null || defender is null) return false;
+    
+    // Calcular damage
+    int damage = calculate_damage(attacker_id, defender_id, weapon_type);
+    int defender_hp_before = defender.hp;
+    
+    // Aplicar damage
+    defender.hp -= damage;
+    if(defender.hp < 0) defender.hp = 0;
+    
+    // Atualizar tempo de ação do combate
+    if(combat_instances.exists(attacker_id)) {
+        CombatInstance@ combat = cast<CombatInstance@>(combat_instances[attacker_id]);
+        if(combat !is null) {
+            combat.update_action_time();
+        }
+    }
+    
+    // Log da ação
+    string action_type = "attack";
+    if(damage >= defender_hp_before * 0.5) action_type = "critical";
+    
+    log_combat_action(attacker_id, defender_id, action_type, weapon_type, damage, 0,
+                     attacker.hp, attacker.hp, defender_hp_before, defender.hp, "ongoing");
+    
+    // Mensagens
+    string weapon_text = weapon_type != "" ? " com " + weapon_type : "";
+    attacker.send_message("say Você atacou " + defender.name + weapon_text + " causando " + damage + " de dano!");
+    defender.send_message("say " + attacker.name + " te atacou" + weapon_text + " causando " + damage + " de dano! HP: " + defender.hp + "/" + defender.max_hp);
+    
+    // Verificar se o defensor morreu
+    if(defender.hp <= 0) {
+        // Defensor morreu
+        attacker.send_message("say Você derrotou " + defender.name + "!");
+        defender.send_message("say Você foi derrotado por " + attacker.name + "!");
+        
+        // XP e recompensas
+        int exp_gain = defender.player_level * 10 + 50;
+        int gold_gain = defender.player_level * 5 + random(10, 50);
+        
+        attacker.exp += exp_gain;
+        attacker.gold += gold_gain;
+        
+        attacker.send_message("say Você ganhou " + exp_gain + " XP e " + gold_gain + " moedas!");
+        
+        // Ressurreição do defensor (respawn)
+        defender.hp = defender.max_hp / 2; // 50% da vida
+        defender.x = 0; // Posição de respawn
+        defender.y = 0;
+        defender.z = 0;
+        defender.map_name = "spawn"; // Mapa de respawn
+        
+        defender.send_message("say Você foi ressuscitado no ponto de respawn com metade da vida.");
+        
+        // Finalizar combate
+        end_combat(attacker_id, "victory");
+        end_combat(defender_id, "defeat");
+        
+        // Salvar jogadores
+        save_player_async(attacker_id);
+        save_player_async(defender_id);
+        
+        // Atualizar estatísticas
+        update_statistics("combat_victory");
+        update_statistics("combat_defeat");
+        
+        return true;
+    }
+    
+    // Salvar defensor (HP atualizado)
+    save_player_async(defender_id);
+    
+    return true;
+}
+
+bool attempt_flee(string player_id) {
+    if(!is_player_in_combat(player_id)) {
+        return false;
+    }
+    
+    // Chance de fuga baseada no nível (mínimo 30%, máximo 80%)
+    player@ player = get_player_by_id(player_id);
+    if(player is null) return false;
+    
+    int flee_chance = 30 + (player.player_level * 2);
+    if(flee_chance > 80) flee_chance = 80;
+    
+    CombatInstance@ combat = cast<CombatInstance@>(combat_instances[player_id]);
+    if(combat is null) return false;
+    
+    string opponent_id = combat.attacker_id == player_id ? combat.defender_id : combat.attacker_id;
+    Player@ opponent = get_player_by_id(opponent_id);
+    
+    if(random(1, 100) <= flee_chance) {
+        // Fuga bem-sucedida
+        player.send_message("say Você conseguiu fugir do combate!");
+        if(opponent !is null) {
+            opponent.send_message("say " + player.name + " fugiu do combate!");
+        }
+        
+        // Log da fuga
+        log_combat_action(player_id, opponent_id, "flee", "successful", 0, 0,
+                         player.hp, player.hp, 
+                         opponent !is null ? opponent.hp : 0, 
+                         opponent !is null ? opponent.hp : 0, "flee");
+        
+        end_combat(player_id, "flee");
+        
+        update_statistics("combat_flee");
+        return true;
+    } else {
+        // Fuga falhou
+        player.send_message("say Você tentou fugir mas não conseguiu!");
+        if(opponent !is null) {
+            opponent.send_message("say " + player.name + " tentou fugir mas falhou!");
+        }
+        
+        // Log da tentativa de fuga
+        log_combat_action(player_id, opponent_id, "flee", "failed", 0, 0,
+                         player.hp, player.hp,
+                         opponent !is null ? opponent.hp : 0,
+                         opponent !is null ? opponent.hp : 0, "ongoing");
+        
+        return false;
+    }
+}
+
+// Função para cleanup de combates expirados (chamar periodicamente)
+async<void> cleanup_expired_combats() {
+    while(true) {
+        string[] keys = combat_instances.get_keys();
+        for(uint i = 0; i < keys.length(); i++) {
+            if(combat_instances.exists(keys[i])) {
+                CombatInstance@ combat = cast<CombatInstance@>(combat_instances[keys[i]]);
+                if(combat !is null && combat.is_expired()) {
+                    end_combat(keys[i], "timeout");
+                }
+            }
+        }
+        
+        // Verificar a cada 30 segundos
+        yield_for(30000);
+    }
+}
+
+// Funções auxiliares que devem ser implementadas em outros módulos
+int get_player_hp(string player_id) {
+    Player@ player = get_player_by_id(player_id);
+    return player !is null ? player.hp : 0;
+}
+
+string[] get_nearby_players(string map_name, int x, int y, int z, int radius) {
+    string[] nearby;
+    
+    string[] all_players = players_database.get_keys();
+    for(uint i = 0; i < all_players.length(); i++) {
+        Player@ other = cast<Player@>(players_database[all_players[i]]);
+        if(other !is null && other.map_name == map_name) {
+            int distance = abs(other.x - x) + abs(other.y - y) + abs(other.z - z);
+            if(distance <= radius) {
+                nearby.push_back(all_players[i]);
+            }
+        }
+    }
+    
+    return nearby;
+}
+
+// Função para logging de combate (implementada em history.nvgt)
+void log_combat_action(string attacker_id, string defender_id, string action_type, 
+                      string weapon_used, int damage_dealt, int damage_blocked,
+                      int attacker_hp_before, int attacker_hp_after,
+                      int defender_hp_before, int defender_hp_after, string battle_result) {
+    
+    if(!server_db.is_open()) return;
+    
+    Player@ attacker = get_player_by_id(attacker_id);
+    Player@ defender = get_player_by_id(defender_id);
+    
+    string attacker_name = attacker !is null ? attacker.name : "Unknown";
+    string defender_name = defender !is null ? defender.name : "Unknown";
+    string map_name = attacker !is null ? attacker.map_name : "unknown";
+    int x = attacker !is null ? attacker.x : 0;
+    int y = attacker !is null ? attacker.y : 0;
+    int z = attacker !is null ? attacker.z : 0;
+    
+    string query = "INSERT INTO combat_logs (attacker_id, attacker_name, defender_id, defender_name, " +
+                   "action_type, weapon_used, damage_dealt, damage_blocked, " +
+                   "attacker_hp_before, attacker_hp_after, defender_hp_before, defender_hp_after, " +
+                   "battle_result, map_name, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    
+    db_statement@ stmt = server_db.prepare(query);
+    if(stmt !is null) {
+        stmt.bind(1, string_to_number(attacker_id));
+        stmt.bind(2, attacker_name);
+        stmt.bind(3, string_to_number(defender_id));
+        stmt.bind(4, defender_name);
+        stmt.bind(5, action_type);
+        stmt.bind(6, weapon_used);
+        stmt.bind(7, damage_dealt);
+        stmt.bind(8, damage_blocked);
+        stmt.bind(9, attacker_hp_before);
+        stmt.bind(10, attacker_hp_after);
+        stmt.bind(11, defender_hp_before);
+        stmt.bind(12, defender_hp_after);
+        stmt.bind(13, battle_result);
+        stmt.bind(14, map_name);
+        stmt.bind(15, x);
+        stmt.bind(16, y);
+        stmt.bind(17, z);
+        
+        stmt.step();
+    }
+}

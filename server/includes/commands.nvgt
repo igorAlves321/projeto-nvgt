@@ -1,0 +1,752 @@
+// Sistema de comandos do servidor NVGT
+// Processamento avançado de comandos de jogadores e admins
+
+#include "globals.nvgt"
+#include "network.nvgt"
+#include "player.nvgt"
+#include "map.nvgt"
+// #include "items.nvgt"  // Temporariamente removido para evitar dependência circular
+// #include "history.nvgt"  // Temporariamente removido para evitar dependência circular
+
+// Estrutura para comando
+class ServerCommand {
+    string name;
+    string description;
+    bool admin_only;
+    string[] aliases;
+    string usage;
+    
+    ServerCommand(string cmd_name, string cmd_desc, bool is_admin = false) {
+        name = cmd_name;
+        description = cmd_desc;
+        admin_only = is_admin;
+        usage = cmd_name;
+    }
+}
+
+// Sistema global de comandos
+dictionary registered_commands;  // name -> ServerCommand
+dictionary command_aliases;      // alias -> real_name
+
+// Registrar comandos do sistema
+void init_command_system() {
+    debug_log("Inicializando sistema de comandos");
+    
+    // Comandos básicos de jogador
+    register_command("help", "Mostra lista de comandos disponíveis", false);
+    register_command("who", "Lista jogadores online", false);
+    register_command("time", "Mostra tempo de jogo", false);
+    register_command("save", "Salva seus dados", false);
+    register_command("quit", "Sair do jogo", false);
+    register_command("pm", "Enviar mensagem privada", false, {"msg", "tell", "whisper"}, "pm <jogador> <mensagem>");
+    register_command("r", "Responder última mensagem privada", false, {"reply"}, "r <mensagem>");
+    register_command("me", "Ação em terceira pessoa", false, {"action"}, "me <ação>");
+    
+    // Comandos de movimento
+    register_command("go", "Mover para uma direção", false, {"move"}, "go <direção>");
+    register_command("look", "Examinar ambiente", false, {"l", "examine"}, "look [direção/objeto]");
+    register_command("map", "Mostrar informações do mapa atual", false);
+    
+    // Comandos sociais
+    register_command("say", "Falar no chat local", false, {"'"}, "say <mensagem>");
+    register_command("shout", "Gritar (alcance maior)", false, {"yell"}, "shout <mensagem>");
+    register_command("ooc", "Chat fora do personagem", false, {"("}, "ooc <mensagem>");
+    
+    // Comandos de inventário
+    register_command("inventory", "Ver inventário", false, {"inv", "i"});
+    register_command("get", "Pegar item", false, {"take", "pick"}, "get <item>");
+    register_command("drop", "Largar item", false, {"put"}, "drop <item>");
+    register_command("use", "Usar item", false, {"activate"}, "use <item>");
+    register_command("give", "Dar item para jogador", false, {"offer"}, "give <item> <jogador>");
+    register_command("pickup", "Pegar item do chão", false, {"grab"}, "pickup [item]");
+    
+    // Comandos de combate
+    register_command("attack", "Atacar inimigo", false, {"kill", "hit"}, "attack <alvo>");
+    register_command("flee", "Fugir do combate", false, {"escape", "run"});
+    register_command("rest", "Descansar para recuperar vida", false, {"sleep"});
+    
+    // Comandos de informação
+    register_command("score", "Ver estatísticas do personagem", false, {"stats", "stat"});
+    register_command("health", "Ver vida atual", false, {"hp"});
+    register_command("experience", "Ver experiência", false, {"exp", "xp"});
+    register_command("level", "Ver informações de nível", false);
+    
+    // === COMANDOS DE ADMINISTRADOR ===
+    
+    // Sistema
+    register_command("shutdown", "Desligar servidor", true, {"reboot"}, "shutdown [tempo_em_segundos]");
+    register_command("freeze", "Congelar/descongelar jogo", true, {"gamefreeze"});
+    register_command("backup", "Fazer backup do banco", true);
+    register_command("reload", "Recarregar configurações", true);
+    
+    // Gerenciamento de jogadores
+    register_command("kick", "Expulsar jogador", true, {"boot"}, "kick <jogador> [motivo]");
+    register_command("ban", "Banir jogador", true, {"banhammer"}, "ban <jogador> [motivo]");
+    register_command("unban", "Remover ban", true, {"pardon"}, "unban <jogador>");
+    register_command("mute", "Silenciar jogador", true, {"silence"}, "mute <jogador> [tempo]");
+    register_command("unmute", "Remover silêncio", true, {"unsilence"}, "unmute <jogador>");
+    
+    // Teleporte e movimento
+    register_command("goto", "Teletransportar para jogador", true, {"tp", "teleport"}, "goto <jogador>");
+    register_command("summon", "Chamar jogador até você", true, {"bring"}, "summon <jogador>");
+    register_command("move", "Mover jogador", true, {}, "move <jogador> <x> <y> [z]");
+    register_command("changemap", "Mover jogador para mapa", true, {}, "changemap <jogador> <mapa> [x] [y] [z]");
+    
+    // Itens e economia
+    register_command("give_item", "Dar item para jogador", true, {"giveitem"}, "give_item <jogador> <item> [quantidade]");
+    register_command("take_item", "Remover item", true, {"takeitem"}, "take_item <jogador> <item> [quantidade]");
+    register_command("spawn_item", "Spawnar item no mundo", true, {"createitem"}, "spawn_item <item> [quantidade] [x] [y] [z]");
+    register_command("list_items", "Listar todos os itens", true, {"items"});
+    register_command("item_info", "Informações do item", true, {"iteminfo"}, "item_info <item>");
+    register_command("set_gold", "Definir ouro do jogador", true, {"setgold"}, "set_gold <jogador> <quantidade>");
+    register_command("add_exp", "Dar experiência", true, {"giveexp", "addexp"}, "add_exp <jogador> <quantidade>");
+    register_command("set_level", "Definir nível", true, {"setlevel"}, "set_level <jogador> <nível>");
+    
+    // Status e informações
+    register_command("player_info", "Ver informações do jogador", true, {"pinfo", "whois"}, "player_info <jogador>");
+    register_command("online", "Lista detalhada de jogadores", true);
+    register_command("server_info", "Informações do servidor", true, {"sinfo"});
+    register_command("statistics", "Estatísticas do servidor", true, {"stats"});
+    register_command("logs", "Ver logs recentes", true, {}, "logs [categoria] [quantidade]");
+    register_command("history", "Ver histórico de ações", true, {}, "history [jogador] [tipo] [quantidade]");
+    
+    // Mapas e mundo
+    register_command("newmap", "Criar novo mapa", true, {}, "newmap <nome> <largura> <altura> [andares]");
+    register_command("delmap", "Deletar mapa", true, {}, "delmap <nome>");
+    register_command("listmaps", "Listar mapas", true);
+    register_command("rawdata", "Atualizar dados do mapa", true, {}, "rawdata <mapa>");
+    
+    // Comunicação e broadcasts
+    register_command("broadcast", "Anúncio global", true, {"announce"}, "broadcast <mensagem>");
+    register_command("admin_msg", "Mensagem para admins", true, {"amsg"}, "admin_msg <mensagem>");
+    register_command("notify", "Notificação especial", true, {}, "notify <jogador> <mensagem>");
+    
+    debug_log("Sistema de comandos inicializado com " + registered_commands.get_size() + " comandos");
+}
+
+// Registrar um comando
+void register_command(string name, string description, bool admin_only = false, 
+                     string[] aliases = {}, string usage = "") {
+    ServerCommand@ cmd = ServerCommand(name, description, admin_only);
+    cmd.aliases = aliases;
+    cmd.usage = (usage != "") ? usage : name;
+    
+    registered_commands[name] = cmd;
+    
+    // Registrar aliases
+    for(uint i = 0; i < aliases.length(); i++) {
+        command_aliases[aliases[i]] = name;
+    }
+}
+
+// Resolver comando (incluindo aliases)
+string resolve_command(string input) {
+    if(registered_commands.exists(input)) {
+        return input;
+    }
+    
+    if(command_aliases.exists(input)) {
+        string real_name;
+        command_aliases.get(input, real_name);
+        return real_name;
+    }
+    
+    return "";
+}
+
+// Verificar se jogador pode usar comando
+bool can_use_command(player@ player, string command_name) {
+    if(!registered_commands.exists(command_name)) {
+        return false;
+    }
+    
+    ServerCommand@ cmd;
+    registered_commands.get(command_name, @cmd);
+    if(cmd is null) return false;
+    
+    if(cmd.admin_only && !player.admin_status) {
+        return false;
+    }
+    
+    return true;
+}
+
+// Processar comando completo
+bool process_command(player@ player, string full_command) {
+    if(player is null || full_command == "") return false;
+    
+    string[] parts = full_command.split(" ");
+    if(parts.length() == 0) return false;
+    
+    string command_name = parts[0].lower();
+    string[] args;
+    
+    // Extrair argumentos
+    for(uint i = 1; i < parts.length(); i++) {
+        args.push_back(parts[i]);
+    }
+    
+    // Resolver comando (verificar aliases)
+    string resolved = resolve_command(command_name);
+    if(resolved == "") {
+        player.send_message("say Comando não reconhecido: " + command_name);
+        return false;
+    }
+    
+    // Verificar permissões
+    if(!can_use_command(player, resolved)) {
+        player.send_message("say Você não tem permissão para usar este comando.");
+        return false;
+    }
+    
+    // Executar comando
+    return execute_command(player, resolved, args);
+}
+
+// Executar comando específico
+bool execute_command(player@ player, string command, string[] args) {
+    // Comandos básicos
+    if(command == "help") {
+        return cmd_help(player, args);
+    }
+    else if(command == "who") {
+        return cmd_who(player, args);
+    }
+    else if(command == "time") {
+        return cmd_time(player, args);
+    }
+    else if(command == "save") {
+        return cmd_save(player, args);
+    }
+    else if(command == "quit") {
+        return cmd_quit(player, args);
+    }
+    else if(command == "pm") {
+        return cmd_pm(player, args);
+    }
+    else if(command == "say") {
+        return cmd_say(player, args);
+    }
+    else if(command == "inventory") {
+        return cmd_inventory(player, args);
+    }
+    else if(command == "score") {
+        return cmd_score(player, args);
+    }
+    
+    // Comandos de admin
+    else if(command == "freeze") {
+        return cmd_freeze(player, args);
+    }
+    else if(command == "backup") {
+        return cmd_backup(player, args);
+    }
+    else if(command == "broadcast") {
+        return cmd_broadcast(player, args);
+    }
+    else if(command == "kick") {
+        return cmd_kick(player, args);
+    }
+    else if(command == "player_info") {
+        return cmd_player_info(player, args);
+    }
+    else if(command == "server_info") {
+        return cmd_server_info(player, args);
+    }
+    else if(command == "pickup") {
+        return cmd_pickup(player, args);
+    }
+    else if(command == "spawn_item") {
+        return cmd_spawn_item(player, args);
+    }
+    else if(command == "list_items") {
+        return cmd_list_items(player, args);
+    }
+    else if(command == "item_info") {
+        return cmd_item_info(player, args);
+    }
+    else if(command == "statistics") {
+        return cmd_statistics(player, args);
+    }
+    else if(command == "history") {
+        return cmd_history(player, args);
+    }
+    // Comandos de combate
+    else if(command == "attack" || command == "atacar") {
+        return cmd_attack(player, args);
+    }
+    else if(command == "defend" || command == "defender") {
+        return cmd_defend(player, args);
+    }
+    else if(command == "flee" || command == "fugir") {
+        return cmd_flee(player, args);
+    }
+    else if(command == "combat_status" || command == "status_combate") {
+        return cmd_combat_status(player, args);
+    }
+    
+    // Comando não implementado ainda
+    player.send_message("say Comando '" + command + "' reconhecido mas não implementado ainda.");
+    return false;
+}
+
+// === IMPLEMENTAÇÃO DOS COMANDOS ===
+
+bool cmd_help(player@ player, string[] args) {
+    string[] command_list;
+    string[] admin_list;
+    
+    string[] keys = registered_commands.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        ServerCommand@ cmd;
+        registered_commands.get(keys[i], @cmd);
+        if(cmd is null) continue;
+        
+        if(cmd.admin_only) {
+            if(player.admin_status) {
+                admin_list.push_back(cmd.name + " - " + cmd.description);
+            }
+        } else {
+            command_list.push_back(cmd.name + " - " + cmd.description);
+        }
+    }
+    
+    player.send_message("say === COMANDOS DISPONÍVEIS ===");
+    for(uint i = 0; i < command_list.length(); i++) {
+        player.send_message("say " + command_list[i]);
+    }
+    
+    if(admin_list.length() > 0) {
+        player.send_message("say === COMANDOS DE ADMINISTRADOR ===");
+        for(uint i = 0; i < admin_list.length(); i++) {
+            player.send_message("say " + admin_list[i]);
+        }
+    }
+    
+    return true;
+}
+
+bool cmd_who(player@ player, string[] args) {
+    string[] online = get_online_players();
+    player.send_message("say Jogadores online (" + online.length() + "): " + join(online, ", "));
+    return true;
+}
+
+bool cmd_time(player@ player, string[] args) {
+    // TODO: Implementar sistema de tempo de jogo
+    player.send_message("say Tempo de jogo: Em desenvolvimento");
+    return true;
+}
+
+bool cmd_save(player@ player, string[] args) {
+    player.save_player_data();
+    player.send_message("say Dados salvos com sucesso!");
+    return true;
+}
+
+bool cmd_quit(player@ player, string[] args) {
+    player.send_message("say Desconectando...");
+    // TODO: Implementar desconexão graceful
+    return true;
+}
+
+bool cmd_pm(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: pm <jogador> <mensagem>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    string message = "";
+    for(uint i = 1; i < args.length(); i++) {
+        if(i > 1) message += " ";
+        message += args[i];
+    }
+    
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' não encontrado.");
+        return false;
+    }
+    
+    target.send_message("pm [" + player.name + "]: " + message);
+    player.send_message("pm Para [" + target.name + "]: " + message);
+    
+    return true;
+}
+
+bool cmd_say(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: say <mensagem>");
+        return false;
+    }
+    
+    string message = join(args, " ");
+    
+    // Broadcast para jogadores no mesmo mapa
+    player@[] players_here = get_players_in_map(player.map_name);
+    for(uint i = 0; i < players_here.length(); i++) {
+        players_here[i].send_message("say " + player.name + " diz: " + message);
+    }
+    
+    return true;
+}
+
+bool cmd_inventory(player@ player, string[] args) {
+    // TODO: Implementar sistema de inventário
+    player.send_message("say Inventário: Em desenvolvimento");
+    return true;
+}
+
+bool cmd_score(player@ player, string[] args) {
+    string stats = "=== ESTATÍSTICAS ===\n";
+    stats += "Nome: " + player.name + "\n";
+    stats += "Nível: " + player.player_level + "\n";
+    stats += "Experiência: " + player.exp + "\n";
+    stats += "Ouro: " + player.gold + "\n";
+    stats += "Vida: " + player.hp + "/" + player.max_hp + "\n";
+    stats += "Mana: " + player.mp + "/" + player.max_mp + "\n";
+    stats += "Raça: " + player.race + "\n";
+    stats += "Localização: " + player.map_name + " (" + player.x + "," + player.y + "," + player.z + ")";
+    
+    player.send_message("say " + stats);
+    return true;
+}
+
+// Comandos de admin
+bool cmd_freeze(player@ player, string[] args) {
+    // TODO: Implementar freeze global
+    player.send_message("say Comando freeze: Em desenvolvimento");
+    return true;
+}
+
+bool cmd_backup(player@ player, string[] args) {
+    player.send_message("say Iniciando backup do banco de dados...");
+    // TODO: Chamar função de backup
+    return true;
+}
+
+bool cmd_broadcast(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: broadcast <mensagem>");
+        return false;
+    }
+    
+    string message = join(args, " ");
+    server_broadcast("announce [ANÚNCIO] " + message);
+    return true;
+}
+
+bool cmd_kick(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: kick <jogador> [motivo]");
+        return false;
+    }
+    
+    string target_name = args[0];
+    string reason = "Sem motivo especificado";
+    if(args.length() > 1) {
+        reason = join(nvgt_split(join(args, " "), " "), " ");
+    }
+    
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' não encontrado.");
+        return false;
+    }
+    
+    target.send_message("say Você foi expulso pelo administrador " + player.name + ". Motivo: " + reason);
+    server_broadcast("say " + target_name + " foi expulso por " + player.name);
+    
+    // TODO: Implementar desconexão forçada
+    return true;
+}
+
+bool cmd_player_info(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: player_info <jogador>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' não encontrado.");
+        return false;
+    }
+    
+    string info = "=== INFORMAÇÕES DO JOGADOR ===\n";
+    info += "Nome: " + target.name + "\n";
+    info += "Nível: " + target.player_level + " (EXP: " + target.exp + ")\n";
+    info += "Vida: " + target.hp + "/" + target.max_hp + "\n";
+    info += "Mana: " + target.mp + "/" + target.max_mp + "\n";
+    info += "Ouro: " + target.gold + "\n";
+    info += "Localização: " + target.map_name + " (" + target.x + "," + target.y + "," + target.z + ")\n";
+    info += "Admin: " + (target.admin_status ? "Sim" : "Não") + "\n";
+    info += "Status: " + target.status;
+    
+    player.send_message("say " + info);
+    return true;
+}
+
+bool cmd_pickup(player@ player, string[] args) {
+    WorldItem@ item = get_item_at_position(player.map_name, player.x, player.y, player.z);
+    if(item is null) {
+        player.send_message("say Não há itens nesta posição.");
+        return false;
+    }
+    
+    GameItem@ game_item = get_item_by_id(item.item_id);
+    if(game_item is null) {
+        player.send_message("say Item inválido encontrado.");
+        return false;
+    }
+    
+    if(pickup_item_at(player.name, player.map_name, player.x, player.y, player.z)) {
+        player.send_message("say Você pegou " + game_item.display_name + " (x" + item.quantity + ").");
+        log_action(player.name, "pickup", "Pegou " + game_item.display_name + " (x" + item.quantity + ")", 
+                   player.map_name, player.x, player.y, player.z);
+        update_statistics("item_collect");
+        return true;
+    } else {
+        player.send_message("say Falha ao pegar o item.");
+        return false;
+    }
+}
+
+bool cmd_spawn_item(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: spawn_item <item> [quantidade] [x] [y] [z]");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = 1;
+    int x = player.x, y = player.y, z = player.z;
+    
+    if(args.length() > 1) quantity = string_to_number(args[1]);
+    if(args.length() > 2) x = string_to_number(args[2]);
+    if(args.length() > 3) y = string_to_number(args[3]);
+    if(args.length() > 4) z = string_to_number(args[4]);
+    
+    if(spawn_item_at(item_name, player.map_name, x, y, z, quantity, "admin:" + player.name)) {
+        player.send_message("say Item " + item_name + " (x" + quantity + ") spawnado em (" + x + "," + y + "," + z + ").");
+        log_action(player.name, "spawn_item", "Admin spawnou " + item_name + " (x" + quantity + ")", 
+                   player.map_name, x, y, z);
+        update_statistics("item_spawn");
+        return true;
+    } else {
+        player.send_message("say Falha ao spawnar item " + item_name + ". Verifique se o item existe.");
+        return false;
+    }
+}
+
+bool cmd_list_items(player@ player, string[] args) {
+    string[] items_list;
+    string[] keys = items_database.get_keys();
+    
+    for(uint i = 0; i < keys.length(); i++) {
+        GameItem@ item;
+        items_database.get(keys[i], @item);
+        if(item !is null) {
+            items_list.push_back(item.name + " - " + item.display_name + " (" + item.item_type + ")");
+        }
+    }
+    
+    if(items_list.length() == 0) {
+        player.send_message("say Nenhum item cadastrado no sistema.");
+        return false;
+    }
+    
+    player.send_message("say === LISTA DE ITENS ===\nTotal: " + items_list.length() + " itens");
+    for(uint i = 0; i < items_list.length(); i++) {
+        player.send_message("say " + items_list[i]);
+    }
+    
+    return true;
+}
+
+bool cmd_item_info(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: item_info <item>");
+        return false;
+    }
+    
+    string item_name = args[0];
+    GameItem@ item = get_item_by_name(item_name);
+    if(item is null) {
+        player.send_message("say Item '" + item_name + "' não encontrado.");
+        return false;
+    }
+    
+    string info = "=== INFORMAÇÕES DO ITEM ===\n";
+    info += "Nome: " + item.name + "\n";
+    info += "Nome de exibição: " + item.display_name + "\n";
+    info += "Descrição: " + item.description + "\n";
+    info += "Tipo: " + item.item_type + " / " + item.category + "\n";
+    info += "Raridade: " + item.rarity + "\n";
+    
+    if(item.damage > 0) info += "Dano: " + item.damage + "\n";
+    if(item.defense > 0) info += "Defesa: " + item.defense + "\n";
+    if(item.heal_amount > 0) info += "Cura: " + item.heal_amount + "\n";
+    if(item.mp_restore > 0) info += "Restaura MP: " + item.mp_restore + "\n";
+    
+    info += "Empilhável: " + (item.stackable ? "Sim" : "Não") + "\n";
+    if(item.stackable) info += "Máx por pilha: " + item.max_stack + "\n";
+    info += "Peso: " + item.weight + "\n";
+    info += "Valor: " + item.value + " moedas\n";
+    info += "Comercializável: " + (item.tradeable ? "Sim" : "Não") + "\n";
+    info += "Vendível: " + (item.sellable ? "Sim" : "Não");
+    
+    player.send_message("say " + info);
+    return true;
+}
+
+bool cmd_statistics(player@ player, string[] args) {
+    string stats = get_current_statistics_report();
+    player.send_message("say " + stats);
+    return true;
+}
+
+bool cmd_history(player@ player, string[] args) {
+    string player_filter = "";
+    string action_filter = "";
+    int limit = 20;
+    
+    if(args.length() > 0) player_filter = args[0];
+    if(args.length() > 1) action_filter = args[1];
+    if(args.length() > 2) limit = string_to_number(args[2]);
+    
+    string[] history = get_recent_actions(limit, action_filter, player_filter);
+    
+    if(history.length() == 0) {
+        player.send_message("say Nenhum histórico encontrado com os filtros especificados.");
+        return false;
+    }
+    
+    player.send_message("say === HISTÓRICO DE AÇÕES ===\nMostrando " + history.length() + " entradas:");
+    for(uint i = 0; i < history.length(); i++) {
+        player.send_message("say " + history[i]);
+    }
+    
+    return true;
+}
+
+// Comandos de Combate
+bool cmd_attack(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: attack <jogador> [arma]");
+        return false;
+    }
+    
+    string target_name = args[0];
+    string weapon = args.length() > 1 ? args[1] : "";
+    
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' não encontrado.");
+        return false;
+    }
+    
+    if(target.name == player.name) {
+        player.send_message("say Você não pode atacar a si mesmo!");
+        return false;
+    }
+    
+    // Verificar se estão no mesmo mapa e próximos
+    if(target.map_name != player.map_name) {
+        player.send_message("say O jogador não está no mesmo mapa que você.");
+        return false;
+    }
+    
+    int distance = abs(target.x - player.x) + abs(target.y - player.y) + abs(target.z - player.z);
+    if(distance > 2) {
+        player.send_message("say Você precisa estar mais próximo para atacar.");
+        return false;
+    }
+    
+    // Verificar se já está em combate
+    if(is_player_in_combat(player.name)) {
+        // Se já está em combate com este jogador, executar ataque
+        if(execute_attack(player.name, target.name, weapon)) {
+            return true;
+        } else {
+            player.send_message("say Falha ao executar ataque.");
+            return false;
+        }
+    } else {
+        // Iniciar novo combate
+        if(start_combat(player.name, target.name)) {
+            // Executar primeiro ataque
+            execute_attack(player.name, target.name, weapon);
+            return true;
+        } else {
+            if(is_player_in_combat(target.name)) {
+                player.send_message("say " + target_name + " já está em combate com outro jogador.");
+            } else {
+                player.send_message("say Não foi possível iniciar o combate.");
+            }
+            return false;
+        }
+    }
+}
+
+bool cmd_defend(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say Você não está em combate.");
+        return false;
+    }
+    
+    // Implementar defesa (reduz dano do próximo ataque)
+    // TODO: Implementar sistema de defesa temporária
+    player.send_message("say Você se preparou para defender!");
+    
+    log_action(player.name, "defend", "Jogador se defendeu", 
+               player.map_name, player.x, player.y, player.z);
+    
+    return true;
+}
+
+bool cmd_flee(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say Você não está em combate.");
+        return false;
+    }
+    
+    if(attempt_flee(player.name)) {
+        return true;
+    } else {
+        player.send_message("say Você não conseguiu fugir! Tente novamente na próxima rodada.");
+        return false;
+    }
+}
+
+bool cmd_combat_status(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say Você não está em combate.");
+        return false;
+    }
+    
+    CombatInstance@ combat = cast<CombatInstance@>(combat_instances[player.name]);
+    if(combat is null) {
+        player.send_message("say Erro: Dados de combate não encontrados.");
+        return false;
+    }
+    
+    string opponent_id = combat.attacker_id == player.name ? combat.defender_id : combat.attacker_id;
+    player@ opponent = get_player_by_id(opponent_id);
+    
+    if(opponent !is null) {
+        uint64 combat_duration = (get_time_stamp() - combat.start_time) / 1000;
+        string status = "=== STATUS DO COMBATE ===\n";
+        status += "Oponente: " + opponent.name + "\n";
+        status += "Sua vida: " + player.hp + "/" + player.max_hp + "\n";
+        status += "Vida do oponente: " + opponent.hp + "/" + opponent.max_hp + "\n";
+        status += "Duração: " + combat_duration + " segundos\n";
+        status += "Status: " + combat.battle_status;
+        
+        player.send_message("say " + status);
+    }
+    
+    return true;
+}

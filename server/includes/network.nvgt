@@ -1,0 +1,164 @@
+// Sistema de rede do servidor NVGT - CORRIGIDO
+// Usando APIs nativas NVGT para networking
+
+// Instância global do servidor de rede
+network server_net;
+uint64[] connected_peers;
+string[] peer_addresses;
+dictionary peer_names; // peer_id -> player_name
+
+// Chave de criptografia para pacotes
+const string PACKET_ENCRYPTION_KEY = "evm_server_key_2024";
+
+// Criptografia e descriptografia de pacotes usando AES
+string encrypt_packet(string message) {
+    return string_aes_encrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
+string decrypt_packet(string message) {
+    return string_aes_decrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
+// Classe net global para compatibilidade BGT
+class net_handler {
+    void send_reliable(uint64 peer_id, string message, int channel = 0) {
+        if (peer_id == 0) {
+            // Broadcast para todos os peers conectados
+            for(uint i = 0; i < connected_peers.length(); i++) {
+                string encrypted = encrypt_packet(message);
+                server_net.send(connected_peers[i], encrypted, channel, true);
+            }
+        } else {
+            string encrypted = encrypt_packet(message);
+            server_net.send(peer_id, encrypted, channel, true);
+        }
+    }
+
+    void send_packet(uint64 peer_id, string message, string map_filter = "") {
+        send_reliable(peer_id, message, 0);
+    }
+}
+
+// Instância global net para compatibilidade BGT
+net_handler net;
+
+// Inicialização do servidor usando API NVGT nativa
+bool server_init(int port) {
+    debug_log("Inicializando servidor na porta " + port);
+
+    if(!server_net.setup_server(port, MAX_PLAYERS, 1)) { // port, max_peers, max_channels
+        debug_log("ERRO: Não foi possível inicializar servidor na porta " + port);
+        return false;
+    }
+
+    debug_log("Servidor iniciado com sucesso na porta " + port);
+    return true;
+}
+
+// Envio de mensagens usando API NVGT nativa
+void send_reliable(uint64 peer_id, string message, int channel = 0) {
+    if (peer_id == 0) {
+        // Broadcast para todos
+        for(uint i = 0; i < connected_peers.length(); i++) {
+            string encrypted = encrypt_packet(message);
+            server_net.send(connected_peers[i], encrypted, channel, true);
+        }
+    } else {
+        string encrypted = encrypt_packet(message);
+        server_net.send(peer_id, encrypted, channel, true);
+    }
+}
+
+void send_packet(uint64 peer_id, string message, int channel = 0) {
+    if (peer_id == 0) {
+        // Broadcast para todos
+        for(uint i = 0; i < connected_peers.length(); i++) {
+            string encrypted = encrypt_packet(message);
+            server_net.send(connected_peers[i], encrypted, channel, true);
+        }
+    } else {
+        string encrypted = encrypt_packet(message);
+        server_net.send(peer_id, encrypted, channel, true);
+    }
+}
+
+// Broadcast para todos ou mapa específico
+void server_broadcast(string message, string target_map = "", string exclude_player = "") {
+    for(uint i = 0; i < connected_peers.length(); i++) {
+        uint64 peer_id = connected_peers[i];
+        
+        // Verificar se deve excluir este jogador
+        if(exclude_player != "" && peer_names.exists("" + peer_id)) {
+            if(string(peer_names["" + peer_id]) == exclude_player) {
+                continue;
+            }
+        }
+        
+        // TODO: Verificar mapa quando sistema de player estiver pronto
+        send_reliable(peer_id, message);
+    }
+}
+
+// Adicionar peer conectado
+void add_connected_peer(uint64 peer_id, string address) {
+    connected_peers.push_back(peer_id);
+    peer_addresses.push_back(address);
+    debug_log("Peer conectado: " + peer_id + " (" + address + ")");
+}
+
+// Remover peer desconectado  
+void remove_connected_peer(uint64 peer_id) {
+    for(uint i = 0; i < connected_peers.size(); i++) {
+        if(connected_peers[i] == peer_id) {
+            connected_peers.erase(i);
+            peer_addresses.erase(i);
+            break;
+        }
+    }
+    
+    // Remover do mapeamento de nomes
+    string peer_key = "" + peer_id;
+    if(peer_names.exists(peer_key)) {
+        peer_names.delete(peer_key);
+    }
+    
+    debug_log("Peer desconectado: " + peer_id);
+}
+
+// Loop de rede - processar eventos usando API NVGT nativa
+void network_loop() {
+    const network_event@ event;
+    while((@event = server_net.request()) !is null) {
+        // Passar dados do evento const para função que não modifica
+        server_handle_network_event_const(event);
+    }
+}
+
+// Obter número de jogadores conectados usando NVGT nativo
+uint get_connected_count() {
+    return connected_peers.size();
+}
+
+// Verificar se peer está conectado
+bool is_peer_connected(uint64 peer_id) {
+    for(uint i = 0; i < connected_peers.size(); i++) {
+        if(connected_peers[i] == peer_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Associar nome do jogador ao peer
+void set_peer_name(uint64 peer_id, string player_name) {
+    peer_names["" + peer_id] = player_name;
+}
+
+// Obter nome do jogador pelo peer
+string get_peer_name(uint64 peer_id) {
+    string peer_key = "" + peer_id;
+    if(peer_names.exists(peer_key)) {
+        return string(peer_names[peer_key]);
+    }
+    return "";
+}

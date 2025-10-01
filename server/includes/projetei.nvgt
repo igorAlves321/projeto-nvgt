@@ -1,0 +1,104 @@
+// projetei.nvgt - Sistema de Projéteis Teleguiados do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+#include "network.nvgt"
+
+projetei@[] projeteis_ativos;
+
+class projetei {
+	int x;
+	int y;
+	string map;
+	string nome;
+	string somprojetei, njogador;
+	timer projeteitimer;
+	int projeteitime = 90;
+	
+	projetei(int cx, int cy, string cmap, string cnome) {
+		x = cx;
+		y = cy;
+		map = cmap;
+		nome = cnome;
+		somprojetei = spawn_moving_sound("projetilloop.ogg", x, y, map);
+		njogador = selecionar_jogador(map);
+	}
+}
+
+void projeteiloop() {
+	for (uint i = 0; i < projeteis_ativos.length(); i++) {
+		if (projeteis_ativos[i].projeteitimer.elapsed >= projeteis_ativos[i].projeteitime) {
+			int i2 = get_player_index_from(projeteis_ativos[i].njogador);
+			
+			// Verificar se jogador alvo é válido
+			if (i2 > -1) {
+				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || 
+					players[i2].afk || players[i2].map != projeteis_ativos[i].map) i2 = -1;
+			}
+			
+			if (i2 < 0) projeteis_ativos[i].njogador = selecionar_jogador(projeteis_ativos[i].map);
+			i2 = get_player_index_from(projeteis_ativos[i].njogador);
+			
+			if (i2 > -1) {
+				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || 
+					players[i2].afk || players[i2].map != projeteis_ativos[i].map) i2 = -1;
+			}
+			
+			if (i2 < 0) break;
+			
+			// Movimento do projétil em direção ao alvo
+			if (projeteis_ativos[i].x > players[i2].x && players[i2].insz == false && projeteis_ativos[i].nome != players[i2].charname && 
+				players[i2].map == projeteis_ativos[i].map && players[i2].newbie == false && players[i2].afk == false && 
+				players[i2].pacifico == 0 && emequipe(players[i2].charname, projeteis_ativos[i].nome) == false) {
+				projeteis_ativos[i].x--;
+				update_moving_sound(projeteis_ativos[i].somprojetei, projeteis_ativos[i].x, projeteis_ativos[i].y);
+				projeteis_ativos[i].projeteitimer.restart();
+			}
+			else if (projeteis_ativos[i].x < players[i2].x && players[i2].insz == false && projeteis_ativos[i].nome != players[i2].charname && 
+					projeteis_ativos[i].map == players[i2].map && players[i2].afk == false && players[i2].pacifico == 0 && 
+					players[i2].newbie == false && emequipe(players[i2].charname, projeteis_ativos[i].nome) == false) {
+				projeteis_ativos[i].x++;
+				update_moving_sound(projeteis_ativos[i].somprojetei, projeteis_ativos[i].x, projeteis_ativos[i].y);
+				projeteis_ativos[i].projeteitimer.restart();
+			}
+			else if (projeteis_ativos[i].y > players[i2].y && projeteis_ativos[i].nome != players[i2].charname && 
+					projeteis_ativos[i].map == players[i2].map && players[i2].afk == false && players[i2].pacifico == 0 && 
+					players[i2].newbie == false && players[i2].insz == false && 
+					emequipe(players[i2].charname, projeteis_ativos[i].nome) == false) {
+				projeteis_ativos[i].y--;
+				update_moving_sound(projeteis_ativos[i].somprojetei, projeteis_ativos[i].x, projeteis_ativos[i].y);
+				projeteis_ativos[i].projeteitimer.restart();
+			}
+			else if (projeteis_ativos[i].y < players[i2].y && projeteis_ativos[i].nome != players[i2].charname && 
+					projeteis_ativos[i].map == players[i2].map && players[i2].afk == false && players[i2].pacifico == 0 && 
+					players[i2].newbie == false && players[i2].insz == false && 
+					emequipe(players[i2].charname, projeteis_ativos[i].nome) == false) {
+				projeteis_ativos[i].y++;
+				update_moving_sound(projeteis_ativos[i].somprojetei, projeteis_ativos[i].x, projeteis_ativos[i].y);
+				projeteis_ativos[i].projeteitimer.restart();
+			}
+			// Impacto do projétil
+			else if (projeteis_ativos[i].x == players[i2].x && players[i2].insz == false && projeteis_ativos[i].y == players[i2].y && 
+					players[i2].charname != projeteis_ativos[i].nome && players[i2].map == projeteis_ativos[i].map && 
+					players[i2].newbie == false && players[i2].afk == false && players[i2].pacifico == 0 && 
+					emequipe(players[i2].charname, projeteis_ativos[i].nome) == false) {
+				// net.send_reliable(players[i2].peer_id, "stopmoving", 0);
+				players[i2].health -= random(100, 200);
+				players[i2].tparalisado.restart();
+				players[i2].paralisado = true;
+				players[i2].nparalisado += 10000;
+				net.send_packet(0, "play projetilacerta.ogg " + players[i2].x + " " + players[i2].y + " " + players[i2].map, players[i2].map);
+				net.send_packet(0, "inithurt " + players[i2].charname + " " + players[i2].x + " " + players[i2].y + " " + 
+							   players[i2].voice + " " + players[i2].pitch + " " + players[i2].map, players[i2].map);
+				players[i2].lasthit = "projetei_" + projeteis_ativos[i].nome;
+				destroy_moving_sound(projeteis_ativos[i].somprojetei);
+				projeteis.remove_at(i);
+				break;
+			}
+		}
+	}
+}
+
+void spawn_projetei(int x, int y, string map, string nome) {
+	projetei c(x, y, map, nome);
+	projeteis_ativos.push_back(c);
+}
