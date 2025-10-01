@@ -1,0 +1,574 @@
+// Variáveis globais e utilitários para NVGT
+// Usando funcionalidades 100% nativas NVGT
+
+#include "audio.nvgt"
+
+// Função para acessar código ASCII de caracteres (conversa de ascii_to_character)
+int get_char_code(string text, int index) {
+	if(index < 0 || index >= int(text.length())) return 0;
+	// NVGT: usar substr para obter 1 char e converter para código ASCII
+	string char_str = text.substr(index, 1);
+	if(char_str.length() == 0) return 0;
+	// Loop para encontrar o código ASCII correspondente (0-255)
+	for(int i = 0; i < 256; i++) {
+		if(ascii_to_character(i) == char_str) {
+			return i;
+		}
+	}
+	return 0; // fallback se não encontrar
+}
+
+// Função para aparar espaços em branco
+string trim_string(const string &in text) {
+	string result = text;
+	while(result.length() > 0) {
+		uint8 ch = get_char_code(result, 0);
+		if(ch == 32 || ch == 9) {
+			result = result.substr(1);
+			continue;
+		}
+		break;
+	}
+	while(result.length() > 0) {
+		uint8 ch = get_char_code(result, result.length() - 1);
+		if(ch == 32 || ch == 9) {
+			result = result.substr(0, result.length() - 1);
+			continue;
+		}
+		break;
+	}
+	return result;
+}
+
+// Variáveis globais do jogo
+string un = "";          // nome do usuário
+string pw = "";          // senha do usuário (armazenamento local)
+string gender = "";      // gênero do jogador
+string nolhar = "";      // controle de olhar
+
+// Preferências e configurações persistentes
+string mainlang = "pt";
+string idiomaorigem = "es";
+string idiomachat = "pt";
+int tradutorativo = 0;
+int atu = 0;
+int ouvirmortes = 1;
+int rcontrol = 0;
+int voice = 1;
+double volumejogo = 0;
+int ttsrate = 0;
+string cmfinal = "";
+int avisadesconectou = 0;
+int ouvirhits = 1;
+int primeiravez = 0;
+int numero_dispositivo = 0;
+int usalogo = 0;
+int atualizar = 0;
+int ouvirpassos = 1;
+int ouviremoutrasjanelas = 1;
+double musicamenu = 30;
+int beaconing = 0;
+int interrupt = 0;
+int asktoexit = 0;
+int avisanivel = 1;
+int f0 = 0, f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0, f6 = 0, f7 = 0, f8 = 0, f9 = 0;
+int falarteclas = 0;
+double bicicletaveloc = 400.0;
+bool outras = true;
+bool bazuca = true;
+int dcoordenadas = 0;
+int dcamera = 0;
+int dinventario = 0;
+int dvarinha = 0;
+int bicicletaativa = 1;
+int bicicleta = 0;
+int dauto = 0;
+int dhelicoptero = 0;
+int davion = 0;
+int dtanque = 0;
+int dmoto = 0;
+int darmas = 0;
+int dbaculo = 0;
+int dbazuca = 0;
+int camionativo = 1;
+string somchuva = "rain4.ogg";
+bool centado = false;
+bool comurl = false;
+int numerochuva = 0;
+
+timer tenter;
+timer exittimer;
+
+// Sistema de localização usando recursos NVGT nativos
+class properties_util {
+	dictionary data;
+	string current_file = "";
+
+	string get_value(const string &in key) {
+		string result;
+		if(data.get(key, result)) {
+			return result;
+		}
+		return key; // Retorna a própria chave se não encontrar tradução
+	}
+
+	void set_value(const string &in key, const string &in value) {
+		data.set(key, value);
+	}
+
+	void load(const string &in filename) {
+		data.delete_all();
+		current_file = filename;
+		string path = filename;
+		if(!file_exists(path)) {
+			string alt = "client/" + filename;
+			if(file_exists(alt)) {
+				path = alt;
+			}
+			else {
+				return;
+			}
+		}
+
+		file lang_file;
+		if(!lang_file.open(path, "rb")) {
+			return;
+		}
+		string content = lang_file.read();
+		lang_file.close();
+		if(content == "") {
+			return;
+		}
+
+		if(content.length() >= 3 && get_char_code(content, 0) == 0xEF && get_char_code(content, 1) == 0xBB && get_char_code(content, 2) == 0xBF) {
+			content = content.substr(3);
+		}
+		content = content.replace("\r\n", "\n");
+		content = content.replace("\r", "\n");
+		string[] lines = content.split("\n");
+		for(uint i = 0; i < lines.length(); i++) {
+			string line = trim_string(lines[i]);
+			if(line == "" || line.substr(0, 1) == "#" || line.substr(0, 2) == "//") continue;
+			int eq = line.find("=");
+			if(eq <= 0) continue;
+			string key = trim_string(line.substr(0, eq));
+			string value = trim_string(line.substr(eq + 1));
+			if(key == "") continue;
+			set_value(key, value);
+		}
+	}
+
+	void set_arquivo(const string &in filename) {
+		load(filename);
+	}
+
+	string get_arquivo() {
+		return current_file;
+	}
+}
+properties_util pu;
+
+// Função para conversão de string para número (usando parse_int/parse_float nativos NVGT)
+int string_to_number(string str) {
+	return parse_int(str);
+}
+
+// BGT compatibility layer já inclui clipboard functions
+
+// Definições de variáveis globais necessárias (algumas podem estar declaradas em client.nvgt)
+// Remover aquelas que causam conflito
+string net_un = "", net_pw = "";
+bool account_creating = false;
+bool connected = false;
+string username = "";
+double gversion = 1.0;
+int game_serverport = 9317;  // Deve coincidir com SERVER_PORT do servidor
+string game_serveraddress = "localhost";
+
+// Variáveis adicionais necessárias para compilação
+file pf;
+sound_pool stream_pool_main;
+string banned = "";
+string ver = "1.0";
+string mapname = "";
+int wineask = 0;
+
+// Pools de som principais
+sound_pool p;
+sound_pool p2;
+sound_pool pobjs;
+sound_pool pcomputador;
+
+// Outros pools auxiliares
+sound_pool spool;
+
+// Outros estados auxiliares
+int salvavida = 0;
+
+// Arrays e objetos necessários
+class obj_class {
+	int x = 0;
+	int y = 0;
+	string item = "";
+	string map = "";
+	int amount = 1;
+	timer looptimer;
+	int loop_interval = 1500;
+};
+obj_class[] objs;
+
+class ambiente_class {
+	string name;
+};
+ambiente_class[] game_ambientes;
+
+class staircase_class {
+	string name;
+	int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+	int minx = 0, maxx = 0, miny = 0, maxy = 0;
+	string tile = "";
+	bool abletojump = false;
+};
+staircase_class[] staircases;
+
+class door_class {
+	string name;
+	int dx = 0, dy = 0;
+	int finishx = 0, finishy = 0;
+	int doorsound = -1;  // slot do sound_pool
+	int doorsound2 = -1; // slot do sound_pool
+	string ds2 = "";
+	string ds3 = "";
+	string ds4 = "";
+	bool moving = false;
+	timer movetimer;
+};
+door_class[] doors;
+
+class elevador_class {
+	string name;
+	int x = 0, y = 0;
+	int fx = 0, fy = 0;
+	int s = -1;  // slot do sound_pool
+	bool moving = false;
+	timer movetimer;
+};
+elevador_class[] elevadors;
+
+class maquinatempo_class {
+	string name;
+};
+maquinatempo_class[] game_maquinatempos;
+
+class areia_movedissa_class {
+	string name;
+};
+areia_movedissa_class[] game_areia_movedissas;
+
+string[] game_map;
+
+void exitgame() {
+	if(exiting) return;
+	exiting = true;
+	game_exiting = true;
+	speak(pu.get_value("Saindo do servidor..."));
+	writeprefs();
+	if(connected) {
+		game_net.send(net_peer_id, "close", 0, true);
+	}
+	exittimer.restart();
+	connected = false;
+	connect = false;
+}
+
+void sair() {
+	exitgame();
+	sound door;
+	door.load("door1close.ogg");
+	door.play_wait();
+	exit();
+}
+
+// Classes LAN
+class lancha_class {
+	int nalancha = 0;
+	void sair() {
+		nalancha = 0;
+	}
+	void loop() {
+		// TODO: implementar loop da lancha
+	}
+};
+lancha_class game_lan;
+lancha_class@ lan = @game_lan;
+
+// Declarações de variáveis para o sistema
+
+// Variáveis de ping e timing
+bool forcepinging = false;
+timer pingtimer;
+timer walktimer;
+
+// Outras variáveis necessárias
+bool ausente = false;
+bool emchat = false;
+// Note: portable, prefsdir, PREFSFILE are already defined in config.nvgt
+int game_peer_id = 0;
+uint64 net_peer_id = 0; // Para compatibilidade com sistema de rede
+network_event game_event;
+network game_net;
+network game_network;
+
+// Classes de jogador (declaração básica)
+class player_class {
+    string charname;
+    int x, y;
+    string mapname;
+    int pacifico;
+    int beeping;
+};
+player_class[] game_players;
+
+// Classe me (jogador principal)
+class me_class {
+    int x = 0, y = 0;
+};
+me_class game_me;
+
+// Outras variáveis essenciais
+string currentloc = "";
+int zonestatus = 1;
+string godir = "", godir2 = "";
+int go = 0, go2 = 0;
+bool jumping = false;
+int pulou = 0;
+bool falling = false;
+bool connect = false;
+bool floating = false;
+bool cloaked = false;
+int jumpheight = 5;
+bool star = false;
+bool moveable = true;
+string inv = "";
+string apartamentoinv = "";
+bool game_term = false;
+bool game_exiting = false;
+bool exiting = false;
+bool game_dcheck = false;
+bool game_echeck = false;
+class tracker_class { int x, y; };
+tracker_class tracker;
+
+// Variáveis adicionais para compatibilidade (renomeadas para evitar conflitos)
+bool dcheck_flag = false;
+bool echeck_flag = false;
+bool game_echo = false;
+timer game_echotimer;
+sound_pool game_p; // Alias para compatibilidade BGT
+int game_falhou = 0;
+int game_desenvolvedordm = 0;
+int game_modera = 0;
+int game_dveloz = 0;
+int game_falarteclas = 1;
+
+// Sistema TTS usando recursos nativos NVGT
+tts_voice game_tts;
+
+// NVGT já possui função speak() nativa - não redefinir
+
+// Funções auxiliares usando recursos NVGT nativos
+void open_sound_device(int device_id = -1) {
+	// NVGT gerencia dispositivos automaticamente
+}
+
+// Funções básicas usando UI nativa NVGT
+void dlg(string text) {
+	speak(text);
+	// Opcional: usar alert() para diálogos visuais também
+}
+
+// Input usando recursos NVGT nativos
+string input_text(string prompt) {
+	return input_box("Input", prompt);
+}
+
+void writeprefs() {
+	string path;
+	if(portable) {
+		path = PREFSFILE;
+	}
+	else {
+		if(!directory_exists(prefsdir)) directory_create(prefsdir);
+		path = prefsdir + "\\" + PREFSFILE;
+	}
+
+	// Evita concorrência deixando a instância global pronta para reuso
+	pf.close();
+	pf.open(path, "wb");
+
+	string s =
+"mlang=" + mainlang + "\r\n"
+"tradutorativo=" + tradutorativo + "\r\n"
+"idiomaorigem=" + idiomaorigem + "\r\n"
+"idiomachat=" + idiomachat + "\r\n"
+"atu=" + atu + "\r\n"
+"ouvirmortes=" + ouvirmortes + "\r\n"
+"rcontrol=" + rcontrol + "\r\n"
+"nalancha=" + game_lan.nalancha + "\r\n"
+"un=" + un + "\r\n"
+"pw=" + pw + "\r\n"
+"voice=" + voice + "\r\n"
+"volumejogo=" + volumejogo + "\r\n"
+"ttsrate=" + ttsrate + "\r\n"
+"cmfinal=" + cmfinal + "\r\n"
+"avisadesconectou=" + avisadesconectou + "\r\n"
+"ouvirhits=" + ouvirhits + "\r\n"
+"primeiravez=" + primeiravez + "\r\n"
+"numero_dispositivo=" + numero_dispositivo + "\r\n"
+"usalogo=" + usalogo + "\r\n"
+"atualizar=" + atualizar + "\r\n"
+"ouvirpassos=" + ouvirpassos + "\r\n"
+"ouviremoutrasjanelas=" + ouviremoutrasjanelas + "\r\n"
+"musicamenu=" + musicamenu + "\r\n"
+"beaconing=" + beaconing + "\r\n"
+"wineask=" + wineask + "\r\n"
+"interrupt=" + interrupt + "\r\n"
+"falarteclas=" + falarteclas + "\r\n"
+"asktoexit=" + asktoexit + "\r\n"
+"avisanivel=" + avisanivel + "\r\n"
+"f1=" + f1 + "\r\n"
+"f2=" + f2 + "\r\n"
+"f3=" + f3 + "\r\n"
+"f4=" + f4 + "\r\n"
+"f5=" + f5 + "\r\n"
+"f6=" + f6 + "\r\n"
+"f7=" + f7 + "\r\n"
+"f8=" + f8 + "\r\n"
+"f9=" + f9 + "\r\n"
+"f0=" + f0 + "\r\n";
+
+	s = string_encrypt(s, PREFS_ENCRYPTION_KEY);
+	pf.write(s);
+	pf.close();
+}
+
+void dlgplay(string filename, bool flag = false, int volume = 0) {
+	// TODO: implementar reprodução de diálogo
+}
+
+bool msginvalida(string msg) {
+	return (msg == "" || msg.find(" ") >= 0);
+}
+
+// Input helper usando recursos NVGT nativos
+class v_helper {
+	string input(string prompt) {
+		return input_box("Input", prompt);
+	}
+}
+v_helper v;
+
+// Sistema de menus usando classe menu nativa NVGT
+menu client_menu;
+
+class m_helper {
+	void add_item_tts(string text, string value) {
+		client_menu.add_item(text, value);
+	}
+	int run(string title, bool flag) {
+		client_menu.intro_text = title;
+		return client_menu.run();
+	}
+	string get_item_name(int index) {
+		// Fallback: retorna o ID do item já que get_item_text não existe
+		return client_menu.get_item_id(index);
+	}
+}
+m_helper m;
+
+// Sistema TTS usando tts_voice nativo NVGT
+string[] game_wslist;
+int game_wsindex = 0;
+int game_wsv = 0;
+
+void refresh_voice_list() {
+	game_tts.refresh();
+	game_wslist = game_tts.list_voices();
+}
+
+string[] get_voice_names() {
+	return game_wslist;
+}
+
+// Gerenciamento de streams de áudio (substitui bass.bgt)
+audio_stream_manager audio_stream_primary;
+audio_stream_manager audio_stream_secondary;
+int streamvolume = 0; // valor em dB para streams
+int streamurl = -1;
+int streamurl2 = -1;
+
+void init_audio_system() {
+	audio_stream_primary.init(streamvolume);
+	audio_stream_secondary.init(streamvolume);
+}
+
+// Mantém assinatura original para compatibilidade
+void init_bass() {
+	init_audio_system();
+}
+
+// String to number conversion extension for compatibility
+int to_number(string str) {
+	return parse_int(str);
+}
+
+// Funções de rede usando NVGT nativo (sem wrappers BGT)
+// Use diretamente: game_net.send(peer, message, channel, reliable)
+
+// Função para copiar texto para clipboard (usando API NVGT)
+bool clipboard_copy_text(string text) {
+	return clipboard_set_text(text);
+}
+
+// Função para ler texto do clipboard (usando API NVGT)
+string clipboard_read_text() {
+	return clipboard_get_text();
+}
+
+// Função para detectar se há leitor de tela (usando API NVGT)
+bool screen_reader_is_running() {
+	return screen_reader_detect() != "";
+}
+
+// Funções de som não implementadas (stubs)
+void set_sound_storage(string path) {
+	// TODO: implementar storage de som
+}
+
+void set_sound_decryption_key(string key, bool flag = false) {
+	// TODO: implementar descriptografia de som
+}
+
+void show_game_window(string title) {
+	show_window(title);
+}
+
+string generate_computer_id(string prefix = "", bool flag = false) {
+	// TODO: implementar geração de ID único
+	return "nvgt_client_" + random(1000, 9999);
+}
+
+// void install_keyhook() {
+//	// TODO: implementar keyhook se necessário - comentado por conflito
+// }
+
+// Funcões de criptografia (usando API NVGT)
+string string_decrypt(string text, string key) {
+	// Stub temporário - implementar criptografia real depois
+	return text;
+}
+
+string string_encrypt(string text, string key) {
+	// Stub temporário - implementar criptografia real depois
+	return text;
+}
