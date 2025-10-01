@@ -1537,7 +1537,7 @@ file sstatus;
 					if(this.pacifico==0){
 						// Verifica se tem recompensa na cabe?a
 						if(this.bounty_on_head == 1){
-							send_reliable(this.peer_id, "msg2 ;Voc? n?o pode usar modo pacifista com recompensa na cabe?a.;", 0);
+							send_reliable(this.peer_id, "msg2 ;"+pu.get_value("Voc? n?o pode usar modo pacifista com recompensa na cabe?a.")+";", 0);
 							this.atpacifistasegundos = 10; // Reset o timer
 							return;
 						}
@@ -1740,55 +1740,25 @@ void getplayers(int index) {
 }
 
 void getplayers_for_bounty(int index) {
+	// Verifica se o jogador est? AFK
 	if(players[index].afk) return;
-	
-	// Debug para confirmar que a fun??o est? sendo chamada
-	send_reliable(players[index].peer_id, "msg2 ;FUN??O GETPLAYERS_FOR_BOUNTY CHAMADA - NOVA IMPLEMENTA??O - VERS?O 2.0;", 0);
-	
-	// Debug para verificar quantos jogadores est?o online
-	send_reliable(players[index].peer_id, "msg2 ;DEBUG BOUNTY: Total de jogadores: " + players.length() + ";", 0);
-	
-	// Verifica??es b?sicas antes de processar
-	int nivel_int = int(players[index].level);
-	send_reliable(players[index].peer_id, "msg2 ;DEBUG: Seu n?vel: " + players[index].level + " (int: " + nivel_int + ");", 0);
-	
-	if(nivel_int <= 10){
-		send_reliable(players[index].peer_id, "msg2 ;Voc? precisa estar no m?nimo no n?vel 11 para colocar recompensas. Seu n?vel: " + nivel_int + ";", 0);
-		return;
-	}
-	
-	if(players[index].bounty_active == 1){
-		send_reliable(players[index].peer_id, "msg2 ;Voc? j? tem uma recompensa ativa. Aguarde ela expirar ou ser coletada.;", 0);
-		return;
-	}
 	
 	// Cria lista de jogadores eleg?veis para recompensa baseada na mesma l?gica do getplayers
 	string[] jogadores_disponiveis;
 	for(int i = 0; i < players.length(); i++){
-		// Debug para cada jogador
-		string debug_info = "Player " + i + ": ";
-		if(i == index) debug_info += "? voc? mesmo, ";
-		if(players[i].peer_id <= 0) debug_info += "peer_id inv?lido (" + players[i].peer_id + "), ";
-		if(players[i].bounty_on_head > 0) debug_info += "j? tem recompensa (" + players[i].bounty_on_head + "), ";
-		if(players[i].invs == 1) debug_info += "invis?vel, ";
-		debug_info += "Nome: " + players[i].charname;
-		send_reliable(players[index].peer_id, "msg2 ;" + debug_info + ";", 0);
-		
 		if(i != index && players[i].peer_id > 0 && players[i].bounty_on_head == 0 && players[i].invs != 1){
 			jogadores_disponiveis.insert_last(players[i].charname + " (N?vel " + int(players[i].level) + ")" + "=" + players[i].charname);
 		}
 	}
 	
-	send_reliable(players[index].peer_id, "msg2 ;DEBUG BOUNTY: Jogadores dispon?veis encontrados: " + jogadores_disponiveis.length() + ";", 0);
-	
 	if(jogadores_disponiveis.length() == 0){
-		send_reliable(players[index].peer_id, "msg2 ;NOVA IMPLEMENTA??O: N?o h? jogadores dispon?veis para colocar recompensa.;", 0);
+		send_reliable(players[index].peer_id, "msg2 ;"+pu.get_value("N?o h? jogadores dispon?veis para colocar recompensa.")+";", 0);
 		return;
 	}
 	
 	// Usa send_menu igual ao menu do celular
 	string[] soundsmenu = {"menumove.ogg", "menuitem.ogg", "menuaccept.ogg", "menuback.ogg"};
-	send_menu(index, ";Escolha o jogador para colocar recompensa::", "bounty_select_player", 0, jogadores_disponiveis, soundsmenu);
+	send_menu(index, ";"+pu.get_value("Escolha o jogador para colocar recompensa:")+":", "bounty_select_player", 0, jogadores_disponiveis, soundsmenu);
 }
 
 void remove_player(string playername, string map) {
@@ -1895,14 +1865,14 @@ void send_players(int index, bool to_others=true){
 	if(to_others) server_maps[players[index].mapindex].send_to_others(players[index].peer_id, 6, "add_player_to_map "+players[index].charname+" "+players[index].x+" "+players[index].y+" "+players[index].bipar+" "+players[index].pacifico+" "+players[index].peer_id, true);
 }
 
-// Fun??o para processar coleta de recompensa quando um jogador mata outro
+// Função para processar coleta de recompensa quando um jogador mata outro
 void process_bounty_kill(int killer_index, int victim_index) {
-	// Verifica se a v?tima tem recompensa na cabe?a
+	// Verifica se a vítima tem recompensa na cabeça
 	if(players[victim_index].bounty_on_head == 1) {
 		// Transfere o valor da recompensa para o assassino
 		players[killer_index].inv_add_item("reais", players[victim_index].bounty_value);
 		
-		// Remove 1 n?vel da v?tima
+		// Remove 1 nível da vítima
 		if(players[victim_index].level > 1) {
 			players[victim_index].level -= 1;
 			players[victim_index].xp = (players[victim_index].level - 1) * 1000000;
@@ -1915,13 +1885,13 @@ void process_bounty_kill(int killer_index, int victim_index) {
 		// Som de recompensa coletada
 		send_packet(0, "play notifi14.ogg", 0, 0, 0);
 		
-		// Limpa todas as vari?veis de recompensa da v?tima
+
 		players[victim_index].bounty_on_head = 0;
 		players[victim_index].bounty_value = 0;
 		players[victim_index].bounty_owner = "";
 		players[victim_index].bounty_online_time = 0;
 		
-		// Limpa vari?veis ativas do sistema se a v?tima era o alvo
+		
 		for(int i = 0; i < players.length(); i++) {
 			if(players[i].bounty_target == players[victim_index].charname) {
 				players[i].bounty_active = 0;
@@ -1930,7 +1900,7 @@ void process_bounty_kill(int killer_index, int victim_index) {
 			}
 		}
 		
-		// Atualiza t?tulo da v?tima (remove "Recompensado")
+		// Atualiza título da vítima (remove "Recompensado")
 		settitle(victim_index);
 	}
 }
