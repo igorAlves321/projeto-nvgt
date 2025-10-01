@@ -1,0 +1,624 @@
+// Sistema de menus convertido para NVGT usando classes nativas
+#include "../../include/menu.nvgt"  // Include do sistema de menu nativo do NVGT
+#include "../../include/input_forms.nvgt"  // Formulários de entrada NVGT
+
+// Instância global do menu
+menu game_menu;
+
+// Controle de música de fundo dos menus
+sound menu_music_sound;
+bool menu_music_loaded = false;
+string current_menu_music = "";
+
+string int_to_string(int value) {
+	return "" + value;
+}
+
+int menu_volume_to_db() {
+	int vol = int(musicamenu);
+	if(vol < 0) vol = 0;
+	if(vol > 100) vol = 100;
+	return vol - 100;
+}
+
+void stop_menu_music_internal() {
+	menu_music_sound.stop();
+	menu_music_sound.close();
+	menu_music_loaded = false;
+	current_menu_music = "";
+}
+
+void stop_menu_music(bool immediate = true) {
+	if(!menu_music_loaded) return;
+	if(!immediate) {
+		fade_menu_music(20);
+		return;
+	}
+	stop_menu_music_internal();
+}
+
+void fade_menu_music(int steps = 30) {
+	if(!menu_music_loaded) return;
+	if(steps <= 0) {
+		stop_menu_music_internal();
+		return;
+	}
+	int start_volume = menu_music_sound.volume;
+	int target_volume = -100;
+	for(int i = 0; i < steps; i++) {
+		int new_volume = start_volume + ((target_volume - start_volume) * (i + 1)) / steps;
+		menu_music_sound.volume = new_volume;
+		wait(15);
+	}
+	stop_menu_music_internal();
+}
+
+void start_menu_music() {
+	stop_menu_music();
+	string track = "m" + int_to_string(random(1, 8)) + ".ogg";
+	if(!menu_music_sound.load(track)) {
+		if(!menu_music_sound.load("sounds/" + track)) {
+			return;
+		}
+	}
+	menu_music_sound.volume = menu_volume_to_db();
+	menu_music_sound.play_looped();
+	menu_music_loaded = true;
+	current_menu_music = track;
+}
+
+void ensure_menu_music_volume() {
+	if(menu_music_loaded) {
+		menu_music_sound.volume = menu_volume_to_db();
+	}
+}
+
+bool prompt_login_form(const string &in title = "") {
+	string form_title = title != "" ? title : pu.get_value("Conectar");
+
+	while(true) {
+		input_form form(form_title);
+		form.description = pu.get_value("Informe suas credenciais e pressione enter.");
+		form.add_text_field("username", pu.get_value("Digite seu nome de usuário."), net_un != "" ? net_un : un, true);
+		form.add_text_field("password", pu.get_value("Digite sua senha."), net_pw, true, true);
+
+		dictionary@ result = form.run();
+		if(form.user_canceled) return false;
+
+		string username_candidate = "";
+		string password_candidate = "";
+		result.get("username", username_candidate);
+		result.get("password", password_candidate);
+
+		if(msginvalida(username_candidate)) {
+			dlg(pu.get_value("Nome de usuário inválido. Espaços não são aceitos."));
+			continue;
+		}
+		if(password_candidate == "" || msginvalida(password_candidate)) {
+			dlg(pu.get_value("Senha inválida. Espaços não são aceitos."));
+			continue;
+		}
+
+		net_un = username_candidate;
+		un = username_candidate;
+		net_pw = password_candidate;
+		pw = password_candidate;
+		writeprefs();
+		return true;
+	}
+	return false; // fallback
+}
+
+bool collect_account_creation_data(string &out username_out, string &out password_out, string &out email_out) {
+	while(true) {
+		input_form form(pu.get_value("Criar nova conta"));
+		form.description = pu.get_value("Preencha os campos para criar sua conta.");
+		form.add_text_field("username", pu.get_value("Digite seu nome de usuário."), "", true);
+		form.add_text_field("email", pu.get_value("Digite seu e-mail."), "", true);
+		form.add_text_field("password", pu.get_value("Digite sua senha (mínimo 8 caracteres)."), "", true, true);
+		form.add_text_field("confirm", pu.get_value("Repita sua senha."), "", true, true);
+
+		dictionary@ result = form.run();
+		if(form.user_canceled) return false;
+
+		string username_candidate = "";
+		string email_candidate = "";
+		string password_candidate = "";
+		string confirm_candidate = "";
+		result.get("username", username_candidate);
+		result.get("email", email_candidate);
+		result.get("password", password_candidate);
+		result.get("confirm", confirm_candidate);
+
+		if(msginvalida(username_candidate)) {
+			dlg(pu.get_value("Nome de usuário inválido. Espaços não são aceitos."));
+			continue;
+		}
+		if(email_candidate == "" || email_candidate.find("@") == -1) {
+			dlg(pu.get_value("E-mail em branco ou inválido."));
+			continue;
+		}
+		if(password_candidate.length() < 8 || msginvalida(password_candidate)) {
+			dlg(pu.get_value("Senha inválida. Isso pode ser porque ela contém menos de 8 caracteres, tenha símbolos especiais ou espaços."));
+			continue;
+		}
+		if(password_candidate != confirm_candidate) {
+			dlg(pu.get_value("As senhas são diferentes."));
+			continue;
+		}
+
+		username_out = username_candidate;
+		email_out = email_candidate;
+		password_out = password_candidate;
+		return true;
+	}
+	return false; // fallback
+}
+
+string prompt_numeric_input(const string &in title, const string &in description, int default_value = 1) {
+	while(true) {
+		input_form form(title);
+		form.description = description;
+		form.add_number_field("value", pu.get_value("Quantidade"), default_value, true);
+		dictionary@ result = form.run();
+		if(form.user_canceled) return "";
+		double raw_value = 0;
+		if(!result.get("value", raw_value)) {
+			speak(pu.get_value("Entrada inválida."));
+			continue;
+		}
+		int final_value = int(raw_value);
+		if(final_value <= 0) {
+			speak(pu.get_value("Informe um número positivo."));
+			continue;
+		}
+		return "" + final_value;
+	}
+	return ""; // fallback
+}
+
+// Função para configurar menu padrão (equivale ao setupmenu)
+void setupmenu(bool music = false) {
+	game_menu.reset(true);
+	if(music) start_menu_music();
+	else ensure_menu_music_volume();
+	
+	// Configurações de som
+	game_menu.click_sound = "menumove.ogg";
+	game_menu.select_sound = "menuenter.ogg";
+	game_menu.open_sound = "menuopen.ogg";
+	game_menu.edge_sound = ""; // Sem som de borda
+	game_menu.wrap_sound = ""; // Sem som de wrap
+	game_menu.close_sound = "menuvolta.ogg";
+	
+	// Configurações de comportamento
+	game_menu.wrap = true;
+	game_menu.focus_first_item = false;
+	game_menu.automatic_intro = true;
+}
+
+// Função para menu silencioso (definição principal - remove stub)
+void menusilent() {
+	game_menu.reset(true);
+	ensure_menu_music_volume();
+	game_menu.click_sound = "";
+	game_menu.select_sound = "";
+	game_menu.open_sound = "menuopen.ogg";
+	game_menu.edge_sound = "";
+	game_menu.wrap_sound = "";
+	game_menu.close_sound = "";
+	game_menu.wrap = true;
+	game_menu.focus_first_item = false;
+	game_menu.automatic_intro = true;
+}
+
+// Menu principal
+void menuprincipal() {
+	setupmenu(true);
+	game_menu.add_item(pu.get_value("Conectar"), "logar");
+	game_menu.add_item(pu.get_value("teste de alto-falantes"), "testspeaks");
+	game_menu.add_item(pu.get_value("Configurar personagem"), "personagem");
+	game_menu.add_item(pu.get_value("Criar nova conta"), "create");
+	game_menu.add_item(pu.get_value("Configurações"), "options");
+	game_menu.add_item(pu.get_value("Checar por atualizações"), "checar");
+	game_menu.add_item(pu.get_value("Sair"), "exit");
+	
+	game_menu.intro_text = pu.get_value("Menu principal");
+	int mres = game_menu.run();
+	if(mres == -1) {
+		fade_menu_music(30);
+		writeprefs();
+		sair();
+		return;
+	}
+	string selected_id = game_menu.get_item_id(mres);
+
+	if(selected_id == "exit") {
+		fade_menu_music(30);
+		writeprefs();
+		sair();
+	}
+	else if(selected_id == "checar") {
+		batualizacao(false);
+	}
+	else if(selected_id == "personagem") {
+		if(prompt_login_form(pu.get_value("Configurar personagem"))) {
+			dlg(pu.get_value("Preferências atualizadas."));
+		}
+		menuprincipal();
+	}
+	else if(selected_id == "testspeaks") {
+		fade_menu_music(30);
+		dlgplay("altofalante.ogg");
+		menuprincipal();
+	}
+	else if(selected_id == "logar") {
+		if(!prompt_login_form(pu.get_value("Conectar"))) {
+			menuprincipal();
+			return;
+		}
+		fade_menu_music(30);
+		speak(pu.get_value("Conectando ao servidor..."));
+		net_logar();
+	}
+	else if(selected_id == "create") {
+		fade_menu_music(30);
+		account_creating = true;
+		net_create();
+	}
+	else if(selected_id == "options") {
+		fade_menu_music(18);
+		optionsmenu();
+	}
+}
+
+// Menu de seleção de jogador
+string select_player(string text, bool showall = false) {
+	if(mapname == "quadro") return "";
+	setupmenu();
+	
+	for (uint i = 0; i < game_players.length(); i++) {
+		player_class@ p = game_players[i];
+		if(p.charname == un) continue;
+		bool same_map = (p.mapname == mapname);
+		if(!showall && (!same_map || p.beeping != 1)) continue;
+		if(showall && p.beeping != 1) continue;
+		game_menu.add_item(p.charname, p.charname);
+	}
+	
+	game_menu.intro_text = pu.get_value(text);
+	int mres = game_menu.run();
+	if(mres == -1) return "";
+	return game_menu.get_item_id(mres);
+}
+
+// Menu de opções
+void optionsmenu() {
+	setupmenu();
+	game_menu.add_item(pu.get_value("Configurações gerais"), "gerais");
+	game_menu.add_item(pu.get_value("Configurações do perfil"), "perfil");
+	game_menu.add_item(pu.get_value("Selecionar um arquivo de idioma"), "idioma");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Opções Menu. Selecione uma opção.");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "gerais") {
+		gerais();
+	}
+	else if(selected_id == "idioma") {
+		string a = idiomas();
+		if(a == "") {
+			optionsmenu();
+		}
+		else {
+			cmfinal = "lang/" + a;
+			writeprefs();
+			pu.set_arquivo(cmfinal);
+			optionsmenu();
+		}
+	}
+	else if(selected_id == "perfil") {
+		perfio();
+	}
+	else {
+		menuprincipal();
+	}
+}
+
+// Menu de perfil
+void perfio() {
+	setupmenu();
+	game_menu.add_item(pu.get_value("Selecionar voz"), "voz");
+	
+	if(ouvirmortes == 1) game_menu.add_item(pu.get_value("Desativar avisos de mortes"), "mortes");
+	else if(ouvirmortes == 0) game_menu.add_item(pu.get_value("Ativar avisos de mortes"), "mortes");
+	
+	if(avisanivel == 1) game_menu.add_item(pu.get_value("Desativar aviso quando um jogador subir de nível"), "nivel");
+	else if(avisanivel == 0) game_menu.add_item(pu.get_value("Ativar aviso quando um jogador subir de nível"), "nivel");
+	
+	if(ouvirpassos == 1) game_menu.add_item(pu.get_value("Ouvindo passos de outros jogadores"), "passos");
+	if(ouvirpassos == 0) game_menu.add_item(pu.get_value("Não ouvindo passos de outros jogadores"), "passos");
+	
+	game_menu.add_item(pu.get_value("Voltar"), "voltar");
+	
+	game_menu.intro_text = pu.get_value("Opções do perfil");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "voz") {
+		voicemenu();
+	}
+	else if(selected_id == "mortes") {
+		if(ouvirmortes == 0) ouvirmortes = 1;
+		else if(ouvirmortes == 1) ouvirmortes = 0;
+		writeprefs();
+		perfio();
+	}
+	else if(selected_id == "nivel") {
+		if(avisanivel == 1) avisanivel = 0;
+		else if(avisanivel == 0) avisanivel = 1;
+		writeprefs();
+		perfio();
+	}
+	else if(selected_id == "passos") {
+		if(ouvirpassos == 0) ouvirpassos = 1;
+		else if(ouvirpassos == 1) ouvirpassos = 0;
+		writeprefs();
+		perfio();
+	}
+	else {
+		optionsmenu();
+	}
+}
+
+// Menu sim/não simples usando função nativa do NVGT
+bool simple_yes_no(const string&in prompt) {
+	menu yn_menu;
+	yn_menu.click_sound = "menumove.ogg";
+	yn_menu.select_sound = "menuenter.ogg";
+	yn_menu.close_sound = "menuvolta.ogg";
+	
+	return yes_no(prompt, yn_menu);
+}
+
+// Menu de sair
+void exitmenu() {
+	if (asktoexit == 1) {
+		bool should_exit = simple_yes_no(pu.get_value("Deseja sair?"));
+		if (should_exit) {
+			speak(pu.get_value("respaldando inventário"));
+			game_net.send(1, "/g", 1, true);
+			wait(1000);
+			exitgame();
+		}
+	}
+	else {
+		exitgame();
+	}
+}
+
+// Menu de loja
+void store(string storeitems) {
+	if(ausente || !player_moveable) return;
+	setupmenu();
+	
+	string[] items = storeitems.split("\r\n");
+	for (uint i = 0; i < items.length(); i++) {
+		string[] item = items[i].split(" ");
+		string it = item[0].replace(",", "");
+		game_menu.add_item(items[i], it);
+	}
+	
+	game_menu.intro_text = pu.get_value("Loja menu. Aqui tem") + " " + items.length() + " " + pu.get_value("itens") + ".";
+	int mres = game_menu.run();
+	if (mres >= 0) {
+		string item_id = game_menu.get_item_id(mres);
+		string amount = prompt_numeric_input(pu.get_value("Quantidade"), pu.get_value("Quanto de") + " " + item_id + "?");
+		if(amount != "") {
+			game_net.send(net_peer_id, "/buy123321123 " + amount + " " + item_id, 1, true);
+		}
+	}
+}
+
+// Função de seleção de idiomas
+string idiomas() {
+	// TODO: implementar find_files quando necessário
+	// string[] soundfiles = find_files("lang/*.lang");
+	string[] soundfiles; // Temporário
+	
+	if(soundfiles.length() <= 0) {
+		speak(pu.get_value("Nenhum arquivo de idioma encontrado."));
+		return "";
+	}
+	
+	setupmenu();
+	for(uint i = 0; i < soundfiles.length(); i++) {
+		string filename = soundfiles[i].replace(".lang", "");
+		game_menu.add_item(filename, soundfiles[i]);
+	}
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Escolha o arquivo de idioma que deseja usar.");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "back") {
+		return "";
+	}
+	else return selected_id;
+}
+
+// Missing function stubs that need to be converted from BGT
+string daritem(){
+	if(ausente||!moveable)return "";
+	menusilent();
+	for (int i=game_me.x-3; i<=game_me.x+3; i++){
+		for (uint i2=0; i2<game_players.length(); i2++){
+			if (game_players[i2].x==i&&game_players[i2].charname!=un&&game_players[i2].mapname==mapname&&game_players[i2].y==game_me.y&&game_players[i2].beeping==1){
+				game_menu.add_item(game_players[i2].charname,game_players[i2].charname);
+			}
+		}
+	}
+	game_menu.intro_text = pu.get_value("Selecione o jogador que deseja");
+	int mres=game_menu.run();
+	if(mres==-1){
+		speak(pu.get_value("Ninguém por perto."));
+		return"";
+	}
+	else return game_menu.get_item_id(mres);
+}
+
+string get_player_username_by_index(int index) {
+	// Stub implementation - returns the username of a player by index
+	if(index >= 0 && index < game_players.length()) {
+		return game_players[index].charname;
+	}
+	return "";
+}
+
+// Placeholder para funções que dependem de outros sistemas ainda não convertidos
+void voicemenu() {
+	refresh_voice_list();
+	string[] voices = get_voice_names();
+	if(voices.length() == 0) {
+		dlg(pu.get_value("Nenhuma voz disponível."));
+		perfio();
+		return;
+	}
+
+	int original_voice = voice;
+	int original_rate = ttsrate;
+	int original_tts_voice = tts.voice;
+	int original_tts_rate = tts.rate;
+	int candidate_voice = voice;
+	if(candidate_voice < 0 || candidate_voice >= int(voices.length())) {
+		candidate_voice = game_tts.voice >= 0 ? game_tts.voice : 0;
+	}
+	if(candidate_voice < 0 || candidate_voice >= int(voices.length())) candidate_voice = 0;
+	int candidate_rate = ttsrate;
+	bool saved = false;
+
+	while(true) {
+		setupmenu();
+		for(uint i = 0; i < voices.length(); i++) {
+			string label = voices[i];
+			if(label == "") label = pu.get_value("Voz") + " " + int_to_string(int(i) + 1);
+			if(int(i) == candidate_voice) label = "* " + label;
+			string voice_id = "voice:" + int_to_string(int(i));
+			game_menu.add_item(label, voice_id);
+		}
+		game_menu.add_item(pu.get_value("Testar voz"), "preview");
+		game_menu.add_item(pu.get_value("Aumentar velocidade"), "rate_up");
+		game_menu.add_item(pu.get_value("Diminuir velocidade"), "rate_down");
+		game_menu.add_item(pu.get_value("Salvar"), "save");
+		game_menu.add_item(pu.get_value("Cancelar"), "cancel");
+		game_menu.intro_text = pu.get_value("Selecione uma voz e ajuste a velocidade.") + " (" + int_to_string(candidate_rate) + ")";
+
+		int choice = game_menu.run();
+		if(choice == -1) {
+			break;
+		}
+		string selected_id = game_menu.get_item_id(choice);
+		if(selected_id.length() > 6 && selected_id.substr(0, 6) == "voice:") {
+			int new_voice = string_to_number(selected_id.substr(6));
+			if(new_voice >= 0 && new_voice < int(voices.length())) {
+				candidate_voice = new_voice;
+				string selected_name = voices[candidate_voice];
+				if(selected_name == "") selected_name = pu.get_value("Voz") + " " + int_to_string(candidate_voice + 1);
+				speak(pu.get_value("Voz selecionada.") + " " + selected_name);
+			}
+			continue;
+		}
+		if(selected_id == "preview") {
+			if(candidate_voice >= 0 && candidate_voice < int(voices.length())) {
+				if(tts.voice != candidate_voice) tts.set_voice(candidate_voice);
+				if(game_tts.voice != candidate_voice) game_tts.set_voice(candidate_voice);
+				if(tts.rate != candidate_rate) tts.set_rate(candidate_rate);
+				if(game_tts.rate != candidate_rate) game_tts.set_rate(candidate_rate);
+				speak(pu.get_value("Esta é uma mensagem de teste."));
+			}
+			continue;
+		}
+		if(selected_id == "rate_up") {
+			if(candidate_rate < 10) candidate_rate++;
+			speak(pu.get_value("Velocidade") + ": " + int_to_string(candidate_rate));
+			continue;
+		}
+		if(selected_id == "rate_down") {
+			if(candidate_rate > -10) candidate_rate--;
+			speak(pu.get_value("Velocidade") + ": " + int_to_string(candidate_rate));
+			continue;
+		}
+		if(selected_id == "save") {
+			voice = candidate_voice;
+			ttsrate = candidate_rate;
+			if(tts.voice != voice) tts.set_voice(voice);
+			if(game_tts.voice != voice) game_tts.set_voice(voice);
+			if(tts.rate != ttsrate) tts.set_rate(ttsrate);
+			if(game_tts.rate != ttsrate) game_tts.set_rate(ttsrate);
+			writeprefs();
+			speak(pu.get_value("Voz atualizada."));
+			saved = true;
+			break;
+		}
+		if(selected_id == "cancel") {
+			break;
+		}
+	}
+
+	if(!saved) {
+		if(original_voice >= 0 && tts.voice != original_voice) tts.set_voice(original_voice);
+		if(original_voice >= 0 && game_tts.voice != original_voice) game_tts.set_voice(original_voice);
+		if(tts.rate != original_tts_rate) tts.set_rate(original_tts_rate);
+		if(game_tts.rate != original_tts_rate) game_tts.set_rate(original_tts_rate);
+		voice = original_voice;
+		ttsrate = original_rate;
+	}
+
+	perfio();
+}
+
+void gerais() {
+	// TODO: implementar quando converter sistema de configurações gerais
+	dlg(pu.get_value("Configurações gerais ainda não implementadas"));
+	optionsmenu();
+}
+
+void batualizacao(bool auto_check) {
+	// TODO: implementar quando converter sistema de atualização
+	dlg(pu.get_value("Sistema de atualização ainda não implementado"));
+	menuprincipal();
+}
+
+void logar() {
+	// TODO: implementar quando converter sistema de login
+	dlg(pu.get_value("Sistema de login ainda não implementado"));
+	menuprincipal();
+}
+
+void create() {
+	// TODO: implementar quando converter sistema de criação de conta
+	dlg(pu.get_value("Sistema de criação de conta ainda não implementado"));
+	menuprincipal();
+}
+
+/* // sair removida - pode ter conflito com function em comandos.nvgt
+void sair() {
+	// TODO: implementar saída do jogo
+	exit();
+}
+*/ // sair removida - pode ter conflito
+
+/* // exitgame removida - pode ter conflito
+void exitgame() {
+	exit();
+}
+*/ // exitgame removida - pode ter conflito
+
+// dlgplay já está definida em dialogos.nvgt
+
+// writeprefs removido - implementação está em globals.nvgt
+
+// Variáveis e funções definidas em globals.nvgt - não precisa redeclarar

@@ -1,0 +1,120 @@
+// Sistema de áudio adaptado para NVGT
+// Substitui bass.bgt, fornecendo gerenciamento de streams e volume
+
+class audio_stream_entry {
+	sound@ handle;
+	string source = "";
+	bool loop = true;
+	int volume = 0;
+	bool loaded = false;
+
+	audio_stream_entry() {}
+}
+
+class audio_stream_manager {
+	array<audio_stream_entry@> entries;
+	int master_volume = 0; // 0 dB por padrão
+
+	void init(int initial_volume = 0) {
+		master_volume = initial_volume;
+	}
+
+	// Retorna o índice do stream carregado ou -1 em caso de erro
+	int load(string source, bool loop = true) {
+		if(source == "") return -1;
+		audio_stream_entry@ entry = audio_stream_entry();
+		entry.source = source;
+		entry.loop = loop;
+		entry.volume = master_volume;
+		@entry.handle = sound();
+
+		if(!load_into_entry(entry))
+			return -1;
+
+		int index = entries.length();
+		entries.insert_last(entry);
+		return index;
+	}
+
+	bool load_into_entry(audio_stream_entry@ entry) {
+		if(@entry == null) return false;
+		if(@entry.handle == null)
+			@entry.handle = sound();
+
+		entry.handle.close();
+		entry.loaded = false;
+
+		entry.handle.load(entry.source);
+		if(!entry.handle.active) {
+			entry.handle.stream(entry.source);
+		}
+
+		if(!entry.handle.active)
+			return false;
+
+		entry.handle.volume = entry.volume;
+		entry.loaded = true;
+		return true;
+	}
+
+	bool is_valid(int handle) {
+		return handle >= 0 && handle < int(entries.length()) && entries[handle] !is null && entries[handle].loaded;
+	}
+
+	void play(int handle) {
+		if(!is_valid(handle)) return;
+		audio_stream_entry@ entry = entries[handle];
+		if(entry.loop)
+			entry.handle.play_looped();
+		else
+			entry.handle.play();
+	}
+
+	void play_once(int handle) {
+		if(!is_valid(handle)) return;
+		audio_stream_entry@ entry = entries[handle];
+		entry.handle.play();
+	}
+
+	void stop(int handle) {
+		if(!is_valid(handle)) return;
+		audio_stream_entry@ entry = entries[handle];
+		entry.handle.stop();
+		entry.handle.seek(0);
+	}
+
+	void unload(int handle) {
+		if(!is_valid(handle)) return;
+		audio_stream_entry@ entry = entries[handle];
+		entry.handle.stop();
+		entry.handle.close();
+		entry.loaded = false;
+	}
+
+	void set_volume(int handle, int volume) {
+		if(!is_valid(handle)) return;
+		audio_stream_entry@ entry = entries[handle];
+		entry.volume = volume;
+		entry.handle.volume = volume;
+	}
+
+	void set_master_volume(int volume) {
+		master_volume = volume;
+		for(uint i = 0; i < entries.length(); i++) {
+			audio_stream_entry@ entry = entries[i];
+			if(entry.loaded) {
+				entry.volume = volume;
+				entry.handle.volume = volume;
+			}
+		}
+	}
+
+	void stop_all() {
+		for(uint i = 0; i < entries.length(); i++) {
+			if(is_valid(i)) {
+				entries[i].handle.stop();
+				entries[i].handle.seek(0);
+			}
+		}
+	}
+}

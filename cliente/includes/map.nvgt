@@ -1,0 +1,375 @@
+// Sistema de mapas convertido para NVGT
+#include "platforms.nvgt"
+#include "zones.nvgt"
+#include "safezones.nvgt"
+
+// Declarações globais necessárias
+dictionary fail;
+string[] map2;
+string[] map;
+bool amisafe = false;
+
+// Variáveis de coordenadas e configurações
+class coordinate_limits {
+	int x, y;
+}
+coordinate_limits max;
+
+// Para get_tile_at - agora implementado em platforms.nvgt
+
+// string gmt() already defined in stubs.nvgt
+// string gmt() {
+//	return get_tile_at(me.x, me.y);
+// }
+
+string gct() {
+	// TODO: implementar camera quando converter camera.bgt
+	return get_tile_at(0, 0); // camera.x, camera.y
+}
+
+string linear(string[] a, string char_separator = "\r\n") {
+	string final;
+	for(uint i=0; i<a.length(); i++) {
+		final += (a[i] + char_separator);
+	}
+	return final;
+}
+
+string[] delinear(string a, string char_separator = "\r\n") {
+	// NVGT nativo: implementar split manualmente
+	string[] result;
+	if(a.length() == 0) return result;
+	
+	int start = 0;
+	int pos = a.find(char_separator, start);
+	
+	while(pos != -1) {
+		if(pos > start) {
+			result.push_back(a.substr(start, pos - start));
+		}
+		start = pos + char_separator.length();
+		pos = a.find(char_separator, start);
+	}
+	
+	// Adicionar última parte se existir
+	if(start < int(a.length())) {
+		result.push_back(a.substr(start));
+	}
+	
+	return result;
+}
+
+void mapreset(bool complete = true) {
+	// TODO: implementar stream quando converter sistema de áudio
+	if(comurl && complete) {
+		if(streamurl >= 0) {
+			audio_stream_primary.stop(streamurl);
+			audio_stream_primary.unload(streamurl);
+			streamurl = -1;
+		}
+		if(streamurl2 >= 0) {
+			audio_stream_secondary.stop(streamurl2);
+			audio_stream_secondary.unload(streamurl2);
+			streamurl2 = -1;
+		}
+		comurl = false;
+	}
+	fail.delete_all();
+	
+	// TODO: implementar estas funções quando converter os respectivos sistemas
+	// destroy_all_doors();
+	// destroy_all_elevadors();
+	// destroy_all_txts();
+	// destroy_all_dialogs();
+	// destroy_stores();
+	
+	if(complete) p.destroy_all();
+	
+	// TODO: implementar disableds quando converter sistema relevante
+	// disableds.resize(0);
+	
+	if(complete) {
+		// TODO: implementar estas variáveis quando converter sistemas relevantes
+		// currentloc = -1;
+		// destroy_all_ambientes();
+		// destroy_all_sources();
+		// destroy_all_source2s();
+		// destroy_all_msounds();
+		// steps.destroy_all();
+		// shoot.destroy_all();
+		// bodys.destroy_all();
+		// walls.destroy_all();
+		// doors_sound.destroy_all();
+		// npcs.destroy_all();
+		// pl.destroy_all();
+	}
+	
+	// Implementar destroy_all_staircases - agora funcional
+	destroy_all_staircases();
+	map2.resize(0);
+	zones.resize(0);
+	safezones.resize(0);
+	platforms.resize(0);
+	outras = true;
+	bazuca = true;
+	dcamera = 0;
+	dcoordenadas = 0;
+	dinventario = 0;
+	dauto = 0;
+	dhelicoptero = 0;
+	davion = 0;
+	dtanque = 0;
+	dmoto = 0;
+	darmas = 0;
+	dbaculo = 0;
+	dbazuca = 0;
+	bicicletaativa = 1;
+	camionativo = 1;
+	somchuva = "rain4.ogg";
+	destruir_areias_movedissas();
+}
+
+void init_data(string data_line, bool complete = true) {
+	// Função para processar uma linha de dados do mapa
+	string[] parsed = data_line.split(":");
+	
+	if(parsed[0] == "map") {
+		mapname = data_line.substr(4); // string_trim_left equivalente
+		if(mapname == "túnel") {
+			centado = false;
+			// TODO: implementar lan quando converter sistema de lancha
+			// if(lan.nalancha == 1) lan.saindo = 1;
+		}
+	}
+	else if(parsed[0] == "url" && parsed.length() > 1 && complete) {
+		string source = data_line.substr(4);
+		if(streamurl >= 0) {
+			audio_stream_primary.stop(streamurl);
+			audio_stream_primary.unload(streamurl);
+		}
+		streamurl = audio_stream_primary.load(source, true);
+		if(streamurl >= 0) {
+			audio_stream_primary.set_volume(streamurl, streamvolume);
+			audio_stream_primary.play(streamurl);
+			comurl = true;
+		}
+	}
+	else if(parsed[0] == "teto") {
+		somchuva = parsed[1];
+	}
+	else if(parsed[0] == "platform" && parsed.length() >= 5) {
+		string minx, maxx, y, tile;
+		minx = parsed[1];
+		maxx = parsed[2];
+		y = parsed[3];
+		tile = parsed[4];
+		map.push_back(minx + ":" + maxx + ":" + y + ":" + y + ":" + tile);
+	}
+	else if((parsed[0] == "wall" || parsed[0] == "pwall") && parsed.length() >= 5) {
+		string x, miny, maxy, tile;
+		x = parsed[1];
+		miny = parsed[2];
+		maxy = parsed[3];
+		tile = parsed[4];
+		map.push_back(x + ":" + x + ":" + miny + ":" + maxy + ":" + tile);
+	}
+	else if(parsed[0] == "zone") {
+		// TODO: implementar parsing de zonas completo
+		// zones.insert_last(data_line.substr(5));
+	}
+	else if(parsed[0] == "desc" && parsed.length() > 4) {
+		colocar_desc(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+					 string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5]);
+	}
+	else if(parsed[0] == "maxx") {
+		max.x = string_to_number(parsed[1]);
+	}
+	else if(parsed[0] == "maxy") {
+		max.y = string_to_number(parsed[1]);
+	}
+	else if(parsed[0] == "x") {
+		me.x = string_to_number(parsed[1]);
+	}
+	else if(parsed[0] == "y") {
+		me.y = string_to_number(parsed[1]);
+	}
+	else if((parsed[0] == "sound_source" || parsed[0] == "som") && parsed.length() >= 6) {
+		int lx = string_to_number(parsed[1]);
+		int rx = string_to_number(parsed[2]);
+		int miny = string_to_number(parsed[3]);
+		int maxy = string_to_number(parsed[4]);
+		string id = "123";
+		// TODO: implementar spawn_source quando converter sistema de áudio
+		// spawn_source(lx, rx, miny, maxy, parsed[5].replace(".wav", ".ogg"), id);
+	}
+	else if((parsed[0] == "door" || parsed[0] == "porta") && parsed.length() >= 9) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		int fx = string_to_number(parsed[3]);
+		int fy = string_to_number(parsed[4]);
+		int speed = string_to_number(parsed[5]);
+		string snd1 = parsed[6];
+		string snd2 = parsed[7];
+		string snd3 = parsed[8];
+		string snd4 = parsed[9];
+		// Implementar spawn_door - agora funcional
+		spawn_door(x, y, fx, fy, speed, snd1, snd2, snd3, snd4);
+	}
+	else if(parsed[0] == "elevador" && parsed.length() > 4) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		int fx = string_to_number(parsed[3]);
+		int fy = string_to_number(parsed[4]);
+		// Implementar spawn_elevador - agora funcional
+		spawn_elevador(x, y, fx, fy);
+	}
+	else if(parsed[0] == "staircase" && parsed.length() >= 6) {
+		int lx = string_to_number(parsed[1]);
+		int rx = string_to_number(parsed[2]);
+		int miny = string_to_number(parsed[3]);
+		int maxy = string_to_number(parsed[4]);
+		string tile = parsed[5];
+		string id = "1234";
+		// TODO: implementar spawn_staircase quando converter sistema de escadas
+		// spawn_staircase(lx, rx, miny, maxy, tile, id);
+	}
+	else if(parsed[0] == "texto" && parsed.length() >= 4) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		string txt = parsed[3];
+		// TODO: implementar spawn_txt quando converter sistema de textos
+		// spawn_txt(x, y, txt);
+	}
+	else if(parsed[0] == "areia_movedissa") {
+		colocar_areia_movedissa(string_to_number(parsed[1]), string_to_number(parsed[2]), mapname);
+	}
+	else if(parsed[0] == "desativar") {
+		if(parsed[1] == "coordenadas") dcoordenadas = 1;
+		if(parsed[1] == "varinha") dvarinha = 1;
+		if(parsed[1] == "camera") dcamera = 1;
+		if(parsed[1] == "bicicleta") bicicletaativa = 0;
+		if(parsed[1] == "armas_pretas") outras = false;
+	}
+	else if(parsed[0] == "safemap") {
+		if(amisafe == false) {
+			amisafe = true;
+			// NVGT nativo: notifica servidor que está em area segura
+			game_net.send(net_peer_id, "iamsafe", 0, true); // reliable
+		}
+	}
+	else if(parsed[0] == "safezone" && parsed.length() == 5) {
+		// TODO: implementar safezones.set quando converter sistema de safezones completo
+		// safezones.set(parsed[1] + ":" + parsed[2] + ":" + parsed[3] + ":" + parsed[4], "safe");
+	}
+	else if((parsed[0].length() > 1 && parsed[0][0] == "/" && parsed[0][1] == "/") || parsed[0] == "comment") {
+		// Comentário - ignorar
+	}
+	// else {
+		// TODO: implementar add_add_item quando converter sistema de items
+		// add_add_item("misc", "map error. An error has occured. On line: " + (i+1) + ". " + data_line + ". Error: Invalid syntax.");
+	// }
+}
+
+void load_map(string mdata, bool complete = true) {
+	mapreset(complete);
+	bool isitsafe = false;
+	string[] ldata = delinear(mdata);
+	string[] parsed = ldata[0].split(" ");
+	string filename;
+	
+	if(parsed.length() == 5 && parsed[1] == "local") {
+		// TODO: implementar pack_file quando converter sistema de arquivos
+		// pack_file map_pack;
+		// file@ map_file;
+		filename = parsed[2] + ".map";
+		ldata.resize(0);
+		// TODO: implementar carregamento de mapas encriptados
+		// if(map_pack.open(MAPS_STORAGE)) {
+		//     @map_file = map_pack.get_file(filename);
+		//     ldata = delinear(string_decrypt(map_file.read(), MAPS_ENCRYPTION_KEY));
+		//     map_file.close();
+		//     map_pack.close();
+		//     ldata.insert_last("x:" + parsed[3]);
+		//     ldata.insert_last("y:" + parsed[4]);
+		//     map2 = ldata;
+		// }
+	}
+	else {
+		ldata[0] = ldata[0].replace("changemap ", "");
+		ldata[0] = ldata[0].replace("changemap2 ", "");
+		map2 = ldata;
+	}
+	
+	for(uint i=0; i<ldata.length(); i++) {
+		if(ldata[i] == "safemap") isitsafe = true;
+		init_data(ldata[i], complete);
+	}
+	
+	if(isitsafe == false && amisafe == true) {
+		amisafe = false;
+		game_net.send(server_peer_id, "iamnotsafe", 0, true);
+	}
+	
+	// TODO: implementar chuva() quando converter sistema de clima
+	// chuva();
+}
+
+void spawn_platform(int leftx, int rightx, int miny, int maxy, string plattype) {
+	map.push_back(leftx + ":" + rightx + ":" + miny + ":" + maxy + ":" + plattype);
+}
+
+void spawn_tiles(int leftx, int rightx, int miny, int maxy, string plattype) {
+	map.push_back(leftx + ":" + rightx + ":" + miny + ":" + maxy + ":" + plattype);
+}
+
+void spawn_zone(int leftx, int rightx, int miny, int maxy, string zonetype) {
+	zone z(leftx, rightx, miny, maxy, zonetype);
+	zones.push_back(z);
+}
+
+bool inansz = false;
+
+bool check_safezone() {
+	// TODO: implementar safezones.get_keys() quando converter sistema completo
+	// string[] safekeys = safezones.get_keys();
+	bool ret = false;
+	// for(uint i=0; i<safekeys.length(); i++) {
+	//     string[] atest = safekeys[i].split(":");
+	//     int smnx = string_to_number(atest[0]);
+	//     int smxx = string_to_number(atest[1]);
+	//     int smny = string_to_number(atest[2]);
+	//     int smxy = string_to_number(atest[3]);
+	//     if(me.x >= smnx && me.x <= smxx && me.y >= smny && me.y <= smxy) {
+	//         ret = true;
+	//         break;
+	//     }
+	// }
+	return ret;
+}
+
+void safeloop() {
+	bool v = check_safezone();
+	if(v == false && inansz == true && nolhar == "") {
+		inansz = false;
+		game_net.send(server_peer_id, "sn", 0, true);
+	}
+	if(v == true && inansz == false) {
+		inansz = true;
+		game_net.send(server_peer_id, "s", 0, true);
+	}
+}
+
+// Função para limpar plataformas/tiles para debugging
+void clear_all_platforms() {
+	platforms.resize(0);
+	map.resize(0);
+}
+
+void playstep() {
+	if(jumping == false) {
+		string step = get_tile_at(me.x, me.y) + "step" + string(random(1, 5)) + ".ogg";
+		p2.play_stationary(step, false);
+		// NVGT nativo: envia movimento para servidor
+		game_net.send(net_peer_id, "move " + step + " " + me.x + " " + me.y, 0, false); // unreliable
+	}
+}

@@ -1,0 +1,202 @@
+// Sistema de rede modernizado para NVGT
+const network_event@ event;
+bool encryption = true;
+double idversion = 1.0;
+int connecttime = 10000;
+timer connecttimer;
+
+void net_create() {
+	string username;
+	string password;
+	string email;
+	if(!collect_account_creation_data(username, password, email)) {
+		account_creating = false;
+		menuprincipal();
+		return;
+	}
+
+	menusilent();
+	game_menu.add_item(pu.get_value("Mulher"), "0");
+	game_menu.add_item(pu.get_value("Homem"), "1");
+	game_menu.intro_text = pu.get_value("Você é homem ou mulher?");
+	int selection = game_menu.run();
+	if(selection == -1) {
+		account_creating = false;
+		menuprincipal();
+		return;
+	}
+
+	string selected_gender = game_menu.get_item_id(selection);
+	gender = selected_gender;
+
+	speak(pu.get_value("Conectando..."));
+
+	network temp_net;
+	@event = null;
+	temp_net.setup_client(4, 100);
+	temp_net.connect(game_serveraddress, game_serverport);
+	connecttimer.restart();
+
+	while(true) {
+		wait(5);
+
+		if(key_pressed(KEY_ESCAPE)) {
+			temp_net.destroy();
+			account_creating = false;
+			menuprincipal();
+			return;
+		}
+
+		@event = temp_net.request();
+		if(event is null) {
+			if(connecttimer.elapsed >= connecttime) {
+				dlg(pu.get_value("Servidor indisponível"));
+				temp_net.destroy();
+				account_creating = false;
+				menuprincipal();
+				return;
+			}
+			continue;
+		}
+
+		if(event.type == event_connect) {
+			uint64 peer_id = event.peer_id;
+			string create_msg = "xt55 " + username + " " + password + " " + email + " " + selected_gender;
+			temp_net.send(peer_id, create_msg, 0, true);
+		}
+		else if(event.type == event_receive) {
+			string received_msg = event.message;
+			if(received_msg == "created") {
+				account_creating = false;
+				net_un = username;
+				net_pw = password;
+				un = username;
+				pw = password;
+				writeprefs();
+				temp_net.destroy();
+				dlg(pu.get_value("Conta criada com sucesso! Pressione enter para logar-se."));
+				net_logar();
+				return;
+			}
+			else if(received_msg.find("Erro") != -1 || received_msg.lower().find("erro") != -1) {
+				dlg(pu.get_value(received_msg));
+				temp_net.destroy();
+				account_creating = false;
+				menuprincipal();
+				return;
+			}
+		}
+		else if(event.type == event_disconnect) {
+			dlg(pu.get_value("Servidor indisponível"));
+			temp_net.destroy();
+			account_creating = false;
+			menuprincipal();
+			return;
+		}
+	}
+}
+
+void net_logar(bool localhost = false) {
+	if(net_un == "" || net_pw == "") {
+		if(!prompt_login_form(pu.get_value("Conectar"))) {
+			menuprincipal();
+			return;
+		}
+	}
+	else {
+		writeprefs();
+	}
+
+	speak(pu.get_value("Conectando ao servidor..."));
+	string target_address = game_serveraddress;
+	if(localhost) {
+		target_address = "localhost";
+	}
+
+	connected = false;
+	@event = null;
+	game_net.setup_client(4, 150);
+	game_net.connect(target_address, game_serverport);
+	connecttimer.restart();
+
+	while(true) {
+		wait(5);
+
+		if(key_pressed(KEY_ESCAPE)) {
+			game_net.destroy();
+			reset();
+			menuprincipal();
+			return;
+		}
+
+		@event = game_net.request();
+		if(event is null) {
+			if(!connected && connecttimer.elapsed >= connecttime) {
+				string reason = "Sua internet ou o servidor caiu.";
+				dlg(pu.get_value("Erro: Servidor caiu. Motivos por isso: ") + pu.get_value(reason));
+				game_net.destroy();
+				reset();
+				menuprincipal();
+				return;
+			}
+			continue;
+		}
+
+		if(event.type == event_disconnect || (!connected && connecttimer.elapsed >= connecttime)) {
+			string reason = "Sua internet ou o servidor caiu.";
+			dlg(pu.get_value("Erro: Servidor caiu. Motivos por isso: ") + pu.get_value(reason));
+			game_net.destroy();
+			reset();
+			menuprincipal();
+			return;
+		}
+
+		if(event.type == event_connect && !connected) {
+			net_peer_id = event.peer_id;
+			server_peer_id = event.peer_id;
+			string login_msg = "h33j " + net_un + " " + net_pw + " " + gversion + " " + banned;
+			game_net.send(net_peer_id, login_msg, 0, true);
+			continue;
+		}
+
+		if(event.type == event_receive) {
+			string full_msg = event.message;
+			string[] parsed = full_msg.split(" ");
+
+			if(parsed.length() >= 2) {
+				if(parsed[0] == "x") me.x = string_to_number(parsed[1]);
+				if(parsed[0] == "y") me.y = string_to_number(parsed[1]);
+			}
+
+			if(parsed.length() >= 1) {
+				if(parsed[0] == "changemap") {
+					string map_name = full_msg.replace("changemap ", "");
+					load_map(map_name);
+				}
+				else if(parsed[0] == "usarcolete") {
+					salvavida = 1;
+				}
+				else if(parsed[0] == "updatenow") {
+					dlg(pu.get_value("Erro: Você precisa da última versão para poder jogar. Por favor atualiza para a última versão em checar por atualizações."));
+					game_net.destroy();
+					menuprincipal();
+					return;
+				}
+			}
+
+			if(full_msg.find("loggedin") != -1) {
+				username = net_un;
+				connected = true;
+				speak(pu.get_value("Logado com sucesso! Entrando no jogo..."));
+				return;
+			}
+
+			if(full_msg.lower().find("erro") != -1) {
+				dlg(pu.get_value(full_msg));
+				game_net.destroy();
+				menuprincipal();
+				return;
+			}
+		}
+	}
+}
