@@ -1,0 +1,48 @@
+No NVGT, as informações sobre threads, concorrência e programação assíncrona estão detalhadas na seção **"Concurrency Tutorial"** do documento **"Doc NVGT.txt"**.
+
+Aqui estão os pontos chave e os arquivos/trechos relevantes:
+
+1.  **Tipos de Concorrência no NVGT**:
+    O NVGT suporta três tipos principais de concorrência:
+    *   **Async (Assíncrono)**: É a forma mais fácil de usar e, na maioria dos casos, a mais adequada. Ela permite chamar funções em outra thread e recuperar o valor de retorno posteriormente. O motor isola o programador da maioria dos problemas de concorrência.
+        *   **Classe `async`**: Uma classe template que permite chamar qualquer função no NVGT em outra thread. Possui propriedades como `value` (resultado), `complete` (finalizado), `failed` (falhou), `exception` (informação de erro) e métodos como `wait()` e `try_wait()` para aguardar a conclusão da tarefa.
+        *   **Exemplos de Código (no `Doc NVGT.txt`)**:
+            *   `async result(url_get, "https://nvgt.gg");` para requisições HTTP.
+            *   Um exemplo completo usando `input_box` que é executado em sua própria thread:
+                ```nvgt
+                void main() {
+                    async result(input_box, "name", "please enter your name");
+                    result.wait(); // Input_box cria um diálogo em sua própria thread.
+                    // ... (código continua)
+                }
+                ```
+            *   Um exemplo de captura de exceção em uma chamada `async`:
+                ```nvgt
+                funcdef void return_void_taking_uint(uint);
+                void main() {
+                    string[] my_empty_array;
+                    async result(return_void_taking_uint(my_empty_array.remove_at), 0); // Chamada que causará uma exceção.
+                    // ... (código continua)
+                }
+                ```
+
+    *   **Coroutines (Corrotinas)**: Envolve multitarefa cooperativa. Uma corrotina começa a ser executada quando você chama `create_coroutine` e pausa a execução de outro código até que `yield()` seja chamado. Você deve lembrar de usar `yield()` em loops ou operações demoradas (como I/O de rede) para permitir que outras partes do código sejam executadas.
+        *   **Função `create_coroutine`**: `void create_coroutine(coroutine @func, dictionary @args);`.
+        *   **Função `yield`**: Simplesmente `yield;`.
+        *   **Formato da Corrotina**: `void coroutine(dictionary@);`.
+        *   **Observação**: Não há um exemplo de arquivo .nvgt específico para corrotinas, mas as assinaturas das funções e o padrão de uso são fornecidos na documentação.
+
+    *   **Threads (Fios de Execução)**: Oferecem o controle mais baixo nível e são mais complexas de usar, com maior risco de bugs como condições de corrida (data races) e deadlocks se não forem gerenciadas corretamente.
+        *   **Primitivas de Sincronização**: O NVGT oferece primitivas como locks (mutexes), semáforos e variáveis de condição.
+        *   **Classe `thread_event`**: Permite que uma ou mais threads esperem de forma segura por um evento sinalizado por outra thread. Possui tipos como `THREAD_EVENT_AUTO_RESET` (reinicia automaticamente) e `THREAD_EVENT_MANUAL_RESET` (reinicia manualmente).
+        *   **Tipos Atômicos (`atomic_T`)**: São tipos de dados para os quais as operações são realizadas atomicamente, garantindo que as modificações são indivisíveis e ininterruptas em um ambiente de execução concorrente. Exemplos incluem `atomic_bool`, `atomic_int`.
+        *   **Exemplo de Arquivo**: O arquivo `instance.nvgt` (mencionado no `Doc NVGT.txt` e `códigos.txt`) utiliza um `named_mutex` para gerenciar instâncias da aplicação, o que é uma forma de controle de concorrência baseada em threads.
+
+2.  **Arquivos e Seções Relevantes**:
+    *   **`Doc NVGT.txt`**: Contém o "Concurrency Tutorial" completo, descrevendo async, coroutines, threads, e fornecendo snippets de código para `async` e as assinaturas das funções para coroutines e `thread_event`.
+    *   **`instance.nvgt` (presente em `Doc NVGT.txt` e `códigos.txt`)**: Este é um arquivo de inclusão real que utiliza a primitiva de concorrência `named_mutex` para gerenciar múltiplas instâncias do seu jogo.
+    *   **`nvgt_subsystems.nvgt` (presente em `Doc NVGT.txt` e `códigos.txt`)**: Define os subsistemas do NVGT e é usado para configurar máscaras de acesso (`script_module::set_access_mask`), o que pode ter implicações na segurança e no controle de acesso de scripts em diferentes contextos de execução, que podem ou não ser concorrentes.
+
+É importante notar que a documentação enfatiza que a concorrência é "fácil de usar incorretamente" e pode levar a "bugs muito estranhos ou comportamentos muito estranhos" que são difíceis de depurar. Recomenda-se otimizar a execução síncrona primeiro antes de recorrer a métodos de concorrência.
+
+Você gostaria de aprofundar em algum desses tipos de concorrência, como um exemplo prático de uso da classe `async` ou da classe `thread_event`?
