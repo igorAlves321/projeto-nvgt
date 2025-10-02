@@ -243,9 +243,9 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
         end_combat(attacker_id, "victory");
         end_combat(defender_id, "defeat");
         
-        // Salvar jogadores
-        save_player_async(attacker_id);
-        save_player_async(defender_id);
+        // Salvar jogadores - NVGT: usar save_player_to_database em vez de save_player_async
+        save_player_to_database(@attacker);
+        save_player_to_database(@defender);
         
         // Atualizar estatísticas
         update_statistics("combat_victory");
@@ -254,8 +254,8 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
         return true;
     }
     
-    // Salvar defensor (HP atualizado)
-    save_player_async(defender_id);
+    // Salvar defensor (HP atualizado) - NVGT: usar save_player_to_database
+    save_player_to_database(@defender);
     
     return true;
 }
@@ -276,7 +276,7 @@ bool attempt_flee(string player_id) {
     if(combat is null) return false;
     
     string opponent_id = combat.attacker_id == player_id ? combat.defender_id : combat.attacker_id;
-    Player@ opponent = get_player_by_id(opponent_id);
+    player@ opponent = get_player_by_id(opponent_id);
     
     if(random(1, 100) <= flee_chance) {
         // Fuga bem-sucedida
@@ -313,39 +313,38 @@ bool attempt_flee(string player_id) {
 }
 
 // Função para cleanup de combates expirados (chamar periodicamente)
-async<void> cleanup_expired_combats() {
-    while(true) {
-        string[] keys = combat_instances.get_keys();
-        for(uint i = 0; i < keys.length(); i++) {
-            if(combat_instances.exists(keys[i])) {
-                CombatInstance@ combat = cast<CombatInstance@>(combat_instances[keys[i]]);
-                if(combat !is null && combat.is_expired()) {
-                    end_combat(keys[i], "timeout");
-                }
+// NVGT: async não está disponível, usar timer no loop principal
+timer cleanup_combat_timer;
+void cleanup_expired_combats() {
+    // Verificar apenas se passou tempo suficiente (30 segundos)
+    if(cleanup_combat_timer.elapsed < 30000) return;
+    cleanup_combat_timer.restart();
+    
+    string[] keys = combat_instances.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        if(combat_instances.exists(keys[i])) {
+            CombatInstance@ combat = cast<CombatInstance@>(combat_instances[keys[i]]);
+            if(combat !is null && combat.is_expired()) {
+                end_combat(keys[i], "timeout");
             }
         }
-        
-        // Verificar a cada 30 segundos
-        yield_for(30000);
     }
 }
 
 // Funções auxiliares que devem ser implementadas em outros módulos
 int get_player_hp(string player_id) {
-    Player@ player = get_player_by_id(player_id);
+    player@ player = get_player_by_id(player_id);
     return player !is null ? player.hp : 0;
 }
 
 string[] get_nearby_players(string map_name, int x, int y, int z, int radius) {
     string[] nearby;
     
-    string[] all_players = players_database.get_keys();
-    for(uint i = 0; i < all_players.length(); i++) {
-        Player@ other = cast<Player@>(players_database[all_players[i]]);
-        if(other !is null && other.map_name == map_name) {
-            int distance = abs(other.x - x) + abs(other.y - y) + abs(other.z - z);
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i] !is null && players[i].map_name == map_name) {
+            int distance = abs(players[i].x - x) + abs(players[i].y - y) + abs(players[i].z - z);
             if(distance <= radius) {
-                nearby.push_back(all_players[i]);
+                nearby.push_back(players[i].charname);
             }
         }
     }
@@ -359,10 +358,11 @@ void log_combat_action(string attacker_id, string defender_id, string action_typ
                       int attacker_hp_before, int attacker_hp_after,
                       int defender_hp_before, int defender_hp_after, string battle_result) {
     
-    if(!server_db.is_open()) return;
+    // NVGT: Usar bancoJogo em vez de server_db
+    if(!database_initialized || bancoJogo is null) return;
     
-    Player@ attacker = get_player_by_id(attacker_id);
-    Player@ defender = get_player_by_id(defender_id);
+    player@ attacker = get_player_by_id(attacker_id);
+    player@ defender = get_player_by_id(defender_id);
     
     string attacker_name = attacker !is null ? attacker.name : "Unknown";
     string defender_name = defender !is null ? defender.name : "Unknown";
@@ -376,25 +376,26 @@ void log_combat_action(string attacker_id, string defender_id, string action_typ
                    "attacker_hp_before, attacker_hp_after, defender_hp_before, defender_hp_after, " +
                    "battle_result, map_name, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
-    db_statement@ stmt = server_db.prepare(query);
+    // NVGT: db_statement não existe, usar sqlite3statement
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(stmt !is null) {
-        stmt.bind(1, string_to_number(attacker_id));
-        stmt.bind(2, attacker_name);
-        stmt.bind(3, string_to_number(defender_id));
-        stmt.bind(4, defender_name);
-        stmt.bind(5, action_type);
-        stmt.bind(6, weapon_used);
-        stmt.bind(7, damage_dealt);
-        stmt.bind(8, damage_blocked);
-        stmt.bind(9, attacker_hp_before);
-        stmt.bind(10, attacker_hp_after);
-        stmt.bind(11, defender_hp_before);
-        stmt.bind(12, defender_hp_after);
-        stmt.bind(13, battle_result);
-        stmt.bind(14, map_name);
-        stmt.bind(15, x);
-        stmt.bind(16, y);
-        stmt.bind(17, z);
+        stmt.bind_int(1, string_to_number(attacker_id));
+        stmt.bind_text(2, attacker_name);
+        stmt.bind_int(3, string_to_number(defender_id));
+        stmt.bind_text(4, defender_name);
+        stmt.bind_text(5, action_type);
+        stmt.bind_text(6, weapon_used);
+        stmt.bind_int(7, damage_dealt);
+        stmt.bind_int(8, damage_blocked);
+        stmt.bind_int(9, attacker_hp_before);
+        stmt.bind_int(10, attacker_hp_after);
+        stmt.bind_int(11, defender_hp_before);
+        stmt.bind_int(12, defender_hp_after);
+        stmt.bind_text(13, battle_result);
+        stmt.bind_text(14, map_name);
+        stmt.bind_int(15, x);
+        stmt.bind_int(16, y);
+        stmt.bind_int(17, z);
         
         stmt.step();
     }

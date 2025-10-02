@@ -1,7 +1,7 @@
 // helicoptero.nvgt - Sistema de Helicóptero do EVM Server (convertido de BGT)
 // Conversão: BGT → NVGT
 
-#include "network.nvgt"
+// Nota: network.nvgt já incluído via server.nvgt
 
 helicoptero@[] helicopteros_ativos;
 
@@ -26,7 +26,7 @@ void helicopteroloop() {
 	for (uint i = 0; i < helicopteros_ativos.length(); i++) {
 		// Helicóptero foi destruído
 		if (helicopteros_ativos[i].vida <= 0) {
-			server_// net.send_reliable(0, "play bombaatomicaexplode.ogg " + helicopteros_ativos[i].x + " " + helicopteros_ativos[i].y + " " + helicopteros_ativos[i].map);
+			server_broadcast("play bombaatomicaexplode.ogg " + helicopteros_ativos[i].x + " " + helicopteros_ativos[i].y + " " + helicopteros_ativos[i].map);
 			// net.send_reliable(0, "msgnormal Um helicóptero foi derrubado!", 0);
 			
 			// Dropar itens valiosos
@@ -64,46 +64,47 @@ void helicopteroloop() {
 		if (helicopteros_ativos[i].tbomba.elapsed >= random(40000, 70000)) {
 			helicopteros_ativos[i].tbomba.restart();
 			int a = random(1, 3);
-			if (a <= 2) spawn_maxbomba(helicopteros_ativos[i].x, 0, helicopteros_ativos[i].map, "Helicóptero");
-			else spawn_bombaatomica(helicopteros_ativos[i].x, helicopteros_ativos[i].y, helicopteros_ativos[i].map, "helicóptero");
+			// TODO: Reimplementar spawn_maxbomba quando sistema de comandos for integrado
+			// if (a <= 2) spawn_maxbomba(helicopteros_ativos[i].x, 0, helicopteros_ativos[i].map, "Helicóptero");
+			if (a > 2) spawn_bombaatomica(helicopteros_ativos[i].x, helicopteros_ativos[i].y, helicopteros_ativos[i].map, "helicóptero");
 		}
 		
-		if (helicopteros[i].helicopterotimer.elapsed >= helicopteros[i].helicopterotime) {
-			if (helicopteros[i].sair == false) {
+		if (helicopteros_ativos[i].helicopterotimer.elapsed >= helicopteros_ativos[i].helicopterotime) {
+			if (helicopteros_ativos[i].sair == false) {
 				// Atacar jogadores e seguir
 				for (uint i2 = 0; i2 < players.length(); i2++) {
 					// Atirar em jogadores na mesma posição X
-					if (players[i2].x == helicopteros[i].x && players[i2].map == helicopteros[i].map && 
-						helicopteros[i].tempoatirar.elapsed >= random(800, 1000) && players[i2].pacifico == 0) {
-						helicopteros[i].tempoatirar.restart();
+					if (players[i2].x == helicopteros_ativos[i].x && players[i2].map == helicopteros_ativos[i].map && 
+						helicopteros_ativos[i].tempoatirar.elapsed >= random(800, 1000) && players[i2].pacifico == 0) {
+						helicopteros_ativos[i].tempoatirar.restart();
 						players[i2].health -= random(600, 1000);
-						server_// net.send_reliable(0, "play helicopteroarma" + random(1, 3) + ".ogg " + players[i2].x + " " + players[i2].y + " " + players[i2].map);
-						server_// net.send_reliable(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y);
+						server_broadcast("play helicopteroarma" + random(1, 3) + ".ogg " + players[i2].x + " " + players[i2].y + " " + players[i2].map);
+						server_broadcast("inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y);
 						players[i2].lasthit = "helicoptero";
 					}
 					
 					// Movimento de perseguição
-					if (players[i2].x > helicopteros[i].x && players[i2].map == helicopteros[i].map && 
+					if (players[i2].x > helicopteros_ativos[i].x && players[i2].map == helicopteros_ativos[i].map && 
 						players[i2].newbie == false && players[i2].afk == false) {
-						helicopteros[i].x++;
-						update_moving_sound(helicopteros[i].soundhelicoptero, helicopteros[i].x, helicopteros[i].y);
-						helicopteros[i].helicopterotimer.restart();
+						helicopteros_ativos[i].x++;
+						update_moving_sound(helicopteros_ativos[i].soundhelicoptero, helicopteros_ativos[i].x, helicopteros_ativos[i].y);
+						helicopteros_ativos[i].helicopterotimer.restart();
 						break;
 					}
-					if (players[i2].x < helicopteros[i].x && players[i2].map == helicopteros[i].map && 
+					if (players[i2].x < helicopteros_ativos[i].x && players[i2].map == helicopteros_ativos[i].map && 
 						players[i2].newbie == false && players[i2].afk == false) {
-						helicopteros[i].x--;
-						update_moving_sound(helicopteros[i].soundhelicoptero, helicopteros[i].x, helicopteros[i].y);
-						helicopteros[i].helicopterotimer.restart();
+						helicopteros_ativos[i].x--;
+						update_moving_sound(helicopteros_ativos[i].soundhelicoptero, helicopteros_ativos[i].x, helicopteros_ativos[i].y);
+						helicopteros_ativos[i].helicopterotimer.restart();
 						break;
 					}
 				}
 			}
 			// Modo de saída
-			else if (helicopteros[i].sair) {
-				helicopteros[i].x++;
-				update_moving_sound(helicopteros[i].soundhelicoptero, helicopteros[i].x, helicopteros[i].y);
-				if (helicopteros[i].x > 380) {
+			else if (helicopteros_ativos[i].sair) {
+				helicopteros_ativos[i].x++;
+				update_moving_sound(helicopteros_ativos[i].soundhelicoptero, helicopteros_ativos[i].x, helicopteros_ativos[i].y);
+				if (helicopteros_ativos[i].x > 380) {
 					helicopteros.remove_at(i);
 					break;
 				}
@@ -114,5 +115,5 @@ void helicopteroloop() {
 
 void spawn_helicoptero(int x, int y, string map, int vida = random(250000, 300000)) {
 	helicoptero c(x, y, map, vida);
-	helicopteros.insert_last(c);
+	helicopteros_ativos.insert_last(c);  // NVGT: Corrigido - usar nome consistente
 }
