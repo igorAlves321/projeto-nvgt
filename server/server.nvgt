@@ -93,7 +93,7 @@ bool init_database() {
     }
     
     // Usar caminho relativo correto
-    string db_path = "database/evm.db";
+    string db_path = "database/ig.db";
     debug_log("Abrindo banco de dados: " + db_path);
     
     @bancoJogo = sqlite3();
@@ -464,15 +464,19 @@ void process_player_command(uint64 peer_id, string command) {
 
 // Handler de eventos de rede do servidor
 void server_handle_network_event_const(const network_event@ event) {
+    debug_log("🔍 Processando evento: tipo=" + event.type);
+    
     if(event.type == event_connect) {
+        debug_log("🟢 EVENT_CONNECT recebido! peer_id=" + event.peer_id);
         add_connected_peer(event.peer_id, "unknown"); // NVGT não fornece peer_address no evento
         connected_count++;
 
         debug_log("Nova conexão: " + event.peer_id + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
-        screen_reader_speak("Nova conexão, total " + connected_count, false);
+        // screen_reader_speak("Nova conexão, total " + connected_count, false); // Comentado para não bugar NVDA
         log_to_database("INFO", "NETWORK", "Nova conexão", -1, "peer:" + event.peer_id);
 
         // Enviar mensagem de boas-vindas
+        debug_log("📤 Enviando mensagem de boas-vindas para peer " + event.peer_id);
         send_reliable(event.peer_id, "say Bem-vindo ao servidor EVM! Digite 'help' para ajuda.");
     }
     else if(event.type == event_disconnect) {
@@ -492,7 +496,7 @@ void server_handle_network_event_const(const network_event@ event) {
 
         string msg = player_name != "" ? player_name + " desconectou" : "Desconexão: " + event.peer_id;
         debug_log(msg + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
-        screen_reader_speak(msg, false);
+        // screen_reader_speak(msg, false); // Comentado para não bugar NVDA
     }
     else if(event.type == event_receive) {
         string decrypted = decrypt_packet(event.message);
@@ -531,12 +535,12 @@ void server_handle_network_event_const(const network_event@ event) {
 
 // Loop principal do servidor
 void main() {
-    screen_reader_speak("Iniciando servidor EVM com banco de dados SQLite", true);
-    debug_log("=== SERVIDOR EVM INICIANDO ===");
+    debug_log("=== SERVIDOR IG INICIANDO ===");
+    // screen_reader_speak("Iniciando servidor IG com banco de dados SQLite", true); // Comentado para não bugar NVDA
     
     // Inicializar banco de dados
     if(!init_database()) {
-        screen_reader_speak("Falha ao inicializar banco de dados", true);
+        // screen_reader_speak("Falha ao inicializar banco de dados", true);
         debug_log("ERRO CRÍTICO: Falha na inicialização do banco de dados");
         return;
     }
@@ -555,7 +559,7 @@ void main() {
     
     // Inicializar servidor de rede
     if(!server_init(SERVER_PORT)) {
-        screen_reader_speak("Falha ao inicializar servidor de rede na porta " + SERVER_PORT, true);
+        // screen_reader_speak("Falha ao inicializar servidor de rede na porta " + SERVER_PORT, true);
         debug_log("ERRO CRÍTICO: Falha na inicialização do servidor de rede");
         debug_log("");
         debug_log("Pressione ENTER para sair...");
@@ -580,16 +584,16 @@ void main() {
     last_backup.restart();
     
     log_to_database("INFO", "SYSTEM", "Servidor iniciado", -1, "porta:" + SERVER_PORT);
-    screen_reader_speak("Servidor EVM iniciado na porta " + SERVER_PORT, true);
+    // screen_reader_speak("Servidor IG iniciado na porta " + SERVER_PORT, true); // Comentado para não bugar NVDA
 
-    debug_log("Servidor EVM rodando na porta " + SERVER_PORT);
+    debug_log("Servidor IG rodando na porta " + SERVER_PORT);
     debug_log("Banco de dados: " + DATABASE_FILE);
     debug_log("Max jogadores: " + MAX_PLAYERS);
     debug_log("Pressione ESC ou ALT+F4 para desligar o servidor");
     debug_log("=== SERVIDOR PRONTO ===");
 
     // Mostrar janela do servidor
-    show_window("Servidor EVM - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");
+    show_window("Servidor IG - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");
 
     // Timer para atualizar título da janela
     timer update_title_timer;
@@ -611,7 +615,7 @@ void main() {
             int hours = uptime_seconds / 3600;
             int minutes = (uptime_seconds % 3600) / 60;
             string uptime_str = hours + "h " + minutes + "m";
-            show_window("Servidor EVM [" + online + "/" + MAX_PLAYERS + "] - Uptime: " + uptime_str + " - ESC para sair");
+            show_window("Servidor IG [" + online + "/" + MAX_PLAYERS + "] - Uptime: " + uptime_str + " - ESC para sair");
             update_title_timer.restart();
         }
 
@@ -684,7 +688,7 @@ void main() {
     
     // Shutdown graceful
     debug_log("=== DESLIGANDO SERVIDOR ===");
-    screen_reader_speak("Desligando servidor", true);
+    // screen_reader_speak("Desligando servidor", true); // Comentado para não bugar NVDA
     
     // Salvar todos os jogadores
     auto_save_all_players_async();

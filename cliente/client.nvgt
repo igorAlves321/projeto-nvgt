@@ -211,13 +211,16 @@ int mdardo=0;
 
 // Função principal convertida de BGT para NVGT
 void main(){
+	debug_log("🚀 CLIENTE INICIANDO...");
 	// Instância para verificar se já está rodando
 	instance fd(EXECUTABLE_NAME);
+	debug_log("✓ Verificação de instância concluída");
 	// Verificar se SOUND_STORAGE existe (pode ser pasta ou arquivo)
 	if(!directory_exists(SOUND_STORAGE) && !file_exists(SOUND_STORAGE)){
 		alert("Error", "missing "+SOUND_STORAGE);
 		exit();
 	}
+	debug_log("✓ SOUND_STORAGE verificado");
 	init_bass();
 	set_sound_storage(SOUND_STORAGE);
 	set_sound_decryption_key(SOUND_ENCRYPTION_KEY, false);
@@ -309,7 +312,7 @@ void main(){
 	open_sound_device(numero_dispositivo);
 	set_sound_master_volume(volumejogo);
 	pf.close();
-	game_net.setup_client(4, 150); // NVGT: usar game_net
+	game_net.setup_client(1, 150); // Deve coincidir com max_channels do servidor (1)
 	idiomaschat.insert_last("Desativar chat=Desativado");
 	idiomaschat.insert_last("Arabic=ar");
 	idiomaschat.insert_last("English=en");
@@ -568,7 +571,11 @@ void netloop(){
 
 // Função game() convertida de BGT para NVGT
 void game(){
+	debug_log("🎮 Função game() iniciada!");
+	speak("Entrando no jogo!");
 	load_map(mapainicial);
+	debug_log("✅ Mapa inicial carregado: " + mapainicial);
+	speak("Você está no mapa: " + mapainicial + ". Use as setas para se mover.");
 	game_net.send(net_peer_id, "setvoice "+voice, 0, true);
 	if(ouvirhits==0)game_net.send(net_peer_id, "hits", 0, true);
 	game_net.send(net_peer_id, "idiomachat "+idiomachat, 0, true);
@@ -578,8 +585,63 @@ void game(){
 	if(avisanivel==0)game_net.send(net_peer_id, "nnivel", 0, true);
 	connected=true;
 	game_net.send(net_peer_id, "getversion", 0, true);
+	debug_log("🎮 Entrando no loop principal do jogo...");
+	speak("DEBUG: Loop do jogo iniciado! Use as setas para se mover. Pressione ESC para sair.");
+	int loop_count = 0;
 	while(true){
 		wait(5);
+		loop_count++;
+		if(loop_count % 100 == 0) {
+			debug_log("♻️ Loop do jogo rodando... iteração " + loop_count);
+		}
+		
+		// ===== MOVIMENTAÇÃO BÁSICA SIMPLIFICADA =====
+		if(moveable && walktimer.elapsed >= walktime) {
+			bool moved = false;
+			
+			// Movimento para ESQUERDA
+			if(key_down(KEY_LEFT)) {
+				facing = Left;
+				me.x -= 1;
+				moved = true;
+				debug_log("⬅️ Moveu para esquerda: x=" + me.x);
+			}
+			// Movimento para DIREITA
+			else if(key_down(KEY_RIGHT)) {
+				facing = Right;
+				me.x += 1;
+				moved = true;
+				debug_log("➡️ Moveu para direita: x=" + me.x);
+			}
+			// Movimento para BAIXO
+			else if(key_down(KEY_DOWN)) {
+				me.y -= 1;
+				moved = true;
+				debug_log("⬇️ Moveu para baixo: y=" + me.y);
+			}
+			// Movimento para CIMA
+			else if(key_down(KEY_UP)) {
+				me.y += 1;
+				moved = true;
+				debug_log("⬆️ Moveu para cima: y=" + me.y);
+			}
+			
+			// Se moveu, envia para o servidor e toca som de passo
+			if(moved) {
+				walktimer.restart();
+				game_net.send(net_peer_id, "move " + me.x + " " + me.y, 0, true);
+				
+				// Tocar som de passo baseado no tile
+				string tile = get_tile_at(me.x, me.y);
+				if(tile != "") {
+					string step_sound = tile + "step" + random(1, 5) + ".ogg";
+					p2.play_stationary(step_sound, false);
+					debug_log("🔊 Som de passo: " + step_sound);
+				}
+			}
+		}
+		// ===== FIM DA MOVIMENTAÇÃO =====
+		
 		if(nandar>-1){
 			int id=game_p.play_stationary("elevador.ogg", true);
 			int d=-1;
@@ -632,12 +694,46 @@ void game(){
 			secundario();
 			if(gmt()!=""&&jumping==false&&pulou==1&&falling==false) pulou=0;
 		}
+		// Processar eventos de rede do jogo
+		if(connected) {
+			const network_event@ event;
+			while((@event = game_net.request()) !is null && event.type != event_none) {
+				if(event.type == event_disconnect) {
+					debug_log("🔌 Desconectado do servidor!");
+					speak("Conexão perdida.");
+					reset();
+					menuprincipal();
+					return;
+				}
+				else if(event.type == event_receive) {
+					// Processar comandos do servidor (será implementado depois)
+				}
+			}
+		}
+		
+		// Verificar se está saindo do jogo
+		if(exiting && exittimer.elapsed >= exittime) {
+			debug_log("🚪 Saindo do jogo e voltando ao menu...");
+			exittimer.restart();
+			exiting = false;
+			reset();
+			menuprincipal();
+			return; // Sai da função game()
+		}
+		
 		if(key_pressed(KEY_F9) && desenvolvedordm==1){
 			// Resto do código de construção de mapas...
 			// [Será convertido conforme necessário]
 		}
 		if(key_pressed(KEY_ESCAPE)){
+			debug_log("⚠️ ESC pressionado! Chamando exitmenu()");
 			exitmenu();
+		}
+		// Log de teclas de movimento
+		if(key_down(KEY_UP) || key_down(KEY_DOWN) || key_down(KEY_LEFT) || key_down(KEY_RIGHT)) {
+			if(loop_count % 50 == 0) { // Log a cada 50 iterações com tecla pressionada
+				debug_log("⌨️ Tecla de movimento detectada!");
+			}
 		}
 	}
 }

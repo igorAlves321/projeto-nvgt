@@ -45,7 +45,7 @@ void net_create() {
 
 	network temp_net;
 	@event = null;
-	temp_net.setup_client(4, 100);
+	temp_net.setup_client(1, 100); // Deve coincidir com max_channels do servidor (1)
 	temp_net.connect(game_serveraddress, game_serverport);
 	connecttimer.restart();
 
@@ -111,15 +111,15 @@ void net_create() {
 }
 
 void net_logar(bool localhost = false) {
+	// Validação: Verificar se há conta configurada
 	if(net_un == "" || net_pw == "") {
-		if(!prompt_login_form(pu.get_value("Conectar"))) {
-			menuprincipal();
-			return;
-		}
+		dlg(pu.get_value("Você não tem uma conta configurada. Por favor, crie uma conta primeiro ou configure suas credenciais."));
+		menuprincipal();
+		return;
 	}
-	else {
-		writeprefs();
-	}
+	
+	// Salvar preferências antes de conectar
+	writeprefs();
 
 	speak(pu.get_value("Conectando ao servidor..."));
 	string target_address = game_serveraddress;
@@ -127,16 +127,35 @@ void net_logar(bool localhost = false) {
 		target_address = "localhost";
 	}
 
+	debug_log("=== INICIANDO TENTATIVA DE CONEXÃO ===");
+	debug_log("Endereço: " + target_address + " Porta: " + game_serverport);
+	speak("DEBUG: Iniciando conexão para " + target_address + " porta " + game_serverport);
 	connected = false;
 	@event = null;
-	game_net.setup_client(4, 150);
+	
+	debug_log("Chamando setup_client(1, 150)");
+	speak("DEBUG: Chamando setup_client com 1 canal e 150ms timeout");
+	game_net.setup_client(1, 150); // Deve coincidir com max_channels do servidor (1)
+	
+	debug_log("Chamando connect()");
+	speak("DEBUG: Chamando connect para " + target_address + " porta " + game_serverport);
 	game_net.connect(target_address, game_serverport);
+	
+	debug_log("Aguardando evento de conexão... timeout=" + connecttime + "ms");
+	speak("DEBUG: Aguardando evento de conexão");
 	connecttimer.restart();
 
+	// Criar tela de conexão com audio_form para permitir cancelamento
+	audio_form conectando_form;
+	conectando_form.create_window(pu.get_value("Conectando ao servidor... Pressione ESC para cancelar."), false, true);
+	
 	while(true) {
 		wait(5);
+		conectando_form.monitor(); // Processa eventos da interface
 
 		if(key_pressed(KEY_ESCAPE)) {
+			debug_log("Usuário cancelou a conexão");
+			speak("DEBUG: Usuário cancelou conexão");
 			game_net.destroy();
 			reset();
 			menuprincipal();
@@ -146,6 +165,8 @@ void net_logar(bool localhost = false) {
 		@event = game_net.request();
 		if(event is null) {
 			if(!connected && connecttimer.elapsed >= connecttime) {
+				debug_log("TIMEOUT após " + connecttimer.elapsed + "ms - Servidor não respondeu");
+				speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
 				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 				game_net.destroy();
 				reset();
@@ -155,7 +176,26 @@ void net_logar(bool localhost = false) {
 			continue;
 		}
 
+		// Ignorar event_none (tipo 0 - sem eventos)
+		if(event.type == event_none) {
+			if(!connected && connecttimer.elapsed >= connecttime) {
+				debug_log("TIMEOUT após " + connecttimer.elapsed + "ms - Servidor não respondeu");
+				speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
+				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
+				game_net.destroy();
+				reset();
+				menuprincipal();
+				return;
+			}
+			continue; // Aguardar eventos reais
+		}
+
+		debug_log("Evento recebido: tipo=" + event.type + ", peer_id=" + event.peer_id);
+		speak("DEBUG: Evento recebido - tipo=" + event.type + " peer=" + event.peer_id);
+
 		if(event.type == event_disconnect || (!connected && connecttimer.elapsed >= connecttime)) {
+			debug_log("Evento de desconexão ou timeout");
+			speak("DEBUG: Desconectado ou timeout");
 			dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 			game_net.destroy();
 			reset();
@@ -164,17 +204,23 @@ void net_logar(bool localhost = false) {
 		}
 
 		if(event.type == event_connect && !connected) {
+			debug_log("✅ EVENT_CONNECT recebido! peer_id=" + event.peer_id);
+			speak("DEBUG: EVENT_CONNECT recebido! Enviando credenciais");
 			net_peer_id = event.peer_id;
 			server_peer_id = event.peer_id;
 			// Segurança: Enviar hash SHA-256 da senha ao invés de texto plano
 			string hashed_password = hash_password(net_pw);
 			string login_msg = "h33j " + net_un + " " + hashed_password + " " + gversion + " " + banned;
+			debug_log("Enviando credenciais: " + net_un + " (hash omitido por segurança)");
 			game_net.send(net_peer_id, encrypt_packet(login_msg), 0, true); // Criptografar antes de enviar
+			debug_log("Credenciais enviadas, aguardando resposta do servidor");
+			speak("DEBUG: Credenciais enviadas, aguardando resposta");
 			continue;
 		}
 
 		if(event.type == event_receive) {
 			string full_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
+			debug_log("📨 Mensagem recebida do servidor: '" + full_msg + "'");
 			string[] parsed = full_msg.split(" ");
 
 			if(parsed.length() >= 2) {
@@ -199,10 +245,13 @@ void net_logar(bool localhost = false) {
 			}
 
 			if(full_msg.find("loggedin") != -1) {
+				debug_log("🎉 LOGGEDIN ENCONTRADO! Iniciando jogo...");
 				username = net_un;
 				connected = true;
 				speak(pu.get_value("Logado com sucesso! Entrando no jogo..."));
+				debug_log("Chamando game()...");
 				game(); // Entra no loop principal do jogo
+				debug_log("game() retornou (isso não deveria acontecer!)");
 				return;
 			}
 
