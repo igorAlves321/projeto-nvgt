@@ -1,0 +1,624 @@
+// Servidor EVM em NVGT
+// Sistema principal com banco de dados e threading
+
+// Plugin SQLite necessário
+#pragma plugin nvgt_sqlite
+
+// Incluir SQLite primeiro para tipos de dados
+#include "../include/sqlite3constants.nvgt"
+#include "../include/logger.nvgt"
+
+// Configurações do servidor
+const int SERVER_PORT = 9317;
+const int MAX_PLAYERS = 100;
+const string DATABASE_FILE = "server/database/evm.db";
+
+// Forward declaration removida - NVGT não suporta forward declarations com void
+
+// Sistema de banco de dados - variáveis definidas em shared_globals.nvgt
+
+#include "includes/shared_globals.nvgt"
+#include "includes/globals.nvgt"
+#include "includes/network.nvgt"
+#include "includes/player.nvgt"
+#include "includes/map.nvgt"
+#include "includes/item.nvgt"
+#include "includes/bullet.nvgt"
+#include "includes/commands.nvgt"
+#include "includes/mine/mina.nvgt"
+#include "includes/moving_sound/msound.nvgt"
+#include "includes/mine/objmagnet.nvgt"
+#include "includes/dog.nvgt"
+#include "includes/coelho.nvgt"
+#include "includes/cavalo.nvgt"
+#include "includes/cobra.nvgt"
+#include "includes/coco.nvgt"
+#include "includes/wall.nvgt"
+#include "includes/voids.nvgt"
+#include "includes/rotation.nvgt"
+#include "includes/splay.nvgt"
+#include "includes/projetei.nvgt"
+#include "includes/missilguiado.nvgt"
+#include "includes/stubs.nvgt"
+#include "includes/apartamento.nvgt"
+#include "includes/banheiro.nvgt"
+#include "includes/bombaatomica.nvgt"
+#include "includes/bombanuclear.nvgt"
+#include "includes/canhao.nvgt"
+#include "includes/fogo.nvgt"
+#include "includes/paje.nvgt"
+#include "includes/mercenario.nvgt"
+#include "includes/pia.nvgt"
+#include "includes/fonteagua.nvgt"
+#include "includes/fogogrudado.nvgt"
+#include "includes/fitaexplosiva.nvgt"
+#include "includes/computador.nvgt"
+#include "includes/hcaverna.nvgt"
+#include "includes/bombadefogo.nvgt"
+#include "includes/help.nvgt"
+#include "includes/ip_locale.nvgt"
+#include "includes/changes.nvgt"
+#include "includes/compban.nvgt"
+#include "includes/minaouro.nvgt"
+#include "includes/guarda.nvgt"
+#include "includes/helicoptero.nvgt"
+#include "includes/boladefogo.nvgt"
+#include "includes/maquinatempo.nvgt"
+#include "includes/tempocair.nvgt"
+#include "includes/items.nvgt"
+// #include "includes/history.nvgt"  // Temporariamente desabilitado para evitar dependência circular
+#include "includes/combat.nvgt"
+#include "../include/db_props.nvgt"
+// sqlite3constants.nvgt já incluído no topo
+
+// Estados do servidor - variáveis definidas em shared_globals.nvgt
+
+// Temporizadores do servidor
+timer server_uptime;
+timer last_save;
+timer last_backup;
+
+// Inicialização do banco de dados
+bool init_database() {
+    debug_log("Inicializando banco de dados SQLite: " + DATABASE_FILE);
+    
+    @bancoJogo = sqlite3();
+    if(bancoJogo.open(DATABASE_FILE) != SQLITE_OK) {
+        debug_log("ERRO: Não foi possível abrir banco de dados: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    // Criar tabelas se não existirem
+    create_database_tables();
+    
+    database_initialized = true;
+    debug_log("Banco de dados inicializado com sucesso");
+    return true;
+}
+
+// Criar estrutura do banco de dados
+void create_database_tables() {
+    // Tabela de jogadores
+    string create_players = """
+        CREATE TABLE IF NOT EXISTS players (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_login DATETIME,
+            
+            -- Dados do jogo
+            level INTEGER DEFAULT 1,
+            experience INTEGER DEFAULT 0,
+            gold INTEGER DEFAULT 100,
+            hp INTEGER DEFAULT 100,
+            max_hp INTEGER DEFAULT 100,
+            mp INTEGER DEFAULT 50,
+            max_mp INTEGER DEFAULT 50,
+            race TEXT DEFAULT 'humano',
+            
+            -- Localização
+            map_name TEXT DEFAULT 'inicio',
+            x INTEGER DEFAULT 0,
+            y INTEGER DEFAULT 0,
+            z INTEGER DEFAULT 0,
+            
+            -- Status
+            is_admin BOOLEAN DEFAULT FALSE,
+            is_banned BOOLEAN DEFAULT FALSE,
+            is_online BOOLEAN DEFAULT FALSE,
+            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+            
+            -- Inventário (JSON serializado)
+            inventory TEXT DEFAULT '{}',
+            equipment TEXT DEFAULT '{}',
+            
+            -- Estatísticas
+            play_time INTEGER DEFAULT 0,
+            deaths INTEGER DEFAULT 0,
+            kills INTEGER DEFAULT 0
+        );
+    """;
+    
+    // Tabela de logs do servidor
+    string create_logs = """
+        CREATE TABLE IF NOT EXISTS server_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            level TEXT NOT NULL,  -- INFO, WARNING, ERROR, DEBUG
+            category TEXT NOT NULL,  -- NETWORK, PLAYER, GAME, SYSTEM
+            message TEXT NOT NULL,
+            player_id INTEGER,
+            additional_data TEXT,
+            FOREIGN KEY (player_id) REFERENCES players(id)
+        );
+    """;
+    
+    // Tabela de sessões ativas
+    string create_sessions = """
+        CREATE TABLE IF NOT EXISTS player_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            peer_id TEXT NOT NULL,
+            login_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            FOREIGN KEY (player_id) REFERENCES players(id)
+        );
+    """;
+    
+    // Tabela de configurações do servidor
+    string create_config = """
+        CREATE TABLE IF NOT EXISTS server_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            description TEXT,
+            last_modified DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    
+    // Executar criação das tabelas
+    if(bancoJogo.execute(create_players) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela players: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_logs) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela server_logs: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_sessions) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela player_sessions: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_config) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela server_config: " + bancoJogo.get_last_error_text());
+    }
+    
+    debug_log("Tabelas do banco de dados criadas/verificadas");
+}
+
+// Logging no banco de dados (thread-safe)
+void log_to_database(string level, string category, string message, int player_id = -1, string additional_data = "") {
+    if(!database_initialized) return;
+    
+    // TODO: Implementar threading quando sintaxe for confirmada
+    log_to_database_async(level, category, message, player_id, additional_data);
+}
+
+void log_to_database_async(string level, string category, string message, int player_id, string additional_data) {
+    if(!database_initialized) return;
+    
+    string query = """
+        INSERT INTO server_logs (level, category, message, player_id, additional_data)
+        VALUES (?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt != null) {
+        stmt.bind_text(1, level);
+        stmt.bind_text(2, category);
+        stmt.bind_text(3, message);
+        
+        if(player_id > 0) {
+            stmt.bind_int(4, player_id);
+        } else {
+            stmt.bind_null(4);
+        }
+        
+        stmt.bind_text(5, additional_data);
+        
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao inserir log no banco: " + bancoJogo.get_last_error_text());
+        }
+    }
+}
+
+// Salvar dados do jogador no banco (async)
+void save_player_to_database(player@ player) {
+    if(!database_initialized || player is null) return;
+    
+    // TODO: Implementar threading quando sintaxe for confirmada
+    save_player_to_database_async(player.name, player.player_level, player.exp,
+                player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
+                player.race, player.map_name, player.x, player.y, player.z,
+                player.admin_status);
+}
+
+void save_player_to_database_async(string name, int level, int exp, int gold, 
+                                   int hp, int max_hp, int mp, int max_mp,
+                                   string race, string map_name, int x, int y, int z,
+                                   bool is_admin) {
+    if(!database_initialized) return;
+    
+    string query = """
+        UPDATE players SET 
+            level = ?, experience = ?, gold = ?, hp = ?, max_hp = ?,
+            mp = ?, max_mp = ?, race = ?, map_name = ?, x = ?, y = ?, z = ?,
+            is_admin = ?, last_activity = CURRENT_TIMESTAMP
+        WHERE username = ?;
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt != null) {
+        stmt.bind_int(1, level);
+        stmt.bind_int(2, exp);
+        stmt.bind_int(3, gold);
+        stmt.bind_int(4, hp);
+        stmt.bind_int(5, max_hp);
+        stmt.bind_int(6, mp);
+        stmt.bind_int(7, max_mp);
+        stmt.bind_text(8, race);
+        stmt.bind_text(9, map_name);
+        stmt.bind_int(10, x);
+        stmt.bind_int(11, y);
+        stmt.bind_int(12, z);
+        stmt.bind_int(13, is_admin ? 1 : 0);
+        stmt.bind_text(14, name);
+        
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao salvar jogador no banco: " + bancoJogo.get_last_error_text());
+        } else {
+            debug_log("Jogador " + name + " salvo no banco de dados");
+        }
+    }
+}
+
+// Backup automático do banco (async)
+void perform_database_backup() {
+    if(async_backup_running) {
+        debug_log("Backup já está em andamento, ignorando");
+        return;
+    }
+    
+    async_backup_running = true;
+    // TODO: Implementar threading quando sintaxe for confirmada
+    perform_database_backup_async();
+}
+
+void perform_database_backup_async() {
+    debug_log("Iniciando backup automático do banco de dados");
+    
+    string backup_timestamp = datetime_now();
+    backup_timestamp.replace_this(":", "_");
+    backup_timestamp.replace_this(" ", "_");
+
+    string backup_file = "server/backups/evm_backup_" + backup_timestamp + ".db";
+    
+    // Criar diretório se não existir
+    if(!directory_exists("server/backups")) {
+        directory_create("server/backups");
+    }
+    
+    // Backup usando SQLite backup API
+    sqlite3@ backup_db = sqlite3();
+    if(backup_db.open(backup_file) == SQLITE_OK) {
+        // TODO: Implementar backup SQLite nativo quando disponível
+        // Por agora, fazer cópia simples
+        string backup_sql = "VACUUM main INTO '" + backup_file + "';";
+        if(bancoJogo.execute(backup_sql) == SQLITE_OK) {
+            debug_log("Backup realizado com sucesso: " + backup_file);
+            log_to_database("INFO", "SYSTEM", "Backup automático realizado", -1, backup_file);
+        } else {
+            debug_log("ERRO no backup: " + bancoJogo.get_last_error_text());
+            log_to_database("ERROR", "SYSTEM", "Falha no backup automático", -1, bancoJogo.get_last_error_text());
+        }
+        backup_db.close();
+    }
+    
+    async_backup_running = false;
+}
+
+// Auto-save de todos os jogadores (async)
+void auto_save_all_players() {
+    if(async_save_running) {
+        debug_log("Auto-save já está em andamento, ignorando");
+        return;
+    }
+    
+    async_save_running = true;
+    // TODO: Implementar threading quando sintaxe for confirmada
+    auto_save_all_players_async();
+}
+
+void auto_save_all_players_async() {
+    debug_log("Iniciando auto-save de todos os jogadores");
+    
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].is_logged_in) {
+            save_player_to_database(players[i]);
+            wait(10); // Pequena pausa entre saves para não sobrecarregar
+        }
+    }
+    
+    debug_log("Auto-save concluído para " + get_online_players().length() + " jogadores");
+    log_to_database("INFO", "GAME", "Auto-save concluído", -1, "" + get_online_players().length() + " jogadores");
+    
+    async_save_running = false;
+    last_save.restart();
+}
+
+// Funções auxiliares para jogadores (implementação básica)
+player@ get_player_by_peer(uint64 peer_id) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].peer_id == peer_id) {
+            return players[i];
+        }
+    }
+    return null;
+}
+
+uint64 get_player_peer_id(player@ p) {
+    if(p is null) return 0;
+    return p.peer_id;
+}
+
+void update_all_players() {
+    // Implementação básica para atualização dos jogadores
+    // TODO: Implementar lógica completa de atualização
+}
+
+void remove_player(uint64 peer_id) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].peer_id == peer_id) {
+            players.erase(i);
+            break;
+        }
+    }
+}
+
+string[] get_online_players() {
+    string[] online_list;
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].is_logged_in) {
+            online_list.push_back(players[i].name);
+        }
+    }
+    return online_list;
+}
+
+// Processamento de comando de jogador
+void process_player_command(uint64 peer_id, string command) {
+    player@ player = get_player_by_peer(peer_id);
+    if(player is null) {
+        debug_log("Comando recebido de peer desconhecido: " + peer_id);
+        return;
+    }
+    
+    // Log do comando
+    log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
+    // log_action(player.name, "command", command, player.map_name, player.x, player.y, player.z); // TODO: Implementar history.nvgt
+
+    // Atualizar estatísticas de mensagens
+    // update_statistics("message"); // TODO: Implementar statistics.nvgt
+    
+    // Verificar se o jogo está congelado
+    if(game_frozen && !player.admin_status) {
+        send_reliable(peer_id, "say Jogo temporariamente congelado. Aguarde.");
+        return;
+    }
+    
+    // Usar sistema de comandos avançado
+    if(!process_command(player, command)) {
+        // Fallback para comandos básicos se não processado
+        string[] parts = command.split(" ");
+        if(parts.length() == 0) return;
+
+        string cmd = parts[0].lower();
+
+        if(cmd == "login") {
+            // TODO: Implementar sistema de login
+            send_reliable(get_player_peer_id(player), "say Sistema de login em desenvolvimento");
+        }
+        else {
+            send_reliable(get_player_peer_id(player), "say Comando não reconhecido: " + cmd + ". Digite 'help' para ver comandos disponíveis.");
+        }
+    }
+}
+
+// Handler de eventos de rede do servidor
+void server_handle_network_event_const(const network_event@ event) {
+    if(event.type == event_connect) {
+        add_connected_peer(event.peer_id, "unknown"); // NVGT não fornece peer_address no evento
+        connected_count++;
+        
+        debug_log("Nova conexão: " + event.peer_id + " (endereço desconhecido)");
+        log_to_database("INFO", "NETWORK", "Nova conexão", -1, "peer:" + event.peer_id);
+        // log_action("", "connection", "Nova conexão do peer " + event.peer_id, "", 0, 0, 0, "ip:" + event.peer_address); // TODO: Implementar history.nvgt
+
+        // Atualizar estatísticas
+        // update_statistics("login"); // TODO: Implementar statistics.nvgt
+        
+        // Enviar mensagem de boas-vindas
+        send_reliable(event.peer_id, "say Bem-vindo ao servidor EVM! Digite 'help' para ajuda.");
+    }
+    else if(event.type == event_disconnect) {
+        player@ player = get_player_by_peer(event.peer_id);
+        if(player !is null) {
+            // Salvar dados antes de desconectar
+            save_player_to_database(player);
+            log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
+            // log_action(player.name, "disconnect", "Jogador desconectou", player.map_name, player.x, player.y, player.z); // TODO: Implementar history.nvgt
+            
+            remove_player(event.peer_id);
+        }
+        
+        remove_connected_peer(event.peer_id);
+        connected_count--;
+        
+        debug_log("Desconexão: " + event.peer_id);
+    }
+    else if(event.type == event_receive) {
+        string decrypted = decrypt_packet(event.message);
+        debug_log("Comando recebido de " + event.peer_id + ": " + decrypted);
+        
+        process_player_command(event.peer_id, decrypted);
+    }
+}
+
+// Loop principal do servidor
+void main() {
+    screen_reader_speak("Iniciando servidor EVM com banco de dados SQLite", true);
+    debug_log("=== SERVIDOR EVM INICIANDO ===");
+    
+    // Inicializar banco de dados
+    if(!init_database()) {
+        screen_reader_speak("Falha ao inicializar banco de dados", true);
+        debug_log("ERRO CRÍTICO: Falha na inicialização do banco de dados");
+        return;
+    }
+    
+    // Inicializar sistema de comandos
+    init_command_system();
+
+    // Inicializar sistema de itens
+    init_items_system();
+
+    // Inicializar sistema de histórico
+    // init_history_system(); // TODO: Implementar quando history.nvgt estiver pronto
+
+    // Inicializar limpeza de combates expirados
+    // cleanup_expired_combats(); // TODO: Implementar quando combat.nvgt estiver pronto
+    
+    // Inicializar servidor de rede
+    if(!server_init(SERVER_PORT)) {
+        screen_reader_speak("Falha ao inicializar servidor de rede", true);
+        debug_log("ERRO CRÍTICO: Falha na inicialização do servidor de rede");
+        return;
+    }
+    
+    // TODO: Carregar mapas iniciais (GameMap class não implementada ainda)
+    // GameMap@ inicio_map = load_map("inicio");
+    // if(inicio_map is null) {
+    //     debug_log("AVISO: Mapa 'inicio' não encontrado, criando mapa padrão");
+    // }
+    
+    // Marcar servidor como ativo
+    server_running = true;
+    server_uptime.restart();
+    last_save.restart();
+    last_backup.restart();
+    
+    log_to_database("INFO", "SYSTEM", "Servidor iniciado", -1, "porta:" + SERVER_PORT);
+    screen_reader_speak("Servidor EVM iniciado na porta " + SERVER_PORT, true);
+    
+    debug_log("Servidor EVM rodando na porta " + SERVER_PORT);
+    debug_log("Banco de dados: " + DATABASE_FILE);
+    debug_log("Max jogadores: " + MAX_PLAYERS);
+    debug_log("=== SERVIDOR PRONTO ===");
+    
+    // Loop principal
+    while(server_running) {
+        // Processar eventos de rede
+        network_loop();
+        
+        // Atualizar jogadores
+        update_all_players();
+        
+        // Sistema de balas/projéteis (convertido do BGT)
+        bulletloop();
+
+        // Sistema de objetos/itens (convertido do BGT)
+        objloop();
+
+        // Sistema de NPCs convertidos do BGT
+        dogloop();
+        coelholoop();
+        cavaloloop();
+        cobraloop();
+        cocoloop();
+        wallloop();
+
+        // Sistemas de combate avançado
+        projeteiloop();
+        mguiadoloop();
+        bombaatomicaloop();
+        bombanuclearloop();
+        canhaoloop();
+        fogoloop();
+
+        // NPCs de combate
+        pajeloop();
+        mercenarioloop();
+        hcavernaloop();
+
+        // Sistemas ambientais
+        pialoop();
+        fogogrudadoloop();
+        fitaloop();
+        computadorloop();
+        bombadefogoloop();
+
+        // Veículos e unidades avançadas
+        guardaloop();
+        helicopteroloop();
+        boladefogoloop();
+        caiuloop();
+
+        // Atualizar pico de jogadores nas estatísticas
+        // update_peak_players(get_connected_count()); // TODO: Implementar estatísticas
+
+        // Processamento periódico de histórico
+        // process_history_maintenance(); // TODO: Implementar quando history.nvgt estiver pronto
+        
+        // Auto-save a cada 5 minutos
+        if(last_save.elapsed >= 300000) { // 5 minutos
+            auto_save_all_players();
+        }
+        
+        // Backup automático a cada hora
+        if(last_backup.elapsed >= 3600000) { // 1 hora
+            perform_database_backup();
+            last_backup.restart();
+        }
+        
+        // Pausa para não sobrecarregar CPU
+        wait(5);
+    }
+    
+    // Shutdown graceful
+    debug_log("=== DESLIGANDO SERVIDOR ===");
+    screen_reader_speak("Desligando servidor", true);
+    
+    // Salvar todos os jogadores
+    auto_save_all_players_async();
+    
+    // Salvar estatísticas finais
+    // save_daily_statistics(); // TODO: Implementar quando statistics.nvgt estiver pronto
+
+    // Backup final
+    perform_database_backup_async();
+
+    // Limpar itens expirados
+    cleanup_expired_items();
+    
+    // Fechar banco de dados
+    if(database_initialized) {
+        bancoJogo.close();
+        debug_log("Banco de dados fechado");
+    }
+    
+    log_to_database("INFO", "SYSTEM", "Servidor desligado", -1, "uptime:" + server_uptime.elapsed);
+    debug_log("Servidor desligado após " + (server_uptime.elapsed / 1000) + " segundos");
+}
