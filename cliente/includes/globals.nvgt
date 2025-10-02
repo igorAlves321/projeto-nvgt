@@ -2,6 +2,7 @@
 // Usando funcionalidades 100% nativas NVGT
 
 #include "audio.nvgt"
+#include "../../include/bgt_compat.nvgt"  // Funções de compatibilidade BGT (string_hash, etc)
 
 // Função para acessar código ASCII de caracteres (conversa de ascii_to_character)
 int get_char_code(string text, int index) {
@@ -526,50 +527,134 @@ int to_number(string str) {
 // Funções de rede usando NVGT nativo (sem wrappers BGT)
 // Use diretamente: game_net.send(peer, message, channel, reliable)
 
-// Função para copiar texto para clipboard (usando API NVGT)
-bool clipboard_copy_text(string text) {
-	return clipboard_set_text(text);
-}
+// NOTA: clipboard_copy_text e clipboard_read_text agora vêm do bgt_compat.nvgt
 
-// Função para ler texto do clipboard (usando API NVGT)
-string clipboard_read_text() {
-	return clipboard_get_text();
-}
-
-// Função para detectar se há leitor de tela (usando API NVGT)
+// Wrapper para screen_reader_is_running sem parâmetro (detectar qualquer leitor)
 bool screen_reader_is_running() {
 	return screen_reader_detect() != "";
 }
 
-// Funções de som não implementadas (stubs)
+// Sistema de armazenamento de sons
+pack@ global_sound_pack;
+string global_sound_pack_path = "";
+string global_sound_key = "";
+
 void set_sound_storage(string path) {
-	// TODO: implementar storage de som
+	// NVGT: Duas opções de carregamento de sons
+	global_sound_pack_path = path;
+	
+	// Opção 1: Se for uma pasta, não usar pack
+	if(directory_exists(path)) {
+		// Usar sons da pasta diretamente (sem pack)
+		@global_sound_pack = null;
+		// Nota: Quando usar pasta, os arquivos de som devem incluir o prefixo
+		// Ex: p.play_1d("sounds/passos.ogg") ou usar get_sound_path()
+		return;
+	}
+	
+	// Opção 2: Se for um arquivo .dat, tentar abrir como pack
+	if(file_exists(path)) {
+		@global_sound_pack = pack();
+		
+		// NVGT: O pack descriptografa automaticamente se foi criado com criptografia
+		// Não precisa passar chave no open()
+		if(!global_sound_pack.open(path)) {
+			alert("Erro", "Não foi possível abrir o pacote de sons: " + path);
+			@global_sound_pack = null;
+			return;
+		}
+	} else {
+		alert("Erro", "Caminho de sons não encontrado: " + path);
+		@global_sound_pack = null;
+	}
 }
 
+// Função helper para obter caminho completo do som
+string get_sound_path(string filename) {
+	// Se estiver usando pack, retornar nome do arquivo diretamente
+	if(@global_sound_pack != null) {
+		return filename;
+	}
+	
+	// Se estiver usando pasta, adicionar prefixo
+	if(global_sound_pack_path != "" && directory_exists(global_sound_pack_path)) {
+		// Se o filename já tem o caminho da pasta, não adicionar novamente
+		if(filename.find(global_sound_pack_path) == 0) {
+			return filename;
+		}
+		// Se o arquivo existe sem prefixo (na raiz), usar direto
+		if(file_exists(filename)) {
+			return filename;
+		}
+		// Adicionar prefixo da pasta
+		return global_sound_pack_path + "/" + filename;
+	}
+	
+	// Fallback: retornar como está
+	return filename;
+}
+
+// NVGT: sound_default_pack já é uma propriedade global do NVGT, não precisa declarar
+// Esta é uma variável global que o sound_pool já usa como fallback
+
 void set_sound_decryption_key(string key, bool flag = false) {
-	// TODO: implementar descriptografia de som
+	// NVGT: Armazenar chave para referência
+	global_sound_key = key;
+	// Nota: O pack do NVGT descriptografa automaticamente se o arquivo .dat
+	// foi criado com criptografia. Não há método público para passar chave.
+	// Se o sounds.dat original do BGT usar criptografia, será necessário:
+	// 1. Descriptografar o sounds.dat com ferramenta BGT
+	// 2. OU usar pasta "sounds" com arquivos .ogg soltos
+}
+
+// Configurar todos os sound_pools para usar o pack global
+void configure_sound_pools_with_pack() {
+	// Configurar sound_default_pack global que todos os sound_pools usam
+	@sound_default_pack = @global_sound_pack;
+	
+	// Se global_sound_pack for null, significa que estamos usando pasta
+	// Neste caso, os sons serão carregados diretamente do sistema de arquivos
+	if(@global_sound_pack == null) {
+		// Usando pasta de sons - não precisa configurar pack_file em cada pool
+		// Os sons serão carregados do diretório "sounds/"
+		return;
+	}
+	
+	// Configurar os pools principais para usar o pack
+	@p.pack_file = @global_sound_pack;
+	@p2.pack_file = @global_sound_pack;
+	@pobjs.pack_file = @global_sound_pack;
+	@pcomputador.pack_file = @global_sound_pack;
+	@spool.pack_file = @global_sound_pack;
+	@ambientepool.pack_file = @global_sound_pack;
+	@sourcepool.pack_file = @global_sound_pack;
+	@stream_pool_main.pack_file = @global_sound_pack;
+	@game_p.pack_file = @global_sound_pack;
 }
 
 void show_game_window(string title) {
 	show_window(title);
 }
 
-string generate_computer_id(string prefix = "", bool flag = false) {
-	// TODO: implementar geração de ID único
-	return "nvgt_client_" + random(1000, 9999);
-}
+// NOTA: generate_computer_id agora vem do bgt_compat.nvgt
 
 // void install_keyhook() {
 //	// TODO: implementar keyhook se necessário - comentado por conflito
 // }
 
-// Funcões de criptografia (usando API NVGT)
-string string_decrypt(string text, string key) {
-	// Stub temporário - implementar criptografia real depois
-	return text;
+// NOTA: string_encrypt e string_decrypt agora vêm do bgt_compat.nvgt
+
+// ===== FUNÇÕES DE AUTENTICAÇÃO COM HASH SHA-256 =====
+
+// Função helper para hash de senhas usando SHA-256
+string hash_password(string password) {
+	if(password == "") return "";
+	// Retorna hash SHA-256 em formato hexadecimal
+	return string_hash(password, 1, false);
 }
 
-string string_encrypt(string text, string key) {
-	// Stub temporário - implementar criptografia real depois
-	return text;
+// Função helper para verificar senha contra hash
+bool verify_password(string password, string hash) {
+	if(password == "" || hash == "") return false;
+	return (hash_password(password) == hash);
 }

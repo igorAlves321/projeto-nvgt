@@ -21,6 +21,8 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/globals.nvgt"
 #include "includes/network.nvgt"
 #include "includes/player.nvgt"
+#include "includes/db_auth.nvgt"  // Funções de banco de dados para autenticação
+#include "includes/auth.nvgt"  // Sistema de autenticação com hash SHA-256
 #include "includes/map.nvgt"
 #include "includes/item.nvgt"
 #include "includes/bullet.nvgt"
@@ -125,8 +127,9 @@ void create_database_tables() {
         CREATE TABLE IF NOT EXISTS players (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
             email TEXT,
+            gender INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login DATETIME,
             
@@ -464,37 +467,64 @@ void server_handle_network_event_const(const network_event@ event) {
     if(event.type == event_connect) {
         add_connected_peer(event.peer_id, "unknown"); // NVGT não fornece peer_address no evento
         connected_count++;
-        
-        debug_log("Nova conexão: " + event.peer_id + " (endereço desconhecido)");
-        log_to_database("INFO", "NETWORK", "Nova conexão", -1, "peer:" + event.peer_id);
-        // log_action("", "connection", "Nova conexão do peer " + event.peer_id, "", 0, 0, 0, "ip:" + event.peer_address); // TODO: Implementar history.nvgt
 
-        // Atualizar estatísticas
-        // update_statistics("login"); // TODO: Implementar statistics.nvgt
-        
+        debug_log("Nova conexão: " + event.peer_id + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
+        screen_reader_speak("Nova conexão, total " + connected_count, false);
+        log_to_database("INFO", "NETWORK", "Nova conexão", -1, "peer:" + event.peer_id);
+
         // Enviar mensagem de boas-vindas
         send_reliable(event.peer_id, "say Bem-vindo ao servidor EVM! Digite 'help' para ajuda.");
     }
     else if(event.type == event_disconnect) {
         player@ player = get_player_by_peer(event.peer_id);
+        string player_name = "";
         if(player !is null) {
+            player_name = player.name;
             // Salvar dados antes de desconectar
             save_player_to_database(player);
             log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
-            // log_action(player.name, "disconnect", "Jogador desconectou", player.map_name, player.x, player.y, player.z); // TODO: Implementar history.nvgt
-            
+
             remove_player(event.peer_id);
         }
-        
+
         remove_connected_peer(event.peer_id);
         connected_count--;
-        
-        debug_log("Desconexão: " + event.peer_id);
+
+        string msg = player_name != "" ? player_name + " desconectou" : "Desconexão: " + event.peer_id;
+        debug_log(msg + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
+        screen_reader_speak(msg, false);
     }
     else if(event.type == event_receive) {
         string decrypted = decrypt_packet(event.message);
         debug_log("Comando recebido de " + event.peer_id + ": " + decrypted);
-        
+
+        // Processar comandos de autenticação ANTES de verificar login
+        string[] parts = decrypted.split(" ");
+        if(parts.length() == 0) return;
+
+        string cmd = parts[0];
+
+        // xt55: Criar conta - formato: xt55 <username> <password_hash> <email> <gender>
+        if(cmd == "xt55" && parts.length() >= 5) {
+            string username = parts[1];
+            string password_hash = parts[2];
+            string email = parts[3];
+            int gender = parse_int(parts[4]);
+            handle_create_account(event.peer_id, username, password_hash, email, gender);
+            return;
+        }
+
+        // h33j: Login - formato: h33j <username> <password_hash> <version> <computer_id>
+        if(cmd == "h33j" && parts.length() >= 5) {
+            string username = parts[1];
+            string password_hash = parts[2];
+            double version = parse_float(parts[3]);
+            string computer_id = parts[4];
+            handle_login(event.peer_id, username, password_hash, version, computer_id);
+            return;
+        }
+
+        // Outros comandos requerem login
         process_player_command(event.peer_id, decrypted);
     }
 }
@@ -525,8 +555,15 @@ void main() {
     
     // Inicializar servidor de rede
     if(!server_init(SERVER_PORT)) {
-        screen_reader_speak("Falha ao inicializar servidor de rede", true);
+        screen_reader_speak("Falha ao inicializar servidor de rede na porta " + SERVER_PORT, true);
         debug_log("ERRO CRÍTICO: Falha na inicialização do servidor de rede");
+        debug_log("");
+        debug_log("Pressione ENTER para sair...");
+
+        // Aguardar tecla ENTER
+        while(!key_pressed(KEY_RETURN)) {
+            wait(5);
+        }
         return;
     }
     
@@ -544,14 +581,40 @@ void main() {
     
     log_to_database("INFO", "SYSTEM", "Servidor iniciado", -1, "porta:" + SERVER_PORT);
     screen_reader_speak("Servidor EVM iniciado na porta " + SERVER_PORT, true);
-    
+
     debug_log("Servidor EVM rodando na porta " + SERVER_PORT);
     debug_log("Banco de dados: " + DATABASE_FILE);
     debug_log("Max jogadores: " + MAX_PLAYERS);
+    debug_log("Pressione ESC ou ALT+F4 para desligar o servidor");
     debug_log("=== SERVIDOR PRONTO ===");
-    
+
+    // Mostrar janela do servidor
+    show_window("Servidor EVM - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");
+
+    // Timer para atualizar título da janela
+    timer update_title_timer;
+    update_title_timer.restart();
+
     // Loop principal
     while(server_running) {
+        // Verificar se usuário quer fechar o servidor (ESC ou Alt+F4)
+        if(key_pressed(KEY_ESCAPE) || (key_down(KEY_LALT) && key_pressed(KEY_F4)) || (key_down(KEY_RALT) && key_pressed(KEY_F4))) {
+            debug_log("Comando de desligamento recebido (ESC/Alt+F4)");
+            server_running = false;
+            break;
+        }
+
+        // Atualizar título da janela a cada 5 segundos
+        if(update_title_timer.elapsed >= 5000) {
+            int online = connected_count;
+            int uptime_seconds = int(server_uptime.elapsed / 1000);
+            int hours = uptime_seconds / 3600;
+            int minutes = (uptime_seconds % 3600) / 60;
+            string uptime_str = hours + "h " + minutes + "m";
+            show_window("Servidor EVM [" + online + "/" + MAX_PLAYERS + "] - Uptime: " + uptime_str + " - ESC para sair");
+            update_title_timer.restart();
+        }
+
         // Processar eventos de rede
         network_loop();
         

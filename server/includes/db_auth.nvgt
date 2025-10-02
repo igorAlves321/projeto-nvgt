@@ -1,0 +1,131 @@
+// db_auth.nvgt - Funções de banco de dados para autenticação
+// Sistema de contas com hash SHA-256
+
+// Verificar se jogador existe no banco
+bool player_exists_in_database(string username) {
+    if(!database_initialized) return false;
+
+    string query = "SELECT COUNT(*) FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query player_exists: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() == SQLITE_ROW) {
+        int count = stmt.column_int(0);
+        return (count > 0);
+    }
+
+    return false;
+}
+
+// Obter hash de senha do jogador
+string get_player_password_hash(string username) {
+    if(!database_initialized) return "";
+
+    string query = "SELECT password_hash FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query get_password_hash: " + bancoJogo.get_last_error_text());
+        return "";
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0);
+    }
+
+    return "";
+}
+
+// Criar nova conta de jogador
+bool create_player_account(string username, string password_hash, string email, int gender) {
+    if(!database_initialized) {
+        debug_log("ERRO: Database não inicializado ao tentar criar conta");
+        return false;
+    }
+
+    debug_log("Tentando criar conta: user=" + username + ", email=" + email + ", gender=" + gender);
+
+    string query = """
+        INSERT INTO players (username, password_hash, email, gender, level, experience, gold,
+                           hp, max_hp, mp, max_mp, race, map_name, x, y, z, is_admin)
+        VALUES (?, ?, ?, ?, 1, 0, 100, 100, 100, 50, 50, 'humano', ?, 1, 0, 0, 0);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query create_account: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("Query preparada, fazendo bind dos parâmetros...");
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, password_hash);  // Hash SHA-256 já vem do cliente
+    stmt.bind_text(3, email);
+    stmt.bind_int(4, gender);
+    stmt.bind_text(5, mapainicial);  // Mapa inicial do servidor
+    
+    debug_log("Parâmetros bound, executando INSERT...");
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao criar conta: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("Conta criada no banco: " + username);
+    return true;
+}
+
+// Carregar dados do jogador do banco
+bool load_player_from_database(player@ p) {
+    if(!database_initialized || p is null) return false;
+
+    string query = """
+        SELECT level, experience, gold, hp, max_hp, mp, max_mp, race,
+               map_name, x, y, z, is_admin, gender
+        FROM players WHERE username = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query load_player: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, p.charname);
+
+    if(stmt.step() == SQLITE_ROW) {
+        p.player_level = stmt.column_int(0);
+        p.exp = stmt.column_int(1);
+        p.gold = stmt.column_int(2);
+        p.hp = stmt.column_int(3);
+        p.max_hp = stmt.column_int(4);
+        p.mp = stmt.column_int(5);
+        p.max_mp = stmt.column_int(6);
+        p.race = stmt.column_text(7);
+        p.map = stmt.column_text(8);
+        p.map_name = stmt.column_text(8);
+        p.x = stmt.column_int(9);
+        p.y = stmt.column_int(10);
+        p.z = stmt.column_int(11);
+        p.admin_status = (stmt.column_int(12) == 1);
+        p.is_admin = p.admin_status;
+        p.admin = p.admin_status;
+        p.sexo = stmt.column_int(13);
+
+        // Configurar valores derivados
+        p.health = p.hp;
+        p.maxhealth = p.max_hp;
+
+        debug_log("Dados carregados do banco para " + p.charname);
+        return true;
+    }
+
+    debug_log("ERRO: Jogador não encontrado no banco - " + p.charname);
+    return false;
+}

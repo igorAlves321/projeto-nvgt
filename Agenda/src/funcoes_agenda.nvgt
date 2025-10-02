@@ -1,0 +1,135 @@
+#include "form.nvgt"
+#include "speech.nvgt"
+
+void addContacts() {
+	audio_form text;
+	text.create_window("Agenda telefônica - versão" + agenda_ver);
+	wait(50);
+	int name = text.create_input_box("Dijite o nome do contato", "");
+	int foneNumber = text.create_input_box("Dijite o telefone do contato", "");
+	int addContat = text.create_button("Adicionar contato a agenda");
+	array<int> inputs = {name, foneNumber, addContat};
+	int indiceFoco = 0;
+	text.focus(inputs[indiceFoco]);
+	while (true) {
+		if (key_pressed(KEY_ESCAPE)) break;
+		wait(5);
+		text.monitor();
+		if (text.is_pressed(addContat)) {
+			string nameStr = text.get_text(name);
+			string foneNumberStr = text.get_text(foneNumber);
+			if (foneNumberStr.length() < 11) {
+				wait(5);
+				speak("telefone inválido");
+				wait(10);
+				indiceFoco = 2;
+				text.focus(inputs[indiceFoco]);
+			} else {
+				Contato novoContato;
+				novoContato.nome = nameStr;
+				novoContato.telefone = foneNumberStr;
+				novoContato.commit();
+				contatos.insert_last(novoContato);
+				speak("Contato adicionado!");
+				text.set_text(name, "");
+				text.set_text(foneNumber, "");
+			}
+		}
+	}
+}
+
+void listContacts() {
+
+	if (contatos.length() == 0) {
+		wait(500);
+		speak("A agenda está vazia!");
+		wait(1000);
+	} else {
+		audio_form form;
+		form.create_window("Agenda telefônica - versão" + agenda_ver, true);
+		int listContacts = form.create_list("Listando os contatos");
+		for (int i = 0; i < contatos.length(); i++)
+			form.add_list_item(listContacts, "nome: " + contatos[i].nome + "\ntelefone: " + contatos[i].telefone + "\n");
+		while (true) {
+			wait(5);
+			if (key_pressed(KEY_ESCAPE)) break;
+			form.monitor();
+		}
+	}
+}
+
+void ler_mudancas() {
+	audio_form form;
+	form.create_window("Agenda telefônica - versão" + agenda_ver, true);
+	if (file_exists("changelog.txt")) {
+		file f;
+		f.open("changelog.txt", "r");
+		string linhas = f.read();
+		string[]@ changes = linhas.split("\n");
+		int change = form.create_list("mudanças rescentes");
+		for (uint i = 0; i < changes.length(); i++)
+			form.add_list_item(change, changes[i]);
+		f.close();
+		while (true) {
+			wait(5);
+			if (key_pressed(KEY_ESCAPE)) break;
+			form.monitor();
+		}
+	} else {
+		wait(500);
+		speak("O arquivo de mudanças não foi encontrado... fale com o desenvolvedor para lhe fornecer o arquivo.");
+		wait(1000);
+	}
+}
+
+void deleteContacts() {
+	if (contatos.length() == 0) {
+		wait(500);
+		speak("A agenda está vazia!");
+		wait(1000);
+	} else {
+		audio_form form;
+		form.create_window("Agenda telefônica - versão" + agenda_ver, true);
+		int contatoSelecionado = -1;
+
+		// Exibir os contatos para seleção
+		array<int> contactOptions;
+		for (int i = 0; i < contatos.length(); i++) {
+			int contactOption = form.create_button("Deletar: " + contatos[i].nome + " - " + contatos[i].telefone);
+			contactOptions.insert_last(contactOption);
+		}
+
+		while (true) {
+			wait(5);
+			if (key_pressed(KEY_ESCAPE)) break;
+			form.monitor();
+
+			for (int i = 0; i < contactOptions.length(); i++) {
+				if (form.is_pressed(contactOptions[i])) {
+					contatoSelecionado = i;
+					break;
+				}
+			}
+
+			if (contatoSelecionado != -1) {
+				// Remover contato selecionado
+				bancoAgenda.execute("delete from contatos where rowid=" + contatos[contatoSelecionado].id + ";");
+
+				speak("Contato " + contatos[contatoSelecionado].nome + " foi deletado!");
+				puxarContatos();
+				wait(1000);
+				break;
+			}
+		}
+	}
+}
+
+void puxarContatos() {
+
+	contatos.resize(0);
+	sqlite3statement@ consulta = bancoAgenda.prepare("select rowid, * from contatos;");
+	while (consulta.step() == SQLITE_ROW) {
+		Contato contato(consulta);
+		contatos.insert_last(contato);
+	}
+}

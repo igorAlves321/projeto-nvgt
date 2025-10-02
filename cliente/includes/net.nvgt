@@ -5,6 +5,18 @@ double idversion = 1.0;
 int connecttime = 10000;
 timer connecttimer;
 
+// Chave de criptografia para pacotes (DEVE SER IGUAL AO SERVIDOR)
+const string PACKET_ENCRYPTION_KEY = "evm_server_key_2024";
+
+// Funções de criptografia/descriptografia de pacotes
+string encrypt_packet(string message) {
+    return string_aes_encrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
+string decrypt_packet(string message) {
+    return string_aes_decrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
 void net_create() {
 	string username;
 	string password;
@@ -61,15 +73,17 @@ void net_create() {
 
 		if(event.type == event_connect) {
 			uint64 peer_id = event.peer_id;
-			string create_msg = "xt55 " + username + " " + password + " " + email + " " + selected_gender;
-			temp_net.send(peer_id, create_msg, 0, true);
+			// Segurança: Enviar hash SHA-256 da senha ao invés de texto plano
+			string hashed_password = hash_password(password);
+			string create_msg = "xt55 " + username + " " + hashed_password + " " + email + " " + selected_gender;
+			temp_net.send(peer_id, encrypt_packet(create_msg), 0, true); // Criptografar antes de enviar
 		}
 		else if(event.type == event_receive) {
-			string received_msg = event.message;
+			string received_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
 			if(received_msg == "created") {
 				account_creating = false;
 				net_un = username;
-				net_pw = password;
+				net_pw = password; // Armazenar senha original localmente (será criptografada por writeprefs)
 				un = username;
 				pw = password;
 				writeprefs();
@@ -132,8 +146,7 @@ void net_logar(bool localhost = false) {
 		@event = game_net.request();
 		if(event is null) {
 			if(!connected && connecttimer.elapsed >= connecttime) {
-				string reason = "Sua internet ou o servidor caiu.";
-				dlg(pu.get_value("Erro: Servidor caiu. Motivos por isso: ") + pu.get_value(reason));
+				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 				game_net.destroy();
 				reset();
 				menuprincipal();
@@ -143,8 +156,7 @@ void net_logar(bool localhost = false) {
 		}
 
 		if(event.type == event_disconnect || (!connected && connecttimer.elapsed >= connecttime)) {
-			string reason = "Sua internet ou o servidor caiu.";
-			dlg(pu.get_value("Erro: Servidor caiu. Motivos por isso: ") + pu.get_value(reason));
+			dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 			game_net.destroy();
 			reset();
 			menuprincipal();
@@ -154,13 +166,15 @@ void net_logar(bool localhost = false) {
 		if(event.type == event_connect && !connected) {
 			net_peer_id = event.peer_id;
 			server_peer_id = event.peer_id;
-			string login_msg = "h33j " + net_un + " " + net_pw + " " + gversion + " " + banned;
-			game_net.send(net_peer_id, login_msg, 0, true);
+			// Segurança: Enviar hash SHA-256 da senha ao invés de texto plano
+			string hashed_password = hash_password(net_pw);
+			string login_msg = "h33j " + net_un + " " + hashed_password + " " + gversion + " " + banned;
+			game_net.send(net_peer_id, encrypt_packet(login_msg), 0, true); // Criptografar antes de enviar
 			continue;
 		}
 
 		if(event.type == event_receive) {
-			string full_msg = event.message;
+			string full_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
 			string[] parsed = full_msg.split(" ");
 
 			if(parsed.length() >= 2) {
@@ -188,6 +202,7 @@ void net_logar(bool localhost = false) {
 				username = net_un;
 				connected = true;
 				speak(pu.get_value("Logado com sucesso! Entrando no jogo..."));
+				game(); // Entra no loop principal do jogo
 				return;
 			}
 
