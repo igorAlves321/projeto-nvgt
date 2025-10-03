@@ -1,0 +1,191 @@
+// arena.nvgt - Sistema de Arena PvP do EVM Server
+// Convertido para NVGT
+// Gerencia arenas de combate PvP com regras especiais
+
+// Classe de Arena
+class arena {
+	string map_name;         // Nome do mapa da arena
+	int x_spawn;            // Coordenada X de spawn
+	int y_spawn;            // Coordenada Y de spawn
+	int max_players;        // Máximo de jogadores
+	bool active;            // Se a arena está ativa
+	string[] players_in_arena; // Jogadores atualmente na arena
+	timer match_timer;      // Timer da partida
+	int match_duration;     // Duração da partida em milissegundos
+	bool match_started;     // Se a partida começou
+	
+	arena(string map, int x, int y, int max_p = 10, int duration = 300000) {
+		map_name = map;
+		x_spawn = x;
+		y_spawn = y;
+		max_players = max_p;
+		active = false;
+		match_duration = duration; // 5 minutos padrão
+		match_started = false;
+	}
+}
+
+arena@[] arenas;
+
+// Criar nova arena
+void create_arena(string map_name, int x, int y, int max_players = 10, int duration = 300000) {
+	arena a(map_name, x, y, max_players, duration);
+	arenas.insert_last(a);
+}
+
+// Adicionar jogador à arena
+bool add_player_to_arena(int arena_index, int player_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) {
+		return false;
+	}
+	
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se arena está cheia
+	if(int(arenas[arena_index].players_in_arena.length()) >= arenas[arena_index].max_players) {
+		send_reliable(players[player_index].peer_id, 
+			"msg2 A arena está cheia!", 0);
+		return false;
+	}
+	
+	// Verificar se jogador já está na arena
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		if(arenas[arena_index].players_in_arena[i] == players[player_index].charname) {
+			return false;
+		}
+	}
+	
+	// Adicionar jogador
+	arenas[arena_index].players_in_arena.insert_last(players[player_index].charname);
+	
+	// Marcar que está na arena
+	players[player_index].in_arena = 1;
+	players[player_index].maparena = arenas[arena_index].map_name;
+	players[player_index].xarena = arenas[arena_index].x_spawn;
+	players[player_index].yarena = arenas[arena_index].y_spawn;
+	
+	// Teleportar para arena
+	players[player_index].teleport(arenas[arena_index].x_spawn, 
+		arenas[arena_index].y_spawn, arenas[arena_index].map_name);
+	
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Você entrou na arena! Aguarde o início da partida.", 0);
+	
+	return true;
+}
+
+// Remover jogador da arena
+bool remove_player_from_arena(int arena_index, int player_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) {
+		return false;
+	}
+	
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Remover da lista
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		if(arenas[arena_index].players_in_arena[i] == players[player_index].charname) {
+			arenas[arena_index].players_in_arena.remove_at(i);
+			break;
+		}
+	}
+	
+	// Desmarcar
+	players[player_index].in_arena = 0;
+	players[player_index].maparena = "";
+	
+	// Teleportar de volta
+	if(players[player_index].xarena > 0 && players[player_index].yarena > 0) {
+		players[player_index].teleport(players[player_index].xarena, 
+			players[player_index].yarena, players[player_index].mapavoltar);
+	}
+	
+	return true;
+}
+
+// Iniciar partida de arena
+bool start_arena_match(int arena_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) {
+		return false;
+	}
+	
+	// Precisa de pelo menos 2 jogadores
+	if(arenas[arena_index].players_in_arena.length() < 2) {
+		return false;
+	}
+	
+	arenas[arena_index].match_started = true;
+	arenas[arena_index].match_timer.restart();
+	
+	// Notificar todos os jogadores
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
+		if(player_idx > -1) {
+			send_reliable(players[player_idx].peer_id, 
+				"msg2 A partida começou! Boa sorte!", 0);
+			send_reliable(players[player_idx].peer_id, "ps arena_start.ogg", 0);
+		}
+	}
+	
+	return true;
+}
+
+// Finalizar partida de arena
+void end_arena_match(int arena_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) {
+		return;
+	}
+	
+	arenas[arena_index].match_started = false;
+	
+	// Teleportar todos de volta
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
+		if(player_idx > -1) {
+			remove_player_from_arena(arena_index, player_idx);
+			send_reliable(players[player_idx].peer_id, 
+				"msg2 A partida terminou!", 0);
+		}
+	}
+	
+	arenas[arena_index].players_in_arena.resize(0);
+}
+
+// Loop de arenas (chamar periodicamente)
+void arena_loop() {
+	for(uint i = 0; i < arenas.length(); i++) {
+		if(arenas[i].match_started) {
+			// Verificar se tempo acabou
+			if(arenas[i].match_timer.elapsed >= arenas[i].match_duration) {
+				end_arena_match(i);
+			}
+			
+			// Verificar se sobrou apenas 1 jogador (vencedor)
+			if(arenas[i].players_in_arena.length() <= 1) {
+				if(arenas[i].players_in_arena.length() == 1) {
+					int winner_idx = get_player_index_from(arenas[i].players_in_arena[0]);
+					if(winner_idx > -1) {
+						send_reliable(players[winner_idx].peer_id, 
+							"msg2 Você venceu a partida de arena!", 0);
+						send_reliable(players[winner_idx].peer_id, "ps victory.ogg", 0);
+					}
+				}
+				end_arena_match(i);
+			}
+		}
+	}
+}
+
+// Obter índice da arena por nome do mapa
+int get_arena_index(string map_name) {
+	for(uint i = 0; i < arenas.length(); i++) {
+		if(arenas[i].map_name == map_name) {
+			return i;
+		}
+	}
+	return -1;
+}

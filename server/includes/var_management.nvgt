@@ -1,0 +1,245 @@
+// var_management.nvgt - Sistema de gerenciamento de variáveis do jogador
+// Convertido de BGT para NVGT
+
+class var_management {
+	dictionary@ data;
+	string nameplayer;
+	string origin;
+
+	var_management() {
+		origin = "none";
+	}
+
+	var_management(string origin2, string playername) {
+		file f;
+		if (!f.open(origin2, "rb")) {
+			// Se o arquivo não existe, cria um dicionário vazio
+			@data = dictionary();
+		} else {
+			string serialized_data = f.read();
+			@data = deserialize(serialized_data);
+			f.close();
+		}
+		origin = origin2;
+		this.nameplayer = playername;
+	}
+
+	void reset() {
+		file f;
+		if (!f.open(origin, "rb")) {
+			@data = dictionary();
+			return;
+		}
+		string serialized_data = f.read();
+		@data = deserialize(serialized_data);
+		f.close();
+	}
+
+	bool manage(string name, string operator, string var_data, bool is_number) {
+		if (operator == "<" && is_number) {
+			return is_less_than(name, string_to_number(var_data));
+		}
+		if (operator == ">" && is_number) {
+			return is_greater_than(name, string_to_number(var_data));
+		}
+		if (operator == "<=" && is_number) {
+			return is_less_or_equal_than(name, string_to_number(var_data));
+		}
+		if (operator == ">=" && is_number) {
+			return is_greater_or_equal_than(name, string_to_number(var_data));
+		}
+		if (operator == "==") {
+			return is_equal_than(name, var_data, is_number);
+		}
+		if (operator == "!=") {
+			return is_different_than(name, var_data, is_number);
+		}
+		if (operator == "=") {
+			return set_var_to(name, var_data, is_number);
+		}
+		if (operator == "+=") {
+			return add_value_to(name, var_data, is_number);
+		}
+		if (operator == "-=" && is_number) {
+			return subtract_value_to(name, string_to_number(var_data));
+		}
+		if (operator == "*=" && is_number) {
+			return multiply_value_to(name, string_to_number(var_data));
+		}
+		if (operator == "/=" && is_number) {
+			return divide_value_to(name, string_to_number(var_data));
+		}
+		return false;
+	}
+
+	bool is_less_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get < value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_greater_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get > value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_less_or_equal_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get <= value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_greater_or_equal_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get >= value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_equal_than(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get, value2 = string_to_number(value);
+			data.get(key, get);
+			if (get == value2) {
+				return true;
+			}
+		} else {
+			string get;
+			data.get(key, get);
+			if (get == value) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool is_different_than(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get, value2 = string_to_number(value);
+			data.get(key, get);
+			if (get != value2) {
+				return true;
+			}
+		} else {
+			string get;
+			data.get(key, get);
+			if (get != value) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool set_var_to(string key, string value, bool is_number) {
+		if (is_number) {
+			data.set(key, string_to_number(value));
+			save_configs(origin, nameplayer);
+			return true;
+		} else {
+			data.set(key, value);
+			save_configs(origin, nameplayer);
+			return true;
+		}
+	}
+
+	bool add_value_to(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get;
+			data.get(key, get);
+			get += string_to_number(value);
+			data.set(key, get);
+			save_configs(origin, nameplayer);
+			return true;
+		} else {
+			string get;
+			data.get(key, get);
+			get += value;
+			data.set(key, get); // Bug corrigido: era 'value', agora é 'get'
+			save_configs(origin, nameplayer);
+			return true;
+		}
+	}
+
+	bool subtract_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get -= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	bool multiply_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get *= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	bool divide_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get /= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	void save_configs(string dir, string player_name) {
+		int index_player = get_player_index_from(player_name);
+		file f;
+		if (!f.open(dir, "wb")) {
+			return; // Não conseguiu abrir arquivo para escrita
+		}
+		f.write(data.serialize());
+		f.close();
+		// TODO: Implementar reload de configurações do jogador
+		// if (index_player > -1) {
+		// 	load_configs(index_player);
+		// }
+	}
+}

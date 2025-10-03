@@ -37,6 +37,7 @@ timer tovo;
 class wall_entity {
     int x, y;
     string map;
+    string name;
     int vida;
     wall_entity(int wx, int wy, string wmap, int wvida) {
         x = wx; y = wy; map = wmap; vida = wvida;
@@ -138,18 +139,7 @@ string[] nvgt_split(string str, string delimiter) {
     return str.split(delimiter);
 }
 
-string[] delinear(string text) {
-    // BGT delinear() equivalent usando NVGT split
-    return text.split("\r\n");
-}
-
-string linear(string[] a) {
-    string final;
-    for (uint i = 0; i < a.length(); i++) {
-        final += (a[i] + "\r\n");
-    }
-    return final;
-}
+// delinear() movido para server_map.nvgt (versão mais completa com parâmetro opcional)
 
 uint64 get_time_stamp() {
     // NVGT equivalent to get_ticks() ou timestamp
@@ -303,3 +293,87 @@ bool is_valid_email(string email) {
     if(email.find(".") == -1) return false;
     return true;
 }
+
+// Variável global para controle de jogo pausado
+bool gamestopped = false;
+
+// Função para trocar jogador de mapa
+void changemap(string destination_map, int player_index, int dest_x, int dest_y) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    
+    // Obter índice do mapa antigo
+    string old_map = players[player_index].map;
+    int old_map_index = get_map_index_from(old_map);
+    
+    // Atualizar posição e mapa do jogador
+    players[player_index].map = destination_map;
+    players[player_index].x = dest_x;
+    players[player_index].y = dest_y;
+    
+    // Obter índice do novo mapa
+    int new_map_index = get_map_index_from(destination_map);
+    if(new_map_index >= 0) {
+        players[player_index].mapindex = new_map_index;
+    }
+    
+    // Atualizar lista de jogadores nos mapas
+    if(old_map_index >= 0 && old_map_index < int(server_maps.length())) {
+        server_maps[old_map_index].update_players_on_map(false);
+    }
+    if(new_map_index >= 0 && new_map_index < int(server_maps.length())) {
+        server_maps[new_map_index].update_players_on_map(false);
+    }
+    
+    // Notificar cliente
+    send_reliable(players[player_index].peer_id, "changemap " + destination_map + " " + dest_x + " " + dest_y, 0);
+}
+
+// Função para escrever arquivo (wrapper)
+void file_write(string filename, string content) {
+    file f;
+    if(f.open(filename, "wb")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// Função para verificar se jogo está desabilitado em coordenadas específicas
+bool is_game_disabled(int x, int y, string map) {
+    // Verificar se está em zona de jogo desabilitado
+    // TODO: Implementar lógica de zonas desabilitadas quando necessário
+    return false;
+}
+
+// Função ar() - parece ser relacionada a arredondamento
+int ar(double value) {
+    return int(value + 0.5);
+}
+
+// Arrays globais de entidades (placeholders até serem implementadas)
+class jaula_placeholder {
+    int x, y;
+    string map;
+}
+jaula_placeholder@[] jaulas;
+
+class cachorromascota_placeholder {
+    int x, y;
+    string map, nome;
+}
+cachorromascota_placeholder@[] cachorromascotas;
+
+class monstruo_placeholder {
+    int x, y;
+    string map;
+    string nome;
+}
+monstruo_placeholder@[] monstruos;
+
+// Função send_packet10 - envia pacote para todos no mapa exceto remetente
+void send_packet10(int channel, string sender, string sender2, string packet, string mapname) {
+    int mapindex = get_map_index_from(mapname);
+    if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+        server_maps[mapindex].send_packet(channel, packet, true);
+    }
+}
+

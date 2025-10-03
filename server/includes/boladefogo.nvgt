@@ -1,8 +1,6 @@
 // boladefogo.nvgt - Sistema de Bola de Fogo do EVM Server (convertido de BGT)
 // Conversão: BGT → NVGT
 
-boladefogo@[] boladefogos;
-
 class boladefogo {
 	string nome, mapa, s;
 	int lado, x, y;
@@ -15,62 +13,5 @@ class boladefogo {
 		x = bx;
 		y = by;
 		s = spawn_moving_sound("boladefogo.ogg", x, y, mapa);
-	}
-}
-
-void colocar_boladefogo(string nome, int lado, string mapa, int x, int y) {
-	boladefogo b(nome, lado, mapa, x, y);
-	boladefogos.insert_last(b);
-}
-
-void boladefogoloop() {
-	for (uint i = 0; i < boladefogos.length(); i++) {
-		// Remover após tempo limite
-		if (boladefogos[i].tremover.elapsed >= 50000) {
-			destroy_moving_sound(boladefogos[i].s);
-			boladefogos.remove_at(i);
-			break;
-		}
-		
-		// Verificar colisão com paredes
-		if (get_tile_at(boladefogos[i].x, boladefogos[i].y, boladefogos[i].mapa).find("wall") != -1) {
-			server_broadcast("play boobytraphit1.ogg " + boladefogos[i].x + " " + boladefogos[i].y);
-			destroy_moving_sound(boladefogos[i].s);
-			boladefogos.remove_at(i);
-			break;
-		}
-		
-		// Movimento da bola de fogo
-		if (boladefogos[i].tandar.elapsed >= 50) {
-			boladefogos[i].tandar.restart();
-			
-			// Direções de movimento (assumindo constantes BGT)
-			if (boladefogos[i].lado == 3) boladefogos[i].x++;      // Right
-			else if (boladefogos[i].lado == 2) boladefogos[i].x--; // Left
-			else if (boladefogos[i].lado == 1) boladefogos[i].y--; // Back
-			else if (boladefogos[i].lado == 0) boladefogos[i].y++; // Forward
-			
-			update_moving_sound(boladefogos[i].s, boladefogos[i].x, boladefogos[i].y);
-			
-			// Verificar colisão com jogadores
-			for (uint i2 = 0; i2 < players.length(); i2++) {
-				if (players[i2].x == boladefogos[i].x && boladefogos[i].y == players[i2].y && 
-					players[i2].map == boladefogos[i].mapa && players[i2].pacifico == 0 && 
-					players[i2].afk == false && !emequipe(boladefogos[i].nome, players[i2].charname)) {
-					
-					server_broadcast("play molotovatinge.ogg " + players[i2].x + " " + players[i2].y);
-					players[i2].health -= 2000;
-					players[i2].lasthit = "boladefogo_" + boladefogos[i].nome;
-					server_broadcast("inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y);
-					
-					// Se jogador sobreviveu, aplicar fogo grudado
-					if (players[i2].health > 0) colocar_fogogrudado(boladefogos[i].nome, players[i2].charname);
-					
-					destroy_moving_sound(boladefogos[i].s);
-					boladefogos.remove_at(i);
-					break;
-				}
-			}
-		}
 	}
 }
