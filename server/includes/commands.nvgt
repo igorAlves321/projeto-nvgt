@@ -120,7 +120,25 @@ void init_command_system() {
     register_command("broadcast", "Anúncio global", true, {"announce"}, "broadcast <mensagem>");
     register_command("admin_msg", "Mensagem para admins", true, {"amsg"}, "admin_msg <mensagem>");
     register_command("notify", "Notificação especial", true, {}, "notify <jogador> <mensagem>");
-    
+
+    // 🆕 Sistema de Crafting
+    register_command("craft", "Criar item com receita", false, {"create"}, "craft <item>");
+    register_command("recipes", "Ver receitas disponíveis", false, {"listrecipes"}, "recipes [categoria]");
+    register_command("cancraft", "Verificar se pode criar item", false, {"checkcraft"}, "cancraft <item>");
+
+    // 🆕 Zonas Desabilitadas (Admin)
+    register_command("addzone", "Adicionar zona desabilitada", true, {}, "addzone <minx> <maxx> <miny> <maxy> <mapa> [mensagem]");
+    register_command("removezone", "Remover zona desabilitada", true, {}, "removezone <índice>");
+    register_command("listzones", "Listar zonas desabilitadas", true, {}, "listzones");
+    register_command("togglezonepvp", "Alternar PvP em zona", true, {}, "togglezonepvp <índice>");
+    register_command("checkzone", "Verificar zona atual", false, {}, "checkzone");
+    register_command("savezones", "Salvar zonas em arquivo", true, {}, "savezones");
+    register_command("loadzones", "Carregar zonas de arquivo", true, {}, "loadzones");
+
+    // 🆕 Sistema de Inventário Avançado (Admin)
+    register_command("transfer", "Transferir item entre jogadores", true, {}, "transfer <origem> <destino> <item> <quantidade>");
+    register_command("checkweight", "Ver peso do inventário", false, {}, "checkweight [jogador]");
+
     debug_log("Sistema de comandos inicializado com " + registered_commands.get_size() + " comandos");
 }
 
@@ -206,6 +224,82 @@ bool process_command(player@ player, string full_command) {
 
 // Executar comando específico
 bool execute_command(player@ player, string command, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) return false;
+    
+    // 🆕 INTEGRAÇÃO: Comandos Administrativos
+    if(command == "playtime") {
+        string target = args.length() > 0 ? args[0] : "";
+        cmd_playtime(player_index, target);
+        return true;
+    }
+    else if(command == "kick") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /kick <jogador> [razão]");
+            return false;
+        }
+        string target = args[0];
+        string reason = args.length() > 1 ? join(args, " ").substr(target.length() + 1) : "Expulso por admin";
+        cmd_kick(player_index, target, reason);
+        return true;
+    }
+    else if(command == "inventory") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /inventory <jogador>");
+            return false;
+        }
+        cmd_inventory(player_index, args[0]);
+        return true;
+    }
+    else if(command == "freezeall") {
+        int duration = args.length() > 0 ? string_to_number(args[0]) : 10;
+        cmd_freezeall(player_index, duration);
+        return true;
+    }
+    else if(command == "backup") {
+        cmd_backup(player_index);
+        return true;
+    }
+    else if(command == "forcedc") {
+        cmd_forcedc(player_index);
+        return true;
+    }
+    else if(command == "tp") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /tp <jogador>");
+            return false;
+        }
+        cmd_tp(player_index, args[0]);
+        return true;
+    }
+    else if(command == "tphere") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /tphere <jogador>");
+            return false;
+        }
+        cmd_tphere(player_index, args[0]);
+        return true;
+    }
+    else if(command == "givexp") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /givexp <jogador> <quantidade>");
+            return false;
+        }
+        cmd_givexp(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "giveitem") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /giveitem <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        cmd_giveitem(player_index, target, item, quantity);
+        return true;
+    }
+    
     // Comandos básicos
     if(command == "help") {
         return cmd_help(player, args);

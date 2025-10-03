@@ -1,0 +1,444 @@
+// admin_commands.nvgt - Sistema de Comandos Administrativos
+// ✅ ITEM 4: COMANDOS ADMINISTRATIVOS
+
+// Verifica permissão de admin
+bool is_admin(int player_index) {
+	return players[player_index].admin;
+}
+
+// Verifica se é super admin (usando admin_status)
+bool is_super_admin(int player_index) {
+	return players[player_index].admin_status;
+}
+
+// Comando /playtime
+void cmd_playtime(int player_index, string target_name = "") {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	if(target_name == "") {
+		// Mostrar próprio tempo
+		int minutes = int(players[player_index].playtimer.elapsed / 60000);
+		send_reliable(players[player_index].peer_id, "msg2 Seu tempo conectado: " + minutes + " minutos", 0);
+	} else {
+		// Mostrar tempo de outro jogador
+		int target = get_player_index_from(target_name);
+		if(target == -1) {
+			send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+			return;
+		}
+		
+		int minutes = int(players[target].playtimer.elapsed / 60000);
+		send_reliable(players[player_index].peer_id, "msg2 Tempo de " + target_name + ": " + minutes + " minutos", 0);
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " usou /playtime");
+}
+
+// Comando /kick
+void cmd_kick(int player_index, string target_name, string reason = "Expulso por admin") {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	// Não pode kickar outro admin
+	if(players[target].admin) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não pode kickar este jogador!", 0);
+		return;
+	}
+	
+	// Broadcast
+	for(uint i = 0; i < players.length(); i++) {
+		send_reliable(players[i].peer_id, "msg2 " + target_name + " foi expulso. Razão: " + reason, 0);
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " kickou " + target_name + " - Razão: " + reason);
+	
+	// Desconectar (TODO: Implementar quando network estiver pronto)
+	// server_net.disconnect_peer(players[target].peer_id);
+}
+
+// Comando /inventory
+void cmd_inventory(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	// Serializar inventário
+	string inv = players[target].inv.serialize();
+	string[] items = inv.split("|");
+	
+	send_reliable(players[player_index].peer_id, "msg2 === Inventário de " + target_name + " ===", 0);
+	
+	for(uint i = 0; i < items.length(); i++) {
+		if(items[i].find(":") > -1) {
+			string[] parts = items[i].split(":");
+			send_reliable(players[player_index].peer_id, "msg2 " + parts[0] + " x" + parts[1], 0);
+		}
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " visualizou inventário de " + target_name);
+}
+
+// Comando /freezeall
+void cmd_freezeall(int player_index, int duration = 10) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		return;
+	}
+	
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].admin) { // Não congelar admins
+			players[i].congelado = 1;
+			send_reliable(players[i].peer_id, "msg2 Você foi congelado por " + duration + " segundos!", 0);
+		}
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " congelou todos os jogadores por " + duration + "s");
+	
+	// Broadcast
+	for(uint i = 0; i < players.length(); i++) {
+		send_reliable(players[i].peer_id, "msg2 ADMIN CONGELOU TODOS POR " + duration + " SEGUNDOS!", 0);
+	}
+}
+
+// Comando /backup
+void cmd_backup(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		return;
+	}
+	
+	send_reliable(players[player_index].peer_id, "msg2 Iniciando backup do servidor...", 0);
+	
+	// Salvar tudo
+	auto_save_all_players();
+	
+	// Copiar arquivos críticos
+	// TODO: Implementar cópia de arquivos quando NVGT tiver suporte
+	
+	send_reliable(players[player_index].peer_id, "msg2 Backup concluído!", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " criou backup do servidor");
+}
+
+// Comando /forcedc (força desconexão de todos)
+void cmd_forcedc(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		return;
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " forçou desconexão de todos");
+	
+	// Notificar todos
+	for(uint i = 0; i < players.length(); i++) {
+		send_reliable(players[i].peer_id, "msg2 SERVIDOR REINICIANDO EM 10 SEGUNDOS!", 0);
+	}
+	
+	// Salvar tudo
+	auto_save_all_players();
+	
+	// Aguardar 10 segundos e desconectar todos
+	// TODO: Implementar timer com callback quando disponível
+}
+
+// Comando /tp (teleportar)
+void cmd_tp(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	// Teleportar para o jogador alvo
+	players[player_index].x = players[target].x;
+	players[player_index].y = players[target].y;
+	players[player_index].map = players[target].map;
+	
+	send_reliable(players[player_index].peer_id, "msg2 Teleportado para " + target_name, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " teleportou para " + target_name);
+}
+
+// Comando /tphere (trazer jogador)
+void cmd_tphere(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	// Trazer jogador
+	players[target].x = players[player_index].x;
+	players[target].y = players[player_index].y;
+	players[target].map = players[player_index].map;
+	
+	send_reliable(players[player_index].peer_id, "msg2 " + target_name + " foi trazido até você", 0);
+	send_reliable(players[target].peer_id, "msg2 Você foi teleportado por um admin", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " trouxe " + target_name);
+}
+
+// Comando /givexp
+void cmd_givexp(int player_index, string target_name, int xp_amount) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	ganhaxp(target, xp_amount, 0);
+	send_reliable(players[player_index].peer_id, "msg2 Você deu " + xp_amount + " XP para " + target_name, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + xp_amount + " XP para " + target_name);
+}
+
+// Comando /giveitem
+void cmd_giveitem(int player_index, string target_name, string item_name, int quantity = 1) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	players[target].inv_add_item(item_name, quantity);
+	send_reliable(players[player_index].peer_id, "msg2 Você deu " + quantity + "x " + item_name + " para " + target_name, 0);
+	send_reliable(players[target].peer_id, "msg2 Você recebeu " + quantity + "x " + item_name + " de um admin", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + quantity + "x " + item_name + " para " + target_name);
+}
+
+// ============================================================================
+// 🆕 COMANDOS DE GESTÃO DE ZONAS DESABILITADAS
+// ============================================================================
+
+// Comando /addzone - Adicionar nova zona desabilitada
+void cmd_addzone(int player_index, int minx, int maxx, int miny, int maxy, string map_name, string message = "Zona Segura") {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		return;
+	}
+
+	// Criar nova zona
+	game_disabled_zone@ nova_zona = game_disabled_zone(minx, maxx, miny, maxy, map_name, message);
+	nova_zona.disable_pvp = true;
+	nova_zona.disable_items = false;
+	nova_zona.disable_commands = false;
+	game_disabled_zones.insert_last(nova_zona);
+
+	send_reliable(players[player_index].peer_id,
+		"msg2 Zona adicionada: [" + minx + "," + maxx + "] x [" + miny + "," + maxy + "] no mapa " + map_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " adicionou zona desabilitada no mapa " + map_name);
+}
+
+// Comando /removezone - Remover zona desabilitada por índice
+void cmd_removezone(int player_index, int zone_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		return;
+	}
+
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_reliable(players[player_index].peer_id, "msg2 Índice de zona inválido! Use /listzones para ver as zonas", 0);
+		return;
+	}
+
+	string map_removed = game_disabled_zones[zone_index].map;
+	game_disabled_zones.remove_at(zone_index);
+
+	send_reliable(players[player_index].peer_id, "msg2 Zona " + zone_index + " removida do mapa " + map_removed, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " removeu zona " + zone_index);
+}
+
+// Comando /listzones - Listar todas as zonas desabilitadas
+void cmd_listzones(int player_index) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+
+	if(game_disabled_zones.length() == 0) {
+		send_reliable(players[player_index].peer_id, "msg2 Nenhuma zona desabilitada configurada", 0);
+		return;
+	}
+
+	string result = "=== ZONAS DESABILITADAS (" + game_disabled_zones.length() + ") ===\\r\\n";
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		result += "[" + i + "] Mapa: " + game_disabled_zones[i].map +
+			" | Área: [" + game_disabled_zones[i].minx + "-" + game_disabled_zones[i].maxx +
+			"] x [" + game_disabled_zones[i].miny + "-" + game_disabled_zones[i].maxy + "]";
+
+		if(game_disabled_zones[i].disable_pvp) result += " | PvP:OFF";
+		if(game_disabled_zones[i].disable_items) result += " | Items:OFF";
+		if(game_disabled_zones[i].disable_commands) result += " | Commands:OFF";
+
+		result += "\\r\\n";
+	}
+
+	send_reliable(players[player_index].peer_id, "say " + result, 0);
+}
+
+// Comando /togglezonepvp - Alternar PvP em uma zona
+void cmd_togglezonepvp(int player_index, int zone_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		return;
+	}
+
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_reliable(players[player_index].peer_id, "msg2 Índice de zona inválido!", 0);
+		return;
+	}
+
+	game_disabled_zones[zone_index].disable_pvp = !game_disabled_zones[zone_index].disable_pvp;
+
+	string status = game_disabled_zones[zone_index].disable_pvp ? "desabilitado" : "habilitado";
+	send_reliable(players[player_index].peer_id,
+		"msg2 PvP " + status + " na zona " + zone_index + " (" + game_disabled_zones[zone_index].map + ")", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " alterou PvP na zona " + zone_index + " para " + status);
+}
+
+// Comando /checkzone - Verificar se posição atual está em zona desabilitada
+void cmd_checkzone(int player_index) {
+	bool in_zone = false;
+	int zone_id = -1;
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		if(game_disabled_zones[i].is_inside(players[player_index].x, players[player_index].y, players[player_index].map)) {
+			in_zone = true;
+			zone_id = i;
+			break;
+		}
+	}
+
+	if(in_zone) {
+		send_reliable(players[player_index].peer_id,
+			"msg2 Você está na zona [" + zone_id + "] - " + game_disabled_zones[zone_id].message +
+			" | PvP:" + (game_disabled_zones[zone_id].disable_pvp ? "OFF" : "ON"), 0);
+	} else {
+		send_reliable(players[player_index].peer_id, "msg2 Você não está em nenhuma zona desabilitada", 0);
+	}
+}
+
+// Comando /savezones - Salvar zonas em arquivo de configuração
+void cmd_savezones(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		return;
+	}
+
+	file f;
+	if(!f.open("disabled_zones.cfg", "wb")) {
+		send_reliable(players[player_index].peer_id, "msg2 Erro ao abrir arquivo para salvar!", 0);
+		return;
+	}
+
+	string content = "// Zonas Desabilitadas - Configuração\\n";
+	content += "// Formato: map|minx|maxx|miny|maxy|pvp|items|commands|message\\n\\n";
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		content += game_disabled_zones[i].map + "|";
+		content += game_disabled_zones[i].minx + "|";
+		content += game_disabled_zones[i].maxx + "|";
+		content += game_disabled_zones[i].miny + "|";
+		content += game_disabled_zones[i].maxy + "|";
+		content += (game_disabled_zones[i].disable_pvp ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_items ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_commands ? "1" : "0") + "|";
+		content += game_disabled_zones[i].message + "\\n";
+	}
+
+	f.write(content);
+	f.close();
+
+	send_reliable(players[player_index].peer_id,
+		"msg2 " + game_disabled_zones.length() + " zonas salvas em disabled_zones.cfg", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " salvou " + game_disabled_zones.length() + " zonas");
+}
+
+// Comando /loadzones - Carregar zonas de arquivo de configuração
+void cmd_loadzones(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		return;
+	}
+
+	file f;
+	if(!f.open("disabled_zones.cfg", "rb")) {
+		send_reliable(players[player_index].peer_id, "msg2 Arquivo disabled_zones.cfg não encontrado!", 0);
+		return;
+	}
+
+	string content = f.read();
+	f.close();
+
+	// Limpar zonas atuais
+	game_disabled_zones.resize(0);
+
+	string[] lines = content.split("\\n");
+	int loaded = 0;
+
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		string[] parts = line.split("|");
+		if(parts.length() >= 9) {
+			string map = parts[0];
+			int minx = string_to_number(parts[1]);
+			int maxx = string_to_number(parts[2]);
+			int miny = string_to_number(parts[3]);
+			int maxy = string_to_number(parts[4]);
+			bool pvp = (parts[5] == "1");
+			bool items = (parts[6] == "1");
+			bool commands = (parts[7] == "1");
+			string message = parts[8];
+
+			game_disabled_zone@ zona = game_disabled_zone(minx, maxx, miny, maxy, map, message);
+			zona.disable_pvp = pvp;
+			zona.disable_items = items;
+			zona.disable_commands = commands;
+			game_disabled_zones.insert_last(zona);
+			loaded++;
+		}
+	}
+
+	send_reliable(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas de disabled_zones.cfg", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " carregou " + loaded + " zonas");
+}

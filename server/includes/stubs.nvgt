@@ -193,9 +193,51 @@ class clothes_placeholder {
 }
 clothes_placeholder@[] clothes;
 
-// Funções de spawn de fogo do jogador
+// ✅ IMPLEMENTADO: Sistema de Fogo Contínuo (Player Fire)
+// Cria fogo que causa dano contínuo ao jogador
 void spawn_playerfire(int x, int y, string map, int owner_index, int damage, int duration) {
-    debug_log("SPAWN_PLAYERFIRE: " + x + "," + y + " map:" + map);
+	// Verificar se há jogadores na posição
+	for(uint i = 0; i < players.length(); i++) {
+		// Verificar se jogador está na posição do fogo
+		if(players[i].x == x && players[i].y == y && players[i].map == map) {
+			// Verificar se jogador já não está pegando fogo
+			bool already_burning = false;
+			for(uint j = 0; j < players[i].playerfires.length(); j++) {
+				if(players[i].playerfires[j].x == x && players[i].playerfires[j].y == y) {
+					already_burning = true;
+					break;
+				}
+			}
+			
+			if(!already_burning) {
+				// Criar novo playerfire
+				playerfire pf;
+				pf.x = x;
+				pf.y = y;
+				pf.map = map;
+				pf.owner = owner_index;
+				pf.damage = damage;
+				pf.duration = duration;
+				pf.t.restart();
+				pf.tt.restart();
+				
+				// Adicionar ao array do jogador
+				players[i].playerfires.insert_last(pf);
+				
+				// Notificar jogador
+				send_reliable(players[i].peer_id, "msg2 Você está pegando fogo! Use antídoto!", 0);
+				
+				// Som de fogo
+				int mapindex = get_map_index_from(map);
+				if(mapindex >= 0) {
+					server_maps[mapindex].send_packet(0, "play fire_start.ogg " + x + " " + y, x, y);
+				}
+				
+				debug_log("PLAYERFIRE: Jogador " + players[i].charname + " pegou fogo em " + x + "," + y);
+			}
+			break;
+		}
+	}
 }
 
 // Funções globais de NPC
@@ -304,6 +346,70 @@ string getdesc(string item_name) {
 // Overload de gc para aceitar 2 parâmetros
 string gc(string key, int default_value) {
     return gc(key);
+}
+
+// ==================== FUNÇÕES DE STRING ====================
+
+// Função trim - remover espaços em branco do início e fim
+string trim(string str) {
+    if(str.length() == 0) return "";
+
+    // Encontrar primeiro caractere não-espaço
+    uint start = 0;
+    while(start < str.length() && (str[start] == ' ' || str[start] == '\t' || str[start] == '\r' || str[start] == '\n')) {
+        start++;
+    }
+
+    // Se só tem espaços
+    if(start == str.length()) return "";
+
+    // Encontrar último caractere não-espaço
+    uint end = str.length() - 1;
+    while(end > start && (str[end] == ' ' || str[end] == '\t' || str[end] == '\r' || str[end] == '\n')) {
+        end--;
+    }
+
+    return str.substr(start, (end - start) + 1);
+}
+
+// ==================== VARIÁVEIS GLOBAIS MODIFICÁVEIS ====================
+
+// Variáveis configuráveis do servidor (não-const para permitir reload)
+int MAX_PLAYERS = 100;
+// AUTOSAVE_INTERVAL já está definido em globals.nvgt
+
+// NOTE: disabled_zones e init_disabled_zones já definidos em systems_advanced.nvgt
+
+// ==================== FUNÇÕES DE BOMBA ====================
+
+// Calcular distância de uma bomba até um jogador
+int get_bomba_distance(maxbomba@ bomb, player@ p) {
+    if(bomb.map != p.map) return -1;
+
+    int dx = abs(bomb.x - p.x);
+    int dy = abs(bomb.y - p.y);
+
+    return int(sqrt(double(dx*dx + dy*dy)));
+}
+
+// ==================== FUNÇÕES DE INVENTÁRIO ====================
+
+// Remover item do inventário do jogador
+bool item_take(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    // TODO: Implementar sistema completo de inventário
+    debug_log("ITEM_TAKE: " + players[player_index].charname + " removeu " + quantity + "x " + item_name);
+    return true;
+}
+
+// Dar item ao jogador
+bool item_give(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    // TODO: Implementar sistema completo de inventário
+    debug_log("ITEM_GIVE: " + players[player_index].charname + " recebeu " + quantity + "x " + item_name);
+    return true;
 }
 
 

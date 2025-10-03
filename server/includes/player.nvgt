@@ -3,7 +3,7 @@
 
 #include "playerfires.nvgt"
 #include "settitle.nvgt"
-#include "var_management.nvgt"
+// #include "var_management.nvgt" // TEMPORARIAMENTE DESABILITADO (variáveis não existem)
 #include "db.nvgt"
 #include "crafting.nvgt"
 
@@ -39,6 +39,8 @@ class player {
 	string maparena = "";       // Nome do mapa da arena
 	int xarena = 0;             // Coordenada X de spawn da arena
 	int yarena = 0;             // Coordenada Y de spawn da arena
+	int arena_wins = 0;         // 🆕 Total de vitórias em arenas
+	int arena_kills = 0;        // 🆕 Total de kills em arenas
 	
 	// --- Sistema de Morte Progressiva ---
 	int progressive_death = 0;  // Se está em morte progressiva (1=sim, 0=não)
@@ -285,6 +287,12 @@ class player {
 	int invs = 0, invs2 = 0;
 	int tempotrancado;
 	
+	// 🆕 Sistema de Inventário Avançado
+	double max_carry_weight = 50.0;      // Peso máximo que pode carregar (kg)
+	int max_inventory_slots = 20;        // Número máximo de slots
+	double movement_speed = 1.0;         // Velocidade de movimento (1.0 = normal)
+	bool is_overweight = false;          // Se está sobrecarregado
+	
 	// Equipamentos/vestimentas
 	int caneleirametal = 0, caneleiramadeira = 0;
 	int capacetepolicia = 0;
@@ -317,6 +325,7 @@ class player {
 	int bonemizuno = 0;
 	timer congelartimer;
 	timer tempofogo;
+	int congelado = 0; // 0 = não congelado, 1 = congelado
 	int voice;
 	string version;
 	uint peer_id = 0;
@@ -489,6 +498,25 @@ class player {
 		// Com dictionary, não temos índices - retorna 0 se existe, -1 se não existe
 		// (mantido para compatibilidade com código existente)
 		return inv.exists(itemname) ? 0 : -1;
+	}
+	
+	// ✅ IMPLEMENTADO: Remove quantidade específica de um item
+	void inv_remove_item(string itemname, int quantity) {
+		if (!inv.exists(itemname)) return;
+		
+		int current = 0;
+		inv.get(itemname, current);
+		
+		if (current <= quantity) {
+			// Remove completamente
+			inv.delete(itemname);
+		} else {
+			// Remove apenas a quantidade
+			inv.set(itemname, current - quantity);
+		}
+		
+		// Atualizar cliente
+		send_reliable(peer_id, "inv " + inv.serialize(), 0);
 	}
 	
 	void inv_delete_item(string itemname) {
@@ -1156,11 +1184,23 @@ class player {
 			// Processar morte por jogador
 			if(get_player_index_from(this.lasthit) > -1) {
 				int killer_index = get_player_index_from(this.lasthit);
+				int victim_index = get_player_index_from(this.charname);
+				
 				players[killer_index].matou += 1;
 				players[killer_index].sanity -= random(1, 5);
 				
+				// 🆕 INTEGRAÇÃO: Sistema de Estatísticas
+				server_stats.register_kill(players[killer_index].charname, this.charname);
+				server_stats.register_death(this.charname);
+				
+				// 🆕 INTEGRAÇÃO: Sistema de Experiência
+				// Dar XP ao killer baseado no level da vítima
+				int xp_reward = int(this.level * 100 + random(50, 150));
+				int gold_reward = int(this.level * 10 + random(5, 20));
+				ganhaxp(killer_index, xp_reward, gold_reward);
+				
 				// Processa recompensa se a vítima tiver uma
-				process_bounty_kill(killer_index, get_player_index_from(this.charname));
+				process_bounty_kill(killer_index, victim_index);
 				
 				// Arena
 				if(players[killer_index].map == "arena") {

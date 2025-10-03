@@ -1,0 +1,320 @@
+// weapons_list.nvgt - Sistema de Armas do Servidor
+// Carrega e gerencia todas as armas do jogo
+
+// ============================================================================
+// CLASSE WEAPON
+// ============================================================================
+
+class weapon {
+	// Atributos principais (carregados do weapons_list.db)
+	string name;                      // Nome da arma (ex: "m8a7")
+	string ammo;                      // Nome do item de munição (ex: "7.62mm")
+	string sound_shoot;               // Som do disparo
+	string sound_impact;              // String com sons de impacto em paredes (separados por vírgula)
+	string sound_draw;                // Som ao selecionar a arma
+	string sound_reload;              // Som ao recarregar
+	double damage;                    // Dano base
+	double distance;                  // Distância máxima do projétil
+	double ammo_total;                // Munição total que a arma pode carregar
+	double ammo_cantity;              // Quantidade de munição no carregador/pente
+	double speed;                     // Velocidade de tiro no modo semiautomático (ms)
+	double speed_burst;               // Velocidade de tiro no modo automático (ms)
+	double speed_loading;             // Tempo para recarregar (ms)
+	int require_ammo;                 // 1 se precisa de munição no inventário, 0 caso contrário
+	int enable_burst;                 // 1 se tem modo de rajada/automático, 0 caso contrário
+	int is_dropable;                  // 1 se a arma é arremessável, 0 caso contrário
+	string sound_impact_on_corpse;    // String com sons de impacto em jogadores/NPCs (separados por vírgula)
+	string sound_unload;              // Som ao tentar atirar sem munição
+	string sound_mode1;               // Som ao mudar para modo automático
+	string sound_mode2;               // Som ao mudar para modo semiautomático
+	double ammo_cantity_descount;     // Quantidade de munição gasta por tiro
+	string sound_shoot_dist;          // Som do disparo a longa distância
+	double degradation_point;         // Fator de degradação da arma
+	
+	// Arrays processados (populados a partir das strings com vírgulas)
+	string[] sounds_impact;           // Array de sons de impacto em paredes
+	string[] sounds_impact_on_corpse; // Array de sons de impacto em corpos
+	
+	// Construtor padrão
+	weapon() {
+		name = "";
+		ammo = "";
+		sound_shoot = "";
+		sound_impact = "";
+		sound_draw = "";
+		sound_reload = "";
+		damage = 50;
+		distance = 500;
+		ammo_total = 100;
+		ammo_cantity = 30;
+		speed = 1000;
+		speed_burst = 100;
+		speed_loading = 2000;
+		require_ammo = 1;
+		enable_burst = 0;
+		is_dropable = 1;
+		sound_impact_on_corpse = "";
+		sound_unload = "";
+		sound_mode1 = "";
+		sound_mode2 = "";
+		ammo_cantity_descount = 1;
+		sound_shoot_dist = "";
+		degradation_point = 1;
+	}
+	
+	// Construtor com dados do arquivo
+	weapon(string[] data) {
+		if(data.length() < 23) {
+			debug_log("WEAPON ERROR: Dados insuficientes para criar arma. Esperado 23, recebido " + data.length());
+			weapon(); // Usar construtor padrão
+			return;
+		}
+		
+		// Carregar os 23 atributos na ordem do weapons_list.db
+		name = data[0];
+		ammo = data[1];
+		sound_shoot = data[2];
+		sound_impact = data[3];
+		sound_draw = data[4];
+		sound_reload = data[5];
+		damage = string_to_number(data[6]);
+		distance = string_to_number(data[7]);
+		ammo_total = string_to_number(data[8]);
+		ammo_cantity = string_to_number(data[9]);
+		speed = string_to_number(data[10]);
+		speed_burst = string_to_number(data[11]);
+		speed_loading = string_to_number(data[12]);
+		require_ammo = string_to_number(data[13]);
+		enable_burst = string_to_number(data[14]);
+		is_dropable = string_to_number(data[15]);
+		sound_impact_on_corpse = data[16];
+		sound_unload = data[17];
+		sound_mode1 = data[18];
+		sound_mode2 = data[19];
+		ammo_cantity_descount = string_to_number(data[20]);
+		sound_shoot_dist = data[21];
+		degradation_point = string_to_number(data[22]);
+		
+		// Processar arrays de sons (dividir strings por vírgula)
+		if(sound_impact != "") {
+			sounds_impact = sound_impact.split(",");
+		}
+		
+		if(sound_impact_on_corpse != "") {
+			sounds_impact_on_corpse = sound_impact_on_corpse.split(",");
+		}
+		
+		debug_log("WEAPON: Arma '" + name + "' carregada - Dano: " + damage + ", Alcance: " + distance);
+	}
+	
+	// Obter som de impacto aleatório em parede
+	string get_random_impact_sound() {
+		if(sounds_impact.length() == 0) return "rico1"; // Som padrão
+		return sounds_impact[random(0, sounds_impact.length() - 1)];
+	}
+	
+	// Obter som de impacto aleatório em corpo
+	string get_random_corpse_impact_sound() {
+		if(sounds_impact_on_corpse.length() == 0) return "body1"; // Som padrão
+		return sounds_impact_on_corpse[random(0, sounds_impact_on_corpse.length() - 1)];
+	}
+}
+
+// ============================================================================
+// ARRAY GLOBAL DE ARMAS
+// ============================================================================
+
+weapon@[] weapons_list;
+
+// ============================================================================
+// FUNÇÕES DE CARREGAMENTO
+// ============================================================================
+
+// Carregar todas as armas do arquivo weapons_list.db
+void load_weapons() {
+	debug_log("Carregando armas de weapons_list.db...");
+	
+	file f;
+	if(!f.open("weapons_list.db", "rb")) {
+		debug_log("ERRO: Não foi possível abrir weapons_list.db");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") {
+		debug_log("AVISO: weapons_list.db está vazio");
+		return;
+	}
+	
+	// Dividir por linhas (usar \r\n para compatibilidade)
+	string[] lines = content.split("\r\n");
+	
+	debug_log("WEAPONS: Processando " + lines.length() + " linhas...");
+	
+	int loaded_count = 0;
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = lines[i];
+		
+		// Ignorar linhas vazias ou comentários
+		if(line == "" || line.find("//") == 0) continue;
+		
+		// Dividir atributos por '='
+		string[] parts = line.split("=");
+		
+		if(parts.length() < 23) {
+			debug_log("WEAPONS: Linha " + i + " ignorada - apenas " + parts.length() + " partes (esperado 23)");
+			continue;
+		}
+		
+		// Criar arma e adicionar ao array
+		weapon@ new_weapon = weapon(parts);
+		weapons_list.insert_last(new_weapon);
+		loaded_count++;
+	}
+	
+	debug_log("WEAPONS: " + loaded_count + " armas carregadas com sucesso!");
+}
+
+// Obter arma por nome
+weapon@ get_weapon_by_name(string weapon_name) {
+	for(uint i = 0; i < weapons_list.length(); i++) {
+		if(weapons_list[i].name == weapon_name) {
+			return weapons_list[i];
+		}
+	}
+	return null;
+}
+
+// Obter índice da arma por nome (-1 se não encontrada)
+int get_weapon_index(string weapon_name) {
+	for(uint i = 0; i < weapons_list.length(); i++) {
+		if(weapons_list[i].name == weapon_name) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// Verificar se índice de arma é válido
+bool is_valid_weapon_index(int weapon_index) {
+	return (weapon_index >= 0 && weapon_index < int(weapons_list.length()));
+}
+
+// ============================================================================
+// FUNÇÕES AUXILIARES PARA BULLETS
+// ============================================================================
+
+// Calcular dano de uma bala baseado na arma
+int calculate_weapon_damage(int weapon_index) {
+	// weapon_index vem de bullets[b].weapon, que geralmente é weapon_id
+	// No código BGT original, weapon vem como (arma_index + 1)
+	// Então precisamos subtrair 1 para obter o índice correto
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		debug_log("WEAPON: Índice inválido " + weapon_index + ", usando dano padrão");
+		return 50; // Dano padrão
+	}
+	
+	return int(weapons_list[w].damage);
+}
+
+// Obter som de impacto em parede para uma arma
+string get_weapon_wall_impact_sound(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return "rico1"; // Som padrão
+	}
+	
+	return weapons_list[w].get_random_impact_sound();
+}
+
+// Obter som de impacto em corpo para uma arma
+string get_weapon_body_impact_sound(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return "body1"; // Som padrão
+	}
+	
+	return weapons_list[w].get_random_corpse_impact_sound();
+}
+
+// Obter distância máxima de uma arma
+double get_weapon_distance(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return 500.0; // Distância padrão
+	}
+	
+	return weapons_list[w].distance;
+}
+
+// Verificar se arma requer munição
+bool weapon_requires_ammo(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return true; // Por padrão, requer munição
+	}
+	
+	return (weapons_list[w].require_ammo == 1);
+}
+
+// Obter nome da munição de uma arma
+string get_weapon_ammo_name(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return "9mm"; // Munição padrão
+	}
+	
+	return weapons_list[w].ammo;
+}
+
+// ============================================================================
+// INFORMAÇÕES E DEBUG
+// ============================================================================
+
+// Listar todas as armas carregadas
+void list_all_weapons() {
+	debug_log("=== ARMAS CARREGADAS (" + weapons_list.length() + ") ===");
+	
+	for(uint i = 0; i < weapons_list.length(); i++) {
+		debug_log(i + ": " + weapons_list[i].name + 
+			" (Dano: " + weapons_list[i].damage + 
+			", Alcance: " + weapons_list[i].distance + 
+			", Munição: " + weapons_list[i].ammo + ")");
+	}
+}
+
+// Obter informações detalhadas de uma arma
+string get_weapon_info(int weapon_index) {
+	int w = weapon_index - 1;
+	
+	if(!is_valid_weapon_index(w)) {
+		return "Arma não encontrada (índice " + weapon_index + ")";
+	}
+	
+	weapon@ wpn = weapons_list[w];
+	
+	string info = "=== " + wpn.name + " ===\n";
+	info += "Munição: " + wpn.ammo + "\n";
+	info += "Dano: " + wpn.damage + "\n";
+	info += "Alcance: " + wpn.distance + "\n";
+	info += "Velocidade (semi): " + wpn.speed + "ms\n";
+	info += "Velocidade (auto): " + wpn.speed_burst + "ms\n";
+	info += "Tempo de recarga: " + wpn.speed_loading + "ms\n";
+	info += "Modo automático: " + (wpn.enable_burst == 1 ? "Sim" : "Não") + "\n";
+	info += "Requer munição: " + (wpn.require_ammo == 1 ? "Sim" : "Não") + "\n";
+	info += "Sons de impacto (parede): " + wpn.sounds_impact.length() + "\n";
+	info += "Sons de impacto (corpo): " + wpn.sounds_impact_on_corpse.length() + "\n";
+	info += "Degradação: " + wpn.degradation_point + "\n";
+	
+	return info;
+}

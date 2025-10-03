@@ -150,7 +150,17 @@ void bulletcheck(int b) {
 	for (uint bu = 0; bu < walls.length(); bu++) {
 		if (bullets[b].x == walls[bu].x && walls[bu].map == bullets[b].mapname) {
 			if (bullets[b].y == 0) walls[bu].vida -= dano;
-			if (srico != "") /* net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y); */
+			
+			// 🆕 INTEGRAÇÃO: Som de impacto da arma em parede
+			string impact_sound = get_weapon_wall_impact_sound(bullets[b].weapon);
+			if (impact_sound != "") {
+				net.send_reliable(0, "play " + impact_sound + " " + bullets[b].x + " " + bullets[b].y);
+			}
+			else if (srico != "") {
+				// Fallback para som genérico se arma não tiver som definido
+				net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y);
+			}
+			
 			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
 			bullets.remove_at(b);
 			return;
@@ -230,6 +240,23 @@ void bulletcheck(int b) {
 		}
 		
 		if (players[ie4].pacifico == 1) return;
+		
+		// 🆕 INTEGRAÇÃO: Verificar zonas desabilitadas (PVP bloqueado)
+		if(is_in_disabled_zone(ie4)) {
+			// Bala não causa dano em zona segura
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+		
+		// 🆕 INTEGRAÇÃO: Verificar se atacante está em zona desabilitada
+		ba2 = get_player_index_from(bullets[b].owner);
+		if(ba2 >= 0 && is_in_disabled_zone(ba2)) {
+			// Atacante em zona segura não pode atacar
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
 		
 		// Proteção estrela
 		if (players[ie4].star == true) {
@@ -375,7 +402,33 @@ void bulletcheck(int b) {
 		}
 		
 		if (amount <= 2) amount = random(20, 30);
+		
+		// 🆕 INTEGRAÇÃO: Sistema de Armas - Usar dano da arma
+		// Se arma é válida, sobrescrever dano com o dano da arma
+		if(bullets[b].weapon > 0 && is_valid_weapon_index(bullets[b].weapon - 1)) {
+			int weapon_damage = calculate_weapon_damage(bullets[b].weapon);
+			if(weapon_damage > 0) {
+				amount = weapon_damage;
+			}
+		}
+		
+		// 🆕 INTEGRAÇÃO: Sistema de Combate Avançado
+		// Aplicar bônus de dano do atacante (se encontrado)
+		ba2 = get_player_index_from(bullets[b].owner);
+		if(ba2 >= 0) {
+			amount = calculate_combat_damage(ba2, amount);
+		}
+		
+		// Aplicar redução de dano do defensor
+		amount = calculate_damage_reduction(ie4, amount);
+		
 		players[ie4].health -= amount;
+		
+		// 🆕 INTEGRAÇÃO: Som de impacto da arma no corpo
+		string corpse_sound = get_weapon_body_impact_sound(bullets[b].weapon);
+		if (corpse_sound != "") {
+			net.send_reliable(0, "play " + corpse_sound + " " + bullets[b].x + " " + bullets[b].y);
+		}
 		
 		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
 		bullets.remove_at(b);
@@ -385,7 +438,17 @@ void bulletcheck(int b) {
 	// Verificar colisão com paredes do mapa
 	surface = get_tile_at(bullets[b].x, bullets[b].y, bullets[b].mapname);
 	if (surface.find("wall") > -1 || surface.find("pwall") > -1) {
-		if (srico != "") /* net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y); */
+		
+		// 🆕 INTEGRAÇÃO: Som de impacto da arma em parede
+		string impact_sound = get_weapon_wall_impact_sound(bullets[b].weapon);
+		if (impact_sound != "") {
+			net.send_reliable(0, "play " + impact_sound + " " + bullets[b].x + " " + bullets[b].y);
+		}
+		else if (srico != "") {
+			// Fallback para som genérico se arma não tiver som definido
+			net.send_reliable(0, "play " + srico + " " + bullets[b].x + " " + bullets[b].y);
+		}
+		
 		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
 		bullets.remove_at(b);
 		return;

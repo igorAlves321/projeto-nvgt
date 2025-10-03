@@ -2,6 +2,14 @@
 // Convertido para NVGT
 // Gerencia arenas de combate PvP com regras especiais
 
+// Modos de jogo de arena
+enum arena_mode {
+	MODE_FFA,           // Free For All - todos contra todos
+	MODE_TEAM,          // Team Deathmatch - equipes
+	MODE_ELIMINATION,   // Elimination - último sobrevivente
+	MODE_CAPTURE        // Capture the Flag - capturar bandeira
+}
+
 // Classe de Arena
 class arena {
 	string map_name;         // Nome do mapa da arena
@@ -13,8 +21,20 @@ class arena {
 	timer match_timer;      // Timer da partida
 	int match_duration;     // Duração da partida em milissegundos
 	bool match_started;     // Se a partida começou
+	arena_mode mode;        // Modo de jogo
+	int min_players;        // Mínimo de jogadores para iniciar
 	
-	arena(string map, int x, int y, int max_p = 10, int duration = 300000) {
+	// Sistema de pontuação
+	dictionary scores;      // charname -> score (int)
+	dictionary team_scores; // team_name -> score (int)
+	
+	// Recompensas
+	int xp_reward_winner = 500;
+	int gold_reward_winner = 100;
+	int xp_reward_participant = 100;
+	int gold_reward_participant = 20;
+	
+	arena(string map, int x, int y, int max_p = 10, int duration = 300000, arena_mode game_mode = MODE_FFA) {
 		map_name = map;
 		x_spawn = x;
 		y_spawn = y;
@@ -22,6 +42,49 @@ class arena {
 		active = false;
 		match_duration = duration; // 5 minutos padrão
 		match_started = false;
+		mode = game_mode;
+		min_players = 2;
+	}
+	
+	// Adicionar pontos a um jogador
+	void add_score(string player_name, int points) {
+		if(scores.exists(player_name)) {
+			int current = int(scores[player_name]);
+			scores.set(player_name, current + points);
+		} else {
+			scores.set(player_name, points);
+		}
+	}
+	
+	// Obter pontuação de um jogador
+	int get_score(string player_name) {
+		if(scores.exists(player_name)) {
+			return int(scores[player_name]);
+		}
+		return 0;
+	}
+	
+	// Obter vencedor
+	string get_winner() {
+		string winner = "";
+		int highest_score = 0;
+		
+		string[]@ keys = scores.get_keys();
+		for(uint i = 0; i < keys.length(); i++) {
+			int score = int(scores[keys[i]]);
+			if(score > highest_score) {
+				highest_score = score;
+				winner = keys[i];
+			}
+		}
+		
+		return winner;
+	}
+	
+	// Resetar pontuações
+	void reset_scores() {
+		scores.delete_all();
+		team_scores.delete_all();
 	}
 }
 
@@ -142,6 +205,9 @@ void end_arena_match(int arena_index) {
 	
 	arenas[arena_index].match_started = false;
 	
+	// 🆕 Dar recompensas antes de remover jogadores
+	give_arena_rewards(arena_index);
+	
 	// Teleportar todos de volta
 	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
 		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
@@ -189,3 +255,209 @@ int get_arena_index(string map_name) {
 	}
 	return -1;
 }
+
+// ============================================================================
+// 🆕 SISTEMA DE MATCHMAKING
+// ============================================================================
+
+// Fila de matchmaking
+string[] matchmaking_queue;
+
+// Adicionar jogador à fila de matchmaking
+void add_to_matchmaking(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	string player_name = players[player_index].charname;
+	
+	// Verificar se já está na fila
+	for(uint i = 0; i < matchmaking_queue.length(); i++) {
+		if(matchmaking_queue[i] == player_name) {
+			send_reliable(players[player_index].peer_id, 
+				"msg2 Você já está na fila de matchmaking!", 0);
+			return;
+		}
+	}
+	
+	matchmaking_queue.insert_last(player_name);
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Você entrou na fila de matchmaking. Aguarde um oponente...", 0);
+	
+	// Tentar criar partida se houver jogadores suficientes
+	try_create_match();
+}
+
+// Remover jogador da fila
+void remove_from_matchmaking(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	string player_name = players[player_index].charname;
+	
+	for(uint i = 0; i < matchmaking_queue.length(); i++) {
+		if(matchmaking_queue[i] == player_name) {
+			matchmaking_queue.remove_at(i);
+			send_reliable(players[player_index].peer_id, 
+				"msg2 Você saiu da fila de matchmaking.", 0);
+			return;
+		}
+	}
+}
+
+// Tentar criar uma partida
+void try_create_match() {
+	// Precisa de pelo menos 2 jogadores na fila
+	if(matchmaking_queue.length() < 2) return;
+	
+	// Procurar arena disponível
+	int arena_index = -1;
+	for(uint i = 0; i < arenas.length(); i++) {
+		if(!arenas[i].match_started && arenas[i].players_in_arena.length() == 0) {
+			arena_index = i;
+			break;
+		}
+	}
+	
+	// Se não tem arena disponível, criar uma temporária
+	if(arena_index == -1) {
+		create_arena("arena_pvp", 0, 0, 10, 300000);
+		arena_index = int(arenas.length()) - 1;
+	}
+	
+	// Adicionar jogadores da fila à arena (máximo da arena)
+	// ✅ CORRIGIDO: Substituir min() por operador ternário
+	int players_to_add = (matchmaking_queue.length() < arenas[arena_index].max_players) 
+	                     ? int(matchmaking_queue.length()) 
+	                     : int(arenas[arena_index].max_players);
+	
+	for(int i = 0; i < players_to_add; i++) {
+		int player_idx = get_player_index_from(matchmaking_queue[0]);
+		if(player_idx > -1) {
+			add_player_to_arena(arena_index, player_idx);
+		}
+		matchmaking_queue.remove_at(0);
+	}
+	
+	// Iniciar partida se tem jogadores suficientes
+	if(arenas[arena_index].players_in_arena.length() >= arenas[arena_index].min_players) {
+		start_arena_match(arena_index);
+	}
+}
+
+// ============================================================================
+// 🆕 SISTEMA DE RECOMPENSAS
+// ============================================================================
+
+// Dar recompensas aos participantes
+void give_arena_rewards(int arena_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) return;
+	
+	string winner = arenas[arena_index].get_winner();
+	
+	// Recompensar todos os participantes
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		string player_name = arenas[arena_index].players_in_arena[i];
+		int player_idx = get_player_index_from(player_name);
+		
+		if(player_idx > -1) {
+			bool is_winner = (player_name == winner);
+			
+			if(is_winner) {
+				// Recompensa do vencedor
+				ganhaxp(player_idx, arenas[arena_index].xp_reward_winner, 
+					arenas[arena_index].gold_reward_winner);
+				
+				send_reliable(players[player_idx].peer_id, 
+					"msg2 Você venceu a arena! Recompensa: " + 
+					arenas[arena_index].xp_reward_winner + " XP e " + 
+					arenas[arena_index].gold_reward_winner + " ouro!", 0);
+				
+				// Registrar vitória em estatísticas
+				players[player_idx].arena_wins += 1;
+			} else {
+				// Recompensa de participação
+				ganhaxp(player_idx, arenas[arena_index].xp_reward_participant, 
+					arenas[arena_index].gold_reward_participant);
+				
+				send_reliable(players[player_idx].peer_id, 
+					"msg2 Obrigado por participar! Recompensa: " + 
+					arenas[arena_index].xp_reward_participant + " XP e " + 
+					arenas[arena_index].gold_reward_participant + " ouro.", 0);
+			}
+		}
+	}
+	
+	// Resetar pontuações
+	arenas[arena_index].reset_scores();
+}
+
+// ============================================================================
+// 🆕 SISTEMA DE RANKING
+// ============================================================================
+
+// Mostrar ranking da arena
+string get_arena_ranking(int arena_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) {
+		return "Arena inválida.";
+	}
+	
+	string ranking = "=== RANKING DA ARENA ===\n";
+	
+	// Coletar pontuações
+	string[] players_list;
+	int[] scores_list;
+	
+	string[]@ keys = arenas[arena_index].scores.get_keys();
+	for(uint i = 0; i < keys.length(); i++) {
+		players_list.insert_last(keys[i]);
+		scores_list.insert_last(int(arenas[arena_index].scores[keys[i]]));
+	}
+	
+	// Ordenar por pontuação (bubble sort simples)
+	for(uint i = 0; i < scores_list.length(); i++) {
+		for(uint j = i + 1; j < scores_list.length(); j++) {
+			if(scores_list[j] > scores_list[i]) {
+				// Trocar pontuações
+				int temp_score = scores_list[i];
+				scores_list[i] = scores_list[j];
+				scores_list[j] = temp_score;
+				
+				// Trocar nomes
+				string temp_name = players_list[i];
+				players_list[i] = players_list[j];
+				players_list[j] = temp_name;
+			}
+		}
+	}
+	
+	// Montar ranking
+	for(uint i = 0; i < players_list.length(); i++) {
+		ranking += (i + 1) + ". " + players_list[i] + ": " + scores_list[i] + " pontos\n";
+	}
+	
+	if(players_list.length() == 0) {
+		ranking += "Nenhum jogador pontuou ainda.\n";
+	}
+	
+	return ranking;
+}
+
+// ============================================================================
+// 🆕 EVENTOS DE ARENA
+// ============================================================================
+
+// Registrar kill na arena
+void register_arena_kill(int arena_index, string killer, string victim) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) return;
+	
+	// Adicionar pontos ao killer
+	arenas[arena_index].add_score(killer, 1);
+	
+	// Notificar todos na arena
+	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
+		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
+		if(player_idx > -1) {
+			send_reliable(players[player_idx].peer_id, 
+				"msg2 " + killer + " eliminou " + victim + "!", 0);
+		}
+	}
+}
+

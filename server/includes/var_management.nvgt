@@ -243,3 +243,176 @@ class var_management {
 		// }
 	}
 }
+
+// ============================================================================
+// 🆕 SISTEMA DE RELOAD DE CONFIGURAÇÕES DO SERVIDOR
+// ============================================================================
+
+// Recarregar configurações do servidor (config.nvgt)
+void reload_server_config() {
+	debug_log("Recarregando configurações do servidor...");
+	
+	file f;
+	if(!f.open("config.nvgt", "rb")) {
+		debug_log("ERRO: Não foi possível abrir config.nvgt");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") {
+		debug_log("AVISO: config.nvgt está vazio");
+		return;
+	}
+	
+	string[] lines = content.split("\n");
+	int loaded = 0;
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+
+		// Ignorar comentários e linhas vazias
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		// Processar linha de configuração (formato: VARIAVEL=valor)
+		int equal_pos = line.find_first("=");
+		if(equal_pos < 0) continue;
+
+		string var_name = trim(line.substr(0, equal_pos));
+		string var_value = trim(line.substr(equal_pos + 1));
+		
+		// Aplicar configurações conhecidas
+		if(var_name == "MAX_PLAYERS") {
+			MAX_PLAYERS = string_to_number(var_value);
+			loaded++;
+		}
+		else if(var_name == "AUTOSAVE_INTERVAL") {
+			AUTOSAVE_INTERVAL = string_to_number(var_value);
+			loaded++;
+		}
+		// Adicionar mais variáveis conforme necessário
+	}
+	
+	debug_log("Configurações recarregadas: " + loaded + " variáveis atualizadas");
+}
+
+// Recarregar receitas de crafting
+void reload_crafting_recipes() {
+	debug_log("Recarregando receitas de crafting...");
+	
+	file f;
+	if(!f.open("crafting_recipes.dat", "rb")) {
+		debug_log("AVISO: crafting_recipes.dat não encontrado, usando receitas padrão");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") return;
+	
+	// Limpar receitas antigas
+	crafting_system.recipes.delete_all();
+	
+	// Carregar novas receitas
+	string[] lines = content.split("\n");
+	int loaded = 0;
+
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+		if(line == "" || line.substr(0, 2) == "//") continue;
+		
+		// Formato: result_item|ingredients|description|quantity
+		string[] parts = line.split("|");
+		if(parts.length() >= 3) {
+			string result = parts[0];
+			string ingredients = parts[1];
+			string description = parts[2];
+			int quantity = (parts.length() >= 4) ? string_to_number(parts[3]) : 1;
+			
+			crafting_system.add_recipe(result, ingredients, description, quantity);
+			loaded++;
+		}
+	}
+	
+	debug_log("Receitas de crafting recarregadas: " + loaded + " receitas");
+}
+
+// Recarregar dados de armas do weapons.db
+void reload_weapons() {
+	debug_log("Recarregando armas...");
+	
+	// Limpar armas antigas
+	weapons_list.resize(0);
+	
+	// Recarregar
+	load_weapons();
+	
+	debug_log("Armas recarregadas: " + weapons_list.length() + " armas carregadas");
+}
+
+// Recarregar zonas desabilitadas
+void reload_disabled_zones() {
+	debug_log("Recarregando zonas desabilitadas...");
+
+	// Limpar zonas antigas
+	game_disabled_zones.resize(0);
+
+	// Recarregar
+	init_disabled_zones();
+
+	debug_log("Zonas desabilitadas recarregadas: " + game_disabled_zones.length() + " zonas");
+}
+
+// Recarregar tudo (uso com cuidado - pode causar lag temporário)
+void reload_all_server_data() {
+	debug_log("=== INICIANDO RELOAD COMPLETO DO SERVIDOR ===");
+	
+	reload_server_config();
+	reload_crafting_recipes();
+	reload_weapons();
+	reload_disabled_zones();
+	
+	debug_log("=== RELOAD COMPLETO FINALIZADO ===");
+}
+
+// Atualizar variável específica do servidor em runtime
+bool set_server_var(string var_name, string value) {
+	if(var_name == "MAX_PLAYERS") {
+		MAX_PLAYERS = string_to_number(value);
+		debug_log("MAX_PLAYERS atualizado para: " + value);
+		return true;
+	}
+	else if(var_name == "AUTOSAVE_INTERVAL") {
+		AUTOSAVE_INTERVAL = string_to_number(value);
+		debug_log("AUTOSAVE_INTERVAL atualizado para: " + value);
+		return true;
+	}
+	
+	debug_log("ERRO: Variável desconhecida: " + var_name);
+	return false;
+}
+
+// Obter valor de variável do servidor
+string get_server_var(string var_name) {
+	if(var_name == "MAX_PLAYERS") {
+		return MAX_PLAYERS;
+	}
+	else if(var_name == "AUTOSAVE_INTERVAL") {
+		return AUTOSAVE_INTERVAL;
+	}
+	
+	return "UNKNOWN";
+}
+
+// Listar todas as variáveis configuráveis
+string list_server_vars() {
+	string result = "=== VARIÁVEIS DO SERVIDOR ===\n";
+	result += "MAX_PLAYERS = " + MAX_PLAYERS + "\n";
+	result += "AUTOSAVE_INTERVAL = " + AUTOSAVE_INTERVAL + "\n";
+	result += "TOTAL_PLAYERS = " + players.length() + "\n";
+	result += "SERVER_UPTIME = " + (server_uptime.elapsed / 1000) + "s\n";
+	return result;
+}
+

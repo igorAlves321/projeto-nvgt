@@ -1,0 +1,402 @@
+// inventory_advanced.nvgt - Sistema de Inventário Avançado do EVM Server
+// Convertido para NVGT
+// Sistema de peso, slots e transferência entre jogadores
+
+// ============================================================================
+// CONFIGURAÇÃO DE PESOS DE ITENS
+// ============================================================================
+
+dictionary item_weights; // item_name -> peso (double)
+dictionary item_sizes;   // item_name -> slots ocupados (int)
+
+// Inicializar pesos e tamanhos de itens
+void init_item_data() {
+	debug_log("Inicializando dados de itens (peso e tamanho)...");
+	
+	// Munições (leves)
+	item_weights.set("5.56mm", 0.01);
+	item_weights.set("7.62mm", 0.02);
+	item_weights.set("12gauge", 0.03);
+	item_weights.set(".50cal", 0.05);
+	item_sizes.set("5.56mm", 1);
+	item_sizes.set("7.62mm", 1);
+	item_sizes.set("12gauge", 1);
+	item_sizes.set(".50cal", 1);
+	
+	// Armas (médias a pesadas)
+	item_weights.set("glock17", 0.9);
+	item_weights.set("desert_eagle", 1.2);
+	item_weights.set("mp5", 2.5);
+	item_weights.set("ak47", 3.5);
+	item_weights.set("awp", 6.5);
+	item_weights.set("bazuca", 15.0);
+	item_sizes.set("glock17", 2);
+	item_sizes.set("desert_eagle", 2);
+	item_sizes.set("mp5", 3);
+	item_sizes.set("ak47", 4);
+	item_sizes.set("awp", 5);
+	item_sizes.set("bazuca", 6);
+	
+	// Armaduras (pesadas)
+	item_weights.set("colete", 5.0);
+	item_weights.set("capacete", 1.5);
+	item_weights.set("escudo", 8.0);
+	item_sizes.set("colete", 3);
+	item_sizes.set("capacete", 2);
+	item_sizes.set("escudo", 4);
+	
+	// Consumíveis (leves)
+	item_weights.set("kit_medico", 0.5);
+	item_weights.set("antidoto", 0.2);
+	item_weights.set("agua", 1.0);
+	item_weights.set("comida", 0.5);
+	item_sizes.set("kit_medico", 1);
+	item_sizes.set("antidoto", 1);
+	item_sizes.set("agua", 1);
+	item_sizes.set("comida", 1);
+	
+	// Ferramentas (médias)
+	item_weights.set("picareta", 2.0);
+	item_weights.set("machado", 1.8);
+	item_weights.set("vara_de_pesca", 1.0);
+	item_sizes.set("picareta", 2);
+	item_sizes.set("machado", 2);
+	item_sizes.set("vara_de_pesca", 3);
+	
+	// Recursos (variável)
+	item_weights.set("wood", 0.5);
+	item_weights.set("iron", 2.0);
+	item_weights.set("gold", 5.0);
+	item_sizes.set("wood", 1);
+	item_sizes.set("iron", 1);
+	item_sizes.set("gold", 1);
+	
+	// Moeda (sem peso)
+	item_weights.set("reais", 0.001);
+	item_sizes.set("reais", 1);
+	
+	debug_log("Dados de itens inicializados: " + item_weights.get_size() + " itens configurados");
+}
+
+// Obter peso de um item
+double get_item_weight(string item_name, int quantity = 1) {
+	if(item_weights.exists(item_name)) {
+		double weight;
+		item_weights.get(item_name, weight);
+		return weight * quantity;
+	}
+	
+	// Peso padrão se item não configurado
+	return 0.5 * quantity;
+}
+
+// Obter slots ocupados por um item
+int get_item_size(string item_name, int quantity = 1) {
+	if(item_sizes.exists(item_name)) {
+		int size;
+		item_sizes.get(item_name, size);
+		return size * quantity;
+	}
+	
+	// Tamanho padrão se item não configurado
+	return 1 * quantity;
+}
+
+// ============================================================================
+// FUNÇÕES DE INVENTÁRIO COM LIMITE DE PESO
+// ============================================================================
+
+// Calcular peso total do inventário de um jogador
+double calculate_inventory_weight(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return 0.0;
+	}
+	
+	double total_weight = 0.0;
+	
+	// Percorrer inventário do jogador
+	// Nota: Assumindo que existe uma forma de iterar pelo inventário
+	// TODO: Adaptar conforme estrutura real do inventário do jogador
+	
+	return total_weight;
+}
+
+// Calcular slots ocupados no inventário
+int calculate_inventory_slots(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return 0;
+	}
+	
+	int total_slots = 0;
+	
+	// Percorrer inventário do jogador
+	// TODO: Adaptar conforme estrutura real do inventário
+	
+	return total_slots;
+}
+
+// Verificar se jogador pode carregar item (por peso)
+bool can_carry_weight(int player_index, string item_name, int quantity) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	double current_weight = calculate_inventory_weight(player_index);
+	double item_weight = get_item_weight(item_name, quantity);
+	double max_weight = players[player_index].max_carry_weight;
+	
+	return (current_weight + item_weight) <= max_weight;
+}
+
+// Verificar se jogador tem espaço em slots
+bool has_inventory_space(int player_index, string item_name, int quantity) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	int current_slots = calculate_inventory_slots(player_index);
+	int item_slots = get_item_size(item_name, quantity);
+	int max_slots = players[player_index].max_inventory_slots;
+	
+	return (current_slots + item_slots) <= max_slots;
+}
+
+// Verificar se pode adicionar item (peso E slots)
+bool can_add_to_inventory(int player_index, string item_name, int quantity) {
+	return can_carry_weight(player_index, item_name, quantity) && 
+	       has_inventory_space(player_index, item_name, quantity);
+}
+
+// ============================================================================
+// TRANSFERÊNCIA DE ITENS ENTRE JOGADORES
+// ============================================================================
+
+// Transferir item de um jogador para outro
+bool transfer_item(int from_player, int to_player, string item_name, int quantity) {
+	if(from_player < 0 || from_player >= int(players.length())) {
+		return false;
+	}
+	if(to_player < 0 || to_player >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se o jogador de origem tem o item
+	if(players[from_player].inv_item_number(item_name) < quantity) {
+		send_reliable(players[from_player].peer_id, 
+			"msg2 Você não tem " + quantity + "x " + item_name + "!", 0);
+		return false;
+	}
+	
+	// Verificar se o jogador de destino pode receber
+	if(!can_add_to_inventory(to_player, item_name, quantity)) {
+		send_reliable(players[from_player].peer_id, 
+			"msg2 " + players[to_player].charname + " não tem espaço para receber o item!", 0);
+		send_reliable(players[to_player].peer_id, 
+			"msg2 Seu inventário está cheio!", 0);
+		return false;
+	}
+	
+	// Remover do jogador de origem
+	item_take(from_player, item_name, quantity);
+
+	// Adicionar ao jogador de destino
+	item_give(to_player, item_name, quantity);
+	
+	// Notificações
+	send_reliable(players[from_player].peer_id, 
+		"msg2 Você transferiu " + quantity + "x " + item_name + " para " + players[to_player].charname, 0);
+	send_reliable(players[to_player].peer_id, 
+		"msg2 Você recebeu " + quantity + "x " + item_name + " de " + players[from_player].charname, 0);
+	
+	// Log
+	debug_log(players[from_player].charname + " transferiu " + quantity + "x " + item_name + 
+	          " para " + players[to_player].charname);
+	
+	return true;
+}
+
+// Transferir item para jogador próximo (por nome)
+bool transfer_to_nearby(int from_player, string target_name, string item_name, int quantity) {
+	if(from_player < 0 || from_player >= int(players.length())) {
+		return false;
+	}
+	
+	// Procurar jogador alvo próximo
+	int target_index = -1;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].charname == target_name) {
+			// Verificar se está próximo (mesma posição ou adjacente)
+			int dist_x = abs(players[i].x - players[from_player].x);
+			int dist_y = abs(players[i].y - players[from_player].y);
+			
+			if(dist_x <= 2 && dist_y <= 2 && players[i].map == players[from_player].map) {
+				target_index = i;
+				break;
+			}
+		}
+	}
+	
+	if(target_index == -1) {
+		send_reliable(players[from_player].peer_id, 
+			"msg2 Jogador não encontrado ou está muito longe!", 0);
+		return false;
+	}
+	
+	return transfer_item(from_player, target_index, item_name, quantity);
+}
+
+// ============================================================================
+// ORGANIZAÇÃO DE INVENTÁRIO
+// ============================================================================
+
+// Obter informações do inventário
+string get_inventory_info(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return "Jogador inválido";
+	}
+	
+	double current_weight = calculate_inventory_weight(player_index);
+	double max_weight = players[player_index].max_carry_weight;
+	int current_slots = calculate_inventory_slots(player_index);
+	int max_slots = players[player_index].max_inventory_slots;
+	
+	string info = "=== INVENTÁRIO ===\n";
+	info += "Peso: " + current_weight + " / " + max_weight + " kg\n";
+	info += "Slots: " + current_slots + " / " + max_slots + "\n";
+	info += "Capacidade: " + int((current_weight / max_weight) * 100) + "%\n";
+	
+	// Avisos
+	if(current_weight >= max_weight * 0.9) {
+		info += "\n⚠️ SOBRECARGA: Movimento lento!\n";
+	}
+	if(current_slots >= max_slots) {
+		info += "\n⚠️ INVENTÁRIO CHEIO!\n";
+	}
+	
+	return info;
+}
+
+// Aplicar efeitos de sobrecarga
+void apply_overweight_effects(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+	
+	double current_weight = calculate_inventory_weight(player_index);
+	double max_weight = players[player_index].max_carry_weight;
+	
+	// Calcular % de sobrecarga
+	double weight_percent = current_weight / max_weight;
+	
+	if(weight_percent >= 1.0) {
+		// Totalmente sobrecarregado - não pode se mover
+		players[player_index].movement_speed = 0;
+		players[player_index].is_overweight = true;
+	}
+	else if(weight_percent >= 0.9) {
+		// Quase sobrecarregado - movimento muito lento
+		players[player_index].movement_speed = 0.5;
+		players[player_index].is_overweight = true;
+	}
+	else if(weight_percent >= 0.75) {
+		// Carregado - movimento lento
+		players[player_index].movement_speed = 0.75;
+		players[player_index].is_overweight = true;
+	}
+	else {
+		// Normal
+		players[player_index].movement_speed = 1.0;
+		players[player_index].is_overweight = false;
+	}
+}
+
+// ============================================================================
+// SISTEMA DE EXPANSÃO DE INVENTÁRIO
+// ============================================================================
+
+// Aumentar capacidade de peso do jogador
+void upgrade_carry_capacity(int player_index, double bonus_weight) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+	
+	players[player_index].max_carry_weight += bonus_weight;
+	
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Capacidade de carga aumentada! Novo limite: " + 
+		players[player_index].max_carry_weight + " kg", 0);
+}
+
+// Aumentar número de slots do inventário
+void upgrade_inventory_slots(int player_index, int bonus_slots) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+	
+	players[player_index].max_inventory_slots += bonus_slots;
+	
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Inventário expandido! Novos slots: " + 
+		players[player_index].max_inventory_slots, 0);
+}
+
+// ============================================================================
+// SISTEMA DE DROP/PICKUP INTELIGENTE
+// ============================================================================
+
+// Dropar item no chão (criando objeto no mapa)
+bool drop_item_to_ground(int player_index, string item_name, int quantity) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se tem o item
+	if(players[player_index].inv_item_number(item_name) < quantity) {
+		send_reliable(players[player_index].peer_id, 
+			"msg2 Você não tem " + quantity + "x " + item_name + "!", 0);
+		return false;
+	}
+	
+	// Remover do inventário
+	item_take(player_index, item_name, quantity);
+	
+	// Criar objeto no mapa
+	spawn_obj(players[player_index].x, players[player_index].y, item_name, 
+	          quantity, players[player_index].map);
+	
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Você dropou " + quantity + "x " + item_name, 0);
+	
+	return true;
+}
+
+// Pegar item do chão verificando espaço
+bool pickup_item_from_ground(int player_index, int object_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	if(object_index < 0 || object_index >= int(objs.length())) {
+		return false;
+	}
+	
+	string item_name = objs[object_index].item;
+	int quantity = objs[object_index].amount;
+	
+	// Verificar se pode adicionar
+	if(!can_add_to_inventory(player_index, item_name, quantity)) {
+		send_reliable(players[player_index].peer_id, 
+			"msg2 Inventário cheio! Não é possível pegar " + item_name, 0);
+		return false;
+	}
+	
+	// Adicionar ao inventário
+	item_give(player_index, item_name, quantity);
+	
+	// Remover objeto do mapa
+	objs.remove_at(object_index);
+	
+	send_reliable(players[player_index].peer_id, 
+		"msg2 Você pegou " + quantity + "x " + item_name, 0);
+	
+	return true;
+}

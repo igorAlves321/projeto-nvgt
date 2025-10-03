@@ -13,7 +13,7 @@
 
 // Configurações do servidor
 const int SERVER_PORT = 9317;
-const int MAX_PLAYERS = 100;
+// const int MAX_PLAYERS = 100; // Movido para stubs.nvgt como variável modificável
 const string DATABASE_FILE = "server/database/evm.db";
 
 // Forward declaration removida - NVGT não suporta forward declarations com void
@@ -23,6 +23,8 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/shared_globals.nvgt"
 #include "includes/globals.nvgt"
 #include "includes/network.nvgt"
+#include "includes/var_management.nvgt"  // Sistema de gerenciamento de variáveis (necessário para player.nvgt)
+#include "includes/db.nvgt"  // Sistema de inventário (necessário para player.nvgt)
 #include "includes/player.nvgt"
 #include "includes/settitle.nvgt"  // Sistema de patentes/títulos
 #include "includes/bounty.nvgt"    // Sistema de recompensas
@@ -56,7 +58,7 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/banheiro.nvgt"
 #include "includes/bombaatomica.nvgt"
 #include "includes/bombanuclear.nvgt"
-// #include "includes/comandos/maxbomba.nvgt" // Já incluído via commands.nvgt
+#include "includes/comandos/maxbomba.nvgt" // Sistema de bomba máxima
 #include "includes/canhao.nvgt"
 #include "includes/fogo.nvgt"
 #include "includes/paje.nvgt"
@@ -81,6 +83,13 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/items.nvgt"
 // #include "includes/history.nvgt"  // Temporariamente desabilitado para evitar dependência circular
 #include "includes/combat.nvgt"
+#include "includes/playerfires.nvgt"  // Sistema de fogo contínuo
+#include "includes/placeholder_classes.nvgt"  // Classes temporárias
+#include "includes/weapons.nvgt"  // 🆕 Sistema de armas
+#include "includes/crafting.nvgt"  // Sistema de crafting
+#include "includes/inventory_advanced.nvgt"  // 🆕 Sistema de inventário avançado
+#include "includes/admin_commands.nvgt"  // Comandos administrativos
+#include "includes/systems_advanced.nvgt"  // Sistemas avançados
 #include "../include/db_props.nvgt"
 // sqlite3constants.nvgt já incluído no topo
 
@@ -566,6 +575,14 @@ void main() {
     // Inicializar limpeza de combates expirados
     // cleanup_expired_combats(); // TODO: Implementar quando combat.nvgt estiver pronto
     
+    // 🆕 INTEGRAÇÃO: Inicializar sistemas avançados
+    debug_log("Inicializando sistemas avançados...");
+    init_disabled_zones();  // Zonas desabilitadas (PvP bloqueado)
+    load_weapons();         // 🆕 Carregar armas do weapons.db
+    init_item_data();       // 🆕 Inicializar dados de itens (peso e tamanho)
+    init_moving_sounds();   // 🆕 Inicializar sistema de sons móveis 3D (Steam Audio HRTF)
+    debug_log("Sistemas avançados inicializados");
+    
     // Inicializar servidor de rede
     if(!server_init(SERVER_PORT)) {
         // screen_reader_speak("Falha ao inicializar servidor de rede na porta " + SERVER_PORT, true);
@@ -653,6 +670,7 @@ void main() {
         mguiadoloop();
         bombaatomicaloop();
         bombanuclearloop();
+        maxbombaloop();
         canhaoloop();
         fogoloop();
 
@@ -674,15 +692,47 @@ void main() {
         // boladefogoloop(); // Movido para dentro de maploop em cada mapa
         caiuloop();
 
-        // Atualizar pico de jogadores nas estatísticas
-        // update_peak_players(get_connected_count()); // TODO: Implementar estatísticas
-
-        // Processamento periódico de histórico
-        // process_history_maintenance(); // TODO: Implementar quando history.nvgt estiver pronto
+        // ============================================================
+        // 🆕 SISTEMAS AVANÇADOS INTEGRADOS
+        // ============================================================
+        
+        // Sistema Temporal - Atualizar ciclo dia/noite
+        game_time.update();
+        
+        // Sistema de Arena - Atualizar partidas e matchmaking
+        arena_loop();
+        
+        // Sistema de Itens Magnéticos - Processar atração de itens
+        for(uint i = 0; i < players.length(); i++) {
+            if(players[i].inv_item_number("ima") > 0) {
+                magnetic_item_pull(i);
+            }
+        }
+        
+        // 🆕 Sistema de Inventário Avançado - Aplicar efeitos de sobrecarga
+        for(uint i = 0; i < players.length(); i++) {
+            apply_overweight_effects(i);
+        }
+        
+        // 🆕 Sistema de Sons Móveis 3D - Atualizar posições para todos os jogadores
+        moving_sounds_loop();
+        
+        // Sistema de Estatísticas - Atualizar tempo total de jogo
+        if(last_save.elapsed >= 60000) { // A cada minuto
+            server_stats.total_playtime++;
+        }
+        
+        // Sistema de Itens Magnéticos - Aplicar para todos os jogadores
+        for(uint i = 0; i < players.length(); i++) {
+            if(players[i].inv_item_exists("imã")) {
+                magnetic_item_pull(i, 5); // Raio de 5 tiles
+            }
+        }
         
         // Auto-save a cada 5 minutos
         if(last_save.elapsed >= 300000) { // 5 minutos
             auto_save_all_players();
+            server_stats.save_stats(); // Salvar estatísticas também
         }
         
         // Backup automático a cada hora

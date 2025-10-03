@@ -1,36 +1,211 @@
 // crafting.nvgt - Sistema de Crafting (Criação de Itens)
 // Convertido de BGT para NVGT
-// Placeholder - será implementado quando necessário
+// ✅ IMPLEMENTADO: Sistema completo de crafting
 
 class crafting {
-	// Receitas de crafting (item_resultado => array de ingredientes)
+	// Receitas de crafting (item_resultado => dados da receita)
 	dictionary recipes;
 
 	crafting() {
-		// Inicializar receitas aqui quando necessário
+		// Carregar receitas padrão
+		load_default_recipes();
 	}
 
-	// Verifica se pode criar um item com os ingredientes disponíveis
-	bool can_craft(string item_name, db@ inventory) {
-		// TODO: Implementar lógica de verificação de receitas
-		return false;
+	// ✅ IMPLEMENTADO: Carrega receitas padrão do jogo
+	void load_default_recipes() {
+		// Receitas básicas
+		add_recipe("espada_de_ferro", "ferro:3,madeira:1", "Espada de ferro básica");
+		add_recipe("arco", "madeira:2,corda:1", "Arco simples");
+		add_recipe("flecha", "madeira:1,pedra:1", "Flechas (x10)", 10);
+		add_recipe("escudo_de_madeira", "madeira:4", "Escudo básico de madeira");
+		add_recipe("colete", "couro:5,linha:2", "Colete de proteção");
+		
+		// Receitas intermediárias
+		add_recipe("espada_de_ouro", "ouro:5,madeira:1", "Espada de ouro");
+		add_recipe("armadura_de_ferro", "ferro:8,couro:2", "Armadura completa de ferro");
+		add_recipe("machado_de_ferro", "ferro:3,madeira:2", "Machado de ferro");
+		add_recipe("picareta_de_ferro", "ferro:3,madeira:2", "Picareta de ferro");
+		
+		// Receitas avançadas
+		add_recipe("espada_laser", "cristal:3,bateria:1,circuito:2", "Espada de energia");
+		add_recipe("pistola_laser", "cristal:2,bateria:2,metal:3", "Pistola de energia");
+		add_recipe("armadura_quantum", "nanotecnologia:5,bateria:3,blindagem:4", "Armadura avançada");
+		
+		// Consumíveis
+		add_recipe("kit_médico", "bandagem:3,antídoto:1,remédio:1", "Kit de primeiros socorros");
+		add_recipe("antídoto", "erva_medicinal:2,água:1", "Antídoto para venenos");
+		add_recipe("comida_cozida", "carne:1,lenha:1", "Comida preparada", 5);
+		add_recipe("poção_de_vida", "erva_vermelha:2,cristal_pequeno:1,água:1", "Restaura 100 HP");
+		
+		// Utilitários
+		add_recipe("teleporter", "cristal:2,circuito:1", "Teleportador de uso único");
+		add_recipe("mina", "pólvora:2,metal:1,detonador:1", "Mina explosiva");
+		add_recipe("bomba", "pólvora:3,metal:2,timer:1", "Bomba temporizada");
+		
+		debug_log("CRAFTING: Carregadas " + recipes.get_size() + " receitas padrão");
 	}
 
-	// Cria um item usando ingredientes do inventário
-	bool craft(string item_name, db@ inventory) {
-		// TODO: Implementar lógica de crafting
-		return false;
+	// ✅ IMPLEMENTADO: Verifica se pode criar um item
+	bool can_craft(int player_index, string item_name) {
+		// Verificar se receita existe
+		if(!recipes.exists(item_name)) {
+			return false;
+		}
+		
+		// Pegar dados da receita
+		string recipe_data = string(recipes[item_name]);
+		string[] recipe_parts = recipe_data.split("|");
+		
+		if(recipe_parts.length() < 1) return false;
+		
+		string ingredients_str = recipe_parts[0];
+		string[] ingredients = ingredients_str.split(",");
+		
+		// Verificar cada ingrediente
+		for(uint i = 0; i < ingredients.length(); i++) {
+			string[] item_data = ingredients[i].split(":");
+			if(item_data.length() < 2) continue;
+			
+			string ingredient_name = item_data[0];
+			int required_quantity = string_to_number(item_data[1]);
+			
+			// Verificar se jogador tem a quantidade necessária
+			if(players[player_index].inv_item_number(ingredient_name) < required_quantity) {
+				return false;
+			}
+		}
+		
+		return true;
 	}
 
-	// Adiciona uma receita
-	void add_recipe(string result_item, string[] ingredients) {
-		// TODO: Implementar adição de receitas
+	// ✅ IMPLEMENTADO: Cria um item usando ingredientes
+	bool craft(int player_index, string item_name) {
+		// Verificar se pode criar
+		if(!can_craft(player_index, item_name)) {
+			send_reliable(players[player_index].peer_id, "msg2 Você não tem os ingredientes necessários!", 0);
+			return false;
+		}
+		
+		// Pegar dados da receita
+		string recipe_data = string(recipes[item_name]);
+		string[] recipe_parts = recipe_data.split("|");
+		
+		string ingredients_str = recipe_parts[0];
+		string description = recipe_parts.length() > 1 ? recipe_parts[1] : item_name;
+		int result_quantity = recipe_parts.length() > 2 ? string_to_number(recipe_parts[2]) : 1;
+		
+		string[] ingredients = ingredients_str.split(",");
+		
+		// Remover ingredientes do inventário
+		for(uint i = 0; i < ingredients.length(); i++) {
+			string[] item_data = ingredients[i].split(":");
+			if(item_data.length() < 2) continue;
+			
+			string ingredient_name = item_data[0];
+			int required_quantity = string_to_number(item_data[1]);
+			
+			players[player_index].inv_remove_item(ingredient_name, required_quantity);
+		}
+		
+		// Adicionar item criado
+		players[player_index].inv_add_item(item_name, result_quantity);
+		
+		// 🆕 INTEGRAÇÃO: Registrar estatística de crafting
+		server_stats.register_craft(players[player_index].charname, item_name);
+		
+		// Notificar sucesso
+		send_reliable(players[player_index].peer_id, "msg2 Você criou: " + description + " x" + result_quantity, 0);
+		
+		// Som de crafting
+		int mapindex = players[player_index].mapindex;
+		if(mapindex >= 0) {
+			server_maps[mapindex].send_packet(0, "play craft.ogg " + players[player_index].x + " " + players[player_index].y, 
+				players[player_index].x, players[player_index].y);
+		}
+		
+		debug_log("CRAFTING: " + players[player_index].charname + " criou " + item_name + " x" + result_quantity);
+		return true;
 	}
 
-	// Retorna lista de itens que podem ser criados
-	string[]@ get_craftable_items(db@ inventory) {
-		string[] items;
-		// TODO: Implementar lógica
-		return items;
+	// ✅ IMPLEMENTADO: Adiciona uma receita
+	void add_recipe(string result_item, string ingredients, string description = "", int result_quantity = 1) {
+		// Formato: "ingredientes|descrição|quantidade"
+		string recipe_data = ingredients + "|" + description + "|" + result_quantity;
+		recipes[result_item] = recipe_data;
+	}
+
+	// ✅ IMPLEMENTADO: Retorna lista de itens que podem ser criados
+	string[] get_craftable_items(int player_index) {
+		string[] craftable_items;
+		
+		// Pegar todas as chaves do dicionário de receitas
+		string[] all_recipes = recipes.get_keys();
+		
+		// Verificar quais podem ser criadas
+		for(uint i = 0; i < all_recipes.length(); i++) {
+			if(can_craft(player_index, all_recipes[i])) {
+				craftable_items.insert_last(all_recipes[i]);
+			}
+		}
+		
+		return craftable_items;
+	}
+	
+	// ✅ IMPLEMENTADO: Lista todas as receitas disponíveis
+	string list_all_recipes() {
+		string[] all_recipes = recipes.get_keys();
+		string result = "=== RECEITAS DISPONÍVEIS (" + all_recipes.length() + ") ===\n";
+		
+		for(uint i = 0; i < all_recipes.length(); i++) {
+			string recipe_name = all_recipes[i];
+			string recipe_data = string(recipes[recipe_name]);
+			string[] parts = recipe_data.split("|");
+			
+			string ingredients = parts[0];
+			string description = parts.length() > 1 ? parts[1] : "";
+			
+			result += "\n" + recipe_name + ": " + ingredients;
+			if(description != "") {
+				result += " (" + description + ")";
+			}
+		}
+		
+		return result;
+	}
+	
+	// ✅ IMPLEMENTADO: Mostra ingredientes de uma receita específica
+	string show_recipe(string item_name) {
+		if(!recipes.exists(item_name)) {
+			return "Receita não encontrada: " + item_name;
+		}
+		
+		string recipe_data = string(recipes[item_name]);
+		string[] parts = recipe_data.split("|");
+		
+		string ingredients_str = parts[0];
+		string description = parts.length() > 1 ? parts[1] : "";
+		int quantity = parts.length() > 2 ? string_to_number(parts[2]) : 1;
+		
+		string[] ingredients = ingredients_str.split(",");
+		
+		string result = "=== RECEITA: " + item_name + " ===\n";
+		if(description != "") {
+			result += description + "\n";
+		}
+		result += "Resultado: " + quantity + "x " + item_name + "\n";
+		result += "Ingredientes necessários:\n";
+		
+		for(uint i = 0; i < ingredients.length(); i++) {
+			string[] item_data = ingredients[i].split(":");
+			if(item_data.length() >= 2) {
+				result += "  - " + item_data[1] + "x " + item_data[0] + "\n";
+			}
+		}
+		
+		return result;
 	}
 }
+
+// Instância global do sistema de crafting
+crafting crafting_system;
+
