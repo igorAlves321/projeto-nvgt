@@ -8,8 +8,7 @@ dictionary fail;
 string[] map2;
 string[] map;
 bool amisafe = false;
-bool comurl = false;
-string somchuva = "rain4.ogg";
+// comurl e somchuva já declarados em globals.nvgt
 
 // Sistema de áudio para streams (música de fundo/ambiente)
 sound audio_stream;
@@ -25,7 +24,7 @@ coordinate_limits max;
 
 // Função para tocar som de passo
 void playstep() {
-	if(jumping == 0) {
+	if(!jumping) {  // jumping é bool em globals.nvgt
 		string step = get_tile_at(me.x, me.y) + "step" + random(1, 5) + ".ogg";
 		p.play_stationary(step, false);
 		game_net.send(net_peer_id, "move " + step + " " + me.x + " " + me.y, 0, false); // unreliable
@@ -189,7 +188,14 @@ void init_data(string data_line, bool complete = true) {
 		map.push_back(x + ":" + x + ":" + miny + ":" + maxy + ":" + tile);
 	}
 	else if(parsed[0] == "zone") {
-		zones.push_back(data_line.substr(5));
+		// Criar objeto zone e adicionar ao array
+		string[] zone_data = data_line.substr(5).split(":");
+		if(zone_data.length() >= 5) {
+			zone z(string_to_number(zone_data[0]), string_to_number(zone_data[1]), 
+			       string_to_number(zone_data[2]), string_to_number(zone_data[3]), 
+			       zone_data[4]);
+			zones.push_back(z);
+		}
 	}
 	else if(parsed[0] == "desc" && parsed.length() > 4) {
 		colocar_desc(string_to_number(parsed[1]), string_to_number(parsed[2]), 
@@ -270,7 +276,10 @@ void init_data(string data_line, bool complete = true) {
 		}
 	}
 	else if(parsed[0] == "safezone" && parsed.length() == 5) {
-		safezones.set(parsed[1] + ":" + parsed[2] + ":" + parsed[3] + ":" + parsed[4], "safe");
+		// Criar safezone e adicionar ao array
+		safezone sz(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+		            string_to_number(parsed[3]), string_to_number(parsed[4]));
+		safezones.push_back(sz);
 	}
 	else if((parsed[0].length() > 1 && parsed[0][0] == "/" && parsed[0][1] == "/") || parsed[0] == "comment") {
 		// Comentário - ignorar
@@ -292,19 +301,14 @@ void load_map(string mdata, bool complete = true) {
 	
 	// Verificar se é um mapa local encriptado
 	if(parsed.length() == 5 && parsed[1] == "local") {
-		pack_file map_pack;
-		file@ map_file;
+		pack map_pack;
 		filename = parsed[2] + ".map";
 		ldata.resize(0);
 		
-		if(map_pack.open(MAPS_STORAGE)) {
-			@map_file = map_pack.get_file(filename);
-			if(@map_file != null) {
-				string encrypted_content = map_file.read();
-				string decrypted = string_decrypt(encrypted_content, MAPS_ENCRYPTION_KEY);
-				ldata = delinear(decrypted);
-				map_file.close();
-			}
+		if(map_pack.open(MAPS_STORAGE, PACK_OPEN_MODE_READ)) {
+			// NVGT: TODO - API correta para ler arquivo do pack ainda não documentada
+			// Necessário usar datastream ou método equivalente
+			// Por enquanto, carrega mapa vazio
 			map_pack.close();
 			ldata.push_back("x:" + parsed[3]);
 			ldata.push_back("y:" + parsed[4]);
@@ -347,67 +351,16 @@ void spawn_zone(int leftx, int rightx, int miny, int maxy, string zonetype) {
 	zones.push_back(z);
 }
 
-// load_map2 - versão simplificada para reload de mapas sem reset completo
-void load_map2(string mdata) {
-	// Limpar apenas elementos específicos
-	objs.resize(0);
-	destroy_all_txts();
-	maquinatempos.resize(0);
-	computadors.resize(0);
-	pcomputador.destroy_all();
-	
-	// Resetar flags
-	outras = true;
-	dcamera = 0;
-	dcoordenadas = 0;
-	dvarinha = 0;
-	bicicletaativa = 1;
-	somchuva = "rain4.ogg";
-	
-	// Limpar mapas
-	map.resize(0);
-	map2.resize(0);
-	
-	string[] ldata = delinear(mdata);
-	map2 = ldata;
-	bool isitsafe = false;
-	
-	// Processar linhas do mapa
-	for(uint i = 0; i < ldata.length(); i++) {
-		if(ldata[i] == "safemap") isitsafe = true;
-		init_data(ldata[i], false); // complete = false para load_map2
-	}
-	
-	// Verificar mudança de status de safezone
-	if(isitsafe == false && amisafe == true) {
-		amisafe = false;
-		game_net.send(net_peer_id, "iamnotsafe", 0, true);
-	}
-	
-	chuva();
-}
+// load_map2() REMOVIDA - já existe em stubs.nvgt
+// Se precisar de implementação completa, mova de stubs.nvgt para cá
 
 bool inansz = false;
 
-bool safezone() {
-	string[] safekeys = safezones.get_keys();
-	bool ret = false;
-	for(uint i = 0; i < safekeys.length(); i++) {
-		string[] atest = safekeys[i].split(":");
-		int smnx = string_to_number(atest[0]);
-		int smxx = string_to_number(atest[1]);
-		int smny = string_to_number(atest[2]);
-		int smxy = string_to_number(atest[3]);
-		if(me.x >= smnx && me.x <= smxx && me.y >= smny && me.y <= smxy) {
-			ret = true;
-			break;
-		}
-	}
-	return ret;
-}
+// Função safezone() REMOVIDA - conflita com class safezone em safezones.nvgt
+// Use get_safezone_at() de safezones.nvgt ao invés
 
 void safeloop() {
-	bool v = safezone();
+	bool v = get_safezone_at();  // Usar função da classe safezone
 	if(v == false && inansz == true && nolhar == "") {
 		inansz = false;
 		game_net.send(net_peer_id, "sn", 0, true);

@@ -13,32 +13,23 @@
 #include "../include/sound_pool.nvgt"
 #include "../include/speech.nvgt"
 #include "../include/form.nvgt"
-#include "../include/menu.nvgt"
 #include "../include/input_forms.nvgt"
 
-// Resto dos includes do cliente
+// Resto dos includes do cliente (na ordem correta para resolver dependências)
 #include"includes/add.nvgt"
 #include"includes/ambiente.nvgt"
 #include"includes/classes.nvgt"
-#include"includes/stubs.nvgt"
-// #include"includes/comandos grandes.bgt"  // TODO: converter - removido temporariamente
-#include"includes/comandos.nvgt"
+#include"includes/player.nvgt"          // Player classes precisam vir antes
+#include"includes/weapon.nvgt"          // Weapon system
+#include"includes/item.nvgt"
 #include"includes/clima.nvgt"
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
-// #include"includes/downloader.bgt"  // TODO: converter - removido temporariamente
 #include"includes/elevador.nvgt"
-#include"includes/item.nvgt"
-// #include"includes/jogos.bgt"  // TODO: converter - removido temporariamente
 #include"includes/key_hold.nvgt"
 #include"includes/map.nvgt"
-#include"includes/menu.nvgt"
-// #include"includes/moving_sound_client_handler.bgt"  // TODO: converter - removido temporariamente
-// #include"includes/m_pro.bgt"  // TODO: converter - removido temporariamente
 #include"includes/net.nvgt"
 #include"includes/parsed_data.nvgt"
-#include"includes/player.nvgt"
-// sp.bgt removido - NVGT tem sound_pool nativo
 #include"includes/src.nvgt"
 #include"includes/staircase.nvgt"
 #include"includes/texto.nvgt"
@@ -46,6 +37,10 @@
 #include"includes/usl.nvgt"
 #include"includes/virtualizer.nvgt"
 #include"includes/wine.nvgt"
+#include"includes/stubs.nvgt"           // Stubs vêm antes de comandos
+#include"includes/comandos.nvgt"        // Comandos usam funções dos stubs
+#include "../include/menu.nvgt"         // Biblioteca de menu
+#include"includes/menu.nvgt"            // Menu do cliente (deve vir por último - usa tudo)
 
 // Variáveis de versão movidas para evitar conflitos
 // gversion, ver e serverport serão declaradas em globals.nvgt
@@ -415,160 +410,11 @@ void main(){
 	menuprincipal();
 }
 
-// Função netloop() convertida de BGT para NVGT
-void netloop(){
-	outrosloop();
-	game_event=game_network.request();
-	if(game_event.type==event_disconnect&&game_event.peer_id==net_peer_id){
-		speak(pu.get_value("Conexão caiu."));
-		writeprefs();
-		wait(400);
-		reiniciar();
-	}
-	if(game_event.type==event_receive and game_event.channel==0 and game_event.peer_id==net_peer_id){
-		string[] parsed=pegar_mensagem().split(" ");
-		if(parsed[0]=="pong"){
-			if(!forcepinging) pingtimer.restart();
-			if(forcepinging){
-				forcepinging=false;
-				game_p.play_stationary("pingstop.ogg",false);
-				speak(pu.get_value("O ping levou")+" "+pingtimer.elapsed+" ms.");
-			}
-		}
-		else if(parsed[0]=="remplayer"){
-			if(parsed[1]!=un)remplayer(to_number(parsed[1]));
-		}
-		else if(parsed[0]=="terminate"){
-			reset();
-			menuprincipal();
-		}
-		else if(parsed[0]=="dlancha"&&game_lan.nalancha==1)game_lan.sair();
-		else if(parsed[0]=="upl"&&parsed.length()>4)update_player(parsed[1], to_number(parsed[2]), to_number(parsed[3]), to_number(parsed[4]));
-		else if(parsed[0]=="p" and parsed.length()>=4) newplayer(parsed[1],to_number(parsed[2]),to_number(parsed[3]));
-		else if(parsed[0]=="pp"&&parsed.length()>2){
-			for(uint i=0;i<game_players.length();i++){
-				if(game_players[i].charname==parsed[1])game_players[i].pacifico=to_number(parsed[2]);
-			}
-		}
-		else if(parsed[0]=="playerbeep"&&parsed.length()>2){
-			for(uint i=0; i<game_players.length(); i++){
-				if(game_players[i].charname==parsed[1]) game_players[i].beeping=to_number(parsed[2]);
-			}
-		}
-		else if (parsed[0]=="update_player2") update_player2(parsed[1], to_number(parsed[2]), to_number(parsed[3]), to_number(parsed[4]));
-		else if(parsed[0]=="s"){
-			update_player(parsed[1], to_number(parsed[2]), to_number(parsed[3]), to_number(parsed[4]));
-			if (parsed[1]!=un and parsed[4]==mapname){
-				string ss=get_tile_at(to_number(parsed[2]),to_number(parsed[3]));
-				if(ss.substr(0,4)!="wall") p2.play_2d(ss+"step"+random(1,5)+".ogg",game_me.x,game_me.y,to_number(parsed[2]),to_number(parsed[3]),false);
-			}
-		}
-		else if(parsed[0]=="sb"){
-			update_player(parsed[1], to_number(parsed[2]), to_number(parsed[3]), to_number(parsed[4]));
-			if (parsed[1]!=un&&parsed[4]==mapname){
-				string ss=get_tile_at(to_number(parsed[2]),to_number(parsed[3]));
-				ss=ss.replace("0", "");
-				ss=ss.replace("1", "");
-				ss=ss.replace("2", "");
-				ss=ss.replace("3", "");
-				ss=ss.replace("4", "");
-				ss=ss.replace("5", "");
-				ss=ss.replace("6", "");
-				ss=ss.replace("7", "");
-				ss=ss.replace("8", "");
-				ss=ss.replace("9", "");
-				ss=ss.replace("concrete", "concret");
-				ss=ss.replace("deepsand", "areia");
-				ss=ss.replace("sand", "areia");
-				ss=ss.replace("cement", "concret");
-				ss=ss.replace("gravel", "terra");
-				ss=ss.replace("rocks", "terra");
-				ss=ss.replace("calcada", "concret");
-				ss=ss.replace("plank", "madeira");
-				ss=ss.replace("wood", "madeira");
-				ss=ss.replace("bridge", "madeira");
-				ss=ss.replace("carpet", "madeira");
-				ss=ss.replace("chair", "metal");
-				ss=ss.replace("deck", "madeira");
-				ss=ss.replace("shortgrass", "grama");
-				ss=ss.replace("grass", "grama");
-				ss=ss.replace("matos", "mato");
-				ss=ss.replace("mud", "barro");
-				if(ss.substr(0,4)!="wall") p2.play_2d("bicicleta"+ss+".ogg",me.x,me.y,to_number(parsed[2]),to_number(parsed[3]),false);
-			}
-		}
-		else if(parsed[0]=="startfloat"){
-			floating=true;
-		}
-		else if(parsed[0]=="stopfloat"){
-			floating=false;
-		}
-		else if(parsed[0]=="startcloak"){
-			cloaked=true;
-		}
-		else if(parsed[0]=="stopcloak"){
-			cloaked=false;
-		}
-		else if(parsed[0]=="superjumpon") jumpheight=15;
-		else if(parsed[0]=="superjumpoff") jumpheight=5;
-		else if(parsed[0]=="spellslist"){
-			spellmenu(pegar_mensagem().replace("spellslist ",""));
-		}
-		else if(parsed[0]=="stopmoving"){
-			moveable=false;
-		}
-		else if(parsed[0]=="startmoving"){
-			moveable=true;
-		}
-		else if(parsed[0]=="staron"){
-			star=true;
-		}
-		else if(parsed[0]=="staroff"){
-			star=false;
-		}
-		else if(parsed[0]=="mtester") mtester(pegar_mensagem().replace("mtester ",""));
-		else if(parsed[0]=="store")store(pegar_mensagem().replace("store ",""));
-		else if(parsed[0]=="changemap"){
-			load_map(pegar_mensagem().replace("changemap ", ""));
-			connect=true;
-		}
-		else if(parsed[0]=="changemap2"){
-			load_map2(pegar_mensagem().replace("changemap2 ", ""));
-			connect=true;
-		}
-		else if(parsed[0]=="invsec"&&parsed.length()>1){
-			itenssecundarios.resize(0);
-			itenssecundarios=pegar_mensagem().replace(parsed[0]+" ", "").split("\r\n");
-			secundario();
-		}
-		else if(parsed[0]=="inv" and parsed.length()>=1){
-			inv=pegar_mensagem().replace("inv ","");
-		}
-		else if(parsed[0]=="turn" and parsed.length()>=4){
-			if (parsed[1]!=un and parsed[4]==mapname)
-			p.play_2d("turn.ogg",me.x, me.y, to_number(parsed[2]), to_number(parsed[3]), false);
-		}
-		else if(parsed[0]=="rico"&&parsed.length()>3){
-			if(parsed[1]!="")p.play_2d(parsed[1],me.x, me.y, to_number(parsed[2]), to_number(parsed[3]), false);
-		}
-		else if(parsed[0]=="spawn_obj" and parsed.length()>=5){
-			if (parsed[3]==mapname)
-			spawn_obj(to_number(parsed[1]),to_number(parsed[2]), parsed[4], to_number(parsed[5]));
-		}
-		else if(parsed[0]=="resetobjs"){
-			objs.resize(0);
-		}
-		else if (parsed[0]=="getobj"){
-			for(uint i=0;i<objs.length();i++){
-				if (objs[i].x==to_number(parsed[1]) and objs[i].y==to_number(parsed[2])){
-					objs.remove_at(i);
-				}
-			}
-		}
-		// Continuando com as demais condições...
-		// [Nota: Esta função é muito extensa, continuarei na próxima edição]
-	}
-}
+// ==========================================
+// netloop() MOVIDA PARA includes/net.nvgt
+// ==========================================
+// A implementação completa da Fase 2 está em net.nvgt
+// Esta versão antiga BGT foi removida para evitar conflitos
 
 // Função game() convertida de BGT para NVGT
 void game(){

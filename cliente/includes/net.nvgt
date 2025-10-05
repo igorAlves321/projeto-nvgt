@@ -264,3 +264,800 @@ void net_logar(bool localhost = false) {
 		}
 	}
 }
+
+// ==========================================
+// NETLOOP - PROCESSAMENTO DE EVENTOS DE REDE
+// ==========================================
+// Processa todos os eventos de rede recebidos do servidor
+// Deve ser chamado continuamente no game loop
+void netloop() {
+	if(!connected) return;
+	
+	const network_event@ ev;
+	// Processar múltiplos eventos em um frame
+	while((@ev = game_net.request()) !is null && ev.type != event_none) {
+		
+		// === DESCONEXÃO ===
+		if(ev.type == event_disconnect) {
+			speak(pu.get_value("Conexão perdida com o servidor."));
+			reset();
+			relogin_flag = true;
+			return;
+		}
+		
+		// === RECEBIMENTO DE MENSAGENS ===
+		if(ev.type == event_receive) {
+			string full_msg = decrypt_packet(ev.message);
+			string[] parsed = full_msg.split(" ");
+			
+			if(parsed.length() == 0) continue;
+			
+			// ===================================================
+			// CANAL 0 - EVENTOS PRINCIPAIS
+			// ===================================================
+			if(ev.channel == 0) {
+				process_channel_0(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 1 - CHAT PRINCIPAL
+			// ===================================================
+			else if(ev.channel == 1) {
+				process_channel_1(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 2 - AVISOS
+			// ===================================================
+			else if(ev.channel == 2) {
+				add_add_item("avisos", full_msg);
+			}
+			// ===================================================
+			// CANAL 3 - MORTES
+			// ===================================================
+			else if(ev.channel == 3) {
+				process_channel_3(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 4 - SONS DE TIRO
+			// ===================================================
+			else if(ev.channel == 4) {
+				process_channel_4(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 5 - SONS DE MAPA
+			// ===================================================
+			else if(ev.channel == 5) {
+				process_channel_5(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 6 - INFORMAÇÕES DE JOGADORES
+			// ===================================================
+			else if(ev.channel == 6) {
+				process_channel_6(full_msg, parsed, ev);
+			}
+			// ===================================================
+			// CANAL 7 - ÁUDIO DE VOZ
+			// ===================================================
+			else if(ev.channel == 7) {
+				process_channel_7(full_msg, parsed, ev);
+			}
+		}
+	}
+}
+
+// ==========================================
+// PROCESSADORES DE CANAIS
+// ==========================================
+
+void process_channel_0(string full_msg, string[] parsed, const network_event@ ev) {
+	// === GRUPO 1: GERENCIAMENTO DE JOGADORES ===
+	if(parsed[0] == "pong") {
+		// Resposta de ping - nada a fazer
+	}
+	else if(parsed[0] == "remplayer" && parsed.length() > 1) {
+		remplayer(parsed[1]);
+	}
+	else if(parsed[0] == "terminate") {
+		writeprefs();
+		wait(200);
+		exit();
+	}
+	else if(parsed[0] == "upl" && parsed.length() >= 6) {
+		// upl username x y facedir mapname peer_id
+		if(parsed[1] != un && parsed[4] == mapname) {
+			updateplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), 
+			             string_to_number(parsed[5]), string_to_number(parsed[6]));
+		}
+	}
+	else if(parsed[0] == "update_player2" && parsed.length() >= 6) {
+		if(parsed[1] != un && parsed[4] == mapname) {
+			updateplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), 
+			             string_to_number(parsed[5]), string_to_number(parsed[6]));
+		}
+	}
+	else if(parsed[0] == "pp" && parsed.length() > 1) {
+		// Jogador pacífico
+		set_player_peaceful(parsed[1], true);
+	}
+	else if(parsed[0] == "playerbeep" && parsed.length() > 2) {
+		p.play_stationary(parsed[2] + ".ogg", false);
+	}
+	else if(parsed[0] == "on") {
+		string who = full_msg.replace(parsed[0] + " ", "");
+		if(who != un && avisadesconectou == 1) {
+			p.play_stationary("online.ogg", false);
+			string mes = who + " " + pu.get_value("aparece com um resplendor.");
+			add_add_item("notificaciones_de_conexiзnes", mes);
+		}
+	}
+	else if(parsed[0] == "off" && parsed.length() >= 3) {
+		if(parsed[1] == un) {
+			if(string_to_number(parsed[3]) == 1) {
+				speak(pu.get_value("A conexão com este universo foi perdida..."));
+				wait(400);
+				reset();
+				relogin_flag = true;
+			}
+			else {
+				wait(200);
+				reset();
+			}
+		}
+		else {
+			remplayer(parsed[1]);
+			if(string_to_number(parsed[2]) == 1 && avisadesconectou == 1) {
+				string mes = parsed[1] + " " + pu.get_value("desaparece em uma explosão de luz.");
+				p.play_stationary("offline.ogg", false);
+				add_add_item("notificaciones_de_conexiзnes", mes);
+			}
+		}
+	}
+	
+	// === GRUPO 2: MOVIMENTO E POSICIONAMENTO ===
+	else if(parsed[0] == "s" && parsed.length() >= 4) {
+		// s username x y mapname step_sound
+		if(parsed[1] != un && parsed[4] == mapname) {
+			p.play_2d("step.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	else if(parsed[0] == "move" && parsed.length() >= 3) {
+		me.x = string_to_number(parsed[1]);
+		me.y = string_to_number(parsed[2]);
+	}
+	else if(parsed[0] == "turn" && parsed.length() >= 4) {
+		if(parsed[1] != un && parsed[4] == mapname) {
+			p.play_2d("turn.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	else if(parsed[0] == "jumping" && parsed.length() >= 5) {
+		if(parsed[1] != un && parsed[4] == mapname) {
+			p.play_2d("jump.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	else if(parsed[0] == "land" && parsed.length() >= 6) {
+		int fh = string_to_number(parsed[5]);
+		if(parsed[1] != un && parsed[4] == mapname) {
+			if(fh < 20) {
+				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "land.ogg", 
+				          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+			}
+			else {
+				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "hardland.ogg", 
+				          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+			}
+		}
+	}
+	else if(parsed[0] == "wall" && parsed.length() >= 5) {
+		if(parsed[1] != un) {
+			p.play_2d(parsed[4] + ".ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	else if(parsed[0] == "ataque") {
+		if(facing == Right) me.x -= 5;
+		if(facing == Left) me.x += 5;
+		me.y += 35;
+		centar();
+	}
+	else if(parsed[0] == "changemap") {
+		load_map(full_msg);
+		connect = true;
+	}
+	else if(parsed[0] == "changemap2") {
+		load_map(full_msg, false);
+		connect = true;
+	}
+	
+	// === GRUPO 3: INVENTÁRIO ===
+	else if(parsed[0] == "inv" && parsed.length() >= 1) {
+		load_inv(full_msg);
+	}
+	else if(parsed[0] == "setinv" && parsed.length() >= 1) {
+		setinv(full_msg);
+	}
+	else if(parsed[0] == "invsec" && parsed.length() > 1) {
+		load_secondary_inventory(full_msg);
+	}
+	
+	// === GRUPO 4: ÁUDIO ===
+	else if(parsed[0] == "play" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "play2" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), true);
+	}
+	else if(parsed[0] == "play3" && parsed.length() > 4) {
+		p.play_extended_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), 
+		                   0, 0, 0, 0, false, 0, 0, 0, string_to_number(parsed[4]));
+	}
+	else if(parsed[0] == "play4" && parsed.length() > 4) {
+		p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), 
+		                            string_to_number(parsed[3]), string_to_number(parsed[4]));
+	}
+	else if(parsed[0] == "ps" && parsed.length() >= 2) {
+		p.play_stationary(parsed[1], false);
+	}
+	else if(parsed[0] == "ps2" && parsed.length() > 2) {
+		p.play_stationary_extended(parsed[1], false, 0, 0, 0, string_to_number(parsed[2]));
+	}
+	else if(parsed[0] == "p2d" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "pan" && parsed.length() > 2) {
+		p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), 0, 100);
+	}
+	else if(parsed[0] == "rs" && parsed.length() > 1) {
+		for(uint i = 0; i < sons.length(); i++) {
+			string[] ss = sons[i].split(":");
+			if(ss[1] == parsed[1]) {
+				p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+				break;
+			}
+		}
+	}
+	else if(parsed[0] == "rico" && parsed.length() > 3) {
+		if(parsed[1] != "") {
+			p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	else if(parsed[0] == "draw" && parsed.length() == 4) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "pst") {
+		if(somchuva != "rain4.ogg") {
+			sound t;
+			t.load(parsed[1]);
+			string vo = "-" + random(3, 5);
+			t.volume = string_to_number(vo);
+			t.play();
+		}
+		else if(somchuva == "rain4.ogg") {
+			p.play_stationary(parsed[1], false);
+		}
+	}
+	
+	// === GRUPO 5: ESTADOS DO JOGADOR ===
+	else if(parsed[0] == "startfloat") floating = true;
+	else if(parsed[0] == "stopfloat") floating = false;
+	else if(parsed[0] == "startcloak") cloaked = true;
+	else if(parsed[0] == "stopcloak") cloaked = false;
+	else if(parsed[0] == "superjumpon") jumpheight = 15;
+	else if(parsed[0] == "superjumpoff") jumpheight = 5;
+	else if(parsed[0] == "start_watch") inansz = true;
+	else if(parsed[0] == "stop_watch") {
+		nolhar.resize(0);
+		inansz = false;
+	}
+	else if(parsed[0] == "stopmoving") moveable = false;
+	else if(parsed[0] == "startmoving") moveable = true;
+	else if(parsed[0] == "staron") star = true;
+	else if(parsed[0] == "staroff") star = false;
+	else if(parsed[0] == "bolhadearon") bolhadear = true;
+	else if(parsed[0] == "bolhaaroff") bolhadear = false;
+	else if(parsed[0] == "fimnovato") novato = 0;
+	else if(parsed[0] == "ininovato") novato = 1;
+	else if(parsed[0] == "morreu") {
+		afogando = 0;
+		congelando = 0;
+	}
+	else if(parsed[0] == "usarcolete") salvavida = 1;
+	else if(parsed[0] == "retirarcolete") salvavida = 0;
+	else if(parsed[0] == "ausente0") ausente = false;
+	else if(parsed[0] == "ausente1") ausente = true;
+	else if(parsed[0] == "seguro") nvaicair = 1;
+	else if(parsed[0] == "aveloz") dveloz = 1;
+	else if(parsed[0] == "dveloz") dveloz = 0;
+	
+	// === GRUPO 6: CLIMA E AMBIENTE ===
+	else if(parsed[0] == "chuvaativa") {
+		chuvaativa = 1;
+		chuva();
+	}
+	else if(parsed[0] == "fimchuva") {
+		chuvaativa = 0;
+		chuvatelhado.pause();
+	}
+	else if(parsed[0] == "volumechuva") {
+		chuvalivre.volume = string_to_number(parsed[1]);
+		chuvatelhado.volume = string_to_number(parsed[1]);
+	}
+	else if(parsed[0] == "addambiente") {
+		destroy_all_ambientes();
+		spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+		               string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5], "123");
+	}
+	else if(parsed[0] == "rsonsmo") {
+		destroy_all_msounds();
+	}
+	else if(parsed[0] == "cm") {
+		createmsound(string_to_number(parsed[1]), parsed[2], string_to_number(parsed[3]), 
+		             string_to_number(parsed[4]), parsed[5]);
+	}
+	else if(parsed[0] == "destroymsound") {
+		destroymsound(string_to_number(parsed[1]));
+	}
+	else if(parsed[0] == "um") {
+		updatemsound(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]));
+	}
+	
+	// === GRUPO 7: MENSAGENS ===
+	else if(parsed[0] == "msg" && parsed.length() > 1) {
+		process_msg(full_msg, parsed);
+	}
+	else if(parsed[0] == "msg2") {
+		process_msg2(full_msg, parsed);
+	}
+	else if(parsed[0] == "msg3") {
+		process_msg3(full_msg, parsed);
+	}
+	else if(parsed[0] == "msg4") {
+		process_msg4(full_msg, parsed);
+	}
+	else if(parsed[0] == "msgnormal") {
+		string m = full_msg.replace(parsed[0] + " ", "");
+		add_add_item("avisos", pu.get_value(m));
+	}
+	
+	// === GRUPO 8: COMBATE ===
+	else if(parsed[0] == "finalhit") {
+		for(uint i = 0; i < sons.length(); i++) {
+			string[] ss = sons[i].split(":");
+			if(ss[1] == parsed[1]) {
+				p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+				if(parsed.length() > 7) {
+					p.play_2d("v" + string_to_number(parsed[8]) + "dor" + random(1, 3) + ".ogg", 
+					          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+				}
+				break;
+			}
+		}
+	}
+	else if(parsed[0] == "impact" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "inithurt") {
+		p.play_2d("v" + string_to_number(parsed[1]) + "quejido" + random(1, 4) + ".ogg", 
+		          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	
+	// === GRUPO 9: ARMAS ===
+	else if(parsed[0] == "reset_weapons") {
+		weapons.resize(0);
+	}
+	else if(parsed[0] == "create_weapon") {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		string[] lines = content.split("\r\n");
+		for(int x = 0; x < lines.length(); x++) {
+			string[] data = lines[x].split(" ");
+			if(get_weapon_index(data[10]) < 0) {
+				create_weapon(string_to_number(data[0]), string_to_number(data[1]), string_to_number(data[2]), 
+				              string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]), 
+				              string_to_number(data[6]), data[7], data[8], data[9], data[10], data[11], 
+				              data[12], data[13], string_to_number(data[14]), data[15]);
+			}
+		}
+	}
+	
+	// === GRUPO 10: MENUS ===
+	else if(parsed[0] == "servermenu") {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		string[] data = content.split("|");
+		menuserver(data[0], data[1], string_to_number(data[2]), data[3].split("\r\n"), data[4].split("\r\n"));
+	}
+	else if(parsed[0] == "menutext" && parsed.length() > 1) {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		textmenu(content.split("\r\n"));
+	}
+	else if(parsed[0] == "menuleitura" && parsed.length() > 1) {
+		string mensagem = full_msg.replace(parsed[0] + " ", "");
+		menul(mensagem.split("\r\n"));
+	}
+	else if(parsed[0] == "menuleitura2" && parsed.length() > 1) {
+		string mensagem = full_msg.replace(parsed[0] + " ", "");
+		menul2(mensagem.split("\r\n"));
+	}
+	else if(parsed[0] == "menuleitura3" && parsed.length() > 1) {
+		string mensagem = full_msg.replace(parsed[0] + " ", "");
+		menul3(mensagem.split("\r\n"));
+	}
+	else if(parsed[0] == "menuleitura4" && parsed.length() > 1) {
+		string mensagem = full_msg.replace(parsed[0] + " ", "");
+		menul4(mensagem.split("\r\n"));
+	}
+	else if(parsed[0] == "menuleitura5" && parsed.length() > 1) {
+		string mensagem = full_msg.replace(parsed[0] + " ", "");
+		menul5(mensagem.split("\r\n"));
+	}
+	
+	// === GRUPO 11: ADMIN ===
+	else if(parsed[0] == "djogador") desenvolvedordm = 1;
+	else if(parsed[0] == "dmoderador") modera = 1;
+	else if(parsed[0] == "dconstructor") construye = 1;
+	else if(parsed[0] == "enabletranslate") enabletranslate = 1;
+	else if(parsed[0] == "disabletranslate") enabletranslate = 0;
+	else if(parsed[0] == "enablechatadm") enablechatadm = 1;
+	else if(parsed[0] == "disablechatadm") enablechatadm = 0;
+	else if(parsed[0] == "restart") {
+		run("C:\\Program Files (x86)\\NVDA\\nvda_slave.exe", "launchNVDA -r", true, true);
+	}
+	else if(parsed[0] == "update") {
+		reset();
+		atualizarv();
+	}
+	else if(parsed[0] == "kill") {
+		send_unreliable(peer_id, "close terminate", 0);
+		writeprefs();
+		wait(200);
+		exit();
+	}
+	else if(parsed[0] == "reiniciar") {
+		wait(1000);
+		reset();
+		relogin_flag = true;
+	}
+	else if(parsed[0] == "chutad") {
+		chutad();
+	}
+	
+	// === GRUPO 12: OUTROS ===
+	else if(parsed[0] == "set_married_variable" && parsed.length() > 1) {
+		married = 1;  // int, não bool
+	}
+	else if(parsed[0] == "set_parabatai_variable" && parsed.length() > 1) {
+		parabatyed = 1;  // int, não bool
+	}
+	else if(parsed[0] == "setstatus") {
+		string m = full_msg.replace(parsed[0] + " ", "");
+		for(uint index = 0; index < players.length(); index++) {
+			players[index].status = m;
+		}
+	}
+	else if(parsed[0] == "pm" || (parsed[0] == "you" && parsed[1] == "reply:")) {
+		p.play_stationary("stunstop.ogg", false);
+		string mes = full_msg;
+		mes = mes.replace("/reply ", "");
+		mes = mes.replace("/r ", "");
+		mes = mes.replace("pm de", pu.get_value("pm de"));
+		mes = mes.replace("pm para", pu.get_value("pm para"));
+		add_add_item("conversaciones_privadas", mes);
+	}
+	else if(parsed[0] == "mensaje") {
+		p.play_stationary("notify8.ogg", false);
+		string mes = full_msg;
+		mes = mes.replace("/reply ", "");
+		mes = mes.replace("/r ", "");
+		mes = mes.replace("mensaje de", pu.get_value("mensagem de"));
+		mes = mes.replace("mensaje para", pu.get_value("mensagem para"));
+		add_add_item("conversaciones_privadas", mes);
+	}
+	else if(parsed[0] == "permanent") {
+		string text = full_msg.replace(parsed[0] + " ", "");
+		string text2 = text.replace("mensaje permanente no leído de", pu.get_value("mensagem permanente não lida de"));
+		add_add_item("conversaciones_privadas", text2);
+		if(logpermanents == 1) {
+			if(!directory_exists("permanents")) directory_create("permanents");
+			string text3 = text2.replace("mensaje permanente no leído de", "mensagem de");
+			file f;
+			f.open("permanents/permanent_" + DATE_YEAR + "_" + DATE_MONTH + "_" + DATE_DAY + ".log", "a");
+			f.write(text3 + "\r\n");
+			f.close();
+		}
+	}
+	else if(parsed[0] == "pass_changed") {
+		pwh = temporal_pwh;
+		temporal_pwh = "";
+		writeprefs();
+	}
+	else if(parsed[0] == "channels" && parsed.length() >= 2) {
+		string data = full_msg.replace(parsed[0] + " ", "");
+		idiomaschat = data.split("\r\n");
+		chatmenu();
+	}
+	// === FALLBACK: Mensagem desconhecida ===
+	else {
+		add_add_item("avisos", full_msg);
+	}
+}
+
+void process_channel_1(string full_msg, string[] parsed, const network_event@ ev) {
+	// Chat principal
+	p.play_stationary("chat.ogg", false);
+	string mensagem = full_msg.replace(parsed[0] + " ", "");
+	mensagem = mensagem.replace("diz:", pu.get_value("diz:") + " ");
+	
+	// Traduzir tipos de personagem
+	mensagem = translate_character_types(mensagem);
+	
+	string[] zumba = mensagem.split(bell);
+	string m = zumba[1];
+	
+	if(tradutorativo == 1 && parsed[0] != un) {
+		string pa = m;
+		if(pa != "") m = pa;
+	}
+	
+	m = ndicionario(m);
+	add_add_item("canal_principal", zumba[0] + m);
+}
+
+void process_channel_3(string full_msg, string[] parsed, const network_event@ ev) {
+	// Canal de mortes
+	if(ouvirmortes == 1 || parsed.find(un) > -1 || full_msg.lower().find(un.lower()) != -1) {
+		p.play_stationary("armarockimpact.ogg", false);
+		
+		if(parsed[0] == "msgmortanaarena") {
+			string m = parsed[1] + " " + pu.get_value("foi morta na arena por") + " " + parsed[2];
+			add_add_item("avisos_de_morte", m);
+		}
+		else if(parsed[0] == "msgmuerte") {
+			process_msg_translated(full_msg, parsed, "avisos_de_morte");
+		}
+		// Adicionar outros tipos de morte conforme necessário
+	}
+}
+
+void process_channel_4(string full_msg, string[] parsed, const network_event@ ev) {
+	// Sons de tiro
+	if(parsed[0] == "f" && parsed.length() == 4) {
+		shoot.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+}
+
+void process_channel_5(string full_msg, string[] parsed, const network_event@ ev) {
+	// Sons de mapa
+	if(parsed[0] == "play_body" && parsed.length() > 3) {
+		bodys.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "play_wall" && parsed.length() > 3) {
+		walls.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "play_npc" && parsed.length() > 3) {
+		npcs.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "play_step" && parsed.length() > 3) {
+		steps.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else if(parsed[0] == "set_player_info" && parsed.length() > 1) {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		string[] packets = content.split("|");
+		for(int x = 0; x < packets.length(); x++) {
+			string[] data = packets[x].split(" ");
+			if(data[0] == "set_team_members" && data.length() >= 1) {
+				string team_content = packets[x].replace(data[0] + " ", "");
+				team_members = team_content.split("\r\n");
+			}
+			else if(data[0] == "set_items_for_translate" && data.length() > 1) {
+				string items_content = packets[x].replace(data[0] + " ", "");
+				items_for_translate = items_content.split("\r\n");
+			}
+			else if(data[0] == "invsec" && data.length() > 1) {
+				load_secondary_inventory(packets[x]);
+			}
+			else if(data[0] == "djogador") desenvolvedordm = 1;
+			else if(data[0] == "dmoderador") modera = 1;
+			else if(data[0] == "dconstructor") construye = 1;
+			else if(data[0] == "enabletranslate") enabletranslate = 1;
+			else if(data[0] == "set_married_variable" && data.length() > 1) {
+				married = 1;
+			}
+			else if(data[0] == "set_parabatai_variable" && data.length() > 1) {
+				parabatyed = 1;
+			}
+			else if(data[0] == "cm") {
+				createmsound(string_to_number(data[1]), data[2], string_to_number(data[3]), 
+				             string_to_number(data[4]), data[5]);
+			}
+			else if(data[0] == "level" && data.length() > 1) {
+				for(int i = 0; i < players.length(); i++) {
+					if(players[i].peer_id == peer_id) {
+						players[i].level = string_to_number(data[1]);
+						break;
+					}
+				}
+			}
+		}
+	}
+}
+
+void process_channel_6(string full_msg, string[] parsed, const network_event@ ev) {
+	// Informações de jogadores e times
+	if(parsed[0] == "gender" && parsed.length() > 1) {
+		gender = parsed[1];
+	}
+	else if(parsed[0] == "reset_all_weapons_ammo") {
+		for(int x = 0; x < player_weapons.length(); x++) {
+			player_weapons[x].ammo_load = 0;
+		}
+	}
+	else if(parsed[0] == "add_team_member" && parsed.length() > 1) {
+		if(team_members.find(parsed[1]) < 0) team_members.insert_last(parsed[1]);
+	}
+	else if(parsed[0] == "remove_team_member" && parsed.length() > 1) {
+		int find = team_members.find(parsed[1]);
+		if(find > -1) team_members.remove_at(find);
+	}
+	else if(parsed[0] == "clear_team_members") {
+		team_members.resize(0);
+		team_members.insert_last(un);
+	}
+	else if(parsed[0] == "set_team_members" && parsed.length() >= 1) {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		team_members = content.split("\r\n");
+	}
+	else if(parsed[0] == "set_map_players" && parsed.length() > 1) {
+		if(parsed[1] == "none") players.resize(0);
+		else {
+			string[] content = full_msg.replace(parsed[0] + " ", "").split("\r\n");
+			for(int x = 0; x < content.length(); x++) {
+				string[] data = content[x].split(" ");
+				if(data.length() > 4) {
+					newplayer(data[0], string_to_number(data[1]), string_to_number(data[2]), 
+					          string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]));
+				}
+			}
+		}
+	}
+	else if(parsed[0] == "add_player_to_map" && parsed.length() > 1) {
+		if(get_player(parsed[1]) < 0) {
+			newplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), 
+			          string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]));
+		}
+	}
+	else if(parsed[0] == "remove_player_from_map" && parsed.length() > 1) {
+		int find = get_player(parsed[1]);
+		if(find > -1) players.remove_at(find);
+	}
+	else if(parsed[0] == "add_line_to_map" && parsed.length() > 1) {
+		string line = full_msg.replace(parsed[0] + " ", "");
+		map2.insert_at(map2.length() - 2, line);
+		init_data(line);
+	}
+	else if(parsed[0] == "remove_line_from_map" && parsed.length() > 1) {
+		string line = full_msg.replace(parsed[0] + " ", "");
+		int find = map2.find(line);
+		if(find > -1) map2.remove_at(find);
+	}
+	else if(parsed[0] == "reset_items_selected") {
+		items_selected.resize(0);
+	}
+	else if(parsed[0] == "select_items" && parsed.length() > 1) {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		items_selected = content.split("\r\n");
+	}
+	else if(parsed[0] == "show_eagle_messages" && parsed.length() > 1) {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		show_eagle_messages(content.split("\r\n"));
+	}
+}
+
+void process_channel_7(string full_msg, string[] parsed, const network_event@ ev) {
+	// Áudio de voz
+	if(parsed[0] == "map_audio" && voicechat == 1) {
+		string vc = full_msg.replace(parsed[0] + " " + parsed[1] + " " + parsed[2] + " ", "");
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		audio.play_2d(vc, me.x, me.y, x, y, false, true);
+	}
+	else if(parsed[0] == "private_audio") {
+		vc = full_msg.replace(parsed[0] + " " + parsed[1] + " ", "");
+		if(voicechat == 1) {
+			audio.play_stationary(vc, false, true);
+			add_add_item("mensagens_de_voz", pu.get_value("mensagem de voz privada de") + " " + parsed[1] + ".");
+			if(logaudio == 1) {
+				saveaudio(vc);
+			}
+		}
+	}
+	else if(parsed[0] == "team_audio") {
+		vc = full_msg.replace(parsed[0] + " ", "");
+		if(voicechat == 1) {
+			audio.play_stationary(vc, false, true);
+			if(logaudio == 1) {
+				saveaudio(vc);
+			}
+		}
+	}
+}
+
+// ==========================================
+// FUNÇÕES AUXILIARES DE PROCESSAMENTO
+// ==========================================
+
+void process_msg(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " " + parsed[1] + " ", "");
+	string[] b = a.split("|");
+	for(uint i = 0; i < b.length(); i++) {
+		m += pu.get_value(b[i]);
+	}
+	add_add_item(parsed[1], m);
+}
+
+void process_msg2(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", "");
+	string[] b = a.split(";");
+	for(uint i = 0; i < b.length(); i++) {
+		m += pu.get_value(b[i]);
+	}
+	add_add_item("avisos", m);
+}
+
+void process_msg3(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", "");
+	string[] b = a.split(";");
+	for(uint i = 0; i < b.length(); i++) {
+		m += pu.get_value(b[i]);
+	}
+	add_add_item("mensajes_del_equipo", m);
+}
+
+void process_msg4(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", "");
+	string[] b = a.split(";");
+	for(uint i = 0; i < b.length(); i++) {
+		m += pu.get_value(b[i]);
+	}
+	add_add_item("visiones_angelicales", m);
+}
+
+void process_msg_translated(string full_msg, string[] parsed, string channel) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", "");
+	string[] b = a.split(";");
+	for(uint i = 0; i < b.length(); i++) {
+		m += pu.get_value(b[i]);
+	}
+	add_add_item(channel, m);
+}
+
+string translate_character_types(string text) {
+	text = text.replace("ser_de_luz", pu.get_value("ser_de_luz"));
+	text = text.replace("Novato", pu.get_value("Novato"));
+	text = text.replace("Novata", pu.get_value("Novata"));
+	text = text.replace("vampira", pu.get_value("vampira"));
+	text = text.replace("vampiro", pu.get_value("vampiro"));
+	text = text.replace("vampira_diurna", pu.get_value("vampira_diurna"));
+	text = text.replace("vampiro_diurno", pu.get_value("vampiro_diurno"));
+	text = text.replace("jefe_de_clan", pu.get_value("chefe_de_clã"));
+	text = text.replace("licántropo", pu.get_value("licantropo"));
+	text = text.replace("líder_de_la_manada", pu.get_value("líder_da_matilha"));
+	text = text.replace("guerrera_hada", pu.get_value("guerreira_fada"));
+	text = text.replace("guerrero_hada", pu.get_value("guerreiro_fada"));
+	text = text.replace("bruja ", pu.get_value("bruxa "));
+	text = text.replace("brujo", pu.get_value("bruxo"));
+	text = text.replace("cazador", pu.get_value("caçador"));
+	text = text.replace("cazadora", pu.get_value("caçadora"));
+	text = text.replace("guerrera_oscurecida", pu.get_value("guerreira_obscurecida"));
+	text = text.replace("guerrero_oscurecido", pu.get_value("guerreiro_obscurecido"));
+	text = text.replace("demonio_menor", pu.get_value("demônio_menor"));
+	text = text.replace("demonio_mayor", pu.get_value("demônio_maior"));
+	text = text.replace("príncipe_del_infierno", pu.get_value("príncipe_do_inferno"));
+	text = text.replace("princesa_del_infierno", pu.get_value("princesa_do_inferno"));
+	return text;
+}
