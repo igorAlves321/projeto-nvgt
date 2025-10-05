@@ -1,32 +1,166 @@
-void batualizacao(bool avisa){
+const string downloads ="download";
+
+void checkupdate(bool avisa){
 	latest=url_get(UPDATE_URL);
-	if(string_contains(latest, "versão:", 1)==-1){
+	if(string_contains(latest, "verção:", 1)==-1){
 		dlg(pu.get_value("Erro ao checar por atualizações. Os motivos podem ser que você esteja usando uma versão beta, ou o servidor não pode ser carregado."));
-		menuprincipal();
+		menuupdates();
 	}
-	latest=string_replace(latest, "versão:", "", true);
-	if((latest==ver)&&(avisa==false)){
+	latest=string_replace(latest, "verção:", "", true);
+	if(latest==ver){
 		dlg(pu.get_value("Nenhuma atualização até o momento."));
-		menuprincipal();
+		menuupdates();
 	}
 	else if(latest!=ver){
 		vernova=latest;
-		updatefound.play_wait();
-		updatemenu();
+		atualizarv();
 	}
 }
+
+void checkupdate2(bool avisa){
+	latest=url_get(UPDATE_URL);
+	
+	// Verificar se houve erro na conexão ou resposta inválida
+	if(latest=="" || string_contains(latest, "verção:", 1)==-1){
+		// Falha na conexão ou resposta inválida - não fazer nada (verificação silenciosa)
+		return;
+	}
+	
+	latest=string_replace(latest, "verção:", "", true);
+	if(latest!=ver){
+		vernova=latest;
+		atualizarv();
+	}
+}
+
 void atualizarv(){
-	speak(pu.get_value("Iniciando o processo de atualização..."));
-	sound updating;
-	updating.stream("update_starting.ogg");
-	updating.play_wait();
-	string status=dl_file(DOWNLOAD_URL, INSTALLER_NAME);
+	if(is_admin()==false&&SCRIPT_EXECUTABLE=="C:\\Program Files (x86)\\MXGProductions\\Reino elemental\\Reino Elemental.exe"){
+		alert("Info", pu.get_value("es recomendable ejecutar el juego como administrador antes de continuar."));
+		exit();
+	}
+	int option=question(pu.get_value("Actualizador"), pu.get_value("Se ha encontrado una actualización. ¿Deseas continuar?"));
+	if(option==1){
+		if(!directory_exists(downloads)) directory_create(downloads);
+		speak(pu.get_value("actualizando cliente..."));
+		string status=dl_file(DOWNLOAD_URL, downloads+"/reino.zip");
+		if(status=="finished"){
+			wait(1500);
+			run("output\\programs\\unzip.exe", "-q -o "+downloads+"\\reino.zip -d download", true, true);
+			wait(500);
+			run("actualizador.exe", "-update", false, true);
+			exit();
+		}
+	}
+	else{
+		alert("Info", pu.get_value("De acuerdo."));
+		main_menu();
+	}
+}
+
+void checkupdateinstaller(bool avisa){
+	latest=url_get(UPDATE_INSTALLER_URL);
+	latest=string_replace(latest, "version:", "", true);
+	if((latest==versioninstaller)&&(avisa==false)){
+		dlg(pu.get_value("Nenhuma atualização até o momento."));
+		menuupdates();
+	}
+	else if(latest!=versioninstaller){
+		atualizarinstaller();
+	}
+}
+
+void atualizarinstaller(){
+	if(is_admin()==false&&SCRIPT_EXECUTABLE=="C:\\Program Files (x86)\\MXGProductions\\Reino elemental\\Reino Elemental.exe"){
+		alert("Info", pu.get_value("es recomendable ejecutar el juego como administrador antes de continuar."));
+		exit();
+	}
+	string status=dl_file(DOWNLOAD_INSTALLER_URL, INSTALLER_NAME);
 	if(status=="finished"){
-		updatemus.stop();
-		updatedone.play_wait();
-		speak(nomejogo+" "+vernova+" "+pu.get_value("Acabou de ser baixado!"));
+		speak(pu.get_value("actualización completada."));
 		wait(1000);
 		run(INSTALLER_NAME, "", false, false);
 		exit();
+	}
+}
+
+void checkupdate2installer(){
+	latest=url_get(UPDATE_INSTALLER_URL);
+	
+	// Verificar se houve erro na conexão ou resposta inválida
+	if(latest=="" || string_contains(latest, "version:", 1)==-1){
+		// Falha na conexão ou resposta inválida - não fazer nada (verificação silenciosa)
+		return;
+	}
+	
+	latest=string_replace(latest, "version:", "", true);
+	if(latest!=versioninstaller){
+		atualizarinstaller();
+	}
+}
+
+void checkupdatemaps(bool avisa){
+	latest=url_get(UPDATE_MAPS_URL);
+	latest=string_replace(latest, "version:", "", true);
+	file@ mapversion;
+	pack_file map_pack;
+	map_pack.open(MAPS_STORAGE);
+	@mapversion =map_pack.get_file("version.txt");
+	string key =string_decrypt(mapversion.read(), MAPS_ENCRYPTION_KEY);
+	mapversion.close();
+	map_pack.close();
+	if(latest==key){
+		dlg(pu.get_value("Nenhuma atualização até o momento."));
+		menuupdates();
+	}
+	else if(latest!=key){
+		updatemaps();
+	}
+}
+
+void checkupdatemaps2(bool avisa){
+	latest=url_get(UPDATE_MAPS_URL);
+	
+	// Verificar se houve erro na conexão ou resposta inválida
+	if(latest=="" || string_contains(latest, "version:", 1)==-1){
+		// Falha na conexão ou resposta inválida - não fazer nada (verificação silenciosa)
+		return;
+	}
+	
+	latest=string_replace(latest, "version:", "", true);
+	file@ mapversion;
+	pack_file map_pack;
+	map_pack.open(MAPS_STORAGE);
+	@mapversion =map_pack.get_file("version.txt");
+	string current =string_decrypt(mapversion.read(), MAPS_ENCRYPTION_KEY);
+	mapversion.close();
+	map_pack.close();
+	if(latest!=current){
+		updatemaps();
+	}
+}
+
+void updatemaps(){
+	if(is_admin()==false&&SCRIPT_EXECUTABLE=="C:\\Program Files (x86)\\MXGProductions\\Reino elemental\\Reino Elemental.exe"){
+		alert("Info", pu.get_value("es recomendable ejecutar el juego como administrador antes de continuar."));
+		exit();
+	}
+	int option=question(pu.get_value("Actualizador"), pu.get_value("Se ha encontrado una actualización. ¿Deseas continuar?"));
+	if(option==1){
+		if(!directory_exists(downloads)) directory_create(downloads);
+		speak(pu.get_value("actualizando mapas..."));
+		string status=dl_file(DOWNLOAD_MAPS_URL, downloads+"/"+MAPS_STORAGE);
+		if(status=="finished"){
+			speak(pu.get_value("el paquete de mapas fue actualizado correctamente."));
+			wait(1500);
+			file_copy(downloads+"/"+MAPS_STORAGE, MAPS_STORAGE, true);
+			wait(500);
+			directory_delete(downloads);
+			run(EXECUTABLE_NAME, "", false, false);
+			exit();
+		}
+	}
+	else{
+		alert("Info", pu.get_value("De acuerdo."));
+		main_menu();
 	}
 }

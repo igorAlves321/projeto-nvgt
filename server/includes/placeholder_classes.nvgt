@@ -1,11 +1,16 @@
 // placeholder_classes.nvgt - Classes temporárias para compilação
 // Estas classes serão substituídas por implementações completas posteriormente
 
+// ✅ REMOVIDO: Classes npc, npc_data, monstruo, monstruo_data
+// Agora implementadas em npc.nvgt e monstruo.nvgt
+
 // NOTA: Classes obj, wall, banheiro, pia JÁ EXISTEM em arquivos separados:
 // - item.nvgt (classe obj)
 // - wall.nvgt (classe wall)
 // - banheiro.nvgt (classe banheiro)
 // - pia.nvgt (classe pia)
+// - npc.nvgt (classe npc) ✅
+// - monstruo.nvgt (classe monstruo) ✅
 
 // Classes _data para respawn (faltam nos arquivos originais)
 class obj_data {
@@ -130,198 +135,12 @@ class arbol_data {
 	}
 }
 
-// NPCs
-class npc {
-	int x, y;
-	int id = 0; // ID único do NPC
-	int x_inicial = 0, y_inicial = 0; // Posição inicial X e Y
-	int vida = 100;
-	int p_index = -1; // Índice do jogador alvo
-	bool enablerespawn = true; // Respawn habilitado
-	bool enablebombs = false; // Se pode usar bombas
-	int mapindex = -1; // Índice do mapa
-	string asesino = ""; // Quem matou o NPC
-	string nombrenpc = ""; // Nome do NPC
-	string impactosbala = ""; // Som de impacto de bala
-	string impactos = ""; // Som de impactos gerais
-	int danoquerecibira = 0; // Dano que irá receber
-	int distanciaataques = 5; // Distância de ataque
-	int tiempoparacaminar = 5000; // Configuração de tempo (ms)
-	int tiempoparaatacar = 3000; // Configuração de tempo (ms)
-	int tiempodelossonidos = 10000; // Configuração de tempo (ms)
-	string map, name;
-	string golpeado = "";
-	bool morreu = false, morrendo = false, nasceu = true;
-	timer tmorreu, tandar, tatirar, tsom;
-	timer ttiempodelossonidos, ttiempoparacaminar, ttiempoparaatacar;
-	string[] sonidosnervioso; // Sons nervosos
-	
-	timer update_player; // Timer para atualizar jogador alvo
-	bool exists_player_in_my_map() { return false; } // Verifica se jogador alvo existe no mapa
-	int select_player_to_attack() { return -1; } // Seleciona jogador para atacar
-	void move() { } // Move o NPC
-	void attack() { } // Ataca o jogador alvo
-	int change_player(int current_index) { return -1; } // Muda de jogador alvo
-	
-	void die() { 
-		// 🆕 INTEGRAÇÃO: Dar XP ao jogador que matou
-		if(asesino != "" && get_player_index_from(asesino) > -1) {
-			int killer_index = get_player_index_from(asesino);
-			
-			// XP baseado na vida do NPC
-			int xp_reward = vida / 2 + random(10, 50);
-			int gold_reward = vida / 10 + random(1, 10);
-			
-			ganhaxp(killer_index, xp_reward, gold_reward);
-			
-			// Registrar estatística
-			server_stats.register_npc_kill(players[killer_index].charname);
-		}
-		
-		morreu = true;
-	} // NPC morre
-
-	npc(int x, int y, string tiponpc, string name, string charname, string voice,
-	    string team, string items, string weapon, string enemy, string map_name,
-	    string grito, string boas_vindas, string morte, string ataque,
-	    int vida, int velocidade, int velocidadetiro, string mapa, string weapon2,
-	    int distance, int maxx, string sound, int dist_grito) {
-		this.x = x; this.y = y;
-		this.name = name;
-		this.map = mapa;
-		this.vida = vida;
-		this.nombrenpc = tiponpc;
-		this.distanciaataques = distance;
-	}
-
-	// Construtor alternativo com muitos parâmetros int (do arquivo de mapa)
-	npc(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, int p10, int p11,
-	    string s1, string s2, string s3, string s4, string s5, string s6,
-	    int p12, int p13, int p14, string s7, string s8, int p15, int p16, string s9, int p17) {
-		this.x = p1; this.y = p2;
-		this.name = s1;
-		this.map = s7;
-		this.vida = p12;
-		this.nombrenpc = s2;
-		this.distanciaataques = p15;
-		// Outros parâmetros podem ser mapeados conforme necessário
-	}
-	
-	// ✅ IMPLEMENTADO: Construtor completo para npc_data (26 parâmetros)
-	// Usado em server_map.nvgt linhas 1256, 1278 para spawnar NPCs
-	npc(int nx, int ny, int nvida, int nxp, int ndistanciaataques,
-	    int ndanoquerecibira, int ndanoquedara, int ndanodelespejo,
-	    int ntiempoparaatacar, int ntiempoparacaminar, int ntiempodelossonidos,
-	    string nitemsadar, string nsonidoataque, string nsonidonervioso,
-	    string nsonidomuerte, string nnombrenpc, string nmsgmuerte,
-	    int ntiempoaparicion, bool nenablerespawn, bool nenablebombs,
-	    string nmap, string npasosnpc, int nleft_range, int nright_range,
-	    string nimpactosbala, string ndegradation) {
-		// Posição
-		this.x = nx;
-		this.y = ny;
-		this.x_inicial = nx;
-		this.y_inicial = ny;
-		
-		// Atributos básicos
-		this.vida = nvida;
-		this.nombrenpc = nnombrenpc;
-		this.map = nmap;
-		
-		// Combate
-		this.distanciaataques = ndistanciaataques;
-		this.danoquerecibira = ndanoquerecibira;
-		
-		// Timers (configurações em ms)
-		this.tiempoparaatacar = ntiempoparaatacar;
-		this.tiempoparacaminar = ntiempoparacaminar;
-		this.tiempodelossonidos = ntiempodelossonidos;
-		
-		// Sons
-		this.impactosbala = nimpactosbala;
-		this.impactos = nimpactosbala; // Mesmo som
-		
-		// Respawn
-		this.enablerespawn = nenablerespawn;
-		this.enablebombs = nenablebombs;
-		
-		// Nome único
-		this.name = nnombrenpc + "_" + nx + "_" + ny;
-		
-		// Inicializar como nascido
-		this.nasceu = true;
-		this.morreu = false;
-		this.morrendo = false;
-	}
-}
-
-class npc_data {
-	int x, y;
-	int vida = 100; // Vida do NPC
-	int xp = 0; // XP que dá ao morrer
-	string map, name;
-	string nombrenpc = ""; // Nome do NPC
-	string degradation = ""; // Som de degradação
-	string impactosbala = ""; // Som de impacto bala
-	int right_range = 0, left_range = 0; // Alcance direita/esquerda
-	string pasosnpc = ""; // Som de passos
-	bool enablebombs = false; // Se usa bombas
-	bool enablerespawn = true; // Se respawna
-	int respawn = 0; // Tempo de respawn (segundos)
-	int tiempoaparicion = 0; // Tempo de aparição
-	string msgmuerte = ""; // Mensagem ao morrer
-	string sonidomuerte = ""; // Som ao morrer
-	string sonidonervioso = ""; // Som nervoso
-	string sonidoataque = ""; // Som de ataque
-	string itemsadar = ""; // Items que dá
-	int tiempodelossonidos = 0; // Tempo dos sons
-	int tiempoparacaminar = 0; // Tempo para caminhar
-	int tiempoparaatacar = 0; // Tempo para atacar
-	int danodelespejo = 0; // Dano do espelho
-	int danoquedara = 0; // Dano que dará
-	int danoquerecibira = 0; // Dano que receberá
-	int distanciaataques = 5; // Distância de ataques
-	timer respawn_timer;
-	
-	npc_data() {}
-}
-
-// Monstros
-class monstruo {
-	int x, y;
-	int vida = 100;
-	int tiros = 0; // Contador de tiros
-	string map, name;
-	string golpeado = "";
-	string asom = ""; // Som de ataque
-	bool morreu = false;
-	timer tmorreu, tsom;
-	timer monstruotimer; // Timer geral
-	int monstruotime = 1000; // Tempo em ms
-	timer tempoatirar; // Timer para atirar
-	timer trespawn; // Timer de respawn
-	
-	monstruo(int x, int y, string mapname) {
-		this.x = x; this.y = y;
-		this.map = mapname;
-		this.vida = 100;
-	}
-}
-
-class monstruo_data {
-	int x, y;
-	int id = 0; // ID do monstro
-	string map;
-	int trespawn = 0; // Tempo de respawn
-	timer respawn_timer;
-	
-	monstruo_data() {}
-	
-	monstruo_data(int mx, int my) {
-		this.x = mx;
-		this.y = my;
-	}
-}
+// ============================================================================
+// ✅ CLASSES NPC E MONSTRUO REMOVIDAS DAQUI
+// Agora implementadas em:
+// - server/includes/npc.nvgt (574 linhas - IA completa)
+// - server/includes/monstruo.nvgt (459 linhas - IA completa)
+// ============================================================================
 
 // Zonas de morte
 class death {

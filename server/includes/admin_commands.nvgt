@@ -442,3 +442,85 @@ void cmd_loadzones(int player_index) {
 	send_reliable(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas de disabled_zones.cfg", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " carregou " + loaded + " zonas");
 }
+
+// Comando /createportal - Criar portal de teletransporte
+void cmd_createportal(int player_index, string destination_map, int dest_x, int dest_y) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	// Verificar se o mapa de destino existe
+	int dest_map_index = get_map_index_from(destination_map);
+	if(dest_map_index == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Mapa de destino não encontrado: " + destination_map, 0);
+		return;
+	}
+	
+	// Criar portal
+	spawn_portal(player_index, players[player_index].x, players[player_index].y, 
+	             players[player_index].map, destination_map, dest_x, dest_y);
+	
+	debug_log("ADMIN: " + players[player_index].charname + " criou portal para " + destination_map);
+}
+
+// Comando /deleteportal - Deletar portal próximo
+void cmd_deleteportal(int player_index, int range = 10) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) return;
+	
+	// Procurar portal próximo
+	for(uint i = 0; i < server_maps[map_index].portals.length(); i++) {
+		portal@ pt = server_maps[map_index].portals[i];
+		int distance = int(get_distance(players[player_index].x, players[player_index].y, pt.x, pt.y));
+		
+		if(distance <= range) {
+			send_reliable(players[player_index].peer_id, "msg2 Portal deletado!", 0);
+			server_maps[map_index].portals.remove_at(i);
+			debug_log("ADMIN: " + players[player_index].charname + " deletou portal em " + players[player_index].map);
+			return;
+		}
+	}
+	
+	send_reliable(players[player_index].peer_id, "msg2 Nenhum portal encontrado próximo!", 0);
+}
+
+// Comando /tempban - Banir temporariamente
+void cmd_tempban(int player_index, string target_name, double days, string reason = "Violação das regras") {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	// Não pode banir outro admin
+	if(players[target].admin) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não pode banir este jogador!", 0);
+		return;
+	}
+	
+	// Criar ban temporário
+	double minutes = days * 1440.0; // 1 dia = 1440 minutos
+	create_temp_ban(target_name, minutes, 0.0, reason, players[target].computer_id);
+	
+	// Broadcast
+	eadm(players[player_index].charname + " baniu temporariamente " + target_name + " por " + days + " dias. Razão: " + reason);
+	
+	// Notificar jogador banido
+	send_reliable(players[target].peer_id, "msg2 Você foi banido temporariamente por " + days + " dias. Razão: " + reason, 0);
+	
+	debug_log("ADMIN: " + players[player_index].charname + " baniu " + target_name + " por " + days + " dias");
+	
+	// Desconectar jogador (TODO: Implementar quando network estiver pronto)
+	// server_net.disconnect_peer(players[target].peer_id);
+}

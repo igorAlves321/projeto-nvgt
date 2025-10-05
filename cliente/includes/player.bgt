@@ -1,15 +1,19 @@
 player@[] players;
 class player{
-	string map, charname;
-	timer beacontimer;
-	int beacontime=random(1000,1500), x=1, y=0, beeping=1, pacifico=0;
-	player(string cn, int cx, int cy){
-		x=cx;
-		y=cy;
-		charname=cn;
-	}
+string charname, status, whomarried;
+timer beacontimer;
+int beacontime=random(1000,1500), x=1, y=0, beeping=1, pacifico=0, peer_id=-1, level=1;
+player(string cn, int cx, int cy, int bp, int pc, int peer, int lvl=1){
+	charname=cn;
+	x=cx;
+	y=cy;
+	beeping=bp;
+	pacifico=pc;
+	peer_id=peer;
+	level=lvl;
 }
-void newplayer(string chn, int chx, int chy){
+}
+void newplayer(string chn, int chx, int chy, int bip, int pac, int peer){
 	int t=0;
 	for(uint i=0;i<players.length();i++){
 		if(players[i].charname==chn){
@@ -18,28 +22,28 @@ void newplayer(string chn, int chx, int chy){
 		}
 	}
 	if(t==0){
-		player p1(chn, chx, chy);
-		players.insert_last(p1);
+	player p1(chn, chx, chy, bip, pac, peer, 1);
+	players.insert_last(p1);
 	}
 }
-void update_player(string name, int x, int y,string map){
+void update_player(int peer, int x, int y){
 	for (uint i=0; i<players.length(); i++){
-		if (players[i].charname==name){
-			players[i].map=map;
+		if (players[i].peer_id==peer){
 			players[i].x=x;
 			players[i].y=y;
+			break;
 		}
 	}
 }
-void update_player2(string name, int x, int y,string map){
+void update_player2(int peer, int x, int y){
 	for (uint i=0; i<players.length(); i++){
-		if (players[i].charname==name){
-			players[i].map=map;
+		if (players[i].peer_id==peer){
 			players[i].x=x;
 			players[i].y=y;
+			break;
 		}
 	}
-	if(un==name){
+	if(peer_id==peer){
 		me.x=x;
 		me.y=y;
 	}
@@ -62,14 +66,16 @@ void remplayer2(string who){
 }
 void beaconloop(){
 	for (uint i=0; i<players.length(); i++){
-		if(players[i].map=="túnel"||players[i].map=="quadro")continue;
-		if (players[i].beacontimer.elapsed>=players[i].beacontime&&players[i].map==mapname&&players[i].beeping==1&&players[i].charname!=un){
+		if (players[i].beacontimer.elapsed>=players[i].beacontime&&players[i].beeping==1&&players[i].charname!=un){
 			players[i].beacontimer.restart();
 			if(playertrack!=players[i].charname){
-				if(players[i].pacifico==0)p.play_2d("beacon.ogg",me.x,me.y,players[i].x,players[i].y,false);
-				else if(players[i].pacifico==1)p.play_2d("bip.ogg",me.x,me.y,players[i].x,players[i].y,false);
+				if(players[i].pacifico==0){
+					if(team_members.find(players[i].charname)<0) pl.play_2d("beacon.ogg",me.x,me.y,players[i].x,players[i].y,false);
+					else pl.play_2d("beacon3.ogg",me.x,me.y,players[i].x,players[i].y,false);
+				}
+				else if(players[i].pacifico==1)pl.play_2d("bip.ogg",me.x,me.y,players[i].x,players[i].y,false);
 			}
-			else p.play_2d("beacon2.ogg",me.x,me.y,players[i].x,players[i].y,false);
+			else pl.play_2d("beacon2.ogg",me.x,me.y,players[i].x,players[i].y,false);
 		}
 	}
 }
@@ -84,4 +90,18 @@ int gpi(string n){
 		if (players[i].charname==n)return i;
 	}
 	return -1;
+}
+
+void set_player_info() {
+	send_reliable(peer_id, "setvoice "+voice, 0);
+	if(ouvirhits==0)send_unreliable(peer_id, "hits", 0);
+	if(falarteclas==0)send_unreliable(peer_id, "nfalarteclas", 0);
+	if(idiomachat=="")idiomachat="es";
+	send_reliable(peer_id, "idiomachat "+idiomachat, 0);
+	send_reliable(peer_id, "idiomajogo "+idiomajogo, 0);
+	send_reliable(peer_id, "setgender", 0);
+	if(mdor==0)send_unreliable(peer_id, "ndor", 0);
+	if(avisanivel==0)send_unreliable(peer_id, "nnivel", 0);
+	send_reliable(peer_id, "get_player_info", 0);
+	if(SCRIPT_COMPILED==false)send_unreliable(event.peer_id, "iamadev", 0);
 }

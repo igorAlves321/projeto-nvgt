@@ -3,16 +3,84 @@ add@[] adds;
 class add{
 	int active=1;
 	int pos;
-	string name;
+	string name, currently_buffer;
 	string[] items;
 	add(string n){
 		name=n;
 	}
+	add(string n, string[] items){
+		this.name=n;
+		this.items =items;
+	}
 }
+
 void create_add(string bname){
 	add b1(bname);
 	adds.insert_last(b1);
+	// Remover ordenação automática para evitar problemas
+	// sort_channels();
 }
+
+void sort_channels(){
+	// Definir ordem prioritária dos canais
+	string[] ordem_canais = {
+		"general",           // Tudo - sempre primeiro
+		"canal_principal",   // Canal Principal - segundo
+		"canal_local",       // Canal Local - terceiro  
+		"mensajes_del_equipo", // Canal de Equipe - quarto
+		"conversaciones_privadas", // Mensagens Privadas
+		"avisos",            // Avisos
+		"mensajes_de_voz",   // Mensagens de Voz
+		"conversaciones_con_la_pareja", // Conversações com a Pareja
+		"conversaciones_celestiales", // Conversações Celestiais
+		"ventas",            // Vendas
+		"avisos_de_morte",  // Avisos de Morte (nome correto)
+		"notificaciones_de_conexiónes", // Notificações de Conexões
+		"visiones_angelicales" // Administração - sempre último
+	};
+	
+	if(adds.length() == 0) return; // Não fazer nada se não há canais
+	
+	add@[] canais_ordenados;
+	
+	// Adicionar canais na ordem prioritária (incluindo administração)
+	for(int i = 0; i < ordem_canais.length(); i++) {
+		for(int j = 0; j < adds.length(); j++) {
+			if(adds[j].name == ordem_canais[i]) {
+				canais_ordenados.insert_last(adds[j]);
+				break;
+			}
+		}
+	}
+	
+	// Adicionar canais não listados (no meio, antes da administração)
+	for(int i = 0; i < adds.length(); i++) {
+		bool encontrado = false;
+		// Verificar se o canal já foi adicionado
+		for(int k = 0; k < ordem_canais.length(); k++) {
+			if(adds[i].name == ordem_canais[k]) {
+				encontrado = true;
+				break;
+			}
+		}
+		// Se não foi encontrado na lista prioritária, adicionar
+		if(!encontrado) {
+			canais_ordenados.insert_last(adds[i]);
+		}
+	}
+	
+	// Substituir array original pelo ordenado
+	adds = canais_ordenados;
+	
+	// Ajustar posição atual se necessário
+	if(addpos >= adds.length()) {
+		addpos = adds.length() - 1;
+	}
+	if(addpos < 0 && adds.length() > 0) {
+		addpos = 0;
+	}
+}
+
 void firstadd(){
 	addpos=0;
 	speakfocusedadd();
@@ -62,20 +130,218 @@ void bottomadditem(){
 	}
 }
 void add_add_item(string addname, string item,bool speakitem=true){
+if(logs==1){
+if(!directory_exists("logs"))directory_create("logs");
+file logfile;
+logfile.open("logs/log_"+DATE_YEAR+"_"+DATE_MONTH+"_"+DATE_DAY+".log", "a");
+logfile.write(item+"\r\n");
+logfile.close();
+}
+	// Verificar se o canal existe, se não existir, criar automaticamente
+	bool canal_existe = false;
 	for (uint i=0; i<adds.length(); i++) {
-		if (adds[i].name==addname||adds[i].name=="tudo"){
-			if (speakitem&&adds[i].name!="tudo")speak(item, 0);
+		if (adds[i].name==addname) {
+			canal_existe = true;
+			break;
+		}
+	}
+	
+	if(!canal_existe) {
+		create_add(addname);
+		// Ordenar apenas quando um novo canal é criado dinamicamente
+		sort_channels();
+	}
+	
+	// Adicionar mensagem ao canal específico e ao canal "general" (Tudo)
+	for (uint i=0; i<adds.length(); i++) {
+		if (adds[i].name==addname||adds[i].name=="general"){
+			if (speakitem&&adds[i].name!="general")speak(item, 0);
 			adds[i].items.insert_last(item);
 		}
 	}
 }
 void speakfocusedadd(){
-	if (adds[addpos].items.length()>0)speak(pu.get_value(adds[addpos].name)+". "+(adds[addpos].pos+1)+" "+pu.get_value("de")+" "+adds[addpos].items.length()+".");
-	else speak(pu.get_value(adds[addpos].name)+". "+pu.get_value("Vazio."));
-}
-int add_active(string addname){
-	for (uint i=0; i<adds.length(); i++){
-		if (adds[i].name==addname)return adds[i].active;
+	if(adds.length() == 0) {
+		speak("Nenhum canal disponível.");
+		return;
 	}
-	return 0;
+	if(addpos < 0 || addpos >= adds.length()) {
+		addpos = 0;
+	}
+	
+	adds[addpos].currently_buffer=adds[addpos].name;
+	if (adds[addpos].items.length()>0)speak(pu.get_value(adds[addpos].name)+". "+(adds[addpos].pos+1)+" "+pu.get_value("de")+" "+adds[addpos].items.length()+".");
+	else speak(pu.get_value(adds[addpos].name)+". "+adds[addpos].items.length()+" "+pu.get_value("elementos."));
+}
+
+int get_buffer_index(string buffername) {
+	for(int i=0; i<adds.length(); i++) {
+		if(adds[i].name==buffername) return i;
+	}
+	return -1;
+}
+
+void load_message_buffers() {
+	if(file_exists("buffers.ini")) {
+		file buf;
+		buf.open("buffers.ini", "rb");
+		string content =string_decrypt(buf.read(), PREFS_ENCRYPTION_KEY);
+		string[] buffers=delinear(content);
+		buf.close();
+		// Criar canais sem ordenar individualmente
+		for(int x=0; x<buffers.length(); x++) {
+			add b1(buffers[x]);
+			adds.insert_last(b1);
+		}
+		// Ordenar todos os canais carregados
+		sort_channels();
+		
+		// Remover canais vazios, exceto o "general"
+		remove_empty_channels();
+	}
+	else {
+		// Primeiro login: criar apenas o canal "general" (Tudo)
+		// O canal "avisos" e outros serão criados dinamicamente quando receberem mensagens
+		add b1("general");
+		adds.insert_last(b1);
+		// Não ordenar ainda pois só temos um canal
+		
+		// Mensagem de boas-vindas no canal geral
+		if(un.length() > 0) {
+			add_add_item("general", pu.get_value("Bem-vindo de volta, " + un + "!"), false);
+		} else {
+			add_add_item("general", pu.get_value("Bem-vindo de volta!"), false);
+		}
+	}
+	
+	return;
+}
+
+bool sort_buffer(string buffername, int range) {
+	int buffer_index=get_buffer_index(buffername);
+	int newposition;
+	if(buffer_index>-1) {
+		add buffer(adds[buffer_index].name, adds[buffer_index].items);
+		newposition =buffer_index+range;
+		if(newposition>=0 && newposition<adds.length()) {
+			adds.remove_at(buffer_index);
+			adds.insert_at(newposition, buffer);
+			return true;
+		}
+	}
+	return false;
+}
+
+void buffersmenu() {
+	if(ausente) return;
+	int counter =-1;
+	p.play_stationary("notify37.ogg", false);
+	speak(pu.get_value("Menú de gestión de búfers. Para mover los apartados, pulse alt+j o alt+k. Para guardarlos, pulse enter."));
+	while(true) {
+		wait(5);
+		mainloop();
+		if(key_pressed(KEY_ESCAPE)){
+			break;
+		}
+		if(key_pressed(KEY_LEFT) && counter>0) {
+			counter--;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_RIGHT) && counter<adds.length()-1) {
+			counter++;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_HOME)&&counter>0){
+			counter=0;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_END)&&counter<adds.length()-1){
+			counter=adds.length()-1;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_down(KEY_LMENU) && key_pressed(KEY_J)) {
+			if(counter>0) {
+				p.play_stationary("-old-menubounds.ogg", false);
+				speak(pu.get_value(adds[counter].name)+" "+pu.get_value("movido a la esquerda."));
+				sort_buffer(adds[counter].name, -1);
+				counter--;
+			}
+		}
+		if(key_down(KEY_LMENU) && key_pressed(KEY_K)) {
+			if(counter>=0 && counter<adds.length()-1) {
+				p.play_stationary("-old-menubounds.ogg", false);
+				speak(pu.get_value(adds[counter].name)+" "+pu.get_value("movido a la direita."));
+				sort_buffer(adds[counter].name, 1);
+				counter++;
+			}
+		}
+		if(key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) {
+			if(counter>=0) {
+				p.play_stationary("menuchecked.ogg", false);
+				save_buffers();
+				break;
+			}
+		}
+	}
+	optionsmenu2();
+}
+
+void save_buffers() {
+	if(adds.length()>0) {
+		// Remover canais vazios antes de salvar
+		remove_empty_channels();
+		// Garantir que os canais estejam na ordem correta antes de salvar
+		sort_channels();
+		
+		string final;
+		for(int i=0; i<adds.length(); i++) {
+			final +=adds[i].name+"\r\n";
+		}
+		string content =string_encrypt(final, PREFS_ENCRYPTION_KEY);
+		file buf;
+		buf.open("buffers.ini", "wb");
+		buf.write(content);
+		buf.close();
+		speak(pu.get_value("Configuración de búfers guardada."));
+	}
+	return;
+}
+
+void copy_buffer() {
+	if(adds.length()>0) {
+		if(adds[addpos].items.length()>0) {
+			clipboard_copy_text(linear(adds[addpos].items));
+			speak(pu.get_value("Búfer de mensagens copiado ao portapapeles."));
+		}
+		else {
+			speak(pu.get_value("Búfer de mensagens vazio."));
+		}
+	}
+}
+
+void remove_empty_channels(){
+	// Remove canais vazios, mas mantém sempre o "general"
+	add@[] canais_com_conteudo;
+	
+	for(int i = 0; i < adds.length(); i++) {
+		// Sempre manter o canal "general", mesmo se vazio
+		if(adds[i].name == "general" || adds[i].items.length() > 0) {
+			canais_com_conteudo.insert_last(adds[i]);
+		}
+	}
+	
+	// Substituir array original
+	adds = canais_com_conteudo;
+	
+	// Ajustar posição se necessário
+	if(addpos >= adds.length()) {
+		addpos = adds.length() - 1;
+	}
+	if(addpos < 0 && adds.length() > 0) {
+		addpos = 0;
+	}
 }

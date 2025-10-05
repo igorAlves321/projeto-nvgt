@@ -1,0 +1,98 @@
+// tempban.nvgt - Sistema de Banimento Temporário
+// Convertido de tempban.bgt para NVGT
+
+tempban@[] tempbans;
+
+class tempban {
+	string motivo;
+	string id;
+	double mins = 5;
+	timer tempbantimer;
+	double ms;
+	string playername;
+	
+	tempban(string pn, double min, string mtv, string idd) {
+		playername = pn;
+		mins = min;
+		ms = mins * 86400000;
+		motivo = mtv;
+		id = idd;
+	}
+}
+
+void tempbanloop() {
+	for(uint i = 0; i < tempbans.length(); i++) {
+		if(tempbans[i].tempbantimer.elapsed >= tempbans[i].ms) {
+			for(uint i2 = 0; i2 < players.length(); i2++) {
+				if(players[i2].check_admin()) {
+					send_reliable(players[i2].peer_id, "msg4 El baneo temporal de " + tempbans[i].playername + " ha finalizado.", 0);
+				}
+			}
+			@tempbans[i] = null;
+			tempbans.remove_at(i);
+			continue;
+		}
+	}
+}
+
+void create_temp_ban(string jugador, double minutes = 5, double elapsed = 0, string motivo = "", string id = "") {
+	tempban tb1(jugador, minutes, motivo, id);
+	tb1.tempbantimer.force(elapsed);
+	tempbans.insert_last(tb1);
+}
+
+bool tempbancheck(string un, string compid) {
+	for(int i = 0; i < tempbans.length(); i++) {
+		if(tempbans[i].playername == un || tempbans[i].id == compid) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int get_tempban_index(string jugador) {
+	for(int i = 0; i < tempbans.length(); i++) {
+		if(tempbans[i].playername.lower() == jugador.lower()) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void save_tempbans() {
+	string final;
+	for(int i = 0; i < tempbans.length(); i++) {
+		final += tempbans[i].playername + "=" + tempbans[i].mins + "=" + tempbans[i].tempbantimer.elapsed + "=" + tempbans[i].motivo + "=" + tempbans[i].id + "\r\n";
+	}
+	file f;
+	f.open("tempbans.usr", "w");
+	f.write(final);
+	f.close();
+}
+
+void load_all_tempbans() {
+	file tb;
+	if(!tb.open("tempbans.usr", "r")) {
+		return;
+	}
+	string tbdata = tb.read();
+	tb.close();
+	if(tbdata == "") {
+		return;
+	}
+	string[] tbans = tbdata.split("\r\n");
+	if(tbans.length() > 0) {
+		for(int i = 0; i < tbans.length(); i++) {
+			if(tbans[i] == "") continue;
+			string[] parsed = tbans[i].split("=");
+			if(parsed.length() >= 5) {
+				create_temp_ban(parsed[0], parse_float(parsed[1]), parse_float(parsed[2]), parsed[3], parsed[4]);
+			}
+		}
+	}
+	return;
+}
+
+void destroi_tempbans() {
+	tempbans.resize(0);
+}

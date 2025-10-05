@@ -1,14 +1,26 @@
-#include"key_hold.bgt"
-#include "usl.bgt"
+// require key_hold.bgt and usl.bgt. These files are already included in the main file
 nss_speech nss;
 key_hold left(KEY_LEFT,500,50);
 key_hold right(KEY_RIGHT,500,50);
 key_hold up(KEY_UP,500,50);
 key_hold down(KEY_DOWN,500,50);
+key_hold back(KEY_BACK,500,50);
+
 tts_voice tts;
 int found_reader=0;
 sound_pool spool;
 string copiaragora;
+int auto_select_screen_reader()
+{
+for(int x=1; x<5; x++)
+{
+if(screen_reader_is_running(x))
+{
+return x;
+}
+}
+return 0;
+}
 void fade (sound@ handle, double final_volume=-50, double delay=25){
 	if (handle.volume == final_volume){
 		return;
@@ -76,11 +88,17 @@ class dynamic_menu_item{
 	bool activate;
 	string name;
 	string letter;
+	dynamic_menu_item(string name) {
+		this.name =name;
+	}
 	dynamic_menu_item(){
 		option="";
 		is_filename=true;
 		name="";
 		activate=false;
+	}
+	bool opEquals(dynamic_menu_item@ dynamic) {
+		return this.name==dynamic.name;
 	}
 }
 class dynamic_menu_pro{
@@ -91,6 +109,8 @@ class dynamic_menu_pro{
 	bool click_at_edge;
 	bool repeat_items_at_edges;
 	bool music_added=false;
+bool tab=false;
+bool final=false;
 	int voltime=50;
 	timer voltimer;
 	sound music;
@@ -189,21 +209,21 @@ class dynamic_menu_pro{
 		return running;
 	}
 	bool set_tts_object(tts_voice@ handle){
-		if(running==true){
+		if(running){
 			return false;
 		}
 		@tts_handle=@handle;
 		return true;
 	}
 	bool set_sound_object(sound@ handle){
-		if(running==true){
+		if(running){
 			return false;
 		}
 		@sound_handle=@handle;
 		return true;
 	}
 	bool set_callback(menu_callback@ callback, string user_data){
-		if(running==true){
+		if(running){
 			return false;
 		}
 		@callback_handle=@callback;
@@ -216,11 +236,17 @@ class dynamic_menu_pro{
 		}
 		return item_list[item-1].name;
 	}
+
+	int get_item_position(string itemname) {
+		dynamic_menu_item dy(itemname);
+		return item_list.find(dy)+1;
+	}
+
 	int run(string intro, bool is_intro_tts){
 		return run_extended(intro, is_intro_tts, 0, false);
 	}
 	int run_extended(string intro, bool is_intro_tts, int start_position, bool auto_speak_first){
-		if(running==true){
+		if(running){
 			return -1;
 		}
 		int item_count=item_list.length();
@@ -271,7 +297,7 @@ class dynamic_menu_pro{
 					}
 				}
 				else if (force_sapi==false){
-					if(speak(intro, 0)==false){
+					if(speak(intro)==false){
 						return -1;
 					}
 				}
@@ -296,9 +322,9 @@ class dynamic_menu_pro{
 		get_characters();
 		string char;
 		string test;
-		while(true){
-			verificando();
-			if(connected)mainloop();
+		while(running){
+			if(!connected) verificando();
+			if(connected) mainloop();
 			if (enable_first_letter_navigation==true){
 				char=get_characters();
 				if(char!="" and !string_is_digits(char)){
@@ -601,7 +627,7 @@ class dynamic_menu_pro{
 					continue;
 				}
 			}
-			if(enable_enter==true and key_pressed(KEY_RETURN) or enable_space==true and key_pressed(KEY_SPACE)){
+			if(enable_enter==true and key_pressed(KEY_RETURN)||key_pressed(KEY_NUMPADENTER) or enable_space==true and key_pressed(KEY_SPACE)){
 				if(menu_position!=0){
 					play_enter_sound();
 					if (item_list[menu_position-1].activate==true){
@@ -616,25 +642,32 @@ class dynamic_menu_pro{
 					return 0;
 				}
 			}
+			if(tab==true){
+				if(key_pressed(KEY_TAB)){
+					running=false;
+					return -2;
+				}
+			}
 			if (key_pressed(volkeycheck) and music_added==true){
+				int musicvolume =music.volume+100;
 				if(speech_output>0 and speech_output<5){
-					screen_reader_speak_interrupt(speech_output, pu.get_value("Volume da música:")+" "+music.volume);
+					screen_reader_speak_interrupt(speech_output, pu.get_value("Volumen de la música del menú:")+" "+musicvolume+"%");
 				}
 				else if (force_sapi==false){
-					speak(pu.get_value("Volume da música:")+" "+music.volume);
+					speak(pu.get_value("Volumen de la música del menú:")+" "+musicvolume+"%");
 				}
 				else{
-					internal_tts.speak_interrupt("music volume: "+music.volume);
+					internal_tts.speak_interrupt(pu.get_value("Volumen de la mmúsica del menú:")+" "+musicvolume+"%");
 				}
 			}
 			if (key_down(volkeydown) and voltimer.elapsed>=voltime){
-				music.volume=music.volume-2;
+				music.volume=music.volume-1;
 				voltimer.restart();
 				musicamenu=music.volume;
 				writeprefs();
 			}
 			if (key_down(volkeyup) and voltimer.elapsed>=voltime){
-				music.volume=music.volume+2;
+				music.volume=music.volume+1;
 				musicamenu=music.volume;
 				writeprefs();
 				voltimer.restart();
@@ -719,7 +752,7 @@ class dynamic_menu_pro{
 		return -1;
 	}
 	bool reset(bool completely){
-		if(running==true){
+		if(running){
 			return false;
 		}
 		item_list.resize(0);
@@ -762,7 +795,7 @@ class dynamic_menu_pro{
 	int menu_position;
 	dynamic_menu_item[] item_list;
 	int add_item_extended(string filename, bool is_filename, string name="", string key="", bool act=true){
-		if(running==true){
+		if(running){
 			return -1;
 		}
 		int new_index=item_list.length();

@@ -10,7 +10,7 @@ class bullet {
 	int damage { get { return dano; } set { dano = value; } } // Alias para dano
 	string[] sounds_impact; // Sons de impacto
 	
-	bullet(int d, int r, int s1, int s2, int fa, string own, int weap, string map, int spee = 2, string sarm = "", string lsound = "") {
+	bullet(int d, int r, int s1, int s2, int fa, string owner, int we, string map, int spee = 2, string sarm = "", string lsound = "") {
 		this.velocidade = spee;
 		this.loopid = lsound;
 		mapname = map;
@@ -23,8 +23,8 @@ class bullet {
 		dano = d;
 		damage = d; // Inicializar damage também
 		range = r;
-		owner = own;
-		weapon = weap;
+		this.owner = owner;
+		weapon = we;
 		somarma = sarm;
 	}
 }
@@ -457,15 +457,46 @@ void bulletcheck(int b) {
 
 // Função auxiliar para verificar colisões com NPCs
 void check_npc_collisions(int b, int dano) {
-	// Dragonsauros
-	for (uint bu = 0; bu < dragonsauros.length(); bu++) {
-		if (bullets[b].x == dragonsauros[bu].x && bullets[b].y == dragonsauros[bu].y && bullets[b].mapname == dragonsauros[bu].map) {
-			net.send_packet(0, "rico dragonsauroapanhando.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
-			if (bu > dragonsauros.length()) return;
-			net.send_packet(0, "rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
-			if (bu > dragonsauros.length()) return;
-			dragonsauros[bu].vida -= dano;
-			dragonsauros[bu].golpeado = bullets[b].owner;
+	// ❌ REMOVIDO: Dragonsauros antigos (usar npcs_global)
+	// for (uint bu = 0; bu < dragonsauros.length(); bu++) {
+	// 	if (bullets[b].x == dragonsauros[bu].x && bullets[b].y == dragonsauros[bu].y && bullets[b].mapname == dragonsauros[bu].map) {
+	// 		net.send_packet(0, "rico dragonsauroapanhando.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+	// 		if (bu > dragonsauros.length()) return;
+	// 		net.send_packet(0, "rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
+	// 		if (bu > dragonsauros.length()) return;
+	// 		dragonsauros[bu].vida -= dano;
+	// 		dragonsauros[bu].golpeado = bullets[b].owner;
+	// 		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+	// 		bullets.remove_at(b);
+	// 		return;
+	// 	}
+	// }
+	
+	// ✅ NOVO: NPCs genéricos (sistema npc.nvgt)
+	for (uint bu = 0; bu < npcs_global.length(); bu++) {
+		if (bullets[b].x == npcs_global[bu].x && bullets[b].y == npcs_global[bu].y && bullets[b].mapname == npcs_global[bu].map) {
+			server_broadcast("play spell_electrobomb_hit.ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+			server_broadcast("rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+			npcs_global[bu].vida -= dano;
+			npcs_global[bu].golpeado = bullets[b].owner;
+			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+			bullets.remove_at(b);
+			return;
+		}
+	}
+	
+	// ✅ NOVO: Monstros genéricos (sistema monstruo.nvgt)
+	for (uint bu = 0; bu < monstruos_global.length(); bu++) {
+		if (bullets[b].x == monstruos_global[bu].x && bullets[b].y == monstruos_global[bu].y && bullets[b].mapname == monstruos_global[bu].map) {
+			// Som específico por tipo
+			if (monstruos_global[bu].tipo == "cachorro")
+				server_broadcast("play cachorroapanhando" + random(1, 2) + ".ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+			else if (monstruos_global[bu].tipo == "lobo")
+				server_broadcast("play loboapanhando" + random(1, 2) + ".ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+			
+			server_broadcast("rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+			monstruos_global[bu].vida -= dano;
+			monstruos_global[bu].golpeado = bullets[b].owner;
 			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
 			bullets.remove_at(b);
 			return;
@@ -473,7 +504,7 @@ void check_npc_collisions(int b, int dano) {
 	}
 	
 	// Continue com outros NPCs...
-	// (Implementar conforme necessário: megadragonsauros, robo_coletores, tubaraos, etc.)
+	// (Implementar conforme necessário: outros tipos futuros)
 }
 
 void spawn_bullet(int p1, int p2, int p3, int p4, int p5, string p6, int p7, string p8, int p9 = 20, string p11 = "", string p10 = "") {

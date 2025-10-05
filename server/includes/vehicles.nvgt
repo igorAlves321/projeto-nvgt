@@ -1,0 +1,221 @@
+// vehicles.nvgt - Sistema de Veículos
+// Convertido de vehicles.bgt para NVGT
+
+class vehicle {
+	int x, y;
+	double fuel;
+	string owner;
+	string type;
+	
+	vehicle(string owner, string type) {
+		this.owner = owner;
+		this.type = type;
+	}
+	
+	void take_vehicle() {
+		if(file_exists("players/" + this.owner + "/" + this.type + ".vehicle")) {
+			file f;
+			f.open("players/" + this.owner + "/" + this.type + ".vehicle", "r");
+			this.fuel = parse_float(f.read());
+			f.close();
+			
+			int index = get_player_index_from(this.owner);
+			if(index > -1) players[index].vehicle_type = this.type;
+		}
+	}
+	
+	void leave_vehicle() {
+		int index = get_player_index_from(this.owner);
+		if(index > -1) players[index].vehicle_type = "";
+		save_vehicle_config();
+	}
+	
+	void save_vehicle_config() {
+		file f;
+		f.open("players/" + this.owner + "/" + this.type + ".vehicle", "w");
+		f.write("" + this.fuel);
+		f.close();
+	}
+	
+	void discount_fuel(double cantity) {
+		this.fuel -= cantity;
+	}
+	
+	void add_fuel(double cantity) {
+		this.fuel += cantity;
+	}
+}
+
+// Classes derivadas
+class aircraft : vehicle {
+	aircraft(string owner, string type) {
+		super(owner, type);
+	}
+}
+
+class helicopter : vehicle {
+	helicopter(string owner, string type) {
+		super(owner, type);
+	}
+}
+
+class lancha : vehicle {
+	lancha(string owner, string type) {
+		super(owner, type);
+	}
+}
+
+class moto : vehicle {
+	moto(string owner, string type) {
+		super(owner, type);
+	}
+}
+
+class car : vehicle {
+	car(string owner, string type) {
+		super(owner, type);
+	}
+}
+
+// Loop principal para processar veículos
+void vehicles_loop() {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].charname == "" || players[i].vehicle_type == "") continue;
+		
+		// Verificar se tem combustível
+		// TODO: Implementar desconto de combustível por movimento
+		// TODO: Implementar sons de motor
+		// TODO: Implementar velocidade modificada
+	}
+}
+
+// Comando: Entrar em veículo
+void cmd_entrar(int player_index, string vehicle_type = "") {
+	// Se não especificou tipo, tentar detectar veículo próximo
+	if(vehicle_type == "") {
+		send_reliable(players[player_index].peer_id, "msg2 Uso: /entrar <tipo>", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Tipos: carro, moto, lancha, helicoptero", 0);
+		return;
+	}
+	
+	// Normalizar tipo
+	vehicle_type = vehicle_type.lower();
+	
+	// Verificar se já está em veículo
+	if(players[player_index].vehicle_type != "") {
+		send_reliable(players[player_index].peer_id, "msg2 Você já está em um veículo!", 0);
+		return;
+	}
+	
+	// Verificar tipo válido
+	if(vehicle_type != "carro" && vehicle_type != "moto" && 
+	   vehicle_type != "lancha" && vehicle_type != "helicoptero") {
+		send_reliable(players[player_index].peer_id, "msg2 Tipo de veículo inválido!", 0);
+		return;
+	}
+	
+	// Criar/carregar veículo
+	vehicle@ v;
+	if(vehicle_type == "carro") {
+		@v = car(players[player_index].charname, "carro");
+	} else if(vehicle_type == "moto") {
+		@v = moto(players[player_index].charname, "moto");
+	} else if(vehicle_type == "lancha") {
+		@v = lancha(players[player_index].charname, "lancha");
+	} else if(vehicle_type == "helicoptero") {
+		@v = helicopter(players[player_index].charname, "helicoptero");
+	}
+	
+	v.take_vehicle();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Você entrou no " + vehicle_type + "!", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Combustível: " + int(v.fuel) + "%", 0);
+	send_reliable(players[player_index].peer_id, "play vehicle_enter.ogg", 0);
+	
+	debug_log(players[player_index].charname + " entrou em " + vehicle_type);
+}
+
+// Comando: Sair de veículo
+void cmd_sair(int player_index) {
+	if(players[player_index].vehicle_type == "") {
+		send_reliable(players[player_index].peer_id, "msg2 Você não está em nenhum veículo!", 0);
+		return;
+	}
+	
+	string vtype = players[player_index].vehicle_type;
+	
+	// Criar veículo temporário para salvar
+	vehicle@ v;
+	if(vtype == "carro") {
+		@v = car(players[player_index].charname, "carro");
+	} else if(vtype == "moto") {
+		@v = moto(players[player_index].charname, "moto");
+	} else if(vtype == "lancha") {
+		@v = lancha(players[player_index].charname, "lancha");
+	} else if(vtype == "helicoptero") {
+		@v = helicopter(players[player_index].charname, "helicoptero");
+	}
+	
+	v.leave_vehicle();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Você saiu do " + vtype + "!", 0);
+	send_reliable(players[player_index].peer_id, "play vehicle_exit.ogg", 0);
+	
+	debug_log(players[player_index].charname + " saiu de " + vtype);
+}
+
+// Comando: Abastecer veículo
+void cmd_abastecer(int player_index, int quantidade = 100) {
+	if(players[player_index].vehicle_type == "") {
+		send_reliable(players[player_index].peer_id, "msg2 Você não está em nenhum veículo!", 0);
+		return;
+	}
+	
+	// Verificar se tem dinheiro suficiente
+	int custo = quantidade * 2; // 2 gold por 1% de combustível
+	if(players[player_index].gold < custo) {
+		send_reliable(players[player_index].peer_id, "msg2 Dinheiro insuficiente! Custo: " + custo + " gold", 0);
+		return;
+	}
+	
+	string vtype = players[player_index].vehicle_type;
+	
+	// Criar veículo para abastecer
+	vehicle@ v;
+	if(vtype == "carro") {
+		@v = car(players[player_index].charname, "carro");
+	} else if(vtype == "moto") {
+		@v = moto(players[player_index].charname, "moto");
+	} else if(vtype == "lancha") {
+		@v = lancha(players[player_index].charname, "lancha");
+	} else if(vtype == "helicoptero") {
+		@v = helicopter(players[player_index].charname, "helicoptero");
+	}
+	
+	v.take_vehicle();
+	
+	// Verificar se já está cheio
+	if(v.fuel >= 100.0) {
+		send_reliable(players[player_index].peer_id, "msg2 O tanque já está cheio!", 0);
+		return;
+	}
+	
+	// Calcular quanto pode abastecer
+	double espaco_disponivel = 100.0 - v.fuel;
+	double abastecer = quantidade;
+	if(abastecer > espaco_disponivel) {
+		abastecer = espaco_disponivel;
+		custo = int(abastecer) * 2;
+	}
+	
+	// Abastecer
+	v.add_fuel(abastecer);
+	players[player_index].gold -= custo;
+	v.save_vehicle_config();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Abastecido " + int(abastecer) + "% por " + custo + " gold", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Combustível atual: " + int(v.fuel) + "%", 0);
+	send_reliable(players[player_index].peer_id, "play refuel.ogg", 0);
+	
+	debug_log(players[player_index].charname + " abasteceu " + vtype + " com " + int(abastecer) + "%");
+}

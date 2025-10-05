@@ -6,11 +6,82 @@ class safezone {
 	int max_x;
 	int min_y;
 	int max_y;
+	string map;
+	string name;
 	
-	safezone(int minx, int maxx, int miny, int maxy) {
+	safezone(int minx, int maxx, int miny, int maxy, string map = "", string name = "Zona Segura") {
 		this.min_x = minx;
 		this.max_x = maxx;
 		this.min_y = miny;
 		this.max_y = maxy;
+		this.map = map;
+		this.name = name;
+	}
+	
+	bool is_inside(int x, int y) {
+		return x >= min_x && x <= max_x && y >= min_y && y <= max_y;
 	}
 } // end safezones
+
+// Verificar se uma posição está em zona segura
+bool is_in_safezone(int x, int y, string map) {
+	int map_index = get_map_index_from(map);
+	if(map_index == -1) return false;
+	
+	for(uint i = 0; i < server_maps[map_index].safezones.length(); i++) {
+		if(server_maps[map_index].safezones[i].is_inside(x, y)) {
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+// Comando: Criar zona segura
+void cmd_createsafezone(int player_index, int size_x, int size_y, string zone_name = "Zona Segura") {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	// Criar zona centrada no jogador
+	int min_x = players[player_index].x - (size_x / 2);
+	int max_x = players[player_index].x + (size_x / 2);
+	int min_y = players[player_index].y - (size_y / 2);
+	int max_y = players[player_index].y + (size_y / 2);
+	
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) return;
+	
+	safezone sz(min_x, max_x, min_y, max_y, players[player_index].map, zone_name);
+	server_maps[map_index].safezones.insert_last(sz);
+	
+	send_reliable(players[player_index].peer_id, "msg2 Zona segura '" + zone_name + "' criada!", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Área: " + size_x + "x" + size_y + " tiles", 0);
+	
+	debug_log("ADMIN: " + players[player_index].charname + " criou safezone '" + zone_name + "' em " + players[player_index].map);
+}
+
+// Comando: Deletar zona segura próxima
+void cmd_deletesafezone(int player_index) {
+	if(!is_admin(player_index)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) return;
+	
+	// Procurar zona segura na posição atual
+	for(uint i = 0; i < server_maps[map_index].safezones.length(); i++) {
+		if(server_maps[map_index].safezones[i].is_inside(players[player_index].x, players[player_index].y)) {
+			string zone_name = server_maps[map_index].safezones[i].name;
+			server_maps[map_index].safezones.remove_at(i);
+			send_reliable(players[player_index].peer_id, "msg2 Zona segura '" + zone_name + "' deletada!", 0);
+			debug_log("ADMIN: " + players[player_index].charname + " deletou safezone '" + zone_name + "'");
+			return;
+		}
+	}
+	
+	send_reliable(players[player_index].peer_id, "msg2 Você não está em nenhuma zona segura!", 0);
+}

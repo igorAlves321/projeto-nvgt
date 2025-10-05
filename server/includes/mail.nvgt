@@ -1,0 +1,537 @@
+// mail.nvgt - Sistema de Correio/Mail
+// Conversão: Novo sistema para NVGT
+// Fase 4: Sistemas Sociais
+
+class mail_message {
+	int id;
+	string sender;
+	string recipient;
+	string subject;
+	string body;
+	int gold_attached;
+	dictionary items_attached;  // item -> quantity
+	bool is_read;
+	bool has_attachments;
+	timer sent_time;
+	
+	mail_message(int msg_id, string from, string to, string subj, string msg_body) {
+		this.id = msg_id;
+		this.sender = from;
+		this.recipient = to;
+		this.subject = subj;
+		this.body = msg_body;
+		this.gold_attached = 0;
+		this.is_read = false;
+		this.has_attachments = false;
+		sent_time.restart();
+	}
+	
+	void attach_gold(int amount) {
+		gold_attached = amount;
+		has_attachments = true;
+	}
+	
+	void attach_item(string item_name, int quantity) {
+		if(items_attached.exists(item_name)) {
+			int current = int(items_attached[item_name]);
+			items_attached.set(item_name, "" + (current + quantity));
+		} else {
+			items_attached.set(item_name, "" + quantity);
+		}
+		has_attachments = true;
+	}
+	
+	string get_preview() {
+		string preview = "[" + (is_read ? "Lida" : "NOVA") + "] ";
+		preview += "De: " + sender + " | ";
+		preview += "Assunto: " + subject;
+		if(has_attachments) {
+			preview += " [Anexos]";
+		}
+		return preview;
+	}
+	
+	string[] get_full_content() {
+		string[] content;
+		content.insert_last("=== Mensagem #" + id + " ===");
+		content.insert_last("De: " + sender);
+		content.insert_last("Para: " + recipient);
+		content.insert_last("Assunto: " + subject);
+		content.insert_last("---");
+		content.insert_last(body);
+		
+		if(has_attachments) {
+			content.insert_last("--- Anexos ---");
+			if(gold_attached > 0) {
+				content.insert_last("Gold: " + gold_attached);
+			}
+			
+			string[] item_keys = items_attached.get_keys();
+			for(uint i = 0; i < item_keys.length(); i++) {
+				int qty = int(items_attached[item_keys[i]]);
+				content.insert_last("Item: " + item_keys[i] + " x" + qty);
+			}
+		}
+		
+		return content;
+	}
+}
+
+class mailbox {
+	string owner;
+	mail_message@[] messages;
+	int max_messages;
+	int next_message_id;
+	
+	mailbox(string owner_name) {
+		this.owner = owner_name;
+		this.max_messages = 50;
+		this.next_message_id = 1;
+	}
+	
+	bool is_full() {
+		return messages.length() >= uint(max_messages);
+	}
+	
+	int get_unread_count() {
+		int count = 0;
+		for(uint i = 0; i < messages.length(); i++) {
+			if(!messages[i].is_read) {
+				count++;
+			}
+		}
+		return count;
+	}
+	
+	void add_message(mail_message@ msg) {
+		if(!is_full()) {
+			msg.id = next_message_id++;
+			messages.insert_last(msg);
+		}
+	}
+	
+	mail_message@ get_message(int msg_id) {
+		for(uint i = 0; i < messages.length(); i++) {
+			if(messages[i].id == msg_id) {
+				return messages[i];
+			}
+		}
+		return null;
+	}
+	
+	void delete_message(int msg_id) {
+		for(uint i = 0; i < messages.length(); i++) {
+			if(messages[i].id == msg_id) {
+				messages.remove_at(i);
+				return;
+			}
+		}
+	}
+	
+	void delete_all_read() {
+		for(int i = int(messages.length()) - 1; i >= 0; i--) {
+			if(messages[i].is_read && !messages[i].has_attachments) {
+				messages.remove_at(i);
+			}
+		}
+	}
+	
+	void save() {
+		// Salvar mailbox em arquivo
+		string path = "players/" + owner + "/mailbox.dat";
+		
+		file f;
+		if(!f.open(path, "wb")) {
+			debug_log("MAIL: Erro ao salvar mailbox de " + owner);
+			return;
+		}
+		
+		// Salvar número de mensagens
+		f.write("" + messages.length() + "\n");
+		f.write("" + next_message_id + "\n");
+		
+		// Salvar cada mensagem
+		for(uint i = 0; i < messages.length(); i++) {
+			f.write(messages[i].sender + "\n");
+			f.write(messages[i].subject + "\n");
+			f.write(messages[i].body + "\n");
+			f.write("" + messages[i].gold_attached + "\n");
+			f.write("" + (messages[i].is_read ? "1" : "0") + "\n");
+			
+			// Salvar itens anexados
+			string[] item_keys = messages[i].items_attached.get_keys();
+			f.write("" + item_keys.length() + "\n");
+			for(uint j = 0; j < item_keys.length(); j++) {
+				f.write(item_keys[j] + "\n");
+				f.write("" + int(messages[i].items_attached[item_keys[j]]) + "\n");
+			}
+		}
+		
+		f.close();
+		debug_log("MAIL: Mailbox de " + owner + " salva (" + messages.length() + " mensagens)");
+	}
+	
+	void load() {
+		string path = "players/" + owner + "/mailbox.dat";
+		
+		file f;
+		if(!f.open(path, "rb")) {
+			// Arquivo não existe ainda
+			return;
+		}
+		
+		string content = f.read();
+		f.close();
+		
+		string[] lines = content.split("\n");
+		if(lines.length() < 2) return;
+		
+		int msg_count = parse_int(lines[0]);
+		next_message_id = parse_int(lines[1]);
+		
+		int line_idx = 2;
+		for(int i = 0; i < msg_count && line_idx < int(lines.length()); i++) {
+			if(line_idx + 5 >= int(lines.length())) break;
+			
+			string sender = lines[line_idx++];
+			string subject = lines[line_idx++];
+			string body = lines[line_idx++];
+			int gold = parse_int(lines[line_idx++]);
+			bool is_read = parse_int(lines[line_idx++]) == 1;
+			
+			mail_message msg(i + 1, sender, owner, subject, body);
+			msg.is_read = is_read;
+			
+			if(gold > 0) {
+				msg.attach_gold(gold);
+			}
+			
+			// Carregar itens anexados
+			if(line_idx < int(lines.length())) {
+				int item_count = parse_int(lines[line_idx++]);
+				for(int j = 0; j < item_count && line_idx + 1 < int(lines.length()); j++) {
+					string item_name = lines[line_idx++];
+					int qty = parse_int(lines[line_idx++]);
+					msg.attach_item(item_name, qty);
+				}
+			}
+			
+			messages.insert_last(msg);
+		}
+		
+		debug_log("MAIL: Mailbox de " + owner + " carregada (" + messages.length() + " mensagens)");
+	}
+}
+
+// Dictionary global de mailboxes
+dictionary player_mailboxes;
+
+// Obter mailbox de um jogador
+mailbox@ get_mailbox(string player_name) {
+	if(!player_mailboxes.exists(player_name)) {
+		mailbox mb(player_name);
+		mb.load();
+		player_mailboxes.set(player_name, @mb);
+		return mb;
+	}
+	
+	return cast<mailbox@>(player_mailboxes[player_name]);
+}
+
+// Comando: Enviar mail
+void cmd_sendmail(int player_index, string recipient, string subject, string message) {
+	// Verificar se destinatário existe (verificar se tem pasta de jogador)
+	bool recipient_exists = false;
+	string[] player_folders = find_directories("players/" + recipient);
+	if(player_folders.length() > 0) {
+		recipient_exists = true;
+	}
+	
+	if(!recipient_exists) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador '" + recipient + "' não encontrado!", 0);
+		return;
+	}
+	
+	mailbox@ mb = get_mailbox(recipient);
+	
+	if(mb.is_full()) {
+		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		return;
+	}
+	
+	// Custo de envio: 10 gold
+	int cost = 10;
+	if(players[player_index].gold < cost) {
+		send_reliable(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
+		return;
+	}
+	
+	players[player_index].gold -= cost;
+	
+	// Criar e enviar mensagem
+	mail_message msg(mb.next_message_id, players[player_index].charname, recipient, subject, message);
+	mb.add_message(msg);
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Mail enviado para " + recipient + "!", 0);
+	
+	// Notificar se estiver online
+	int recipient_idx = get_player_index_from(recipient);
+	if(recipient_idx >= 0) {
+		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um novo mail de " + players[player_index].charname + "!", 0);
+	}
+	
+	debug_log("MAIL: " + players[player_index].charname + " enviou mail para " + recipient);
+}
+
+// Comando: Listar mails
+void cmd_inbox(int player_index) {
+	mailbox@ mb = get_mailbox(players[player_index].charname);
+	
+	if(mb.messages.length() == 0) {
+		send_reliable(players[player_index].peer_id, "msg2 Sua caixa de entrada está vazia", 0);
+		return;
+	}
+	
+	send_reliable(players[player_index].peer_id, "msg2 === Caixa de Entrada (" + mb.messages.length() + "/" + mb.max_messages + ") ===", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Mensagens não lidas: " + mb.get_unread_count(), 0);
+	
+	for(uint i = 0; i < mb.messages.length(); i++) {
+		send_reliable(players[player_index].peer_id, "msg2 #" + mb.messages[i].id + " - " + mb.messages[i].get_preview(), 0);
+	}
+	
+	send_reliable(players[player_index].peer_id, "msg2 Use /readmail <id> para ler uma mensagem", 0);
+}
+
+// Comando: Ler mail
+void cmd_readmail(int player_index, int mail_id) {
+	mailbox@ mb = get_mailbox(players[player_index].charname);
+	
+	mail_message@ msg = mb.get_message(mail_id);
+	if(msg is null) {
+		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		return;
+	}
+	
+	// Marcar como lida
+	msg.is_read = true;
+	mb.save();
+	
+	// Enviar conteúdo
+	string[] content = msg.get_full_content();
+	for(uint i = 0; i < content.length(); i++) {
+		send_reliable(players[player_index].peer_id, "msg2 " + content[i], 0);
+	}
+	
+	if(msg.has_attachments) {
+		send_reliable(players[player_index].peer_id, "msg2 Use /takeattachments " + mail_id + " para pegar os anexos", 0);
+	}
+}
+
+// Comando: Pegar anexos
+void cmd_takeattachments(int player_index, int mail_id) {
+	mailbox@ mb = get_mailbox(players[player_index].charname);
+	
+	mail_message@ msg = mb.get_message(mail_id);
+	if(msg is null) {
+		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		return;
+	}
+	
+	if(!msg.has_attachments) {
+		send_reliable(players[player_index].peer_id, "msg2 Essa mensagem não tem anexos!", 0);
+		return;
+	}
+	
+	// Transferir gold
+	if(msg.gold_attached > 0) {
+		players[player_index].gold += msg.gold_attached;
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu " + msg.gold_attached + " gold!", 0);
+		msg.gold_attached = 0;
+	}
+	
+	// Transferir itens
+	string[] item_keys = msg.items_attached.get_keys();
+	for(uint i = 0; i < item_keys.length(); i++) {
+		int qty = int(msg.items_attached[item_keys[i]]);
+		
+		// Adicionar ao inventário do jogador
+		if(players[player_index].inventory.exists(item_keys[i])) {
+			int current = int(players[player_index].inventory[item_keys[i]]);
+			players[player_index].inventory.set(item_keys[i], "" + (current + qty));
+		} else {
+			players[player_index].inventory.set(item_keys[i], "" + qty);
+		}
+		
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu " + item_keys[i] + " x" + qty, 0);
+	}
+	
+	// Limpar anexos
+	msg.items_attached.delete_all();
+	msg.has_attachments = false;
+	
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Anexos recebidos! A mensagem pode ser deletada", 0);
+}
+
+// Comando: Deletar mail
+void cmd_deletemail(int player_index, int mail_id) {
+	mailbox@ mb = get_mailbox(players[player_index].charname);
+	
+	mail_message@ msg = mb.get_message(mail_id);
+	if(msg is null) {
+		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		return;
+	}
+	
+	if(msg.has_attachments) {
+		send_reliable(players[player_index].peer_id, "msg2 Remova os anexos antes de deletar! Use /takeattachments " + mail_id, 0);
+		return;
+	}
+	
+	mb.delete_message(mail_id);
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Mensagem deletada!", 0);
+}
+
+// Comando: Deletar todas as mensagens lidas
+void cmd_clearinbox(int player_index) {
+	mailbox@ mb = get_mailbox(players[player_index].charname);
+	
+	uint before = mb.messages.length();
+	mb.delete_all_read();
+	uint after = mb.messages.length();
+	
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 " + (before - after) + " mensagens deletadas!", 0);
+}
+
+// Comando: Enviar mail com anexo de gold
+void cmd_sendmailgold(int player_index, string recipient, string subject, string message, int gold_amount) {
+	if(gold_amount <= 0) {
+		send_reliable(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
+		return;
+	}
+	
+	if(players[player_index].gold < gold_amount) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem " + gold_amount + " gold!", 0);
+		return;
+	}
+	
+	// Verificar se destinatário existe
+	bool recipient_exists = false;
+	string[] player_folders = find_directories("players/" + recipient);
+	if(player_folders.length() > 0) {
+		recipient_exists = true;
+	}
+	
+	if(!recipient_exists) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	mailbox@ mb = get_mailbox(recipient);
+	
+	if(mb.is_full()) {
+		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		return;
+	}
+	
+	// Custo de envio: 10 gold + gold anexado
+	int cost = 10 + gold_amount;
+	if(players[player_index].gold < cost) {
+		send_reliable(players[player_index].peer_id, "msg2 Você precisa de " + cost + " gold total!", 0);
+		return;
+	}
+	
+	players[player_index].gold -= cost;
+	
+	// Criar mensagem com anexo
+	mail_message msg(mb.next_message_id, players[player_index].charname, recipient, subject, message);
+	msg.attach_gold(gold_amount);
+	mb.add_message(msg);
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Mail com " + gold_amount + " gold enviado para " + recipient + "!", 0);
+	
+	// Notificar se estiver online
+	int recipient_idx = get_player_index_from(recipient);
+	if(recipient_idx >= 0) {
+		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
+	}
+	
+	debug_log("MAIL: " + players[player_index].charname + " enviou " + gold_amount + " gold via mail para " + recipient);
+}
+
+// Comando: Enviar mail com item
+void cmd_sendmailitem(int player_index, string recipient, string subject, string message, string item_name, int quantity = 1) {
+	if(quantity <= 0) {
+		send_reliable(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
+		return;
+	}
+	
+	// Verificar se tem o item
+	if(!players[player_index].inventory.exists(item_name)) {
+		send_reliable(players[player_index].peer_id, "msg2 Você não tem esse item!", 0);
+		return;
+	}
+	
+	int current_qty = int(players[player_index].inventory[item_name]);
+	if(current_qty < quantity) {
+		send_reliable(players[player_index].peer_id, "msg2 Você só tem " + current_qty + " desse item!", 0);
+		return;
+	}
+	
+	// Verificar se destinatário existe
+	bool recipient_exists = false;
+	string[] player_folders = find_directories("players/" + recipient);
+	if(player_folders.length() > 0) {
+		recipient_exists = true;
+	}
+	
+	if(!recipient_exists) {
+		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		return;
+	}
+	
+	mailbox@ mb = get_mailbox(recipient);
+	
+	if(mb.is_full()) {
+		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		return;
+	}
+	
+	// Custo de envio
+	int cost = 10;
+	if(players[player_index].gold < cost) {
+		send_reliable(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
+		return;
+	}
+	
+	players[player_index].gold -= cost;
+	
+	// Remover item do inventário
+	players[player_index].inventory.set(item_name, "" + (current_qty - quantity));
+	if((current_qty - quantity) <= 0) {
+		players[player_index].inventory.delete(item_name);
+	}
+	
+	// Criar mensagem com item anexado
+	mail_message msg(mb.next_message_id, players[player_index].charname, recipient, subject, message);
+	msg.attach_item(item_name, quantity);
+	mb.add_message(msg);
+	mb.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 Mail com " + item_name + " x" + quantity + " enviado!", 0);
+	
+	// Notificar se estiver online
+	int recipient_idx = get_player_index_from(recipient);
+	if(recipient_idx >= 0) {
+		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
+	}
+	
+	debug_log("MAIL: " + players[player_index].charname + " enviou " + item_name + " x" + quantity + " via mail para " + recipient);
+}

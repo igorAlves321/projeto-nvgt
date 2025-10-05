@@ -37,16 +37,11 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/server_map.nvgt"
 #include "includes/item.nvgt"
 #include "includes/bullet.nvgt"
-#include "includes/commands.nvgt"
-// #include "includes/comandos.nvgt"  // Conflita com globals.nvgt - sistema de comandos antigo não compatível
+#include "includes/refletir.nvgt"  // Sistema de reflexo de dano (extraído de comandos.nvgt)
+#include "includes/commands.nvgt"  // Comandos do servidor
 #include "includes/mine/mina.nvgt"
 #include "includes/moving_sound/msound.nvgt"
 #include "includes/mine/objmagnet.nvgt"
-#include "includes/dog.nvgt"
-#include "includes/coelho.nvgt"
-#include "includes/cavalo.nvgt"
-#include "includes/cobra.nvgt"
-#include "includes/coco.nvgt"
 #include "includes/wall.nvgt"
 #include "includes/voids.nvgt"
 #include "includes/rotation.nvgt"
@@ -61,32 +56,47 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/comandos/maxbomba.nvgt" // Sistema de bomba máxima
 #include "includes/canhao.nvgt"
 #include "includes/fogo.nvgt"
-#include "includes/paje.nvgt"
-#include "includes/mercenario.nvgt"
 #include "includes/pia.nvgt"
 #include "includes/fonteagua.nvgt"
 #include "includes/fogogrudado.nvgt"
 #include "includes/fitaexplosiva.nvgt"
 #include "includes/computador.nvgt"
-#include "includes/hcaverna.nvgt"
 #include "includes/bombadefogo.nvgt"
 #include "includes/help.nvgt"
 #include "includes/ip_locale.nvgt"
 #include "includes/changes.nvgt"
 #include "includes/compban.nvgt"
 #include "includes/minaouro.nvgt"
-// #include "includes/guarda.nvgt"  // TODO: Temporariamente desabilitado - precisa correção
 #include "includes/helicoptero.nvgt"
 #include "includes/boladefogo.nvgt"
 #include "includes/maquinatempo.nvgt"
 #include "includes/tempocair.nvgt"
 #include "includes/items.nvgt"
-// #include "includes/history.nvgt"  // Temporariamente desabilitado para evitar dependência circular
 #include "includes/combat.nvgt"
 #include "includes/playerfires.nvgt"  // Sistema de fogo contínuo
-#include "includes/placeholder_classes.nvgt"  // Classes temporárias
+#include "includes/npc.nvgt"  // 🆕 Sistema completo de NPCs
+#include "includes/monstruo.nvgt"  // 🆕 Sistema completo de Monstros
+#include "includes/placeholder_classes.nvgt"  // Classes temporárias (apenas arbol agora)
+#include "includes/platforms.nvgt"  // 🆕 Sistema de plataformas móveis e escadas
+#include "includes/portals.nvgt"  // 🆕 Sistema de portais e teleporte
+#include "includes/vehicles.nvgt"  // 🆕 Sistema de veículos (carros, motos, lanchas)
+#include "includes/safezones.nvgt"  // 🆕 Sistema de zonas seguras (sem PvP)
+#include "includes/tempban.nvgt"  // 🆕 Sistema de banimento temporário
+#include "includes/trading.nvgt"  // 🆕 FASE 4: Sistema de trocas entre jogadores
+#include "includes/party.nvgt"  // 🆕 FASE 4: Sistema de grupos/party
+#include "includes/friends.nvgt"  // 🆕 FASE 4: Sistema de amigos
+#include "includes/guilds.nvgt"  // 🆕 FASE 4: Sistema de guilds/clans
+#include "includes/chat_advanced.nvgt"  // 🆕 FASE 4: Sistema de chat avançado
+#include "includes/mail.nvgt"  // 🆕 FASE 4: Sistema de correio/mail
+#include "includes/quests.nvgt"  // 🆕 FASE 5: Sistema de quests/missões
+#include "includes/achievements.nvgt"  // 🆕 FASE 5: Sistema de conquistas
+#include "includes/daily_rewards.nvgt"  // 🆕 FASE 5: Sistema de recompensas diárias
+#include "includes/bosses.nvgt"  // 🆕 FASE 5: Sistema de bosses
+#include "includes/dungeons.nvgt"  // 🆕 FASE 5: Sistema de dungeons
+#include "includes/events.nvgt"  // 🆕 FASE 5: Sistema de eventos
 #include "includes/weapons.nvgt"  // 🆕 Sistema de armas
 #include "includes/crafting.nvgt"  // Sistema de crafting
+#include "includes/consumables.nvgt"  // 🆕 Sistema de itens consumíveis (poções, comida, buffs)
 #include "includes/inventory_advanced.nvgt"  // 🆕 Sistema de inventário avançado
 #include "includes/admin_commands.nvgt"  // Comandos administrativos
 #include "includes/systems_advanced.nvgt"  // Sistemas avançados
@@ -451,10 +461,6 @@ void process_player_command(uint64 peer_id, string command) {
     
     // Log do comando
     log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
-    // log_action(player.name, "command", command, player.map_name, player.x, player.y, player.z); // TODO: Implementar history.nvgt
-
-    // Atualizar estatísticas de mensagens
-    // update_statistics("message"); // TODO: Implementar statistics.nvgt
     
     // Verificar se o jogo está congelado
     if(game_frozen && !player.admin_status) {
@@ -471,7 +477,6 @@ void process_player_command(uint64 peer_id, string command) {
         string cmd = parts[0].lower();
 
         if(cmd == "login") {
-            // TODO: Implementar sistema de login
             send_reliable(get_player_peer_id(player), "say Sistema de login em desenvolvimento");
         }
         else {
@@ -569,23 +574,26 @@ void main() {
     // Inicializar sistema de itens
     init_items_system();
 
-    // Inicializar sistema de histórico
-    // init_history_system(); // TODO: Implementar quando history.nvgt estiver pronto
-
-    // Inicializar limpeza de combates expirados
-    // cleanup_expired_combats(); // TODO: Implementar quando combat.nvgt estiver pronto
     
     // 🆕 INTEGRAÇÃO: Inicializar sistemas avançados
     debug_log("Inicializando sistemas avançados...");
     init_disabled_zones();  // Zonas desabilitadas (PvP bloqueado)
     load_weapons();         // 🆕 Carregar armas do weapons.db
     init_item_data();       // 🆕 Inicializar dados de itens (peso e tamanho)
+    init_descriptions();    // 🆕 Inicializar descrições de itens e localizações
     init_moving_sounds();   // 🆕 Inicializar sistema de sons móveis 3D (Steam Audio HRTF)
+    init_consumables_system();  // 🆕 Inicializar sistema de itens consumíveis (poções, buffs)
+    load_all_tempbans();    // 🆕 Carregar banimentos temporários
+    init_word_filter();     // 🆕 FASE 4: Inicializar filtro de palavras do chat
+    init_quests_system();   // 🆕 FASE 5: Inicializar sistema de quests
+    init_achievements_system();  // 🆕 FASE 5: Inicializar sistema de achievements
+    init_bosses_system();   // 🆕 FASE 5: Inicializar sistema de bosses
+    init_dungeons_system(); // 🆕 FASE 5: Inicializar sistema de dungeons
+    init_events_system();   // 🆕 FASE 5: Inicializar sistema de eventos
     debug_log("Sistemas avançados inicializados");
     
     // Inicializar servidor de rede
     if(!server_init(SERVER_PORT)) {
-        // screen_reader_speak("Falha ao inicializar servidor de rede na porta " + SERVER_PORT, true);
         debug_log("ERRO CRÍTICO: Falha na inicialização do servidor de rede");
         debug_log("");
         debug_log("Pressione ENTER para sair...");
@@ -596,9 +604,7 @@ void main() {
         }
         return;
     }
-    
-    // TODO: Carregar mapas iniciais (GameMap class não implementada ainda)
-    // GameMap@ inicio_map = load_map("inicio");
+        // GameMap@ inicio_map = load_map("inicio");
     // if(inicio_map is null) {
     //     debug_log("AVISO: Mapa 'inicio' não encontrado, criando mapa padrão");
     // }
@@ -657,12 +663,12 @@ void main() {
         // Sistema de objetos/itens (convertido do BGT)
         objloop();
 
-        // Sistema de NPCs convertidos do BGT
-        dogloop();
-        coelholoop();
-        cavaloloop();
-        cobraloop();
-        cocoloop();
+        // ❌ REMOVIDO: NPCs antigos individuais (substituídos por npc_global_loop)
+        // dogloop();
+        // coelholoop();
+        // cavaloloop();
+        // cobraloop();
+        // cocoloop();
         wallloop();
 
         // Sistemas de combate avançado
@@ -674,10 +680,10 @@ void main() {
         canhaoloop();
         fogoloop();
 
-        // NPCs de combate
-        pajeloop();
-        mercenarioloop();
-        hcavernaloop();
+        // 🆕 SISTEMAS DE NPC E MONSTROS GENÉRICOS
+        npc_global_loop();       // Sistema completo de NPCs
+        monstruo_global_loop();  // Sistema completo de Monstros
+        consumables_loop();      // 🆕 Sistema de expiração de buffs de consumíveis
 
         // Sistemas ambientais
         pialoop();
@@ -687,9 +693,7 @@ void main() {
         bombadefogoloop();
 
         // Veículos e unidades avançadas
-        // guardaloop();  // TODO: Temporariamente desabilitado - precisa correção
         helicopteroloop();
-        // boladefogoloop(); // Movido para dentro de maploop em cada mapa
         caiuloop();
 
         // ============================================================
@@ -701,6 +705,33 @@ void main() {
         
         // Sistema de Arena - Atualizar partidas e matchmaking
         arena_loop();
+        
+        // 🆕 Sistema de Ban Temporário - Verificar expiração de bans
+        tempbanloop();
+        
+        // 🆕 Sistema de Portais - Processar teletransporte
+        portals_loop();
+        
+        // 🆕 Sistema de Veículos - Processar movimento e combustível
+        vehicles_loop();
+        
+        // 🆕 FASE 4: Sistema de Trading - Verificar timeouts de trocas
+        trading_loop();
+        
+        // 🆕 FASE 5: Sistema de Quests - Processar quests
+        quests_loop();
+        
+        // 🆕 FASE 5: Sistema de Recompensas Diárias - Verificar resets
+        daily_rewards_loop();
+        
+        // 🆕 FASE 5: Sistema de Bosses - Processar bosses e respawns
+        bosses_loop();
+        
+        // 🆕 FASE 5: Sistema de Dungeons - Processar instâncias
+        dungeons_loop();
+        
+        // 🆕 FASE 5: Sistema de Eventos - Processar eventos ativos
+        events_loop();
         
         // Sistema de Itens Magnéticos - Processar atração de itens
         for(uint i = 0; i < players.length(); i++) {
@@ -745,15 +776,16 @@ void main() {
         wait(5);
     }
     
+    
     // Shutdown graceful
     debug_log("=== DESLIGANDO SERVIDOR ===");
-    // screen_reader_speak("Desligando servidor", true); // Comentado para não bugar NVDA
     
     // Salvar todos os jogadores
     auto_save_all_players_async();
     
-    // Salvar estatísticas finais
-    // save_daily_statistics(); // TODO: Implementar quando statistics.nvgt estiver pronto
+    // Salvar banimentos temporários
+    save_tempbans();
+    debug_log("Banimentos temporários salvos");
 
     // Backup final
     perform_database_backup_async();
@@ -770,3 +802,61 @@ void main() {
     log_to_database("INFO", "SYSTEM", "Servidor desligado", -1, "uptime:" + server_uptime.elapsed);
     debug_log("Servidor desligado após " + (server_uptime.elapsed / 1000) + " segundos");
 }
+
+// =====================================================
+// FUNÇÕES DESATIVADAS / COMENTADAS
+// =====================================================
+/*
+LISTA DE FUNCIONALIDADES DESATIVADAS:
+
+1. INCLUDES DESATIVADOS:
+   - #include "includes/comandos.nvgt" (linha 42)
+     Motivo: NPCs antigos não mais necessários
+   
+   - #include "includes/guarda.nvgt" (linha 82)
+     Motivo: Precisa correção, temporariamente desabilitado
+
+2. NPCs ANTIGOS REMOVIDOS (substituídos por npc.nvgt genérico):
+   - dog.nvgt, coelho.nvgt, cavalo.nvgt, cobra.nvgt
+   - coco.nvgt, paje.nvgt, mercenario.nvgt, hcaverna.nvgt
+   - Arquivos de comandos: cachorro.nvgt, lobo.nvgt, urso.nvgt, etc.
+
+3. SISTEMAS PENDENTES (TODO):
+   - Threading (linhas 256, 292, 346, 391)
+     Status: Aguardando sintaxe confirmada do NVGT
+   
+   - Backup SQLite nativo (linha 367)
+     Status: Aguardando implementação nativa
+   
+   - Sistema de Login (linha 481)
+     Status: Não implementado
+   
+   - History System (linha 461, 580)
+     Status: history.nvgt não implementado
+   
+   - Statistics System (linha 464, 775)
+     Status: Funções save_daily_statistics() não implementadas
+   
+   - Combat Cleanup (linha 583)
+     Status: cleanup_expired_combats() não implementado
+   
+   - GameMap Class (linha 609)
+     Status: Classe de mapas não implementada
+   
+   - Update Logic (linha 429)
+     Status: Lógica de atualização incompleta
+
+4. FUNÇÕES COMENTADAS NO GAME LOOP (linhas 669-690):
+   - dogloop(), coelholoop(), cavaloloop(), cobraloop()
+   - cocoloop(), pajeloop(), mercenarioloop(), hcavernaloop()
+   - Todos substituídos por: npc_global_loop() e monstruo_global_loop()
+
+5. FUNÇÕES COMENTADAS POR BUGS:
+   - screen_reader_speak() (linha 762)
+     Motivo: Pode causar bugs no NVDA
+
+OBSERVAÇÕES:
+- A maioria das funções desativadas são de NPCs antigos (substituídos pelo sistema genérico)
+- Algumas funcionalidades aguardam implementação futura (Threading, History, Statistics)
+- Manter este bloco atualizado ao desativar/reativar funcionalidades
+*/

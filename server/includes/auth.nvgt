@@ -82,6 +82,18 @@ void handle_login(uint64 peer_id, string username, string password_hash, double 
         debug_log("Login falhou: computer_id banido - " + computer_id);
         return;
     }
+    
+    // 🆕 Verificar ban temporário
+    if(tempbancheck(username, computer_id)) {
+        int ban_index = get_tempban_index(username);
+        if(ban_index >= 0) {
+            int time_left = int((tempbans[ban_index].ms - tempbans[ban_index].tempbantimer.elapsed) / 60000);
+            string motivo = tempbans[ban_index].motivo;
+            send_reliable(peer_id, "Erro: Você está temporariamente banido. Tempo restante: " + time_left + " minutos. Motivo: " + motivo, 0);
+            debug_log("Login falhou: ban temporário ativo - " + username + " (" + time_left + " minutos restantes)");
+            return;
+        }
+    }
 
     // Verificar limite de jogadores
     if(connected_count >= MAX_PLAYERS) {

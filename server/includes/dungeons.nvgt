@@ -1,0 +1,882 @@
+// ========================================
+// SISTEMA DE DUNGEONS - FASE 5
+// ========================================
+// Sistema completo de dungeons instanciadas com
+// requisitos de party, níveis de dificuldade, ondas,
+// bosses finais e limite diário
+
+#include "globals.nvgt"
+
+// ========================================
+// ENUMS
+// ========================================
+
+enum dungeon_difficulty {
+    DIFFICULTY_NORMAL,    // Solo ou 2-3 jogadores
+    DIFFICULTY_HARD,      // 3-4 jogadores recomendado
+    DIFFICULTY_HEROIC     // 5 jogadores recomendado
+}
+
+enum dungeon_instance_state {
+    INSTANCE_WAITING,     // Aguardando jogadores
+    INSTANCE_ACTIVE,      // Em progresso
+    INSTANCE_COMPLETED,   // Completada
+    INSTANCE_FAILED,      // Falhou
+    INSTANCE_EXPIRED      // Tempo esgotado
+}
+
+// ========================================
+// CLASSES
+// ========================================
+
+class dungeon_wave {
+    int wave_number;
+    string[] enemies;        // Tipos de inimigos
+    int[] enemy_counts;      // Quantidade de cada tipo
+    int[] enemy_levels;      // Nível de cada tipo
+    int delay_seconds;       // Delay antes desta wave
+    string special_event;    // Evento especial (opcional)
+    
+    dungeon_wave() {
+        wave_number = 1;
+        delay_seconds = 5;
+    }
+}
+
+class dungeon_boss_encounter {
+    string boss_name;
+    int boss_level;
+    int boss_hp;
+    int boss_damage;
+    string[] abilities;
+    dictionary loot;         // item_name -> drop_chance
+    int guaranteed_gold;
+    int guaranteed_xp;
+    
+    dungeon_boss_encounter() {
+        boss_level = 1;
+        boss_hp = 10000;
+        boss_damage = 100;
+        guaranteed_gold = 1000;
+        guaranteed_xp = 5000;
+    }
+}
+
+class dungeon_checkpoint {
+    int wave_number;         // Wave onde ocorre o checkpoint
+    float x, y, z;          // Posição do checkpoint
+    bool activated;
+    
+    dungeon_checkpoint() {
+        wave_number = 0;
+        activated = false;
+    }
+}
+
+class dungeon_definition {
+    int id;
+    string name;
+    string description;
+    int required_level;
+    int min_players;
+    int max_players;
+    dungeon_difficulty difficulty;
+    int time_limit_minutes;
+    int daily_entry_limit;
+    
+    // Recompensas por dificuldade
+    int base_gold_reward;
+    int base_xp_reward;
+    dictionary completion_items;  // item_name -> quantity
+    
+    // Ondas
+    dungeon_wave@[] waves;
+    
+    // Boss final
+    dungeon_boss_encounter@ final_boss;
+    
+    // Checkpoints
+    dungeon_checkpoint@[] checkpoints;
+    
+    dungeon_definition() {
+        id = 0;
+        required_level = 1;
+        min_players = 1;
+        max_players = 5;
+        difficulty = DIFFICULTY_NORMAL;
+        time_limit_minutes = 30;
+        daily_entry_limit = 3;
+        base_gold_reward = 500;
+        base_xp_reward = 1000;
+    }
+    
+    // Calcula recompensas baseado em dificuldade
+    int get_gold_reward() {
+        float multiplier = 1.0;
+        switch (difficulty) {
+            case DIFFICULTY_HARD: multiplier = 1.5; break;
+            case DIFFICULTY_HEROIC: multiplier = 2.0; break;
+        }
+        return int(base_gold_reward * multiplier);
+    }
+    
+    int get_xp_reward() {
+        float multiplier = 1.0;
+        switch (difficulty) {
+            case DIFFICULTY_HARD: multiplier = 1.5; break;
+            case DIFFICULTY_HEROIC: multiplier = 2.0; break;
+        }
+        return int(base_xp_reward * multiplier);
+    }
+}
+
+class dungeon_participant {
+    string player_name;
+    int damage_dealt;
+    int healing_done;
+    int deaths;
+    bool is_ready;
+    
+    dungeon_participant(string name) {
+        player_name = name;
+        damage_dealt = 0;
+        healing_done = 0;
+        deaths = 0;
+        is_ready = false;
+    }
+}
+
+class dungeon_instance {
+    int instance_id;
+    dungeon_definition@ definition;
+    dungeon_instance_state state;
+    dungeon_difficulty difficulty;
+    
+    // Participantes
+    dungeon_participant@[] participants;
+    string party_leader;
+    
+    // Progresso
+    int current_wave;
+    int enemies_remaining;
+    int total_enemies_killed;
+    timer start_time;
+    timer wave_timer;
+    dungeon_checkpoint@ last_checkpoint;
+    
+    // Estatísticas
+    int completion_time_seconds;
+    bool bonus_objective_completed;
+    
+    dungeon_instance() {
+        instance_id = 0;
+        state = INSTANCE_WAITING;
+        difficulty = DIFFICULTY_NORMAL;
+        current_wave = 0;
+        enemies_remaining = 0;
+        total_enemies_killed = 0;
+        completion_time_seconds = 0;
+        bonus_objective_completed = false;
+    }
+    
+    // Adiciona participante
+    bool add_participant(string player_name) {
+        // Verifica limite de jogadores
+        if (int(participants.length()) >= definition.max_players) {
+            return false;
+        }
+        
+        // Verifica se já existe
+        for (uint i = 0; i < participants.length(); i++) {
+            if (participants[i].player_name == player_name) {
+                return false;
+            }
+        }
+        
+        dungeon_participant@ dp = dungeon_participant(player_name);
+        participants.insert_last(dp);
+        
+        // Primeiro jogador é o líder
+        if (participants.length() == 1) {
+            party_leader = player_name;
+        }
+        
+        return true;
+    }
+    
+    // Remove participante
+    void remove_participant(string player_name) {
+        for (uint i = 0; i < participants.length(); i++) {
+            if (participants[i].player_name == player_name) {
+                participants.remove_at(i);
+                break;
+            }
+        }
+        
+        // Se líder saiu, escolhe novo
+        if (party_leader == player_name && participants.length() > 0) {
+            party_leader = participants[0].player_name;
+            broadcast("Novo líder: " + party_leader);
+        }
+    }
+    
+    // Verifica se todos estão prontos
+    bool all_ready() {
+        if (participants.length() < uint(definition.min_players)) {
+            return false;
+        }
+        
+        for (uint i = 0; i < participants.length(); i++) {
+            if (!participants[i].is_ready) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Inicia a dungeon
+    void start() {
+        state = INSTANCE_ACTIVE;
+        current_wave = 1;
+        start_time.restart();
+        broadcast("🏰 Dungeon iniciada! Prepare-se!");
+        start_wave(1);
+    }
+    
+    // Inicia uma wave
+    void start_wave(int wave_num) {
+        if (wave_num > int(definition.waves.length())) {
+            // Todas as waves completas, spawna boss final
+            spawn_final_boss();
+            return;
+        }
+        
+        current_wave = wave_num;
+        dungeon_wave@ wave = definition.waves[wave_num - 1];
+        
+        broadcast("⚔️ Wave " + wave_num + " de " + definition.waves.length() + "!");
+        
+        // Conta inimigos totais
+        enemies_remaining = 0;
+        for (uint i = 0; i < wave.enemy_counts.length(); i++) {
+            enemies_remaining += wave.enemy_counts[i];
+        }
+        
+        wave_timer.restart();
+        
+        // Spawna inimigos
+        for (uint i = 0; i < wave.enemies.length(); i++) {
+            string enemy_type = wave.enemies[i];
+            int count = wave.enemy_counts[i];
+            int level = wave.enemy_levels[i];
+            
+            broadcast("Spawnando " + count + "x " + enemy_type + " (Nível " + level + ")");
+            // Aqui implementaria o spawn real dos inimigos
+        }
+    }
+    
+    // Enemy morto
+    void enemy_killed(string enemy_type) {
+        enemies_remaining--;
+        total_enemies_killed++;
+        
+        // Verifica se wave completa
+        if (enemies_remaining <= 0) {
+            wave_completed();
+        }
+    }
+    
+    // Wave completa
+    void wave_completed() {
+        broadcast("✅ Wave " + current_wave + " completa!");
+        
+        // Verifica checkpoint
+        for (uint i = 0; i < definition.checkpoints.length(); i++) {
+            if (definition.checkpoints[i].wave_number == current_wave) {
+                activate_checkpoint(definition.checkpoints[i]);
+                break;
+            }
+        }
+        
+        // Aguarda antes da próxima wave
+        if (current_wave < int(definition.waves.length())) {
+            broadcast("Próxima wave em 10 segundos...");
+            // Timer para próxima wave
+        } else {
+            // Última wave, spawna boss
+            spawn_final_boss();
+        }
+    }
+    
+    // Ativa checkpoint
+    void activate_checkpoint(dungeon_checkpoint@ cp) {
+        cp.activated = true;
+        @last_checkpoint = cp;
+        broadcast("💾 Checkpoint ativado! Se morrerem, ressurgirão aqui.");
+    }
+    
+    // Spawna boss final
+    void spawn_final_boss() {
+        if (definition.final_boss is null) {
+            // Sem boss, dungeon completa
+            complete();
+            return;
+        }
+        
+        broadcast("⚠️⚠️⚠️ BOSS FINAL: " + definition.final_boss.boss_name + " ⚠️⚠️⚠️");
+        broadcast("Nível: " + definition.final_boss.boss_level);
+        broadcast("HP: " + definition.final_boss.boss_hp);
+        
+        // Implementaria spawn do boss aqui
+    }
+    
+    // Boss derrotado
+    void boss_defeated() {
+        broadcast("🎉 Boss derrotado!");
+        complete();
+    }
+    
+    // Completa dungeon
+    void complete() {
+        state = INSTANCE_COMPLETED;
+        completion_time_seconds = start_time.elapsed / 1000;
+        
+        broadcast("🏆🏆🏆 DUNGEON COMPLETA! 🏆🏆🏆");
+        broadcast("Tempo: " + (completion_time_seconds / 60) + "m " + (completion_time_seconds % 60) + "s");
+        
+        // Distribui recompensas
+        distribute_rewards();
+    }
+    
+    // Falha na dungeon
+    void fail(string reason) {
+        state = INSTANCE_FAILED;
+        broadcast("💀 DUNGEON FALHOU: " + reason);
+    }
+    
+    // Distribui recompensas
+    void distribute_rewards() {
+        int gold = definition.get_gold_reward();
+        int xp = definition.get_xp_reward();
+        
+        // Bônus por tempo
+        if (completion_time_seconds < definition.time_limit_minutes * 60 / 2) {
+            gold = int(gold * 1.5);
+            xp = int(xp * 1.5);
+            broadcast("⚡ Bônus de velocidade! +50% recompensas!");
+        }
+        
+        for (uint i = 0; i < participants.length(); i++) {
+            string msg = "=== RECOMPENSAS ===\n";
+            msg += "Gold: " + gold + "\n";
+            msg += "XP: " + xp + "\n";
+            
+            // Itens de conclusão
+            string[] items = definition.completion_items.get_keys();
+            if (items.length() > 0) {
+                msg += "\nITENS:\n";
+                for (uint j = 0; j < items.length(); j++) {
+                    int qty;
+                    definition.completion_items.get(items[j], qty);
+                    msg += "- " + items[j] + " x" + qty + "\n";
+                }
+            }
+            
+            // Loot do boss
+            if (definition.final_boss !is null) {
+                msg += "\nLOOT DO BOSS:\n";
+                msg += "Gold: " + definition.final_boss.guaranteed_gold + "\n";
+                msg += "XP: " + definition.final_boss.guaranteed_xp + "\n";
+                
+                string[] boss_items = definition.final_boss.loot.get_keys();
+                for (uint j = 0; j < boss_items.length(); j++) {
+                    float chance;
+                    definition.final_boss.loot.get(boss_items[j], chance);
+                    
+                    float roll = random(0, 100) / 100.0;
+                    if (roll <= chance) {
+                        msg += "- " + boss_items[j] + " (DROPPED!)\n";
+                    }
+                }
+            }
+            
+            // send_message(participants[i].player_name, msg);
+        }
+    }
+    
+    // Broadcast para participantes
+    void broadcast(string message) {
+        for (uint i = 0; i < participants.length(); i++) {
+            // send_message(participants[i].player_name, message);
+        }
+    }
+    
+    // Verifica timeout
+    bool check_timeout() {
+        if (state != INSTANCE_ACTIVE) return false;
+        
+        if (start_time.elapsed >= definition.time_limit_minutes * 60 * 1000) {
+            fail("Tempo esgotado!");
+            return true;
+        }
+        return false;
+    }
+}
+
+// ========================================
+// SISTEMA GLOBAL DE DUNGEONS
+// ========================================
+
+dungeon_definition@[] dungeon_templates;
+dictionary dungeon_by_id;
+
+dungeon_instance@[] active_instances;
+int next_instance_id = 1;
+
+// Tracking diário de entradas por jogador
+dictionary player_daily_entries;  // player_name -> { dungeon_id -> entry_count }
+
+// Inicializa sistema de dungeons
+void init_dungeons_system() {
+    dungeon_templates.resize(0);
+    dungeon_by_id.delete_all();
+    active_instances.resize(0);
+    player_daily_entries.delete_all();
+    
+    create_default_dungeons();
+    load_dungeons_data();
+}
+
+// Cria dungeons padrão
+void create_default_dungeons() {
+    // Dungeon 1: Caverna dos Goblins
+    {
+        dungeon_definition@ d = dungeon_definition();
+        d.id = 1;
+        d.name = "Caverna dos Goblins";
+        d.description = "Uma caverna infestada de goblins agressivos.";
+        d.required_level = 5;
+        d.min_players = 1;
+        d.max_players = 3;
+        d.difficulty = DIFFICULTY_NORMAL;
+        d.time_limit_minutes = 20;
+        d.daily_entry_limit = 5;
+        d.base_gold_reward = 500;
+        d.base_xp_reward = 1000;
+        
+        // Wave 1
+        dungeon_wave@ w1 = dungeon_wave();
+        w1.wave_number = 1;
+        w1.enemies = {"Goblin Guerreiro"};
+        w1.enemy_counts = {5};
+        w1.enemy_levels = {5};
+        w1.delay_seconds = 5;
+        d.waves.insert_last(w1);
+        
+        // Wave 2
+        dungeon_wave@ w2 = dungeon_wave();
+        w2.wave_number = 2;
+        w2.enemies = {"Goblin Guerreiro", "Goblin Arqueiro"};
+        w2.enemy_counts = {4, 3};
+        w2.enemy_levels = {5, 6};
+        w2.delay_seconds = 10;
+        d.waves.insert_last(w2);
+        
+        // Wave 3
+        dungeon_wave@ w3 = dungeon_wave();
+        w3.wave_number = 3;
+        w3.enemies = {"Goblin Xamã"};
+        w3.enemy_counts = {2};
+        w3.enemy_levels = {7};
+        w3.delay_seconds = 10;
+        d.waves.insert_last(w3);
+        
+        // Boss Final
+        dungeon_boss_encounter@ boss = dungeon_boss_encounter();
+        boss.boss_name = "Chefe Goblin";
+        boss.boss_level = 8;
+        boss.boss_hp = 5000;
+        boss.boss_damage = 80;
+        boss.abilities = {"Grito de Guerra", "Invocar Goblins"};
+        boss.guaranteed_gold = 300;
+        boss.guaranteed_xp = 800;
+        boss.loot.set("Espada Goblin", 0.3);
+        boss.loot.set("Armadura de Couro Reforçado", 0.15);
+        @d.final_boss = boss;
+        
+        // Checkpoint
+        dungeon_checkpoint@ cp = dungeon_checkpoint();
+        cp.wave_number = 2;
+        d.checkpoints.insert_last(cp);
+        
+        // Itens de conclusão
+        d.completion_items.set("Poção de Vida", 3);
+        
+        add_dungeon(d);
+    }
+    
+    // Dungeon 2: Fortaleza dos Mortos-Vivos (Hard)
+    {
+        dungeon_definition@ d = dungeon_definition();
+        d.id = 2;
+        d.name = "Fortaleza dos Mortos-Vivos";
+        d.description = "Uma fortaleza amaldiçoada repleta de mortos-vivos.";
+        d.required_level = 12;
+        d.min_players = 3;
+        d.max_players = 5;
+        d.difficulty = DIFFICULTY_HARD;
+        d.time_limit_minutes = 30;
+        d.daily_entry_limit = 3;
+        d.base_gold_reward = 1500;
+        d.base_xp_reward = 3000;
+        
+        // 5 waves
+        for (int i = 1; i <= 5; i++) {
+            dungeon_wave@ w = dungeon_wave();
+            w.wave_number = i;
+            w.enemies = {"Esqueleto Guerreiro", "Zumbi"};
+            w.enemy_counts = {3 + i, 2 + i};
+            w.enemy_levels = {12 + i, 11 + i};
+            w.delay_seconds = 15;
+            d.waves.insert_last(w);
+        }
+        
+        // Boss Final
+        dungeon_boss_encounter@ boss = dungeon_boss_encounter();
+        boss.boss_name = "Lich Ancião";
+        boss.boss_level = 15;
+        boss.boss_hp = 15000;
+        boss.boss_damage = 200;
+        boss.abilities = {"Explosão Sombria", "Drenar Vida", "Invocar Esqueletos"};
+        boss.guaranteed_gold = 1000;
+        boss.guaranteed_xp = 2500;
+        boss.loot.set("Cajado do Lich", 0.2);
+        boss.loot.set("Orbe das Sombras", 0.15);
+        boss.loot.set("Manto Espectral", 0.25);
+        @d.final_boss = boss;
+        
+        // Checkpoints
+        dungeon_checkpoint@ cp1 = dungeon_checkpoint();
+        cp1.wave_number = 3;
+        d.checkpoints.insert_last(cp1);
+        
+        // Itens de conclusão
+        d.completion_items.set("Poção de Vida Superior", 5);
+        d.completion_items.set("Poção de Mana", 5);
+        
+        add_dungeon(d);
+    }
+    
+    // Dungeon 3: Templo do Fogo Eterno (Heroic)
+    {
+        dungeon_definition@ d = dungeon_definition();
+        d.id = 3;
+        d.name = "Templo do Fogo Eterno";
+        d.description = "Um templo ancestral onde o fogo nunca se apaga.";
+        d.required_level = 20;
+        d.min_players = 5;
+        d.max_players = 5;
+        d.difficulty = DIFFICULTY_HEROIC;
+        d.time_limit_minutes = 45;
+        d.daily_entry_limit = 2;
+        d.base_gold_reward = 3000;
+        d.base_xp_reward = 6000;
+        
+        // 7 waves
+        for (int i = 1; i <= 7; i++) {
+            dungeon_wave@ w = dungeon_wave();
+            w.wave_number = i;
+            w.enemies = {"Elemental de Fogo", "Cultista do Fogo"};
+            w.enemy_counts = {4 + i, 3 + i};
+            w.enemy_levels = {20 + i, 19 + i};
+            w.delay_seconds = 20;
+            d.waves.insert_last(w);
+        }
+        
+        // Boss Final
+        dungeon_boss_encounter@ boss = dungeon_boss_encounter();
+        boss.boss_name = "Senhor do Fogo";
+        boss.boss_level = 25;
+        boss.boss_hp = 50000;
+        boss.boss_damage = 400;
+        boss.abilities = {"Meteoro", "Círculo de Fogo", "Invocar Elementais", "Explosão Ígnea"};
+        boss.guaranteed_gold = 2500;
+        boss.guaranteed_xp = 5000;
+        boss.loot.set("Espada Flamejante Lendária", 0.1);
+        boss.loot.set("Armadura de Chamas", 0.15);
+        boss.loot.set("Anel do Fogo Eterno", 0.2);
+        boss.loot.set("Elmo Ígneo", 0.25);
+        @d.final_boss = boss;
+        
+        // Checkpoints
+        dungeon_checkpoint@ cp1 = dungeon_checkpoint();
+        cp1.wave_number = 3;
+        d.checkpoints.insert_last(cp1);
+        
+        dungeon_checkpoint@ cp2 = dungeon_checkpoint();
+        cp2.wave_number = 5;
+        d.checkpoints.insert_last(cp2);
+        
+        // Itens de conclusão
+        d.completion_items.set("Poção de Vida Suprema", 10);
+        d.completion_items.set("Poção de Mana Suprema", 10);
+        d.completion_items.set("Fragmento de Fogo", 1);
+        
+        add_dungeon(d);
+    }
+}
+
+// Adiciona dungeon template
+void add_dungeon(dungeon_definition@ d) {
+    dungeon_templates.insert_last(d);
+    dungeon_by_id.set("" + d.id, @d);
+}
+
+// Busca dungeon template por ID
+dungeon_definition@ get_dungeon_template(int id) {
+    dungeon_definition@ d;
+    if (dungeon_by_id.get("" + id, @d)) {
+        return d;
+    }
+    return null;
+}
+
+// ========================================
+// COMANDOS
+// ========================================
+
+// /dungeons - Lista todas as dungeons disponíveis
+void cmd_dungeons(int client_index, string[] args) {
+    string msg = "=== DUNGEONS DISPONÍVEIS ===\n\n";
+    
+    for (uint i = 0; i < dungeon_templates.length(); i++) {
+        dungeon_definition@ d = dungeon_templates[i];
+        
+        msg += "[" + d.id + "] " + d.name + "\n";
+        msg += "Nível: " + d.required_level + " | ";
+        
+        switch (d.difficulty) {
+            case DIFFICULTY_NORMAL: msg += "Normal"; break;
+            case DIFFICULTY_HARD: msg += "Difícil"; break;
+            case DIFFICULTY_HEROIC: msg += "Heroico"; break;
+        }
+        
+        msg += "\n";
+        msg += "Jogadores: " + d.min_players + "-" + d.max_players + "\n";
+        msg += "Tempo limite: " + d.time_limit_minutes + " minutos\n";
+        msg += "Entradas diárias: " + d.daily_entry_limit + "\n";
+        msg += "---\n";
+    }
+    
+    msg += "\nUse /dungeoninfo <id> para detalhes.";
+    // send_message(client_index, msg);
+}
+
+// /dungeoninfo <id> - Informações detalhadas
+void cmd_dungeoninfo(int client_index, string[] args) {
+    if (args.length() < 1) {
+        // send_message(client_index, "Use: /dungeoninfo <id>");
+        return;
+    }
+    
+    int id = string_to_number(args[0]);
+    dungeon_definition@ d = get_dungeon_template(id);
+    
+    if (d is null) {
+        // send_message(client_index, "Dungeon não encontrada.");
+        return;
+    }
+    
+    string msg = "=== " + d.name + " ===\n\n";
+    msg += d.description + "\n\n";
+    msg += "Nível requerido: " + d.required_level + "\n";
+    msg += "Jogadores: " + d.min_players + "-" + d.max_players + "\n";
+    msg += "Dificuldade: ";
+    
+    switch (d.difficulty) {
+        case DIFFICULTY_NORMAL: msg += "⭐ Normal\n"; break;
+        case DIFFICULTY_HARD: msg += "⭐⭐ Difícil\n"; break;
+        case DIFFICULTY_HEROIC: msg += "⭐⭐⭐ Heroico\n"; break;
+    }
+    
+    msg += "Tempo limite: " + d.time_limit_minutes + " minutos\n";
+    msg += "Entradas diárias: " + d.daily_entry_limit + "\n\n";
+    
+    msg += "RECOMPENSAS:\n";
+    msg += "Gold: " + d.get_gold_reward() + "\n";
+    msg += "XP: " + d.get_xp_reward() + "\n";
+    
+    if (d.completion_items.get_keys().length() > 0) {
+        msg += "\nItens garantidos:\n";
+        string[] items = d.completion_items.get_keys();
+        for (uint i = 0; i < items.length(); i++) {
+            int qty;
+            d.completion_items.get(items[i], qty);
+            msg += "- " + items[i] + " x" + qty + "\n";
+        }
+    }
+    
+    msg += "\nWaves: " + d.waves.length() + "\n";
+    
+    if (d.final_boss !is null) {
+        msg += "\nBOSS FINAL:\n";
+        msg += d.final_boss.boss_name + " (Nível " + d.final_boss.boss_level + ")\n";
+        msg += "HP: " + d.final_boss.boss_hp + "\n";
+    }
+    
+    // send_message(client_index, msg);
+}
+
+// /createdungeon <id> - Cria uma instância de dungeon
+void cmd_createdungeon(int client_index, string[] args) {
+    if (args.length() < 1) {
+        // send_message(client_index, "Use: /createdungeon <id>");
+        return;
+    }
+    
+    int id = string_to_number(args[0]);
+    dungeon_definition@ template = get_dungeon_template(id);
+    
+    if (template is null) {
+        // send_message(client_index, "Dungeon não encontrada.");
+        return;
+    }
+    
+    // Verifica nível
+    // int player_level = get_player_level(client_index);
+    // if (player_level < template.required_level) {
+    //     send_message(client_index, "Você precisa ser nível " + template.required_level + ".");
+    //     return;
+    // }
+    
+    // Verifica limite diário
+    // (implementar verificação de entradas diárias)
+    
+    // Cria instância
+    dungeon_instance@ instance = dungeon_instance();
+    instance.instance_id = next_instance_id++;
+    @instance.definition = template;
+    instance.difficulty = template.difficulty;
+    
+    // Adiciona criador
+    // string player_name = get_player_name(client_index);
+    // instance.add_participant(player_name);
+    
+    active_instances.insert_last(instance);
+    
+    // send_message(client_index, "Dungeon criada! ID da instância: " + instance.instance_id);
+    // send_message(client_index, "Use /joindungeon " + instance.instance_id + " para convidar outros.");
+}
+
+// /joindungeon <instance_id> - Entra em uma instância
+void cmd_joindungeon(int client_index, string[] args) {
+    if (args.length() < 1) {
+        // send_message(client_index, "Use: /joindungeon <instance_id>");
+        return;
+    }
+    
+    int instance_id = string_to_number(args[0]);
+    dungeon_instance@ instance = get_instance(instance_id);
+    
+    if (instance is null) {
+        // send_message(client_index, "Instância não encontrada.");
+        return;
+    }
+    
+    if (instance.state != INSTANCE_WAITING) {
+        // send_message(client_index, "Esta dungeon já começou.");
+        return;
+    }
+    
+    // string player_name = get_player_name(client_index);
+    // if (instance.add_participant(player_name)) {
+    //     instance.broadcast(player_name + " entrou na dungeon!");
+    //     send_message(client_index, "Você entrou na dungeon. Use /ready quando estiver pronto.");
+    // } else {
+    //     send_message(client_index, "Não foi possível entrar (dungeon cheia?).");
+    // }
+}
+
+// /ready - Marca como pronto
+void cmd_ready(int client_index, string[] args) {
+    // string player_name = get_player_name(client_index);
+    // dungeon_instance@ instance = get_player_instance(player_name);
+    
+    // if (instance is null) {
+    //     send_message(client_index, "Você não está em nenhuma dungeon.");
+    //     return;
+    // }
+    
+    // for (uint i = 0; i < instance.participants.length(); i++) {
+    //     if (instance.participants[i].player_name == player_name) {
+    //         instance.participants[i].is_ready = true;
+    //         instance.broadcast(player_name + " está pronto!");
+    //         
+    //         if (instance.all_ready()) {
+    //             instance.start();
+    //         }
+    //         break;
+    //     }
+    // }
+}
+
+// /leavedungeon - Sai da dungeon
+void cmd_leavedungeon(int client_index, string[] args) {
+    // string player_name = get_player_name(client_index);
+    // dungeon_instance@ instance = get_player_instance(player_name);
+    
+    // if (instance is null) {
+    //     send_message(client_index, "Você não está em nenhuma dungeon.");
+    //     return;
+    // }
+    
+    // instance.remove_participant(player_name);
+    // send_message(client_index, "Você saiu da dungeon.");
+}
+
+// Busca instância por ID
+dungeon_instance@ get_instance(int instance_id) {
+    for (uint i = 0; i < active_instances.length(); i++) {
+        if (active_instances[i].instance_id == instance_id) {
+            return active_instances[i];
+        }
+    }
+    return null;
+}
+
+// ========================================
+// LOOP PRINCIPAL
+// ========================================
+
+void dungeons_loop() {
+    // Remove instâncias completadas/expiradas antigas
+    for (int i = int(active_instances.length()) - 1; i >= 0; i--) {
+        dungeon_instance@ inst = active_instances[i];
+        
+        // Verifica timeout
+        if (inst.check_timeout()) {
+            continue;
+        }
+        
+        // Remove instâncias finalizadas após 5 minutos
+        if (inst.state == INSTANCE_COMPLETED || inst.state == INSTANCE_FAILED) {
+            if (inst.start_time.elapsed >= 5 * 60 * 1000) {
+                active_instances.remove_at(i);
+            }
+        }
+    }
+    
+    // Reset diário de entradas (implementar)
+}
+
+// ========================================
+// PERSISTÊNCIA
+// ========================================
+
+void save_dungeons_data() {
+    // Salva dados de dungeons
+}
+
+void load_dungeons_data() {
+    // Carrega dados de dungeons
+}
