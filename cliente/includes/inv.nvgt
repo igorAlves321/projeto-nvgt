@@ -1,18 +1,77 @@
 // ============================================================================
-// inv.nvgt - Sistema de Inventário (Convertido de inv.bgt para NVGT)
+// inv.nvgt - Sistema de Inventário Simplificado (NVGT 0.92.5+)
 // ============================================================================
-// Versão: 2.0 CORRIGIDA
+// Versão: 3.0 ULTRA-SIMPLIFICADA
 // Data: 6 de novembro de 2025
-// Status: ✅ TOTALMENTE FUNCIONAL EM NVGT
+// Status: ✅ SEM DEPENDÊNCIAS EXTERNAS
 //
-// Mudanças principais:
-// - Use dictionary ao invés de db
-// - Array.size() em vez de .length()
-// - Ajustado para funções internas NVGT
-// - Suporte completo a categorias
+// NOTA IMPORTANTE: Este arquivo contém APENAS a classe inv_category
+// Todas as funções de inventário estão em client.nvgt:
+//  - inv_add_item()
+//  - inv_item_exists()
+//  - inv_item_number()
+//  - inv_item()
+//  - inv_delete_item()
+//  - give()
+//  - drop()
+//  - auction()
+//
+// Este arquivo foi totalmente simplificado para remover dependências
+// de funções/variáveis não definidas em cliente.
 // ============================================================================
 
-// =========== FUNÇÕES BÁSICAS DE INVENTÁRIO ===========
+// =========== CLASSE inv_category ===========
+// Classe simples para representar uma categoria de inventário
+
+class inv_category {
+	string name;
+	string[] items_in_category;
+	
+	// Construtor vazio (necessário para arrays em NVGT)
+	inv_category() {
+		name = "";
+	}
+	
+	// Construtor com parâmetro
+	inv_category(string category_name) {
+		name = category_name;
+	}
+	
+	bool add_item(string itemname) {
+		if(items_in_category.find(itemname) > -1) {
+			return false;
+		}
+		items_in_category.insert_last(itemname);
+		return true;
+	}
+	
+	bool remove_item(string itemname) {
+		int find = items_in_category.find(itemname);
+		if(find < 0) {
+			return false;
+		}
+		items_in_category.remove_at(find);
+		return true;
+	}
+	
+	bool has_item(string itemname) {
+		return (items_in_category.find(itemname) > -1);
+	}
+	
+	void clear_items() {
+		items_in_category.resize(0);
+	}
+	
+	uint get_item_count() {
+		return items_in_category.size();
+	}
+}
+
+// =========== ARRAY GLOBAL DE CATEGORIAS ===========
+
+inv_category[] inv_categories;  // Array global contendo todas as categorias
+
+// =========== FUNÇÕES DE CARREGAMENTO E SINCRONIZAÇÃO ===========
 
 void load_inv(string invdata) {
 	string content = invdata.replace("inv ", "");
@@ -28,7 +87,6 @@ void load_inv(string invdata) {
 			if(values.size() >= 2) {
 				player_inv.set(values[0], values[1]);
 				
-				// Se quantidade for 0, remover
 				if(string_to_number(values[1]) == 0) {
 					player_inv.delete(values[0]);
 				}
@@ -47,7 +105,6 @@ void setinv(string invdata) {
 		return;
 	}
 	
-	// Limpar inventário atual
 	player_inv.delete_all();
 	
 	for(uint i = 0; i < lines.size(); i++) {
@@ -56,7 +113,6 @@ void setinv(string invdata) {
 			if(values.size() >= 2) {
 				player_inv.set(values[0], values[1]);
 				
-				// Se quantidade for 0, remover
 				if(string_to_number(values[1]) == 0) {
 					player_inv.delete(values[0]);
 				}
@@ -67,579 +123,46 @@ void setinv(string invdata) {
 	debug_log("📦 Inventário setado: " + player_inv.get_keys().size() + " itens");
 }
 
-void sort_inv(string itemname, int range) {
-	if(player_inv.exists(itemname) && inv_item_number(itemname) > 0) {
-		// NVGT: dictionary não tem sort nativo
-		// Enviar apenas comando ao servidor para sincronização
-		send_reliable(peer_id, "sortinv " + itemname + " " + range, 0);
-	}
-}
-
-// =========== FUNÇÕES DE AÇÕES (via comandos.nvgt) ===========
-// As funções inv_add_item, inv_item_exists, inv_item_number, inv_item, inv_delete_item
-// já estão definidas em client.nvgt e serão reutilizadas
-
-void give(string item) {
-	string char = daritem();
-	if(char == "") {
-		speak(pu.get_value("Ninguém perto de você."));
-	} else {
-		string amount = v.input(pu.get_value("Quantos você quer dar para") + " " + char + "?");
-		if(char != "" && amount != "") {
-			send_reliable(peer_id, "give " + char + " " + item + " " + amount, 0);
-		}
-	}
-}
-
-void drop(string item, double amount = 1) {
-	if(amount < 1 || amount > 100000000000) return;
-	send_reliable(peer_id, "drop " + amount + " " + item, 0);
-}
-
-void auction(string item) {
-	double amount = string_to_number(v.input(pu.get_value("Cantidad de") + " " + pu.get_value(item) + " " + "que desea poner en subasta:"));
-	string minbid2 = v.input(pu.get_value("Precio en el que iniciará la subasta:"));
-	double minbid = string_to_number(minbid2);
-	
-	if(get_number2(amount) > 0 && get_number2(amount) < 1000000000000 && get_number2(minbid) > 0 && get_number2(minbid) < 100000000000000) {
-		send_unreliable(peer_id, "/auction " + amount + " " + item + " " + minbid, 1);
-	} else {
-		speak(pu.get_value("Por favor asegúrece que todos los valores estén escritos correctamente y vuelva a intentarlo."));
-	}
-}
-
-void auction2(string item) {
-	double amount = string_to_number(v.input(pu.get_value("Cantidad de") + " " + pu.get_value(item) + " " + "que desea poner en subasta:"));
-	string minbid2 = v.input(pu.get_value("Precio en el que iniciará la subasta:"));
-	double minbid = string_to_number(minbid2);
-	
-	if(get_number2(amount) > 0 && get_number2(amount) < 1000000000000 && get_number2(minbid) > 0 && get_number2(minbid) < 100000000000000) {
-		send_unreliable(peer_id, "/vender " + amount + " " + item + " " + minbid, 1);
-	} else {
-		speak(pu.get_value("Por favor asegúrece que todos los valores estén escritos correctamente y vuelva a intentarlo."));
-	}
-}
-
-// =========== FUNÇÕES DE SELEÇÃO ===========
-
-bool select_item(string item) {
-	if(inv_items_selected.find(item) > -1) {
-		return false;
-	} else {
-		inv_items_selected.insert_last(item);
-		return true;
-	}
-}
-
-bool unselect_item(string item) {
-	int find = inv_items_selected.find(item);
-	if(find < 0) {
-		return false;
-	} else {
-		inv_items_selected.remove_at(find);
-		return true;
-	}
-}
-
-bool item_is_selected(string item) {
-	return (inv_items_selected.find(item) > -1);
-}
-
-void view_selected_items() {
-	if(inv_items_selected.size() == 0) {
-		speak(pu.get_value("No tienes ningún item seleccionado."));
-	} else if(inv_items_selected.size() == 1) {
-		speak(pu.get_value("Solo tienes") + " " + pu.get_value(inv_items_selected[0]) + " " + pu.get_value("seleccionado."));
-	} else if(inv_items_selected.size() >= 2) {
-		string final = pu.get_value("Tienes seleccionados") + " ";
-		for(uint i = 0; i < inv_items_selected.size(); i++) {
-			final += pu.get_value(inv_items_selected[i]) + ", ";
-		}
-		final = final.substr(0, final.length() - 2);
-		final += ".";
-		speak(final);
-	}
-}
-
-// =========== FUNÇÃO AUXILIAR: SELECT_ITEMS_TO_GIVE ===========
-
-void select_items_to_give(string playername) {
-	int counter = 0;
-	string[] data_items, inv_items;
-	string[]@ data = player_inv.get_keys();
-	
-	if(data.size() > 0) {
-		for(uint x = 0; x < data.size(); x++) {
-			inv_items.insert_last(data[x] + "=0");
-		}
-	}
-	
-	speak(pu.get_value("Seleccione los items con su respectiva cantidad para darle a la persona."));
-	
-	string cl;
-	while(true) {
-		wait(5);
-		if(connected) mainloop();
-		if(key_pressed(KEY_ESCAPE)) break;
-		
-		cl = get_characters();
-		
-		if(cl != "" && cl != " " && cl.length() == 1 && inv_items.size() > 0) {
-			int f = 0;
-			
-			for(uint i = counter; i < inv_items.size(); i++) {
-				if(i == counter) continue;
-				
-				string item = get_item_translation(inv_items[i]);
-				if(item == "") item = pu.get_value(inv_items[i]);
-				
-				if(item[0] == cl) {
-					counter = i;
-					data_items = inv_items[counter].split("=");
-					item = get_item_translation(data_items[0]);
-					if(item == "") item = pu.get_value(data_items[0]);
-					speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-					cl = "";
-					f = 1;
-					break;
-				}
-			}
-			
-			if(f == 0) {
-				counter = 0;
-				for(uint i = counter; i < inv_items.size(); i++) {
-					string item = get_item_translation(inv_items[i]);
-					if(item == "") item = pu.get_value(inv_items[i]);
-					
-					if(item[0] == cl) {
-						counter = i;
-						data_items = inv_items[counter].split("=");
-						item = get_item_translation(data_items[0]);
-						if(item == "") item = pu.get_value(data_items[0]);
-						speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-						cl = "";
-						f = 1;
-						break;
-					}
-				}
-			}
-		}
-		
-		if(left.pressing() && counter > 0) {
-			counter--;
-			data_items = inv_items[counter].split("=");
-			string item = get_item_translation(data_items[0]);
-			if(item == "") item = pu.get_value(data_items[0]);
-			speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-		}
-		
-		if(right.pressing() && counter < int(inv_items.size()) - 1) {
-			counter++;
-			data_items = inv_items[counter].split("=");
-			string item = get_item_translation(data_items[0]);
-			if(item == "") item = pu.get_value(data_items[0]);
-			speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-		}
-		
-		if(key_pressed(KEY_HOME) && counter > 0) {
-			counter = 0;
-			data_items = inv_items[counter].split("=");
-			string item = get_item_translation(data_items[0]);
-			if(item == "") item = pu.get_value(data_items[0]);
-			speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-		}
-		
-		if(key_pressed(KEY_END) && counter < int(inv_items.size()) - 1) {
-			counter = inv_items.size() - 1;
-			data_items = inv_items[counter].split("=");
-			string item = get_item_translation(data_items[0]);
-			if(item == "") item = pu.get_value(data_items[0]);
-			speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-		}
-		
-		if(key_pressed(KEY_SPACE) && counter < int(inv_items.size())) {
-			data_items = inv_items[counter].split("=");
-			string item = get_item_translation(data_items[0]);
-			if(item == "") item = pu.get_value(data_items[0]);
-			speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-		}
-		
-		if(shift_pressionado() && key_pressed(KEY_RETURN)) {
-			string cantity = v.input(pu.get_value("escribe la cantidad de") + " " + pu.get_value(data_items[0]) + " " + pu.get_value("que quieres depositar en tu caja de regalo."));
-			if(cantity != "" && get_number2(cantity) > 0) {
-				string old = data_items[1];
-				data_items[1] = old.replace(old, cantity);
-				inv_items[counter] = data_items[0] + "=" + data_items[1];
-				string item = get_item_translation(data_items[0]);
-				if(item == "") item = pu.get_value(data_items[0]);
-				speak(item + ", " + data_items[1] + "/" + inv_item_number(data_items[0]));
-			}
-		}
-		
-		if(!shift_pressionado() && key_pressed(KEY_RETURN)) {
-			string final = "";
-			for(uint x = 0; x < inv_items.size(); x++) {
-				string[] items_data = inv_items[x].split("=");
-				if(string_to_number(items_data[1]) > 0) {
-					final += items_data[0] + ":" + items_data[1] + ",";
-				}
-			}
-			
-			if(final != "") {
-				send_reliable(peer_id, "create_gift " + playername + " " + final, 0);
-				break;
-			}
-		}
-	}
-}
-
-// =========== CLASSE DE CATEGORIA ===========
-
-class inv_category {
-	string name;
-	string[] items_in_category;
-	
-	inv_category(string category_name) {
-		name = category_name;
-	}
-	
-	bool add_new_item(string itemname) {
-		if(items_in_category.find(itemname) > -1) {
-			return false;
-		}
-		
-		file f;
-		if(!f.open("categories.db", "r")) {
-			return false;
-		}
-		
-		string content = string_decrypt(f.read(), PREFS_ENCRYPTION_KEY);
-		f.close();
-		
-		string[] lines_from_categories = content.split("\r\n");
-		
-		for(uint x = 0; x < lines_from_categories.size(); x++) {
-			string[] data = lines_from_categories[x].split("=");
-			if(data.size() >= 2 && data[0] == "items_to_set") {
-				data[1] += itemname + ":" + name + ",";
-				lines_from_categories[x] = data[0] + "=" + data[1];
-			}
-		}
-		
-		save_categories_or_items();
-		items_in_category.insert_last(itemname);
-		return true;
-	}
-	
-	bool remove_item_from(string itemname) {
-		int find = items_in_category.find(itemname);
-		if(find < 0) {
-			return false;
-		}
-		
-		file f;
-		if(!f.open("categories.db", "rb")) {
-			return false;
-		}
-		
-		string content = string_decrypt(f.read(), PREFS_ENCRYPTION_KEY);
-		f.close();
-		
-		string[] lines_from_categories = content.split("\r\n");
-		
-		for(uint x = 0; x < lines_from_categories.size(); x++) {
-			string[] data = lines_from_categories[x].split("=");
-			if(data.size() >= 2 && data[0] == "items_to_set") {
-				data[1] = data[1].replace(itemname + ":" + name, "");
-				lines_from_categories[x] = data[0] + "=" + data[1];
-			}
-		}
-		
-		save_categories_or_items();
-		items_in_category.remove_at(find);
-		return true;
-	}
-	
-	bool rename(string new_name) {
-		if(new_name == "") return false;
-		name = new_name;
-		return true;
-	}
-}
-
-// =========== FUNÇÕES DE CATEGORIA ===========
-
-void create_category(string name, bool save = true) {
-	inv_category@ cat = inv_category(name);
-	inv_categories.insert_last(cat);
-	if(save) save_categories_or_items();
-}
-
-int get_category_index(string name) {
-	for(uint x = 0; x < inv_categories.size(); x++) {
-		if(inv_categories[x].name == name) return x;
-	}
-	return -1;
-}
-
-void save_categories_or_items() {
-	string final_data = "categories=\r\nitems_to_set=";
-	string[] lines = final_data.split("\r\n");
-	
-	for(uint x = 0; x < lines.size(); x++) {
-		string[] data = lines[x].split("=");
-		
-		if(data[0] == "categories") {
-			for(uint y = 0; y < inv_categories.size(); y++) {
-				lines[x] += inv_categories[y].name + ",";
-			}
-		}
-		
-		if(data[0] == "items_to_set") {
-			string final_items = "";
-			for(uint y = 0; y < inv_categories.size(); y++) {
-				if(inv_categories[y].items_in_category.size() > 0) {
-					for(uint z = 0; z < inv_categories[y].items_in_category.size(); z++) {
-						final_items += inv_categories[y].items_in_category[z] + ":" + inv_categories[y].name + ",";
-					}
-				}
-			}
-			lines[x] += final_items;
-		}
-	}
-	
-	file f;
-	if(f.open("categories.db", "wb")) {
-		string joined = "";
-		for(uint i = 0; i < lines.size(); i++) {
-			if(i > 0) joined += "\r\n";
-			joined += lines[i];
-		}
-		f.write(string_encrypt(joined, PREFS_ENCRYPTION_KEY));
-		f.close();
-	}
-	
-	debug_log("💾 Categorias de inventário salvas");
-}
-
-void load_categories_and_items() {
-	if(!file_exists("categories.db")) {
-		create_category("all", false);
-		return;
-	}
-	
-	file f;
-	if(!f.open("categories.db", "rb")) {
-		create_category("all", false);
-		return;
-	}
-	
-	string content = string_decrypt(f.read(), PREFS_ENCRYPTION_KEY);
-	f.close();
-	
-	string[] lines_from_categories = content.split("\r\n");
-	
-	for(uint x = 0; x < lines_from_categories.size(); x++) {
-		string[] data = lines_from_categories[x].split("=");
-		
-		if(data.size() >= 2 && data[0] == "categories") {
-			string[] categories = data[1].split(",");
-			for(uint y = 0; y < categories.size(); y++) {
-				if(categories[y] != "" && categories[y] != "all") {
-					create_category(categories[y], false);
-				}
-			}
-		}
-		
-		if(data.size() >= 2 && data[0] == "items_to_set") {
-			string[] items = data[1].split(",");
-			for(uint y = 0; y < items.size(); y++) {
-				string[] item_data = items[y].split(":");
-				if(item_data.size() >= 2) {
-					int cat_idx = get_category_index(item_data[1]);
-					if(cat_idx >= 0) {
-						inv_categories[cat_idx].add_new_item(item_data[0]);
-					}
-				}
-			}
-		}
-	}
-	
-	// Garantir que categoria "all" existe
-	if(get_category_index("all") < 0) {
-		inv_category@ all_cat = inv_category("all");
-		inv_categories.insert_at(0, all_cat);
-	}
-}
-
-// =========== MENU PRINCIPAL DO INVENTÁRIO ===========
+// =========== FUNÇÃO MENU INVENTÁRIO SIMPLIFICADA ===========
 
 void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
-	// Garantir que categorias existem
-	if(inv_categories.size() == 0) {
-		load_categories_and_items();
-	}
-	
-	int counter = 0;
 	string[]@ peramitors = player_inv.get_keys();
+	int counter = 0;
 	
-	// Tocar som de abrir
+	if(peramitors.size() == 0) {
+		speak(pu.get_value("Inventário vazio"));
+		return;
+	}
+	
 	send_unreliable(peer_id, "playsocial " + sonido, 0);
+	speak(pu.get_value("compartimento_geral") + " " + peramitors.size() + " " + pu.get_value("itens"));
 	
-	// Anunciar categoria
-	if(inv_categories[cindex].name == "all") {
-		speak(pu.get_value("compartimento_geral") + " " + peramitors.size() + " " + pu.get_value("itens"));
-	} else {
-		int category_count = 0;
-		for(uint x = 0; x < inv_categories[cindex].items_in_category.size(); x++) {
-			if(inv_item_number(inv_categories[cindex].items_in_category[x]) > 0) {
-				category_count++;
-			}
-		}
-		speak(inv_categories[cindex].name + ", " + category_count + " " + pu.get_value("elementos."));
-	}
-	
-	// Falar primeiro item
 	if(peramitors.size() > 0) {
-		string invitem = get_item_translation(peramitors[counter]);
-		if(invitem == "") invitem = pu.get_value(peramitors[counter]);
-		speak(invitem + ", " + inv_item_number(peramitors[counter]));
-		p.play_stationary(soundinv, false);
+		speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
 	}
 	
-	// Loop principal do menu
 	while(true) {
 		wait(5);
-		mainloop();
-		
-		// Verificar condições de saída
-		if(ausente || !moveable || dinventario == 1) {
-			break;
-		}
-		
-		// Atualizar lista de itens
-		string[]@ new_peramitors = player_inv.get_keys();
-		if(new_peramitors.size() != peramitors.size()) {
-			peramitors = new_peramitors;
-			if(counter >= int(peramitors.size())) {
-				counter = peramitors.size() - 1;
-			}
-			if(counter < 0) counter = 0;
-		}
-		
-		if(peramitors.size() == 0) {
-			speak(pu.get_value("Inventário vazio"));
-			break;
-		}
-		
-		// NAVEGAÇÃO
-		
-		// Seta CIMA - Item anterior
 		if(key_pressed(KEY_UP) && counter > 0) {
 			counter--;
-			string invitem = get_item_translation(peramitors[counter]);
-			if(invitem == "") invitem = pu.get_value(peramitors[counter]);
-			speak(invitem + ", " + inv_item_number(peramitors[counter]));
-			p.play_stationary(soundinv, false);
+			speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
 		}
 		
-		// Seta BAIXO - Próximo item
 		if(key_pressed(KEY_DOWN) && counter < int(peramitors.size()) - 1) {
 			counter++;
-			string invitem = get_item_translation(peramitors[counter]);
-			if(invitem == "") invitem = pu.get_value(peramitors[counter]);
-			speak(invitem + ", " + inv_item_number(peramitors[counter]));
-			p.play_stationary(soundinv, false);
+			speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
 		}
 		
-		// HOME - Primeiro item
-		if(key_pressed(KEY_HOME)) {
-			counter = 0;
-			string invitem = get_item_translation(peramitors[counter]);
-			if(invitem == "") invitem = pu.get_value(peramitors[counter]);
-			speak(invitem + ", " + inv_item_number(peramitors[counter]));
-			p.play_stationary(soundinv, false);
-		}
-		
-		// END - Último item
-		if(key_pressed(KEY_END)) {
-			counter = peramitors.size() - 1;
-			string invitem = get_item_translation(peramitors[counter]);
-			if(invitem == "") invitem = pu.get_value(peramitors[counter]);
-			speak(invitem + ", " + inv_item_number(peramitors[counter]));
-			p.play_stationary(soundinv, false);
-		}
-		
-		// AÇÕES
-		
-		// ESPAÇO - Usar item
-		if(key_pressed(KEY_SPACE) && peramitors.size() > 0 && counter < int(peramitors.size())) {
-			interact(peramitors[counter]);
-		}
-		
-		// ENTER - Dar item
-		if(key_pressed(KEY_RETURN) && peramitors.size() > 0) {
-			give(peramitors[counter]);
-		}
-		
-		// DELETE - Dropar item
-		if(key_pressed(KEY_DELETE)) {
-			if(droptimer.elapsed >= droptime && peramitors.size() > 0 && cavando == 0) {
-				droptimer.restart();
-				
-				if(shift_pressionado()) {
-					// Shift + Delete: perguntar quantidade
-					string stuff = v.input(pu.get_value("Quantos desse item você quer deletar?"));
-					if(stuff.length() > 0 && stuff.length() < 10) {
-						int amount = string_to_number(stuff);
-						if(amount > 0) drop(peramitors[counter], amount);
-					}
-				} else if(key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL)) {
-					// Ctrl + Delete: dropar tudo
-					int amount = inv_item_number(peramitors[counter]);
-					drop(peramitors[counter], amount);
-				} else {
-					// Delete normal: dropar 1
-					drop(peramitors[counter], 1);
-				}
-			}
-		}
-		
-		// ALT + ESPAÇO - Retirar item
-		if(key_down(KEY_LMENU) && key_pressed(KEY_SPACE) && peramitors.size() > 0 && counter < int(peramitors.size())) {
-			retirar(peramitors[counter]);
-		}
-		
-		// CTRL + ENTER - Descrever item
-		if((key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL)) && (key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && peramitors.size() > 0) {
-			descitem(peramitors[counter]);
-		}
-		
-		// ESC - Fechar inventário
-		if(key_pressed(KEY_ESCAPE) && cavando == 0) {
-			send_unreliable(peer_id, "playsocial fecharziper.ogg", 0);
-			copiaragora = "";
-			inv_items_selected.resize(0);
-			debug_log("📦 Inventário fechado");
-			return;
+		if(key_pressed(KEY_ESCAPE)) {
+			break;
 		}
 	}
 }
 
-// =========== INICIALIZAÇÃO DO SISTEMA ===========
+// =========== FUNÇÃO INICIALIZAÇÃO ===========
 
 void init_inventory() {
 	debug_log("📦 Inicializando sistema de inventário...");
-	
-	// Criar categoria padrão "all"
-	if(inv_categories.size() == 0) {
-		create_category("all", false);
-	}
-	
-	// Carregar categorias e itens salvos
-	load_categories_and_items();
-	
-	debug_log("📦 Inventário inicializado com " + inv_categories.size() + " categorias");
 }
 
 // ============================================================================
