@@ -13,6 +13,7 @@
 
 // Configurações do servidor
 const int SERVER_PORT = 9317;
+const string server_version = "1.0.0-alpha"; // Versão do servidor
 // const int MAX_PLAYERS = 100; // Movido para stubs.nvgt como variável modificável
 const string DATABASE_FILE = "server/database/evm.db";
 
@@ -451,6 +452,15 @@ string[] get_online_players() {
     return online_list;
 }
 
+// Broadcast mensagem para todos os jogadores em um mapa específico
+void broadcast_to_map(string map_name, string message, uint64 exclude_peer = 0) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map_name == map_name && players[i].peer_id != exclude_peer) {
+            send_reliable(players[i].peer_id, message, 0);
+        }
+    }
+}
+
 // Processamento de comando de jogador
 void process_player_command(uint64 peer_id, string command) {
     player@ player = get_player_by_peer(peer_id);
@@ -475,6 +485,237 @@ void process_player_command(uint64 peer_id, string command) {
         if(parts.length() == 0) return;
 
         string cmd = parts[0].lower();
+
+        // Comando de movimento do jogador
+        if(cmd == "move" && parts.length() == 3) {
+            int new_x = parse_int(parts[1]);
+            int new_y = parse_int(parts[2]);
+            
+            // Atualizar posição do jogador
+            player.x = new_x;
+            player.y = new_y;
+            
+            debug_log("🚶 Jogador " + player.name + " moveu para (" + new_x + ", " + new_y + ")");
+            
+            // Broadcast movimento para outros jogadores no mesmo mapa
+            string move_msg = "xt01 " + peer_id + " " + new_x + " " + new_y;
+            broadcast_to_map(player.map_name, move_msg, peer_id); // Envia para todos exceto o próprio jogador
+            return;
+        }
+        
+        // ===== COMANDOS DE CONFIGURAÇÃO (IMPLEMENTADOS) =====
+        
+        // setvoice - Configurar voz/narrador preferido
+        if(cmd == "setvoice" && parts.length() >= 2) {
+            string voice_name = parts[1];
+            player.voice_id = voice_name;
+            save_player_to_database(player);
+            debug_log("🎤 Jogador " + player.name + " configurou voz: " + voice_name);
+            // Não precisa responder - cliente já sabe
+            return;
+        }
+        
+        // hits - Toggle sons de impacto
+        if(cmd == "hits") {
+            player.ouvirhits = !player.ouvirhits;
+            save_player_to_database(player);
+            string status = player.ouvirhits ? "ativados" : "desativados";
+            debug_log("🔊 Jogador " + player.name + " - sons de impacto " + status);
+            send_reliable(peer_id, "say Sons de impacto " + status, 0);
+            return;
+        }
+        
+        // idiomachat - Configurar idioma do chat
+        if(cmd == "idiomachat" && parts.length() >= 2) {
+            string language = parts[1];
+            player.idiomachat = language;
+            save_player_to_database(player);
+            debug_log("🌍 Jogador " + player.name + " configurou idioma: " + language);
+            send_reliable(peer_id, "say Idioma do chat configurado: " + language, 0);
+            return;
+        }
+        
+        // dpassos - Desativar sons de passos
+        if(cmd == "dpassos") {
+            player.ouvirpassos = (player.ouvirpassos == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.ouvirpassos == 0) ? "desativados" : "ativados";
+            debug_log("👣 Jogador " + player.name + " - sons de passos " + status);
+            send_reliable(peer_id, "say Sons de passos " + status, 0);
+            return;
+        }
+        
+        // ndor - Não ouvir mensagens de dor
+        if(cmd == "ndor") {
+            player.mdor = (player.mdor == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.mdor == 0) ? "ativadas" : "desativadas";
+            debug_log("💢 Jogador " + player.name + " - mensagens de dor " + status);
+            send_reliable(peer_id, "say Mensagens de dor " + status, 0);
+            return;
+        }
+        
+        // nnivel - Não avisar subida de nível
+        if(cmd == "nnivel") {
+            player.avisanivel = (player.avisanivel == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.avisanivel == 0) ? "ativados" : "desativados";
+            debug_log("⬆️ Jogador " + player.name + " - avisos de nível " + status);
+            send_reliable(peer_id, "say Avisos de nível " + status, 0);
+            return;
+        }
+        
+        // getversion - Retornar versão do servidor
+        if(cmd == "getversion") {
+            send_reliable(peer_id, "version " + server_version, 0);
+            debug_log("ℹ️ Jogador " + player.name + " solicitou versão: " + server_version);
+            return;
+        }
+
+        // uptime - Retornar tempo online do servidor (F1)
+        if(cmd == "uptime") {
+            uint64 uptime_ms = server_uptime.elapsed;
+            int total_seconds = int(uptime_ms / 1000);
+            int days = total_seconds / 86400;
+            int hours = (total_seconds % 86400) / 3600;
+            int minutes = (total_seconds % 3600) / 60;
+            int seconds = total_seconds % 60;
+
+            string uptime_msg = "Tempo online do servidor: ";
+            if(days > 0) uptime_msg += days + " dia" + (days > 1 ? "s" : "") + ", ";
+            if(hours > 0) uptime_msg += hours + " hora" + (hours > 1 ? "s" : "") + ", ";
+            if(minutes > 0) uptime_msg += minutes + " minuto" + (minutes > 1 ? "s" : "") + ", ";
+            uptime_msg += seconds + " segundo" + (seconds > 1 ? "s" : "");
+
+            send_reliable(peer_id, "say " + uptime_msg, 0);
+            debug_log("⏱️ " + player.name + " verificou uptime: " + days + "d " + hours + "h " + minutes + "m " + seconds + "s");
+            return;
+        }
+
+        // getmotd - Retornar mensagem do dia (F2)
+        if(cmd == "getmotd") {
+            string motd = "Bem-vindo ao servidor IG! Versão " + server_version;
+            send_reliable(peer_id, "say " + motd, 0);
+            debug_log("📢 " + player.name + " solicitou MOTD");
+            return;
+        }
+
+        // ===== FIM DOS COMANDOS DE CONFIGURAÇÃO =====
+
+        // ping - Responder ao ping do cliente
+        if(cmd == "ping") {
+            send_reliable(peer_id, "pong", 0);
+            debug_log("🏓 Ping respondido para " + player.name);
+            return;
+        }
+        
+        // healthcheck - Retornar HP/MP do jogador (tecla S)
+        if(cmd == "healthcheck") {
+            string health_msg = "Vida: " + player.hp + "/" + player.max_hp;
+            if(player.max_mp > 0) {
+                health_msg += ", Mana: " + player.mp + "/" + player.max_mp;
+            }
+            send_reliable(peer_id, "say " + health_msg, 0);
+            debug_log("❤️ " + player.name + " verificou saúde: HP=" + player.hp + "/" + player.max_hp);
+            return;
+        }
+        
+        // lc - Level Check - Retornar nível e estatísticas (tecla V)
+        if(cmd == "lc") {
+            // Formato BGT com separadores ; para processamento correto no cliente
+            // Exemplo BGT: "msg2 Você está no nível; 5, ;e na patente; ;soldado;. ;Você está com; ;50% ;de sede;, 30% ;de fome,; ;10% ;sujo, e; ;5% ;doente;"
+            string stats_msg = "Você está no nível; " + player.player_level + ", ;";
+            
+            // Adicionar título/patente se existir
+            if(player.title != "") {
+                stats_msg += "e na patente; ;" + player.title + ";. ;";
+            } else {
+                stats_msg += ". ;";
+            }
+            
+            stats_msg += "Você está com; ;" + player.nsede + "% ;de sede;, " + player.nfome + "% ;de fome,; ;";
+            stats_msg += player.sujo + "% ;suj" + player.sexo2 + ", e; ;" + player.doente + "% ;doente;";
+            
+            send_reliable(peer_id, "msg2 " + stats_msg, 0);
+            debug_log("📊 " + player.name + " verificou stats: Lv" + player.player_level + " AFK:" + player.afk + " Sede:" + player.nsede + "% Fome:" + player.nfome + "%");
+            return;
+        }
+        
+        
+        // r - Radar (tecla M sem Shift) - Mostrar inimigos/paredes próximos
+        if(cmd == "r") {
+            bool found = false;
+            string radar_msg = "Você avista:";
+            int radar_range = 12;
+            
+            // Varrer área ao redor do jogador
+            for(int i = player.x - radar_range; i <= player.x + radar_range; i++) {
+                // Aqui você pode adicionar verificação de paredes, inimigos, etc
+                // Por enquanto, apenas um placeholder
+                // TODO: Implementar verificação de walls, npcs, etc quando essas classes existirem
+            }
+            
+            if(!found) {
+                send_reliable(peer_id, "say Nada por perto.", 0);
+            } else {
+                send_reliable(peer_id, "msg2 " + radar_msg, 0);
+            }
+            debug_log("🔍 " + player.name + " usou radar");
+            return;
+        }
+        
+        // check_items - Verificar itens no chão (tecla Shift+M)
+        if(cmd == "check_items") {
+            // TODO: Implementar sistema de itens no chão
+            send_reliable(peer_id, "say Nenhum item no chão nesta posição.", 0);
+            debug_log("📦 " + player.name + " verificou itens no chão");
+            return;
+        }
+        
+        // /vestindo - Ver equipamento vestido (tecla P)
+        if(cmd == "/vestindo") {
+            string equipment_msg = "Proteção de roupa: " + player.clothing_protection + "%";
+            
+            // Lista de itens de proteção conhecidos (baseado na classe player)
+            int items_count = 0;
+            if(player.jaquetacouro > 0) { equipment_msg += ", Jaqueta de couro"; items_count++; }
+            if(player.camisamalha > 0) { equipment_msg += ", Camisa de malha"; items_count++; }
+            if(player.calcajeans > 0) { equipment_msg += ", Calça jeans"; items_count++; }
+            if(player.luvas > 0) { equipment_msg += ", Luvas"; items_count++; }
+            if(player.pulseira > 0) { equipment_msg += ", Pulseira"; items_count++; }
+            if(player.pulseirabronze > 0) { equipment_msg += ", Pulseira de bronze"; items_count++; }
+            if(player.pulseiraprata > 0) { equipment_msg += ", Pulseira de prata"; items_count++; }
+            if(player.chapeupanama > 0) { equipment_msg += ", Chapéu Panamá"; items_count++; }
+            if(player.bonemizuno > 0) { equipment_msg += ", Boné Mizuno"; items_count++; }
+            
+            if(items_count == 0) {
+                equipment_msg = "Você não está vestindo nenhum equipamento de proteção.";
+            }
+            
+            send_reliable(peer_id, "say " + equipment_msg, 0);
+            debug_log("👕 " + player.name + " verificou equipamento: " + items_count + " itens, proteção " + player.clothing_protection + "%");
+            return;
+        }
+        
+        // whoonline - Lista de jogadores no mapa (mantido para compatibilidade)
+        if(cmd == "whoonline") {
+            int count = 0;
+            string players_list = "Jogadores no mapa " + player.map_name + ": ";
+            for(uint i = 0; i < players.length(); i++) {
+                if(players[i].map_name == player.map_name && players[i].is_logged_in) {
+                    if(count > 0) players_list += ", ";
+                    players_list += players[i].name;
+                    count++;
+                }
+            }
+            if(count == 1) {
+                send_reliable(peer_id, "say Você está sozinho no mapa.", 0);
+            } else {
+                send_reliable(peer_id, "say " + players_list + " (Total: " + count + ")", 0);
+            }
+            debug_log("👥 " + player.name + " listou jogadores: " + count + " no mapa " + player.map_name);
+            return;
+        }
 
         if(cmd == "login") {
             send_reliable(get_player_peer_id(player), "say Sistema de login em desenvolvimento");

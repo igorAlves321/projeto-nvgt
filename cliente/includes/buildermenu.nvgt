@@ -592,8 +592,87 @@ void builder_disable_weapon() {
 
 // Desfazer última criação
 void builder_undo_last() {
-	// TODO: Precisa implementar map2 array global
-	speak(pu.get_value("Função de desfazer ainda não implementada - precisa de map2 array"));
+	// Verificar se há algo para desfazer
+	if(map2.length() == 0) {
+		speak(pu.get_value("Não há nada para desfazer."));
+		return;
+	}
+	
+	// Obter a última linha adicionada ao mapa
+	string last_line = map2[map2.length() - 1];
+	
+	// Extrair o tipo de elemento da última linha
+	string[] parts = string_split(last_line, ":");
+	if(parts.length() == 0) {
+		speak(pu.get_value("Erro ao processar última criação."));
+		return;
+	}
+	
+	string element_type = parts[0];
+	
+	// Mapear tipos legíveis
+	string element_name = "";
+	if(element_type == "w") element_name = pu.get_value("parede");
+	else if(element_type == "w2") element_name = pu.get_value("parede avançada");
+	else if(element_type == "wall") element_name = pu.get_value("parede com vida");
+	else if(element_type == "p") element_name = pu.get_value("plataforma");
+	else if(element_type == "tp") element_name = pu.get_value("passagem");
+	else if(element_type == "timed_passage") element_name = pu.get_value("passagem cronometrada");
+	else if(element_type == "mapgate") element_name = pu.get_value("portamapa");
+	else if(element_type == "mapgate_item") element_name = pu.get_value("portamapa com item");
+	else if(element_type == "mapgate_multi") element_name = pu.get_value("portamapa múltiplo");
+	else if(element_type == "dr") element_name = pu.get_value("porta");
+	else if(element_type == "elv") element_name = pu.get_value("elevador");
+	else if(element_type == "sc") element_name = pu.get_value("escada");
+	else if(element_type == "z") element_name = pu.get_value("zona");
+	else if(element_type == "sz") element_name = pu.get_value("zona segura");
+	else if(element_type == "item") element_name = pu.get_value("item respawnável");
+	else if(element_type == "npc") element_name = pu.get_value("bot/NPC");
+	else if(element_type == "ss") element_name = pu.get_value("som ambiente");
+	else if(element_type == "ss2") element_name = pu.get_value("música");
+	else if(element_type == "txt") element_name = pu.get_value("texto");
+	else if(element_type == "dlg") element_name = pu.get_value("diálogo");
+	else if(element_type == "arbol") element_name = pu.get_value("árvore");
+	else if(element_type == "am") element_name = pu.get_value("areia movediça");
+	else if(element_type == "ex") element_name = pu.get_value("zona de extração");
+	else if(element_type == "death") element_name = pu.get_value("área de morte");
+	else if(element_type == "disable_game") element_name = pu.get_value("área anti-jogo");
+	else if(element_type == "rt") element_name = pu.get_value("vaso sanitário");
+	else if(element_type == "lv") element_name = pu.get_value("pia");
+	else if(element_type == "dv") element_name = pu.get_value("desativar elemento");
+	else if(element_type == "darmas") element_name = pu.get_value("desativar arma");
+	else if(element_type == "url") element_name = pu.get_value("URL");
+	else if(element_type == "where") element_name = pu.get_value("localização");
+	else if(element_type == "newymap") element_name = pu.get_value("coordenadas de respawn");
+	else if(element_type == "teto") element_name = pu.get_value("configuração de teto");
+	else element_name = element_type;
+	
+	// Confirmar desfazer
+	bool confirm = simple_yes_no(pu.get_value("Desfazer criação de ") + element_name + "?");
+	
+	if(!confirm) {
+		speak(pu.get_value("Operação cancelada."));
+		return;
+	}
+	
+	// Remover última linha do array local
+	map2.remove_at(map2.length() - 1);
+	
+	// Enviar comando ao servidor para remover
+	send_to_server("undo_last::" + last_line, 13, true);
+	
+	speak(pu.get_value("Última criação desfeita: ") + element_name);
+	
+	// Oferecer opção de continuar desfazendo
+	if(map2.length() > 0) {
+		bool continue_undo = simple_yes_no(pu.get_value("Desfazer mais uma criação?"));
+		if(continue_undo) {
+			builder_undo_last(); // Recursivo
+		}
+	}
+	else {
+		speak(pu.get_value("Não há mais criações para desfazer."));
+	}
 }
 
 // Criar plataforma
@@ -1026,24 +1105,273 @@ void builder_create_passage() {
 	}
 }
 
-// Passagem cronometrada
+// Passagem cronometrada (timed passage)
 void builder_create_timed_passage() {
-	// TODO: Implementar - complexo demais para agora
-	speak(pu.get_value("Passagem cronometrada ainda não implementada"));
+	input_form form(pu.get_value("Passagem cronometrada - Parte 1"));
+	form.description = pu.get_value("Crie uma passagem que só funciona em horários específicos.");
+	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
+	form.add_number_field("x2", pu.get_value("Fim x"), 0, true);
+	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
+	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
+	form.add_number_field("dest_x", pu.get_value("Destino x"), 0, true);
+	form.add_number_field("dest_y", pu.get_value("Destino y"), 0, true);
+	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
+	
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+	
+	double x1, x2, y1, y2, dest_x, dest_y;
+	string dest_map;
+	result.get("x1", x1); result.get("x2", x2);
+	result.get("y1", y1); result.get("y2", y2);
+	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
+	result.get("dest_map", dest_map);
+	
+	// Parte 2: Configuração de tempo
+	input_form form2(pu.get_value("Passagem cronometrada - Parte 2"));
+	form2.description = pu.get_value("Configure os horários de funcionamento.");
+	form2.add_number_field("start_hour", pu.get_value("Hora de início (0-23)"), 0, true);
+	form2.add_number_field("start_minute", pu.get_value("Minuto de início (0-59)"), 0, true);
+	form2.add_number_field("end_hour", pu.get_value("Hora de fim (0-23)"), 23, true);
+	form2.add_number_field("end_minute", pu.get_value("Minuto de fim (0-59)"), 59, true);
+	form2.add_text_field("message_active", pu.get_value("Mensagem quando ativo"), "", false);
+	form2.add_text_field("message_inactive", pu.get_value("Mensagem quando inativo"), "", false);
+	
+	dictionary@ result2 = form2.run();
+	if(form2.user_canceled) return;
+	
+	double start_hour, start_minute, end_hour, end_minute;
+	string message_active, message_inactive;
+	result2.get("start_hour", start_hour); result2.get("start_minute", start_minute);
+	result2.get("end_hour", end_hour); result2.get("end_minute", end_minute);
+	result2.get("message_active", message_active); result2.get("message_inactive", message_inactive);
+	
+	// Parte 3: Configurações adicionais
+	bool weekdays_only = simple_yes_no(pu.get_value("Funciona apenas em dias de semana (seg-sex)?"));
+	bool weekends_only = simple_yes_no(pu.get_value("Funciona apenas em fins de semana (sáb-dom)?"));
+	bool require_item = simple_yes_no(pu.get_value("Requer item para atravessar?"));
+	
+	string required_item = "none";
+	int required_qty = 0;
+	
+	if(require_item) {
+		input_form form3(pu.get_value("Item requerido"));
+		form3.add_text_field("item", pu.get_value("Nome do item"), "", true);
+		form3.add_number_field("qty", pu.get_value("Quantidade"), 1, true);
+		
+		dictionary@ result3 = form3.run();
+		if(!form3.user_canceled) {
+			double qty;
+			result3.get("item", required_item);
+			result3.get("qty", qty);
+			required_qty = int(qty);
+		}
+	}
+	
+	// Montar dados
+	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "") {
+		string weekday_flag = weekdays_only ? "1" : (weekends_only ? "2" : "0");
+		
+		string data = "timed_passage:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
+		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
+		              int(start_hour) + ":" + int(start_minute) + ":" +
+		              int(end_hour) + ":" + int(end_minute) + ":" +
+		              weekday_flag + ":" + required_item + ":" + required_qty + ":" +
+		              message_active + ":" + message_inactive;
+		
+		send_to_server("add_line::" + data, 13, true);
+		speak(pu.get_value("Passagem cronometrada criada com sucesso!"));
+	}
 }
 
-// Portamapa (mapgate)
+// Portamapa (mapgate) - Portal que leva a outro mapa
 void builder_create_mapgate() {
-	// TODO: Implementar
-	speak(pu.get_value("Portamapa ainda não implementado"));
+	input_form form(pu.get_value("Portamapa - Parte 1"));
+	form.description = pu.get_value("Crie um portal para outro mapa.");
+	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
+	form.add_number_field("x2", pu.get_value("Fim x"), 0, true);
+	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
+	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
+	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
+	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
+	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
+	
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+	
+	double x1, x2, y1, y2, dest_x, dest_y;
+	string dest_map;
+	result.get("x1", x1); result.get("x2", x2);
+	result.get("y1", y1); result.get("y2", y2);
+	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
+	result.get("dest_map", dest_map);
+	
+	// Parte 2: Configurações
+	input_form form2(pu.get_value("Portamapa - Parte 2"));
+	form2.add_text_field("message", pu.get_value("Mensagem ao atravessar"), "", false);
+	form2.add_text_field("sound", pu.get_value("Som ao atravessar (sem .ogg)"), "", false);
+	form2.add_number_field("cooldown", pu.get_value("Tempo de espera entre usos (ms)"), 0, false);
+	
+	dictionary@ result2 = form2.run();
+	if(form2.user_canceled) return;
+	
+	string message, sound;
+	double cooldown;
+	result2.get("message", message);
+	result2.get("sound", sound);
+	result2.get("cooldown", cooldown);
+	
+	// Restrições opcionais
+	bool require_level = simple_yes_no(pu.get_value("Requer nível mínimo?"));
+	int min_level = 0;
+	
+	if(require_level) {
+		input_form form3(pu.get_value("Nível mínimo"));
+		form3.add_number_field("level", pu.get_value("Nível mínimo necessário"), 1, true);
+		dictionary@ result3 = form3.run();
+		if(!form3.user_canceled) {
+			double level;
+			result3.get("level", level);
+			min_level = int(level);
+		}
+	}
+	
+	bool team_only = simple_yes_no(pu.get_value("Apenas para membros de equipe?"));
+	bool pvp_disabled = simple_yes_no(pu.get_value("Desabilitar PVP ao atravessar?"));
+	
+	// Montar dados
+	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "") {
+		string data = "mapgate:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
+		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
+		              message + ":" + sound + ":" + int(cooldown) + ":" +
+		              min_level + ":" + (team_only ? "1" : "0") + ":" + (pvp_disabled ? "1" : "0");
+		
+		send_to_server("add_line::" + data, 13, true);
+		speak(pu.get_value("Portamapa criado com sucesso!"));
+	}
 }
 
+// Portamapa que requer item 1
 void builder_create_mapgate_item1() {
-	speak(pu.get_value("Portamapa com item ainda não implementado"));
+	input_form form(pu.get_value("Portamapa com item - Parte 1"));
+	form.description = pu.get_value("Portal que requer um item específico.");
+	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
+	form.add_number_field("x2", pu.get_value("Fim x"), 0, true);
+	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
+	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
+	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
+	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
+	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
+	
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+	
+	double x1, x2, y1, y2, dest_x, dest_y;
+	string dest_map;
+	result.get("x1", x1); result.get("x2", x2);
+	result.get("y1", y1); result.get("y2", y2);
+	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
+	result.get("dest_map", dest_map);
+	
+	// Configurar item necessário
+	input_form form2(pu.get_value("Portamapa com item - Parte 2"));
+	form2.description = pu.get_value("Configure o item necessário para atravessar.");
+	form2.add_text_field("item", pu.get_value("Nome do item necessário"), "", true);
+	form2.add_number_field("qty", pu.get_value("Quantidade necessária"), 1, true);
+	form2.add_text_field("message_success", pu.get_value("Mensagem ao atravessar"), "", false);
+	form2.add_text_field("message_fail", pu.get_value("Mensagem quando não tem item"), "", false);
+	
+	dictionary@ result2 = form2.run();
+	if(form2.user_canceled) return;
+	
+	string item, message_success, message_fail;
+	double qty;
+	result2.get("item", item);
+	result2.get("qty", qty);
+	result2.get("message_success", message_success);
+	result2.get("message_fail", message_fail);
+	
+	// Opções adicionais
+	bool consume_item = simple_yes_no(pu.get_value("Consumir o item ao atravessar?"));
+	bool one_way = simple_yes_no(pu.get_value("Portal de mão única (sem volta)?"));
+	
+	// Montar dados
+	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "" && item != "") {
+		string data = "mapgate_item:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
+		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
+		              item + ":" + int(qty) + ":" + (consume_item ? "1" : "0") + ":" +
+		              (one_way ? "1" : "0") + ":" + message_success + ":" + message_fail;
+		
+		send_to_server("add_line::" + data, 13, true);
+		speak(pu.get_value("Portamapa com item criado com sucesso!"));
+	}
 }
 
+// Portamapa que requer item 2 (versão avançada com múltiplos itens)
 void builder_create_mapgate_item2() {
-	speak(pu.get_value("Portamapa com item 2 ainda não implementado"));
+	input_form form(pu.get_value("Portamapa com múltiplos itens - Parte 1"));
+	form.description = pu.get_value("Portal que requer vários itens diferentes.");
+	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
+	form.add_number_field("x2", pu.get_value("Fim x"), 0, true);
+	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
+	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
+	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
+	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
+	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
+	
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+	
+	double x1, x2, y1, y2, dest_x, dest_y;
+	string dest_map;
+	result.get("x1", x1); result.get("x2", x2);
+	result.get("y1", y1); result.get("y2", y2);
+	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
+	result.get("dest_map", dest_map);
+	
+	// Configurar múltiplos itens
+	input_form form2(pu.get_value("Portamapa com múltiplos itens - Parte 2"));
+	form2.description = pu.get_value("Liste os itens necessários (formato: item1.qty1,item2.qty2)");
+	form2.add_text_field("items", pu.get_value("Itens e quantidades"), "", true);
+	form2.add_text_field("message_success", pu.get_value("Mensagem de sucesso"), "", false);
+	form2.add_text_field("message_fail", pu.get_value("Mensagem de falha"), "", false);
+	
+	dictionary@ result2 = form2.run();
+	if(form2.user_canceled) return;
+	
+	string items, message_success, message_fail;
+	result2.get("items", items);
+	result2.get("message_success", message_success);
+	result2.get("message_fail", message_fail);
+	
+	// Opções avançadas
+	bool consume_items = simple_yes_no(pu.get_value("Consumir todos os itens ao atravessar?"));
+	bool require_all = simple_yes_no(pu.get_value("Requer TODOS os itens (se não, requer apenas 1)?"));
+	bool reset_cooldown = simple_yes_no(pu.get_value("Tem tempo de espera entre usos?"));
+	
+	int cooldown_time = 0;
+	if(reset_cooldown) {
+		input_form form3(pu.get_value("Tempo de espera"));
+		form3.add_number_field("time", pu.get_value("Tempo em milissegundos"), 60000, true);
+		dictionary@ result3 = form3.run();
+		if(!form3.user_canceled) {
+			double time;
+			result3.get("time", time);
+			cooldown_time = int(time);
+		}
+	}
+	
+	// Montar dados
+	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "" && items != "") {
+		string data = "mapgate_multi:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
+		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
+		              items + ":" + (consume_items ? "1" : "0") + ":" +
+		              (require_all ? "1" : "0") + ":" + cooldown_time + ":" +
+		              message_success + ":" + message_fail;
+		
+		send_to_server("add_line::" + data, 13, true);
+		speak(pu.get_value("Portamapa com múltiplos itens criado com sucesso!"));
+	}
 }
 
 // Placeholders para funções definidas em outros lugares

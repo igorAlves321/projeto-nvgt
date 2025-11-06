@@ -1,0 +1,192 @@
+#include "../../Produção/contas/conta.nvgt"
+#include "../../Produção/contas/configurar_conta.nvgt"
+
+void navegarBotoes(audio_form form, int[] botoes, int& indiceFocoAtual) {
+bool focoAtualizado = false;
+if (key_pressed(KEY_UP)) {
+indiceFocoAtual--;
+if (indiceFocoAtual < 0) {
+indiceFocoAtual = botoes.length() - 1;
+}
+focoAtualizado = true;
+}
+if (key_pressed(KEY_DOWN)) {
+indiceFocoAtual++;
+if (indiceFocoAtual >= botoes.length()) {
+indiceFocoAtual = 0;
+}
+focoAtualizado = true;
+}
+if (focoAtualizado) {
+form.focus_silently(botoes[indiceFocoAtual]);
+}
+
+// Sincronizar Tab e Setas
+int tabFocus = form.get_current_focus();
+for (int i = 0; i < botoes.length(); i++) {
+if (botoes[i] == tabFocus) {
+indiceFocoAtual = i;
+break;
+}
+}
+}
+
+void checarAtualizacoes() {
+speak("Verificando por atualizações...");
+wait(1000);
+speak("Nenhuma atualização encontrada.");
+}
+
+void menuPrincipal() {
+audio_form menu;
+menu.create_window("Batalha Constante");
+wait(50);
+conf.controleVolumeSliderMenu = menu.create_slider("&Volume da música", retornarVolumeDeValor(conf.volumeMusica), 0, 100);
+menu.set_event_callback(conf.controleVolumeSliderMenu, on_control_event_callback(@conf.tratarEventosForm));
+menu.focus(conf.controleVolumeSliderMenu);
+speak("Menu Principal. Use as setas para ajustar o volume e Esc para sair.");
+while (true) {
+wait(5);
+menu.monitor();
+if(key_released(KEY_LALT) && !key_pressed(KEY_F4)) {
+abrirSubmenu();
+}
+if (key_pressed(KEY_ESCAPE)) {
+estadoJogo = jogo_fechando;
+}
+}
+}
+double retornarVolumeDePorcentagem(int valor) {
+return (valor-100);
+}
+int retornarVolumeDeValor(double valor) {
+return (valor+100);
+}
+void abrirSubmenu() {
+if(estadoJogo == jogo_fechando) return;
+audio_form submenu;
+submenu.create_window("Menu principal");
+wait(50);
+int perfil = submenu.create_button("Perfil");
+int configuracoes = submenu.create_button("Configurações");
+int checarAtualizacoesBotao = submenu.create_button("Checar por Atualizações");
+int[] botoes = { perfil, configuracoes, checarAtualizacoesBotao };
+int indiceFocoAtual = 0;
+submenu.focus(botoes[indiceFocoAtual]);
+speak("Submenu aberto");
+
+while (true) {
+wait(5);
+submenu.monitor();
+navegarBotoes(submenu, botoes, indiceFocoAtual);
+
+int tabFocus = submenu.get_current_focus();
+if (tabFocus != botoes[indiceFocoAtual]) {
+submenu.focus(botoes[indiceFocoAtual]);
+}
+
+if (submenu.is_pressed(perfil)) {
+speak("Abrindo perfil...");
+abrirMenuPerfil();
+}
+if (submenu.is_pressed(configuracoes)) {
+speak("Abrindo configurações...");
+conf.mostrar();
+}
+if (submenu.is_pressed(checarAtualizacoesBotao)) {
+checarAtualizacoes();
+}
+
+if (key_pressed(KEY_ESCAPE)) {
+speak("Fechando submenu...");
+return;
+}
+}
+}
+
+void abrirMenuPerfil() {
+audio_form menuPerfil;
+menuPerfil.create_window("Menu de Perfil");
+wait(50);
+int login = menuPerfil.create_button("Login");
+int iniciarSessao = menuPerfil.create_button("Iniciar Sessão");
+int criarNovaConta = menuPerfil.create_button("Criar Nova Conta");
+int configurarConta = menuPerfil.create_button("Configurar conta existente");
+int[] botoes = { login, iniciarSessao, criarNovaConta, configurarConta };
+int indiceFocoAtual = 0;
+menuPerfil.focus(botoes[indiceFocoAtual]);
+speak("Menu de Perfil aberto");
+
+while (true) {
+wait(5);
+menuPerfil.monitor();
+
+navegarBotoes(menuPerfil, botoes, indiceFocoAtual);
+
+int tabFocus = menuPerfil.get_current_focus();
+if (tabFocus != botoes[indiceFocoAtual]) {
+menuPerfil.focus(botoes[indiceFocoAtual]);
+}
+
+if (menuPerfil.is_pressed(login)) {
+speak("Iniciando login...");
+}
+if (menuPerfil.is_pressed(iniciarSessao)) {
+speak("Iniciando sessão...");
+}
+if (menuPerfil.is_pressed(criarNovaConta)) {
+speak("Criando nova conta...");
+criar_conta();
+}
+if(menuPerfil.is_pressed(configurarConta)) {
+speak("Configurando conta...");
+setUpExistingAccount();
+}
+
+if (key_pressed(KEY_ESCAPE)) {
+speak("Fechando menu de perfil...");
+return;
+}
+}
+}
+void teclasLoop() {
+while(true) {
+wait(5);
+if ((keyboard_modifiers & KEYMOD_ALT) > 0 && key_pressed(KEY_F4) || estadoJogo == jogo_fechando) {
+estadoJogo = jogo_fechando;
+break;
+}
+}
+conf.salva();
+somMusica.stop();
+somMusica.close();
+poolSons.play_stationary("portas/1fechar.ogg", false);
+wait(1000);
+packSons.close();
+@sound_default_pack = null;
+exit(0);
+}
+double fadeIn(sound@som, double volume, int fadeTime) {
+if(@som is null) return 0;
+timer volumeTimer;
+double volumeAtual = som.volume;
+while(volumeAtual < volume) {
+if(volumeTimer.elapsed >= fadeTime) 
+volumeAtual --;
+}
+volumeTimer.force(0);
+volumeTimer.pause();
+return volumeAtual;
+}
+double fadeOut(sound@som, double volume, int fadeTime) {
+if(@som is null) return -1;
+timer volumeTimer;
+double volumeAtual = som.volume;
+while(volumeAtual > volume) {
+if(volumeTimer.elapsed >= fadeTime)
+volumeAtual ++;
+}
+volumeTimer.force(0);
+volumeTimer.pause();
+return volumeAtual;
+}

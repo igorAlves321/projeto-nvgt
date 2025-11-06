@@ -56,7 +56,7 @@ const int DIR_Back = 4;
 
 // Variáveis globais do servidor
 bool pvp = true;
-string mapainicial = "escola";
+string mapainicial = "test"; // Mapa inicial do servidor (mudado para test durante desenvolvimento)
 int doublegold = 0;
 int doublexp = 0;
 int AUTOSAVE_INTERVAL = 300000; // Intervalo de auto-save em ms (5 minutos)
@@ -337,8 +337,22 @@ void changemap(string destination_map, int player_index, int dest_x, int dest_y)
         server_maps[new_map_index].update_players_on_map(false);
     }
     
-    // Notificar cliente
-    send_reliable(players[player_index].peer_id, "changemap " + destination_map + " " + dest_x + " " + dest_y, 0);
+    // CORREÇÃO: Carregar dados do mapa e enviar para o cliente
+    file f;
+    string map_file = "maps/" + destination_map + ".map";
+    string map_data = "";
+    
+    if(f.open(map_file, "rb")) {
+        map_data = f.read();
+        f.close();
+        // Enviar com formato BGT (dados do mapa + coordenadas)
+        send_reliable(players[player_index].peer_id, "changemap " + map_data + "\r\nx:" + dest_x + "\r\ny:" + dest_y + "\r\n", 0);
+        debug_log("📤 Enviado changemap para " + players[player_index].charname + ": " + destination_map + " (" + dest_x + "," + dest_y + ")");
+    } else {
+        // Se não conseguir ler o arquivo, enviar formato simplificado (fallback)
+        send_reliable(players[player_index].peer_id, "changemap " + destination_map + " " + dest_x + " " + dest_y, 0);
+        debug_log("⚠️ Arquivo de mapa não encontrado: " + map_file + " - enviando formato simples");
+    }
 }
 
 // Função para escrever arquivo (wrapper)

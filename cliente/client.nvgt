@@ -22,6 +22,7 @@
 #include"includes/player.nvgt"          // Player classes precisam vir antes
 #include"includes/weapon.nvgt"          // Weapon system
 #include"includes/item.nvgt"
+#include"includes/inv.nvgt"             // Sistema de inventário
 #include"includes/clima.nvgt"
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
@@ -45,7 +46,7 @@
 // Variáveis de versão movidas para evitar conflitos
 // gversion, ver e serverport serão declaradas em globals.nvgt
 // lancha lan; // Now using game_lan from globals.nvgt
-const string mapainicial="map:começo\r\nmaxx:51\r\nmaxy:10\r\nplatform:0:50:0:carpet\r\nwall:0:0:100:wallgeneric\r\nwall:51:0:100:wallgeneric\r\nzone:0:50:0:100:Carregando jogo...\r\nsafezone:0:100:0:100";
+const string mapainicial="map:test\r\nmaxx:51\r\nmaxy:10\r\nplatform:0:50:0:carpet\r\nwall:0:0:100:wallgeneric\r\nwall:51:0:100:wallgeneric\r\nzone:0:50:0:100:Área de testes\r\nsafezone:0:100:0:100";
 string[] weapons(39), sons, itenssecundarios;
 const string bell=ascii_to_character(7);
 const string bell2=ascii_to_character(9);
@@ -211,17 +212,79 @@ void main(){
 	// Instância para verificar se já está rodando
 	instance fd(EXECUTABLE_NAME);
 	debug_log("✓ Verificação de instância concluída");
+	
 	// Verificar se SOUND_STORAGE existe (pode ser pasta ou arquivo)
-	if(!directory_exists(SOUND_STORAGE) && !file_exists(SOUND_STORAGE)){
-		alert("Error", "missing "+SOUND_STORAGE);
+	bool tem_pasta_sounds = directory_exists(SOUND_STORAGE);
+	bool tem_arquivo_dat = file_exists(SOUND_STORAGE);
+	
+	if(!tem_pasta_sounds && !tem_arquivo_dat) {
+		// Mensagem amigável informando como resolver
+		string mensagem = "📢 SONS NÃO ENCONTRADOS!\n\n";
+		mensagem += "O jogo precisa dos arquivos de som para funcionar.\n\n";
+		mensagem += "❌ Faltando: " + SOUND_STORAGE + "\n";
+		mensagem += "   Localização: pasta do jogo\\" + SOUND_STORAGE + "\n\n";
+		mensagem += "✅ Como resolver:\n\n";
+		
+		if(SOUND_STORAGE == "sounds") {
+			mensagem += "OPÇÃO 1 (Recomendada):\n";
+			mensagem += "  • Crie uma pasta chamada 'sounds'\n";
+			mensagem += "  • Adicione os arquivos .ogg dentro dela\n\n";
+			mensagem += "OPÇÃO 2:\n";
+			mensagem += "  • Use o arquivo sounds.dat do jogo original BGT\n";
+			mensagem += "  • Altere config.nvgt: SOUND_STORAGE=\"sounds.dat\"\n";
+		} else {
+			mensagem += "  • Obtenha o arquivo " + SOUND_STORAGE + "\n";
+			mensagem += "  • Coloque na pasta do jogo\n";
+		}
+		
+		mensagem += "\n⚠️ Após adicionar os sons, execute o jogo novamente.";
+		
+		alert("Sem Sons - Não é Possível Iniciar", mensagem);
+		speak("Sons não encontrados. Verifique a mensagem na tela.");
 		exit();
 	}
-	debug_log("✓ SOUND_STORAGE verificado");
+	
+	// Informar qual método de som está sendo usado
+	if(tem_pasta_sounds) {
+		debug_log("✓ SOUND_STORAGE verificado: usando pasta 'sounds'");
+	} else {
+		debug_log("✓ SOUND_STORAGE verificado: usando arquivo pack '" + SOUND_STORAGE + "'");
+	}
 	init_bass();
-	set_sound_storage(SOUND_STORAGE);
+	
+	// Abrir pack de sons DIRETAMENTE (método do Batalha Constante)
+	debug_log("🔧 Tentando abrir pack: " + SOUND_STORAGE);
+	if(!global_sound_pack.open(SOUND_STORAGE, PACK_OPEN_MODE_READ)) {
+		debug_log("❌ ERRO: Falha ao abrir " + SOUND_STORAGE);
+		alert("Erro Fatal", "Não foi possível abrir o arquivo de sons: " + SOUND_STORAGE + "\n\nO jogo será encerrado.");
+		exit();
+	}
+	debug_log("✅ Pack aberto com sucesso!");
+	
+	// Atribuir ao sound_default_pack (igual Batalha Constante)
+	// sound_default_pack é um pack@ (handle), então fazemos referência ao global_sound_pack
+	@sound_default_pack = @global_sound_pack;
+	debug_log("✅ sound_default_pack configurado!");
+	
+	// Testar listando arquivos
+	string[] pack_files = global_sound_pack.list_files();
+	debug_log("📋 Pack contém " + pack_files.length() + " arquivos");
+	if(pack_files.length() > 0) {
+		debug_log("📄 Primeiros 5 arquivos:");
+		for(uint i = 0; i < 5 && i < pack_files.length(); i++) {
+			debug_log("   - " + pack_files[i]);
+		}
+	}
+	
 	set_sound_decryption_key(SOUND_ENCRYPTION_KEY, false);
-	configure_sound_pools_with_pack(); // Configurar todos os pools para usar o pack
+	// configure_sound_pools_with_pack() - NÃO É NECESSÁRIO!
+	// O sound_default_pack já foi configurado acima (igual Batalha Constante)
 	abrir();
+	
+	// Inicializar sistema de inventário
+	init_inventory();
+	debug_log("✅ Sistema de inventário inicializado");
+	
 	p.max_distance=30;
 	bool achou=false;
 	string pasta="C:/Program Files";
@@ -305,10 +368,26 @@ void main(){
 	else pf.open(PREFSFILE, "rb");
 	readprefs();
 	pu.set_arquivo(cmfinal);
+	
+	// ===== INICIALIZAÇÃO DE ÁUDIO COM VERIFICAÇÃO =====
+	debug_log("🔊 Inicializando sistema de áudio...");
+	
+	// Abrir dispositivo de áudio (função não retorna bool, sempre tenta abrir)
 	open_sound_device(numero_dispositivo);
+	debug_log("✓ Dispositivo de áudio aberto");
+	
+	// Configurar volume global
 	set_sound_master_volume(volumejogo);
+	debug_log("✓ Volume global configurado");
+	
+	// Testar reprodução de som
+	debug_log("🔊 Testando reprodução de som...");
+	abrir(); // Chama a função que toca door1open.ogg
+	wait(100); // Aguarda um pouco para o som começar
+	debug_log("✓ Som de teste enviado");
+	
 	pf.close();
-	game_net.setup_client(1, 150); // Deve coincidir com max_channels do servidor (1)
+	// game_net removido - usando global 'con' agora
 	idiomaschat.insert_last("Desativar chat=Desativado");
 	idiomaschat.insert_last("Arabic=ar");
 	idiomaschat.insert_last("English=en");
@@ -421,76 +500,176 @@ void game(){
 	debug_log("🎮 Função game() iniciada!");
 	speak("Entrando no jogo!");
 	load_map(mapainicial);
-	debug_log("✅ Mapa inicial carregado: " + mapainicial);
-	speak("Você está no mapa: " + mapainicial + ". Use as setas para se mover.");
-	game_net.send(net_peer_id, "setvoice "+voice, 0, true);
-	if(ouvirhits==0)game_net.send(net_peer_id, "hits", 0, true);
-	game_net.send(net_peer_id, "idiomachat "+idiomachat, 0, true);
-	if(ouvirpassos==0)game_net.send(net_peer_id, "dpassos", 0, true);
+	debug_log("✅ Mapa inicial carregado: test");
+	speak("Você está no mapa de testes. Use as setas para se mover.");
+	
+	// ===== COMANDOS DE CONFIGURAÇÃO (AGORA IMPLEMENTADOS NO SERVIDOR) =====
+	send_reliable(peer_id, "setvoice "+voice, 0);
+	if(ouvirhits==0) send_reliable(peer_id, "hits", 0);
+	send_reliable(peer_id, "idiomachat "+idiomachat, 0);
+	if(ouvirpassos==0) send_reliable(peer_id, "dpassos", 0);
+	if(mdor==0) send_reliable(peer_id, "ndor", 0);
+	if(avisanivel==0) send_reliable(peer_id, "nnivel", 0);
+	send_reliable(peer_id, "getversion", 0);
+	
 	temponaoevoce.restart();
-	if(mdor==0)game_net.send(net_peer_id, "ndor", 0, true);
-	if(avisanivel==0)game_net.send(net_peer_id, "nnivel", 0, true);
 	connected=true;
-	game_net.send(net_peer_id, "getversion", 0, true);
 	debug_log("🎮 Entrando no loop principal do jogo...");
+	debug_log("✅ connected = " + connected + " | ausente = " + ausente);
 	speak("DEBUG: Loop do jogo iniciado! Use as setas para se mover. Pressione ESC para sair.");
+	
+	// TESTE DE SOM - Tentar tocar um som básico
+	debug_log("🧪 === TESTE DE SOM ===");
+	debug_log("🔊 Tentando tocar som de teste: door1open.ogg");
+	int test_sound = p2.play_stationary(get_sound_path("door1open.ogg"), false);
+	if(test_sound == -1) {
+		debug_log("❌ SOM DE TESTE FALHOU! (retornou -1)");
+	} else {
+		debug_log("✅ SOM DE TESTE OK! ID: " + test_sound);
+	}
+	debug_log("🧪 === FIM DO TESTE ===");
+	
 	int loop_count = 0;
 	while(true){
 		wait(5);
+
+		// ===== CORREÇÃO CRÍTICA: Atualizar eventos do Windows/OS =====
+		// SEM ISSO, key_pressed() NUNCA detecta nada!
+		// Ref: Doc NVGT.txt:12360 - "If it is not repeatedly called, your entire application will be disfunctional"
+		refresh_window();
+
+		// ===== CRITICAL: Update sound pools =====
+		// Sem isso, NENHUM SOM vai tocar!
+		p.update_listener_2d(me.x, me.y, facing);
+		p2.update_listener_2d(me.x, me.y, facing);
+		game_p.update_listener_2d(me.x, me.y, facing);
+		pobjs.update_listener_2d(me.x, me.y, facing);
+		ambientepool.update_listener_2d(me.x, me.y, facing);
+		// ===== END sound pool update =====
+		
 		loop_count++;
 		if(loop_count % 100 == 0) {
 			debug_log("♻️ Loop do jogo rodando... iteração " + loop_count);
 		}
 		
-		// ===== MOVIMENTAÇÃO BÁSICA SIMPLIFICADA =====
+		// ===== MOVIMENTAÇÃO BÁSICA COM SUPORTE A SIDESCROLLING =====
 		if(moveable && walktimer.elapsed >= walktime) {
 			bool moved = false;
 			
-			// Movimento para ESQUERDA
-			if(key_down(KEY_LEFT)) {
-				facing = Left;
-				me.x -= 1;
-				moved = true;
-				debug_log("⬅️ Moveu para esquerda: x=" + me.x);
+			if(sidescrolling == 1) {
+				// MODO LATERAL (sidescrolling ativado)
+				// LEFT/RIGHT = mover X, UP/DOWN = mover Y
+				
+				if(key_down(KEY_LEFT)) {
+					facing = Left;
+					me.x -= 1;
+					moved = true;
+					debug_log("⬅️ [LATERAL] Moveu para esquerda: x=" + me.x);
+				}
+				else if(key_down(KEY_RIGHT)) {
+					facing = Right;
+					me.x += 1;
+					moved = true;
+					debug_log("➡️ [LATERAL] Moveu para direita: x=" + me.x);
+				}
+				else if(key_down(KEY_DOWN)) {
+					me.y -= 1;
+					moved = true;
+					debug_log("⬇️ [LATERAL] Moveu para baixo: y=" + me.y);
+				}
+				else if(key_down(KEY_UP)) {
+					me.y += 1;
+					moved = true;
+					debug_log("⬆️ [LATERAL] Moveu para cima: y=" + me.y);
+				}
 			}
-			// Movimento para DIREITA
-			else if(key_down(KEY_RIGHT)) {
-				facing = Right;
-				me.x += 1;
-				moved = true;
-				debug_log("➡️ Moveu para direita: x=" + me.x);
-			}
-			// Movimento para BAIXO
-			else if(key_down(KEY_DOWN)) {
-				me.y -= 1;
-				moved = true;
-				debug_log("⬇️ Moveu para baixo: y=" + me.y);
-			}
-			// Movimento para CIMA
-			else if(key_down(KEY_UP)) {
-				me.y += 1;
-				moved = true;
-				debug_log("⬆️ Moveu para cima: y=" + me.y);
+			else {
+				// MODO VERTICAL (sidescrolling desativado - padrão)
+				// UP/DOWN = mover Y (frente/trás baseado em facing)
+				// LEFT/RIGHT = rotacionar (mudar facing)
+				
+				if(key_down(KEY_LEFT)) {
+					// Rotacionar para esquerda
+					facing = Left;
+					speak("Virando para esquerda");
+					debug_log("↶ [VERTICAL] Rotacionou para esquerda");
+				}
+				else if(key_down(KEY_RIGHT)) {
+					// Rotacionar para direita
+					facing = Right;
+					speak("Virando para direita");
+					debug_log("↷ [VERTICAL] Rotacionou para direita");
+				}
+				else if(key_down(KEY_UP)) {
+					// Mover para frente baseado na direção atual
+					if(facing == Right) {
+						me.x += 1;
+						debug_log("⬆️ [VERTICAL] Moveu para frente (direita): x=" + me.x);
+					}
+					else if(facing == Left) {
+						me.x -= 1;
+						debug_log("⬆️ [VERTICAL] Moveu para frente (esquerda): x=" + me.x);
+					}
+					else if(facing == Forward) {
+						me.y += 1;
+						debug_log("⬆️ [VERTICAL] Moveu para frente: y=" + me.y);
+					}
+					else if(facing == Back) {
+						me.y -= 1;
+						debug_log("⬆️ [VERTICAL] Moveu para frente (trás): y=" + me.y);
+					}
+					moved = true;
+				}
+				else if(key_down(KEY_DOWN)) {
+					// Mover para trás (oposto da direção atual)
+					if(facing == Right) {
+						me.x -= 1;
+						debug_log("⬇️ [VERTICAL] Moveu para trás (esquerda): x=" + me.x);
+					}
+					else if(facing == Left) {
+						me.x += 1;
+						debug_log("⬇️ [VERTICAL] Moveu para trás (direita): x=" + me.x);
+					}
+					else if(facing == Forward) {
+						me.y -= 1;
+						debug_log("⬇️ [VERTICAL] Moveu para trás: y=" + me.y);
+					}
+					else if(facing == Back) {
+						me.y += 1;
+						debug_log("⬇️ [VERTICAL] Moveu para trás (frente): y=" + me.y);
+					}
+					moved = true;
+				}
 			}
 			
 			// Se moveu, envia para o servidor e toca som de passo
 			if(moved) {
 				walktimer.restart();
-				game_net.send(net_peer_id, "move " + me.x + " " + me.y, 0, true);
-				
+
 				// Tocar som de passo baseado no tile
 				string tile = get_tile_at(me.x, me.y);
+				string step_sound = "";
+
 				if(tile != "") {
-					string step_sound = tile + "step" + random(1, 5) + ".ogg";
-					p2.play_stationary(step_sound, false);
-					debug_log("🔊 Som de passo: " + step_sound);
+					step_sound = tile + "step" + random(1, 5) + ".ogg";
+					debug_log("🔊 Tocando som: " + step_sound);
+					int sound_id = p2.play_stationary(get_sound_path(step_sound), false);
+					if(sound_id == -1) {
+						debug_log("❌ ERRO: play_stationary retornou -1");
+					}
+				} else {
+					debug_log("⚠️ Tile vazio - sem som de passo");
 				}
+
+				// ✅ CORREÇÃO: Enviar com formato correto: "move step_sound x y"
+				send_reliable(peer_id, "move " + step_sound + " " + me.x + " " + me.y, 0);
+				debug_log("📤 Enviado: move " + step_sound + " " + me.x + " " + me.y);
 			}
 		}
 		// ===== FIM DA MOVIMENTAÇÃO =====
 		
 		if(nandar>-1){
-			int id=game_p.play_stationary("elevador.ogg", true);
+			int id=game_p.play_stationary(get_sound_path("elevador.ogg"), true);
 			int d=-1;
 			timer t;
 			moveable=false;
@@ -503,11 +682,11 @@ void game(){
 					if(nandar==0)d=me.y;
 					if(d>nandar){
 						me.y--;
-						game_net.send(net_peer_id, "move "+me.x+" "+me.y, 0, true);
+						send_reliable(peer_id, "move "+me.x+" "+me.y, 0);
 					}
 					else if(d<nandar){
 						me.y++;
-						game_net.send(net_peer_id, "move "+me.x+" "+me.y, 0, true);
+						send_reliable(peer_id, "move "+me.x+" "+me.y, 0);
 					}
 					d=(me.y/20);
 					if(nandar==0)d=me.y;
@@ -518,7 +697,7 @@ void game(){
 						if(mapname=="túnel"){
 							me.x=1;
 							me.y=0;
-							game_net.send(net_peer_id, "move "+me.x+" "+me.y, 0, true);
+							send_reliable(peer_id, "move "+me.x+" "+me.y, 0);
 						}
 						break;
 					}
@@ -536,6 +715,7 @@ void game(){
 			if(doors.length()>0)doorcheckloop();
 			if(elevadors.length()>0)elevadorloop();
 			localloop();
+			checkloc();  // Verifica mudança de zona e anuncia automaticamente
 			if(game_areia_movedissas.length()>0)areia_movedissaloop();
 			weaponcheckloop();
 			secundario();
@@ -543,18 +723,23 @@ void game(){
 		}
 		// Processar eventos de rede do jogo
 		if(connected) {
-			const network_event@ event;
-			while((@event = game_net.request()) !is null && event.type != event_none) {
-				if(event.type == event_disconnect) {
-					debug_log("🔌 Desconectado do servidor!");
-					speak("Conexão perdida.");
-					reset();
-					menuprincipal();
-					return;
-				}
-				else if(event.type == event_receive) {
-					// Processar comandos do servidor (será implementado depois)
-				}
+			netloop(); // Processa todos os eventos de rede (movimentos, itens, jogadores, etc)
+		}
+		
+		// ===== TECLAS PRINCIPAIS DO JOGO (F1-F8, ATALHOS, ETC) =====
+		// Esta é a "ponte" que ativa todos os comandos de gameplay
+		// CORREÇÃO: Chamar tprincipais() sempre que não estiver ausente,
+		// independente de connected (que só controla rede)
+		if(!ausente && !exiting) {
+			// DEBUG: Log periódico para verificar se chegamos aqui
+			if(loop_count % 500 == 0) {
+				debug_log("🎮 tprincipais() sendo chamado (connected=" + connected + ", ausente=" + ausente + ", exiting=" + exiting + ")");
+			}
+			tprincipais(); // Processa F1-F8, Shift+teclas, menus, etc.
+		} else {
+			// DEBUG: Por que não está chamando tprincipais?
+			if(loop_count % 500 == 0) {
+				debug_log("⚠️ tprincipais() NÃO será chamado (connected=" + connected + ", ausente=" + ausente + ", exiting=" + exiting + ")");
 			}
 		}
 		
@@ -576,6 +761,61 @@ void game(){
 			debug_log("⚠️ ESC pressionado! Chamando exitmenu()");
 			exitmenu();
 		}
+		
+		// ===== TECLAS DE INFORMAÇÃO =====
+		// Tecla C: Coordenadas
+		if(key_pressed(KEY_C) && !ausente) {
+			string coord_msg = "Coordenadas: X=" + me.x + ", Y=" + me.y;
+			speak(coord_msg);
+			debug_log("📍 " + coord_msg);
+		}
+		
+		// Tecla B: Localização/Zona
+		if(key_pressed(KEY_B) && !ausente) {
+			speak_zone();  // Fala a descrição da zona atual
+			debug_log("🗺️ B pressionado - chamando speak_zone()");
+		}
+		
+		// Tecla S: Status de saúde
+		if(key_pressed(KEY_S) && !ausente) {
+			send_unreliable(peer_id, "healthcheck", 0);
+			debug_log("⌨️ S pressionado - enviando 'healthcheck'");
+		}
+		
+		// Tecla V: Ver nível e estatísticas
+		if(key_pressed(KEY_V) && !ausente) {
+			send_unreliable(peer_id, "lc", 0);
+			debug_log("⌨️ V pressionado - enviando 'lc' (level check)");
+		}
+		
+		// Tecla M: Radar (sem Shift) ou Check Items (com Shift)
+		if(key_pressed(KEY_M) && !ausente) {
+			if(shift_pressionado()) {
+				send_unreliable(peer_id, "check_items", 0);
+				debug_log("⌨️ Shift+M pressionado - enviando 'check_items'");
+			} else {
+				send_unreliable(peer_id, "r", 0);
+				debug_log("⌨️ M pressionado - enviando 'r' (radar)");
+			}
+		}
+		
+		// Tecla P: Ver equipamento vestido
+		if(key_pressed(KEY_P) && !ausente) {
+			send_unreliable(peer_id, "/vestindo", 0);
+			debug_log("⌨️ P pressionado - enviando '/vestindo'");
+		}
+		
+		// Tecla I: Abrir inventário
+		if(key_pressed(KEY_I) && !ausente && moveable && dinventario == 0) {
+			if(player_inv.get_keys().length() == 0) {
+				speak("Inventário vazio", true);
+				debug_log("🎒 I pressionado - inventário vazio");
+			} else {
+				invmenu(inv_categories[cindex].name);
+				debug_log("🎒 Inventário aberto com " + player_inv.get_keys().length() + " itens");
+			}
+		}
+		
 		// Log de teclas de movimento
 		if(key_down(KEY_UP) || key_down(KEY_DOWN) || key_down(KEY_LEFT) || key_down(KEY_RIGHT)) {
 			if(loop_count % 50 == 0) { // Log a cada 50 iterações com tecla pressionada
@@ -705,81 +945,34 @@ void reiniciar(){
 	exit();
 }
 
-// Funções de inventário convertidas de BGT para NVGT
+// Funções de inventário convertidas de BGT para NVGT (agora usando dictionary player_inv)
 void inv_add_item(string itemname, int itemvalue){
-	string content=inv;
-	string[] peramitors=content.split("\r\n");
-	string[] values;
-	for(uint i=0; i<peramitors.length(); i++){
-		int eq_pos = peramitors[i].find("=");
-		if(eq_pos >= 0) {
-			values.insert_at(i, peramitors[i].substr(eq_pos+1));
-			peramitors[i] = peramitors[i].substr(0, eq_pos);
-		}
+	if(itemname == "") return;
+
+	int current = 0;
+	if(player_inv.exists(itemname)) {
+		player_inv.get(itemname, current);
 	}
-	if(inv_item_exists(itemname)){
-		int orgval;
-		if(inv_item_number(itemname) > -1){
-			orgval=to_number(values[inv_item_number(itemname)]);
-		}
-		else{
-			return;
-		}
-		if(orgval+itemvalue < 1){
-			inv_delete_item(itemname);
-		}
-		else{
-			values[inv_item_number(itemname)]=(orgval+itemvalue);
-			string tempinv;
-			for(uint i=0; i<peramitors.length(); i++){
-				tempinv+=peramitors[i]+"="+values[i]+"\r\n";
-			}
-			inv=tempinv;
-		}
-	}
-	else{
-		if(itemvalue > 0){
-			inv+=itemname+"="+itemvalue+"\r\n";
-		}
+
+	int new_value = current + itemvalue;
+
+	if(new_value <= 0) {
+		player_inv.delete(itemname);
+	} else {
+		player_inv.set(itemname, new_value);
 	}
 }
 
 bool inv_item_exists(string itemname){
-	string content=inv;
-	string[] peramitors=content.split("\r\n");
-	string[] values;
-	for(uint i=0; i<peramitors.length(); i++){
-		int eq_pos = peramitors[i].find("=");
-		if(eq_pos >= 0) {
-			values.insert_at(i, peramitors[i].substr(eq_pos+1));
-			peramitors[i] = peramitors[i].substr(0, eq_pos);
-		}
-	}
-	for(uint i=0; i<peramitors.length(); i++){
-		if(peramitors[i]==itemname){
-			return true;
-		}
-	}
-	return false;
+	return player_inv.exists(itemname);
 }
 
 int inv_item_number(string itemname){
-	string content=inv;
-	string[] peramitors=content.split("\r\n");
-	string[] values;
-	for(uint i=0; i<peramitors.length(); i++){
-		int eq_pos = peramitors[i].find("=");
-		if(eq_pos >= 0) {
-			values.insert_at(i, peramitors[i].substr(eq_pos+1));
-			peramitors[i] = peramitors[i].substr(0, eq_pos);
-		}
-	}
-	for(uint i=0; i<peramitors.length(); i++){
-		if(peramitors[i]==itemname){
-			return to_number(values[i]);
-		}
-	}
-	return 0;
+	if(!player_inv.exists(itemname)) return 0;
+
+	int quantity = 0;
+	player_inv.get(itemname, quantity);
+	return quantity;
 }
 
 int inv_item(string itemname){
@@ -802,20 +995,8 @@ int inv_item(string itemname){
 }
 
 void inv_delete_item(string itemname){
-	string content=inv;
-	string[] peramitors=content.split("\r\n");
-	string[] values;
-	for(uint i=0; i<peramitors.length(); i++){
-		int eq_pos = peramitors[i].find("=");
-		if(eq_pos >= 0) {
-			values.insert_at(i, peramitors[i].substr(eq_pos+1));
-			peramitors[i] = peramitors[i].substr(0, eq_pos);
-		}
-	}
-	for(uint i=0; i<peramitors.length(); i++){
-		if(peramitors[i]==itemname){
-			inv=inv.replace(itemname+"="+values[i]+"\r\n", "");
-		}
+	if(player_inv.exists(itemname)) {
+		player_inv.delete(itemname);
 	}
 }
 
@@ -827,7 +1008,7 @@ void give(string item){
 	else{
 		string amount=v.input(pu.get_value("Quantos você quer dar para")+" "+char+"?");
 		if (char!="" and amount!=""){
-			game_net.send(net_peer_id,"give "+char+" "+item+" "+amount,0, true);
+			send_reliable(peer_id,"give "+char+" "+item+" "+amount, 0);
 		}
 	}
 }
@@ -836,14 +1017,17 @@ void checkitem(){
 	for (uint i=0; i<objs.length(); i++){
 		if (objs[i].x==me.x and objs[i].y==me.y){
 			objs.remove_at(i);
-			game_net.send(net_peer_id,"enter2",0, true);
+			send_reliable(peer_id,"enter2", 0);
 		}
 	}
 }
 
 void drop(string item,int amount=1){
-	if(amount<0||amount>1000000000)return;
-	game_net.send(net_peer_id,"drop "+amount+" "+item,0, true);
+	if(amount < 1 || amount > 100000000000) return;
+	if(!inv_item_exists(item)) return;
+
+	send_reliable(peer_id, "drop " + amount + " " + item, 0);
+	debug_log("🗑️ Dropando " + amount + "x " + item);
 }
 
 void auction(string item){
@@ -851,7 +1035,7 @@ void auction(string item){
 	string minbid2=v.input("Quantidade mínima para a oferta deste leilão?");
 	int minbid=to_number(minbid2);
 	if(amount>0&&amount<1000000000&&minbid>0&&minbid<1000000000){
-		game_net.send(net_peer_id,"/auction "+amount+" "+item+" "+minbid,1, true);
+		send_reliable(peer_id,"/auction "+amount+" "+item+" "+minbid, 0);
 	}
 }
 
@@ -861,8 +1045,8 @@ void echocheck(int dir){
 		game_echotimer.restart();
 		pulou=1;
 		game_echo=false;
-		game_net.send(net_peer_id, "draw caiu.ogg", 0, true);
-		game_p.play_stationary("caiu.ogg", false);
+		send_reliable(peer_id, "draw caiu.ogg", 0);
+		game_p.play_stationary(get_sound_path("caiu.ogg"), false);
 		return;
 	}
 }

@@ -43,27 +43,39 @@ void net_create() {
 
 	speak(pu.get_value("Conectando..."));
 
-	network temp_net;
+	// Usar conexão global ao invés de criar local
 	@event = null;
-	temp_net.setup_client(1, 100); // Deve coincidir com max_channels do servidor (1)
-	temp_net.connect(game_serveraddress, game_serverport);
+	con.setup_client(1, 100); // Deve coincidir com max_channels do servidor (1)
+	uint64 server_peer = con.connect(game_serveraddress, game_serverport);
+	
+	if(server_peer == 0) {
+		dlg(pu.get_value("Erro ao conectar ao servidor"));
+		account_creating = false;
+		menuprincipal();
+		return;
+	}
+	
+	peer_id = server_peer; // Armazenar peer_id global
+	is_connected = true;   // Marcar como conectado
 	connecttimer.restart();
 
 	while(true) {
 		wait(5);
 
 		if(key_pressed(KEY_ESCAPE)) {
-			temp_net.destroy();
+			con.destroy();
+			is_connected = false;
 			account_creating = false;
 			menuprincipal();
 			return;
 		}
 
-		@event = temp_net.request();
+		@event = con.request();
 		if(event is null) {
 			if(connecttimer.elapsed >= connecttime) {
 				dlg(pu.get_value("Servidor indisponível"));
-				temp_net.destroy();
+				con.destroy();
+				is_connected = false;
 				account_creating = false;
 				menuprincipal();
 				return;
@@ -72,11 +84,11 @@ void net_create() {
 		}
 
 		if(event.type == event_connect) {
-			uint64 peer_id = event.peer_id;
+			uint64 connected_peer = event.peer_id;
 			// Segurança: Enviar hash SHA-256 da senha ao invés de texto plano
 			string hashed_password = hash_password(password);
 			string create_msg = "xt55 " + username + " " + hashed_password + " " + email + " " + selected_gender;
-			temp_net.send(peer_id, encrypt_packet(create_msg), 0, true); // Criptografar antes de enviar
+			con.send(connected_peer, encrypt_packet(create_msg), 0, true); // Criptografar antes de enviar
 		}
 		else if(event.type == event_receive) {
 			string received_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
@@ -87,14 +99,15 @@ void net_create() {
 				un = username;
 				pw = password;
 				writeprefs();
-				temp_net.destroy();
+				// NÃO destruir conexão - manter ativa para login
 				dlg(pu.get_value("Conta criada com sucesso! Pressione enter para logar-se."));
 				net_logar();
 				return;
 			}
 			else if(received_msg.find("Erro") != -1 || received_msg.lower().find("erro") != -1) {
 				dlg(pu.get_value(received_msg));
-				temp_net.destroy();
+				con.destroy();
+				is_connected = false;
 				account_creating = false;
 				menuprincipal();
 				return;
@@ -102,7 +115,8 @@ void net_create() {
 		}
 		else if(event.type == event_disconnect) {
 			dlg(pu.get_value("Servidor indisponível"));
-			temp_net.destroy();
+			con.destroy();
+			is_connected = false;
 			account_creating = false;
 			menuprincipal();
 			return;
@@ -130,16 +144,25 @@ void net_logar(bool localhost = false) {
 	debug_log("=== INICIANDO TENTATIVA DE CONEXÃO ===");
 	debug_log("Endereço: " + target_address + " Porta: " + game_serverport);
 	speak("DEBUG: Iniciando conexão para " + target_address + " porta " + game_serverport);
-	connected = false;
+	is_connected = false; // Flag global
 	@event = null;
 	
 	debug_log("Chamando setup_client(1, 150)");
 	speak("DEBUG: Chamando setup_client com 1 canal e 150ms timeout");
-	game_net.setup_client(1, 150); // Deve coincidir com max_channels do servidor (1)
+	con.setup_client(1, 150); // Usando conexão global
 	
 	debug_log("Chamando connect()");
 	speak("DEBUG: Chamando connect para " + target_address + " porta " + game_serverport);
-	game_net.connect(target_address, game_serverport);
+	uint64 server_peer = con.connect(target_address, game_serverport);
+	
+	if(server_peer == 0) {
+		dlg(pu.get_value("Erro ao conectar ao servidor"));
+		reset();
+		menuprincipal();
+		return;
+	}
+	
+	peer_id = server_peer; // Armazenar peer_id global
 	
 	debug_log("Aguardando evento de conexão... timeout=" + connecttime + "ms");
 	speak("DEBUG: Aguardando evento de conexão");
@@ -156,19 +179,21 @@ void net_logar(bool localhost = false) {
 		if(key_pressed(KEY_ESCAPE)) {
 			debug_log("Usuário cancelou a conexão");
 			speak("DEBUG: Usuário cancelou conexão");
-			game_net.destroy();
+			con.destroy();
+			is_connected = false;
 			reset();
 			menuprincipal();
 			return;
 		}
 
-		@event = game_net.request();
+		@event = con.request();
 		if(event is null) {
-			if(!connected && connecttimer.elapsed >= connecttime) {
+			if(!is_connected && connecttimer.elapsed >= connecttime) {
 				debug_log("TIMEOUT após " + connecttimer.elapsed + "ms - Servidor não respondeu");
 				speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
 				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
-				game_net.destroy();
+				con.destroy();
+				is_connected = false;
 				reset();
 				menuprincipal();
 				return;
@@ -178,11 +203,12 @@ void net_logar(bool localhost = false) {
 
 		// Ignorar event_none (tipo 0 - sem eventos)
 		if(event.type == event_none) {
-			if(!connected && connecttimer.elapsed >= connecttime) {
+			if(!is_connected && connecttimer.elapsed >= connecttime) {
 				debug_log("TIMEOUT após " + connecttimer.elapsed + "ms - Servidor não respondeu");
 				speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
 				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
-				game_net.destroy();
+				con.destroy();
+				is_connected = false;
 				reset();
 				menuprincipal();
 				return;
@@ -193,17 +219,18 @@ void net_logar(bool localhost = false) {
 		debug_log("Evento recebido: tipo=" + event.type + ", peer_id=" + event.peer_id);
 		speak("DEBUG: Evento recebido - tipo=" + event.type + " peer=" + event.peer_id);
 
-		if(event.type == event_disconnect || (!connected && connecttimer.elapsed >= connecttime)) {
+		if(event.type == event_disconnect || (!is_connected && connecttimer.elapsed >= connecttime)) {
 			debug_log("Evento de desconexão ou timeout");
 			speak("DEBUG: Desconectado ou timeout");
 			dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
-			game_net.destroy();
+			con.destroy();
+			is_connected = false;
 			reset();
 			menuprincipal();
 			return;
 		}
 
-		if(event.type == event_connect && !connected) {
+		if(event.type == event_connect && !is_connected) {
 			debug_log("✅ EVENT_CONNECT recebido! peer_id=" + event.peer_id);
 			speak("DEBUG: EVENT_CONNECT recebido! Enviando credenciais");
 			net_peer_id = event.peer_id;
@@ -212,7 +239,7 @@ void net_logar(bool localhost = false) {
 			string hashed_password = hash_password(net_pw);
 			string login_msg = "h33j " + net_un + " " + hashed_password + " " + gversion + " " + banned;
 			debug_log("Enviando credenciais: " + net_un + " (hash omitido por segurança)");
-			game_net.send(net_peer_id, encrypt_packet(login_msg), 0, true); // Criptografar antes de enviar
+			con.send(net_peer_id, encrypt_packet(login_msg), 0, true); // Criptografar antes de enviar
 			debug_log("Credenciais enviadas, aguardando resposta do servidor");
 			speak("DEBUG: Credenciais enviadas, aguardando resposta");
 			continue;
@@ -228,36 +255,67 @@ void net_logar(bool localhost = false) {
 				if(parsed[0] == "y") me.y = string_to_number(parsed[1]);
 			}
 
+			// Processar comando changemap (recebido APÓS loggedin)
 			if(parsed.length() >= 1) {
 				if(parsed[0] == "changemap") {
-					string map_name = full_msg.replace("changemap ", "");
-					load_map(map_name);
+					debug_log("🗺️ CHANGEMAP recebido - carregando mapa completo");
+
+					// Carregar mapa com dados completos (formato: "changemap [dados]\r\nx:X\r\ny:Y\r\n")
+					load_map(full_msg);
+
+					// Extrair coordenadas do mapa carregado
+					string[] ldata = delinear(full_msg);
+					for(uint i = 0; i < ldata.length(); i++) {
+						string[] parts = ldata[i].split(":");
+						if(parts[0] == "x" && parts.length() > 1) {
+							me.x = string_to_number(parts[1]);
+						}
+						else if(parts[0] == "y" && parts.length() > 1) {
+							me.y = string_to_number(parts[1]);
+						}
+						else if(parts[0] == "map" && parts.length() > 1) {
+							mapname = parts[1];
+						}
+					}
+
+					debug_log("✅ Mapa carregado! " + mapname + " (" + me.x + "," + me.y + ")");
+					speak("Você está no mapa: " + mapname + ". Use as setas para se mover.");
+
+					// AGORA SIM entra no loop do jogo
+					game();
+					debug_log("game() retornou (desconexão ou saída)");
+					return;
 				}
-				else if(parsed[0] == "usarcolete") {
+			}
+			
+			// Processar loggedin (aguarda changemap para entrar no jogo)
+			if(full_msg.find("loggedin") != -1) {
+				debug_log("🎉 LOGGEDIN recebido! Aguardando changemap...");
+				username = net_un;
+				is_connected = true;
+				speak(pu.get_value("Logado com sucesso! Carregando mundo..."));
+				// NÃO chama game() aqui - aguarda changemap
+			}
+			
+			// Outros comandos
+			if(parsed.length() >= 1) {
+				if(parsed[0] == "usarcolete") {
 					salvavida = 1;
 				}
 				else if(parsed[0] == "updatenow") {
 					dlg(pu.get_value("Erro: Você precisa da última versão para poder jogar. Por favor atualiza para a última versão em checar por atualizações."));
-					game_net.destroy();
+					con.destroy();
+					is_connected = false;
 					menuprincipal();
 					return;
 				}
 			}
-
-			if(full_msg.find("loggedin") != -1) {
-				debug_log("🎉 LOGGEDIN ENCONTRADO! Iniciando jogo...");
-				username = net_un;
-				connected = true;
-				speak(pu.get_value("Logado com sucesso! Entrando no jogo..."));
-				debug_log("Chamando game()...");
-				game(); // Entra no loop principal do jogo
-				debug_log("game() retornou (isso não deveria acontecer!)");
-				return;
-			}
-
+			
+			// Processar erros
 			if(full_msg.lower().find("erro") != -1) {
 				dlg(pu.get_value(full_msg));
-				game_net.destroy();
+				con.destroy();
+				is_connected = false;
 				menuprincipal();
 				return;
 			}
@@ -271,15 +329,16 @@ void net_logar(bool localhost = false) {
 // Processa todos os eventos de rede recebidos do servidor
 // Deve ser chamado continuamente no game loop
 void netloop() {
-	if(!connected) return;
+	if(!is_connected) return; // Usar flag global
 	
 	const network_event@ ev;
 	// Processar múltiplos eventos em um frame
-	while((@ev = game_net.request()) !is null && ev.type != event_none) {
+	while((@ev = con.request()) !is null && ev.type != event_none) { // Usar conexão global
 		
 		// === DESCONEXÃO ===
 		if(ev.type == event_disconnect) {
 			speak(pu.get_value("Conexão perdida com o servidor."));
+			is_connected = false; // Atualizar flag
 			reset();
 			relogin_flag = true;
 			return;
@@ -349,9 +408,73 @@ void netloop() {
 // ==========================================
 
 void process_channel_0(string full_msg, string[] parsed, const network_event@ ev) {
+	// === MOVIMENTO DE OUTROS JOGADORES (BROADCAST DO SERVIDOR) ===
+	if(parsed[0] == "xt01" && parsed.length() >= 4) {
+		// xt01 peer_id x y - Movimento de outro jogador
+		uint64 other_peer_id = string_to_number(parsed[1]);
+		int other_x = string_to_number(parsed[2]);
+		int other_y = string_to_number(parsed[3]);
+		
+		// Atualizar posição do jogador no array local
+		for(uint i = 0; i < players.length(); i++) {
+			if(players[i].peer_id == other_peer_id) {
+				players[i].x = other_x;
+				players[i].y = other_y;
+				
+				// Tocar som de passo 3D do outro jogador
+				string tile = get_tile_at(other_x, other_y);
+				if(tile != "") {
+					string step_sound = tile + "step" + random(1, 5) + ".ogg";
+					p.play_2d(step_sound, me.x, me.y, other_x, other_y, false);
+				}
+				break;
+			}
+		}
+		return;
+	}
+	
 	// === GRUPO 1: GERENCIAMENTO DE JOGADORES ===
 	if(parsed[0] == "pong") {
-		// Resposta de ping - nada a fazer
+		// Calcular tempo de ping
+		int ping_time = pingtimer.elapsed;
+		p.play_stationary("pingend.ogg", false);
+		speak("Ping: " + ping_time + " milissegundos", true);
+		forcepinging = false;
+		debug_log("🏓 Pong recebido! Ping: " + ping_time + "ms");
+	}
+	else if(parsed[0] == "say" && parsed.length() > 1) {
+		// Mensagem simples do servidor (falar direto)
+		string message = full_msg.substr(4); // Remove "say "
+		speak(message, true);
+		debug_log("💬 Servidor disse: " + message);
+	}
+	else if(parsed[0] == "msg2" && parsed.length() > 1) {
+		// Mensagem formatada do servidor com separadores ; (formato BGT)
+		// Exemplo: "Você está no nível; 5, ;e na patente; ;soldado;. ;"
+		// Cada parte separada por ; pode ser traduzida individualmente
+		string m = "";
+		string a = full_msg.substr(5); // Remove "msg2 "
+		
+		// Dividir por ponto-e-vírgula e processar cada parte
+		string[] b = a.split(";");
+		for(uint i = 0; i < b.length(); i++) {
+			if(b[i] != "") {
+				// Aqui poderia traduzir com pu.get_value(), mas por enquanto só concatena
+				// m += pu.get_value(b[i]);  // Tradução BGT-style (se necessário)
+				m += b[i];  // Por enquanto, apenas junta as partes
+			}
+		}
+		
+		add_add_item("servidor", m);
+		debug_log("📨 Mensagem servidor processada: " + m);
+	}
+	else if(parsed[0] == "inv" && parsed.length() >= 1) {
+		// Atualização incremental de inventário
+		load_inv(full_msg);
+	}
+	else if(parsed[0] == "setinv" && parsed.length() >= 1) {
+		// Substituição completa do inventário
+		setinv(full_msg);
 	}
 	else if(parsed[0] == "remplayer" && parsed.length() > 1) {
 		remplayer(parsed[1]);
@@ -467,15 +590,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	
 	// === GRUPO 3: INVENTÁRIO ===
-	else if(parsed[0] == "inv" && parsed.length() >= 1) {
-		load_inv(full_msg);
-	}
-	else if(parsed[0] == "setinv" && parsed.length() >= 1) {
-		setinv(full_msg);
-	}
-	else if(parsed[0] == "invsec" && parsed.length() > 1) {
-		load_secondary_inventory(full_msg);
-	}
+	// (removido - já processado no início da função)
 	
 	// === GRUPO 4: ÁUDIO ===
 	else if(parsed[0] == "play" && parsed.length() > 3) {

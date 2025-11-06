@@ -56,15 +56,25 @@ void fade_menu_music(int steps = 30) {
 void start_menu_music() {
 	stop_menu_music();
 	string track = "m" + int_to_string(random(1, 8)) + ".ogg";
+	debug_log("🎵 Tentando carregar música: " + track);
+	
 	if(!menu_music_sound.load(track)) {
+		debug_log("⚠️ Falha ao carregar '" + track + "', tentando sounds/" + track);
 		if(!menu_music_sound.load("sounds/" + track)) {
+			debug_log("❌ ERRO: Não foi possível carregar música do menu!");
+			debug_log("   Tentou: " + track + " e sounds/" + track);
 			return;
 		}
 	}
-	menu_music_sound.volume = menu_volume_to_db();
+	
+	int volume_db = menu_volume_to_db();
+	menu_music_sound.volume = volume_db;
+	debug_log("🎵 Volume configurado: " + volume_db + " dB (musicamenu=" + musicamenu + "%)");
+	
 	menu_music_sound.play_looped();
 	menu_music_loaded = true;
 	current_menu_music = track;
+	debug_log("✅ Música do menu tocando: " + track);
 }
 
 void ensure_menu_music_volume() {
@@ -183,6 +193,11 @@ void setupmenu(bool music = false) {
 	if(music) start_menu_music();
 	else ensure_menu_music_volume();
 	
+	// Configura navegação baseada em sidescrolling
+	// sidescrolling=0 (vertical): UP/DOWN nos menus
+	// sidescrolling=1 (lateral): LEFT/RIGHT nos menus
+	game_menu.use_tab_panel = (sidescrolling == 1);
+	
 	// Configurações de som
 	game_menu.click_sound = "menumove.ogg";
 	game_menu.select_sound = "menuenter.ogg";
@@ -201,6 +216,10 @@ void setupmenu(bool music = false) {
 void menusilent() {
 	game_menu.reset(true);
 	ensure_menu_music_volume();
+	
+	// Configura navegação baseada em sidescrolling
+	game_menu.use_tab_panel = (sidescrolling == 1);
+	
 	game_menu.click_sound = "";
 	game_menu.select_sound = "";
 	game_menu.open_sound = "menuopen.ogg";
@@ -252,15 +271,9 @@ void menuprincipal() {
 	}
 	else if(selected_id == "personagem") {
 		debug_log("📋 Usuário selecionou CONFIGURAR PERSONAGEM");
-		// Validação: Verificar se há uma conta existente para configurar
-		if(net_un == "" && un == "") {
-			dlg(pu.get_value("Você não tem uma conta criada. Por favor, crie uma conta primeiro em 'Criar nova conta'."));
-			menuprincipal();
-			return;
-		}
-		
+		// Permite configurar credenciais (login) mesmo sem conta salva
 		if(prompt_login_form(pu.get_value("Configurar personagem"))) {
-			dlg(pu.get_value("Preferências atualizadas."));
+			dlg(pu.get_value("Credenciais salvas com sucesso! Agora você pode conectar."));
 		}
 		menuprincipal();
 	}
@@ -317,38 +330,190 @@ string select_player(string text, bool showall = false) {
 	return game_menu.get_item_id(mres);
 }
 
-// Menu de opções
+// Função auxiliar para salvamento automático de configurações
+void salvar_configuracoes_automatico(audio_form@ form_geral, audio_form@ form_perfil, audio_form@ form_notificacoes,
+	int fg_sidescrolling, int fg_autosave, int fg_asktoexit, int fg_fps,
+	int fp_ttsrate, int fn_desconexao, int fn_nivel, int fn_mortes) {
+	
+	// GUIA GERAL
+	sidescrolling = form_geral.is_checked(fg_sidescrolling) ? 1 : 0;
+	autosave = form_geral.is_checked(fg_autosave) ? 1 : 0;
+	asktoexit = form_geral.is_checked(fg_asktoexit) ? 1 : 0;
+	fps = form_geral.is_checked(fg_fps) ? 1 : 0;
+	
+	// GUIA PERFIL
+	ttsrate = int(form_perfil.get_slider(fp_ttsrate));
+	game_tts.set_rate(ttsrate);
+	tts.set_rate(ttsrate);
+	
+	// GUIA NOTIFICAÇÕES
+	avisadesconectou = form_notificacoes.is_checked(fn_desconexao) ? 1 : 0;
+	avisanivel = form_notificacoes.is_checked(fn_nivel) ? 1 : 0;
+	ouvirmortes = form_notificacoes.is_checked(fn_mortes) ? 1 : 0;
+	
+	writeprefs();
+	debug_log("✅ Configurações salvas automaticamente");
+}
+
+// Menu de configurações com sistema de guias (tabs) - NAVEGAÇÃO HORIZONTAL
 void optionsmenu() {
-	setupmenu();
-	game_menu.add_item(pu.get_value("Configurações gerais"), "gerais");
-	game_menu.add_item(pu.get_value("Configurações do perfil"), "perfil");
-	game_menu.add_item(pu.get_value("Selecionar um arquivo de idioma"), "idioma");
-	game_menu.add_item(pu.get_value("Voltar"), "back");
+	debug_log("⚙️ Abrindo menu de configurações com guias...");
 	
-	game_menu.intro_text = pu.get_value("Opções Menu. Selecione uma opção.");
-	int mres = game_menu.run();
-	string selected_id = game_menu.get_item_id(mres);
+	// Criar as subformas para cada guia
+	audio_form form_geral;
+	audio_form form_perfil;
+	audio_form form_notificacoes;
 	
-	if(selected_id == "gerais") {
-		gerais();
-	}
-	else if(selected_id == "idioma") {
-		string a = idiomas();
-		if(a == "") {
-			optionsmenu();
+	// ===== GUIA: GERAL =====
+	form_geral.create_window("Geral");
+	
+	// Sidescrolling (checkbox)
+	int fg_sidescrolling = form_geral.create_checkbox("Movimento lateral (4 direções)", sidescrolling == 1);
+	
+	// Autosave (checkbox)
+	int fg_autosave = form_geral.create_checkbox("Salvar automaticamente", autosave == 1);
+	
+	// Pedir confirmação para sair (checkbox)
+	int fg_asktoexit = form_geral.create_checkbox("Pedir confirmação ao sair", asktoexit == 1);
+	
+	// Ver FPS (checkbox)
+	int fg_fps = form_geral.create_checkbox("Mostrar FPS", fps == 1);
+	
+	// Botão para volume da música (abre slider)
+	int fg_musicvol = form_geral.create_button("Volume da música do menu (" + int(musicamenu) + "%)");
+	
+	// ===== GUIA: PERFIL =====
+	form_perfil.create_window("Perfil");
+	
+	// Taxa de voz (slider inline) - só mostra o valor numérico
+	int fp_ttsrate = form_perfil.create_slider("", ttsrate, -10, 10, "", 1);
+	
+	// Botão para trocar voz
+	int fp_voice = form_perfil.create_button("Selecionar voz");
+	
+	// Botão para trocar idioma
+	int fp_idioma = form_perfil.create_button("Idioma");
+	
+	// ===== GUIA: NOTIFICAÇÕES =====
+	form_notificacoes.create_window("Notificações");
+	
+	// Avisar quando jogador se desconecta
+	int fn_desconexao = form_notificacoes.create_checkbox("Avisos de conexão e desconexão", avisadesconectou == 1);
+	
+	// Avisar ao subir de nível
+	int fn_nivel = form_notificacoes.create_checkbox("Avisar ao subir de nível", avisanivel == 1);
+	
+	// Ouvir mortes
+	int fn_mortes = form_notificacoes.create_checkbox("Ouvir sons de morte", ouvirmortes == 1);
+	
+	// ===== FORMULÁRIO PRINCIPAL =====
+	audio_form f_principal;
+	f_principal.create_window("Configurações", false, true);
+	
+	// Tab panel para navegação LEFT/RIGHT entre guias (só o nome, sem "tab")
+	int f_tabs = f_principal.create_tab_panel("");
+	f_principal.add_list_item(f_tabs, "Geral");
+	f_principal.add_list_item(f_tabs, "Perfil");
+	f_principal.add_list_item(f_tabs, "Notificações");
+	
+	// Subform que exibe o conteúdo da guia selecionada (sem prefixo "Configurações de")
+	int f_conteudo = f_principal.create_subform("", @form_geral);
+	
+	// Apenas botão Cancelar (salvamento é automático)
+	int f_cancel = f_principal.create_button("&Voltar", false, true);
+	
+	// Foca na lista de tabs
+	f_principal.focus(f_tabs);
+	
+	int ultima_guia = 0;
+	
+	// Variáveis para detectar mudanças e salvar automaticamente
+	bool alteracao_detectada = false;
+	
+	// Loop de monitoramento
+	while(true) {
+		wait(5);
+		f_principal.monitor();
+		
+		// Verifica se mudou de guia (LEFT/RIGHT)
+		int guia_atual = f_principal.get_list_position(f_tabs);
+		if(guia_atual != ultima_guia) {
+			// Salva automaticamente ao trocar de guia
+			if(alteracao_detectada) {
+				salvar_configuracoes_automatico(form_geral, form_perfil, form_notificacoes, 
+					fg_sidescrolling, fg_autosave, fg_asktoexit, fg_fps,
+					fp_ttsrate, fn_desconexao, fn_nivel, fn_mortes);
+				alteracao_detectada = false;
+			}
+			
+			if(guia_atual == 0) {
+				f_principal.set_subform(f_conteudo, @form_geral);
+			}
+			else if(guia_atual == 1) {
+				f_principal.set_subform(f_conteudo, @form_perfil);
+			}
+			else if(guia_atual == 2) {
+				f_principal.set_subform(f_conteudo, @form_notificacoes);
+			}
+			ultima_guia = guia_atual;
 		}
-		else {
-			cmfinal = "lang/" + a;
-			writeprefs();
-			pu.set_arquivo(cmfinal);
-			optionsmenu();
+		
+		// Detecta alterações nas configurações
+		if(guia_atual == 0) {
+			if(form_geral.is_checked(fg_sidescrolling) != (sidescrolling == 1) ||
+			   form_geral.is_checked(fg_autosave) != (autosave == 1) ||
+			   form_geral.is_checked(fg_asktoexit) != (asktoexit == 1) ||
+			   form_geral.is_checked(fg_fps) != (fps == 1)) {
+				alteracao_detectada = true;
+			}
 		}
-	}
-	else if(selected_id == "perfil") {
-		perfio();
-	}
-	else {
-		menuprincipal();
+		else if(guia_atual == 1) {
+			if(int(form_perfil.get_slider(fp_ttsrate)) != ttsrate) {
+				alteracao_detectada = true;
+			}
+		}
+		else if(guia_atual == 2) {
+			if(form_notificacoes.is_checked(fn_desconexao) != (avisadesconectou == 1) ||
+			   form_notificacoes.is_checked(fn_nivel) != (avisanivel == 1) ||
+			   form_notificacoes.is_checked(fn_mortes) != (ouvirmortes == 1)) {
+				alteracao_detectada = true;
+			}
+		}
+		
+		// Botão de volume da música (abre slider)
+		if(form_geral.is_pressed(fg_musicvol)) {
+			float new_vol = volume_slider_menu("Volume da música do menu", musicamenu);
+			if(new_vol >= 0) {
+				musicamenu = new_vol;
+				ensure_menu_music_volume();
+				// Atualiza o texto do botão
+				form_geral.set_caption(fg_musicvol, "Volume da música do menu (" + int(musicamenu) + "%)");
+			}
+		}
+		
+		// Botão de selecionar idioma
+		if(form_perfil.is_pressed(fp_idioma)) {
+			string a = idiomas();
+			if(a != "") {
+				cmfinal = "lang/" + a;
+				writeprefs();
+				pu.set_arquivo(cmfinal);
+				speak("Idioma alterado!");
+				alteracao_detectada = false; // Já salvou
+			}
+		}
+		
+		// Voltar (salva automaticamente antes de sair)
+		if(f_principal.is_pressed(f_cancel)) {
+			if(alteracao_detectada) {
+				salvar_configuracoes_automatico(form_geral, form_perfil, form_notificacoes, 
+					fg_sidescrolling, fg_autosave, fg_asktoexit, fg_fps,
+					fp_ttsrate, fn_desconexao, fn_nivel, fn_mortes);
+			}
+			debug_log("⚙️ Saindo das configurações");
+			menuprincipal();
+			return;
+		}
 	}
 }
 
@@ -749,8 +914,8 @@ string selecionar_jogador() {
 
 // Menu de uploads de sons (zoeiras)
 string zoeiras() {
-	// TODO: Implementar find_files quando necessário
-	string[] soundfiles; // = find_files("upsounds/*.ogg");
+	// Usando glob() do NVGT para listar arquivos .ogg
+	string[]@ soundfiles = glob("upsounds/*.ogg");
 	
 	if(soundfiles.length() <= 0) {
 		speak(pu.get_value("Nenhum arquivo encontrado na pasta uploads"));
@@ -759,7 +924,9 @@ string zoeiras() {
 	
 	setupmenu();
 	for(uint i = 0; i < soundfiles.length(); i++) {
-		game_menu.add_item(soundfiles[i].replace(".ogg", ""), soundfiles[i]);
+		// Extrair apenas o nome do arquivo sem o caminho
+		string filename = string_split(soundfiles[i], "/")[-1];
+		game_menu.add_item(filename.replace(".ogg", ""), soundfiles[i]);
 	}
 	
 	game_menu.intro_text = pu.get_value("Escolha o arquivo de som para enviar.");
@@ -773,15 +940,14 @@ string zoeiras() {
 
 // Menu de sons customizados
 string soundsmenu() {
-	// TODO: Implementar find_files quando necessário
-	/*
+	// Usando glob() do NVGT para listar arquivos .ogg
 	if(!directory_exists("upsounds")) {
 		directory_create("upsounds");
 		speak(pu.get_value("A pasta de sons não foi encontrada. Já foi criada, e você pode colocar seus arquivos nela."));
 		return "";
 	}
 	
-	string[] soundfiles = find_files("upsounds/*.ogg");
+	string[]@ soundfiles = glob("upsounds/*.ogg");
 	if(soundfiles.length() <= 0) {
 		speak(pu.get_value("Não há arquivos de som na pasta upsounds"));
 		return "";
@@ -789,7 +955,9 @@ string soundsmenu() {
 	
 	setupmenu();
 	for(uint i = 0; i < soundfiles.length(); i++) {
-		game_menu.add_item(soundfiles[i].replace(".ogg", ""), soundfiles[i]);
+		// Extrair apenas o nome do arquivo sem o caminho
+		string filename = string_split(soundfiles[i], "/")[-1];
+		game_menu.add_item(filename.replace(".ogg", ""), soundfiles[i]);
 	}
 	
 	game_menu.intro_text = pu.get_value("Selecione o áudio a enviar. Atualmente existem ") + soundfiles.length() + pu.get_value(" arquivos na pasta de sons.");
@@ -799,17 +967,12 @@ string soundsmenu() {
 		return "";
 	}
 	else return game_menu.get_item_id(mres);
-	*/
-	
-	speak(pu.get_value("Menu de sons customizados ainda não implementado"));
-	return "";
 }
 
 // Função de seleção de idiomas
 string idiomas() {
-	// TODO: implementar find_files quando necessário
-	// string[] soundfiles = find_files("lang/*.lang");
-	string[] soundfiles; // Temporário
+	// Usando glob() do NVGT para listar arquivos .lang
+	string[]@ soundfiles = glob("lang/*.lang");
 	
 	if(soundfiles.length() <= 0) {
 		speak(pu.get_value("Nenhum arquivo de idioma encontrado."));
@@ -818,7 +981,9 @@ string idiomas() {
 	
 	setupmenu();
 	for(uint i = 0; i < soundfiles.length(); i++) {
-		string filename = soundfiles[i].replace(".lang", "");
+		// Extrair apenas o nome do arquivo sem o caminho e extensão
+		string filename = string_split(soundfiles[i], "/")[-1];
+		filename = filename.replace(".lang", "");
 		game_menu.add_item(filename, soundfiles[i]);
 	}
 	game_menu.add_item(pu.get_value("Voltar"), "back");
@@ -831,6 +996,69 @@ string idiomas() {
 		return "";
 	}
 	else return selected_id;
+}
+
+// Menu de áudios (músicas, efeitos sonoros permanentes)
+string audiosmenu() {
+	// Usando glob() para listar arquivos de áudio (mp3, wav, ogg)
+	string[]@ audiofiles = glob("audios/*.{mp3,wav,ogg}");
+	
+	if(audiofiles.length() <= 0) {
+		speak(pu.get_value("Nenhum arquivo de áudio encontrado na pasta audios"));
+		return "";
+	}
+	
+	setupmenu();
+	for(uint i = 0; i < audiofiles.length(); i++) {
+		// Extrair apenas o nome do arquivo
+		string filename = string_split(audiofiles[i], "/")[-1];
+		// Remover extensão
+		string displayname = filename;
+		if(displayname.find_last(".") != -1) {
+			displayname = displayname.substr(0, displayname.find_last("."));
+		}
+		game_menu.add_item(displayname, audiofiles[i]);
+	}
+	
+	game_menu.intro_text = pu.get_value("Selecione o áudio. Total de arquivos: ") + audiofiles.length();
+	int mres = game_menu.run();
+	
+	if(mres <= 0) {
+		return "";
+	}
+	else return game_menu.get_item_id(mres);
+}
+
+// Menu de sons permanentes do ambiente
+string permanentsmenu() {
+	// Usando glob() para listar sons ambientes permanentes
+	if(!directory_exists("permanent_sounds")) {
+		directory_create("permanent_sounds");
+		speak(pu.get_value("A pasta de sons permanentes não foi encontrada. Já foi criada."));
+		return "";
+	}
+	
+	string[]@ soundfiles = glob("permanent_sounds/*.ogg");
+	
+	if(soundfiles.length() <= 0) {
+		speak(pu.get_value("Nenhum som permanente encontrado"));
+		return "";
+	}
+	
+	setupmenu();
+	for(uint i = 0; i < soundfiles.length(); i++) {
+		// Extrair apenas o nome do arquivo
+		string filename = string_split(soundfiles[i], "/")[-1];
+		game_menu.add_item(filename.replace(".ogg", ""), soundfiles[i]);
+	}
+	
+	game_menu.intro_text = pu.get_value("Selecione o som ambiente permanente. Total: ") + soundfiles.length();
+	int mres = game_menu.run();
+	
+	if(mres <= 0) {
+		return "";
+	}
+	else return game_menu.get_item_id(mres);
 }
 
 // Missing function stubs that need to be converted from BGT
@@ -967,8 +1195,11 @@ void voicemenu() {
 void gerais() {
 	setupmenu();
 	
-	if(sidescrolling == 1) game_menu.add_item(pu.get_value("Navegação lateral ativada. Pressione enter para desativar."), "side");
-	else if(sidescrolling == 0) game_menu.add_item(pu.get_value("Navegação vertical ativada. Pressione enter para ativar navegação lateral."), "side");
+	// NOTA: sidescrolling afeta o MOVIMENTO NO JOGO, não a navegação de menus
+	// Modo vertical (0): UP/DOWN = andar, LEFT/RIGHT = rotacionar
+	// Modo lateral (1): Todas as 4 direções = movimento livre
+	if(sidescrolling == 1) game_menu.add_item(pu.get_value("Movimento lateral (4 direções). Enter para mudar."), "side");
+	else if(sidescrolling == 0) game_menu.add_item(pu.get_value("Movimento vertical (frente/trás + rotação). Enter para mudar."), "side");
 	
 	if(autosave == 1) game_menu.add_item(pu.get_value("Auto-salvar ativado."), "autosave");
 	else if(autosave == 0) game_menu.add_item(pu.get_value("Auto-salvar desativado."), "autosave");
@@ -1011,11 +1242,10 @@ void gerais() {
 		gerais();
 	}
 	else if(selected_id == "musicvol") {
-		string new_vol = prompt_numeric_input(pu.get_value("Volume da música"), pu.get_value("Digite o volume (0-100)"), int(musicamenu));
-		if(new_vol != "") {
-			musicamenu = string_to_number(new_vol);
-			if(musicamenu < 0) musicamenu = 0;
-			if(musicamenu > 100) musicamenu = 100;
+		// Abre menu de slider para ajustar volume (inicia em 50% se for primeira vez)
+		float new_vol = volume_slider_menu("Volume da música do menu", musicamenu);
+		if(new_vol >= 0) { // -1 = cancelado
+			musicamenu = new_vol;
 			ensure_menu_music_volume();
 			writeprefs();
 		}
@@ -1026,11 +1256,139 @@ void gerais() {
 	}
 }
 
+// Menu de slider para ajuste de volume (0-100%)
+float volume_slider_menu(string title, float current_volume) {
+	audio_form vol_form;
+	vol_form.create_window(title, false, true);
+	
+	// Se o volume atual for 0 ou inválido, inicia em 50%
+	if(current_volume <= 0 || current_volume > 100) current_volume = 50.0;
+	
+	// Criar o slider (0-100, incremento de 1, valor inicial baseado em current_volume)
+	int f_slider = vol_form.create_slider(
+		"Volume",
+		current_volume,  // Valor inicial
+		0,               // Mínimo
+		100,             // Máximo
+		"%",             // Sufixo falado ("50 porcento")
+		1                // Incremento (1% por vez)
+	);
+	
+	// Botões OK e Cancelar
+	int f_ok = vol_form.create_button("&Aplicar", true);
+	int f_cancel = vol_form.create_button("&Cancelar", false, true);
+	
+	// Foca no slider
+	vol_form.focus(f_slider);
+	
+	// Loop de monitoramento
+	while(!vol_form.is_pressed(f_cancel) && !vol_form.is_pressed(f_ok)) {
+		wait(5);
+		vol_form.monitor();
+	}
+	
+	// Retorna o valor escolhido ou -1 se cancelado
+	if(vol_form.is_pressed(f_ok)) {
+		float new_value = vol_form.get_slider(f_slider);
+		speak("Volume ajustado para " + int(new_value) + " porcento");
+		return new_value;
+	}
+	else {
+		speak("Cancelado");
+		return -1; // Indica cancelamento
+	}
+}
+
 // Menu de atualizações
 void batualizacao(bool auto_check) {
-	// TODO: implementar sistema de atualização completo quando necessário
-	dlg(pu.get_value("Sistema de atualização ainda não implementado"));
-	if(!auto_check) menuprincipal();
+	string latest = url_get(UPDATE_URL);
+	
+	// Verificar se conseguiu obter a versão do servidor
+	if(latest.find("versão:") == -1) {
+		if(!auto_check) {
+			dlg(pu.get_value("Erro ao checar por atualizações. Os motivos podem ser que você esteja usando uma versão beta, ou o servidor não pode ser carregado."));
+			menuprincipal();
+		}
+		return;
+	}
+	
+	// Extrair versão do servidor
+	latest = latest.replace("versão:", "");
+	latest = trim_string(latest);
+	
+	// Se não há atualização e é checagem manual, avisar
+	if((latest == ver) && (!auto_check)) {
+		dlg(pu.get_value("Nenhuma atualização até o momento."));
+		menuprincipal();
+		return;
+	}
+	
+	// Se há nova versão disponível
+	if(latest != ver) {
+		updatefound.play_wait();
+		updatemenu(latest);
+	}
+	else if(!auto_check) {
+		menuprincipal();
+	}
+}
+
+// Menu de atualização quando nova versão é encontrada
+void updatemenu(string vernova) {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Atualizar agora"), "update");
+	game_menu.add_item(pu.get_value("Depois"), "later");
+	game_menu.add_item(pu.get_value("Cancelar"), "cancel");
+	
+	game_menu.intro_text = pu.get_value("Nova versão disponível: ") + vernova + ". " + 
+	                        pu.get_value("Versão atual: ") + ver + ". " +
+	                        pu.get_value("O que deseja fazer?");
+	
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "update") {
+		atualizarv(vernova);
+	}
+	else if(selected_id == "later") {
+		speak(pu.get_value("Você pode atualizar depois pelo menu principal."));
+		menuprincipal();
+	}
+	else {
+		menuprincipal();
+	}
+}
+
+// Realizar o download e instalação da atualização
+void atualizarv(string vernova) {
+	speak(pu.get_value("Iniciando o processo de atualização..."));
+	
+	sound updating;
+	updating.stream("update_starting.ogg");
+	updating.play_wait();
+	
+	// Iniciar música de atualização em loop
+	updatemus.play_looped();
+	
+	// Fazer download do instalador
+	string status = dl_file(DOWNLOAD_URL, INSTALLER_NAME);
+	
+	if(status == "finished") {
+		updatemus.stop();
+		updatedone.play_wait();
+		speak(nomejogo + " " + vernova + " " + pu.get_value("Acabou de ser baixado!"));
+		wait(1000);
+		
+		// Executar instalador e fechar o jogo
+		run(INSTALLER_NAME, "", false, false);
+		exit();
+	}
+	else {
+		updatemus.stop();
+		dlg(pu.get_value("Erro ao baixar a atualização. Status: ") + status);
+		menuprincipal();
+	}
 }
 
 // Menu de conversão de moedas
@@ -1512,10 +1870,153 @@ void telemenu(string[] maps_of_portal, bool music = false) {
 	}
 }
 
-// Placeholder para funções stub que precisam de implementação completa
+// Menu de ações e gerenciamento de categorias de inventário
 void actions_menu(string type, string context) {
-	// TODO: Implementar menu de ações/categorias
-	speak(pu.get_value("Menu de ações ainda não implementado"));
+	if(type == "inv") {
+		// Menu de gerenciamento de categorias do inventário
+		inventory_categories_menu();
+	}
+	else {
+		speak(pu.get_value("Tipo de menu de ações não reconhecido: ") + type);
+	}
+}
+
+// Menu de categorias de inventário
+void inventory_categories_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Ver todas as categorias"), "view_all");
+	game_menu.add_item(pu.get_value("Filtrar por categoria"), "filter");
+	game_menu.add_item(pu.get_value("Organizar automaticamente"), "auto_organize");
+	game_menu.add_item(pu.get_value("Definir categoria padrão"), "set_default");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Gerenciamento de categorias do inventário. O que deseja fazer?");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "view_all") {
+		view_inventory_categories();
+	}
+	else if(selected_id == "filter") {
+		filter_by_category_menu();
+	}
+	else if(selected_id == "auto_organize") {
+		auto_organize_inventory();
+	}
+	else if(selected_id == "set_default") {
+		set_default_category_menu();
+	}
+	else if(selected_id == "back") {
+		servicesmenu();
+	}
+}
+
+// Ver todas as categorias disponíveis
+void view_inventory_categories() {
+	setupmenu();
+	
+	// Categorias padrão do jogo
+	string[] categories = {
+		"Armas",
+		"Munição",
+		"Consumíveis",
+		"Ferramentas",
+		"Veículos",
+		"Materiais",
+		"Especiais",
+		"Outros"
+	};
+	
+	for(uint i = 0; i < categories.length(); i++) {
+		game_menu.add_item(categories[i], "cat_" + i);
+	}
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Categorias de inventário disponíveis. Total: ") + categories.length();
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id != "back") {
+		// Extrair índice da categoria selecionada
+		if(selected_id.find("cat_") == 0) {
+			int cat_index = string_to_number(selected_id.substr(4));
+			if(cat_index >= 0 && cat_index < int(categories.length())) {
+				speak(pu.get_value("Categoria: ") + categories[cat_index]);
+				// Aqui poderia listar itens dessa categoria
+				send_reliable(peer_id, "listcategory " + categories[cat_index], 0);
+			}
+		}
+	}
+	
+	inventory_categories_menu();
+}
+
+// Menu de filtro por categoria
+void filter_by_category_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Mostrar apenas armas"), "weapons");
+	game_menu.add_item(pu.get_value("Mostrar apenas consumíveis"), "consumables");
+	game_menu.add_item(pu.get_value("Mostrar apenas ferramentas"), "tools");
+	game_menu.add_item(pu.get_value("Mostrar tudo"), "all");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Filtrar inventário por categoria");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "weapons") {
+		send_reliable(peer_id, "filterinv weapons", 0);
+		speak(pu.get_value("Mostrando apenas armas"));
+	}
+	else if(selected_id == "consumables") {
+		send_reliable(peer_id, "filterinv consumables", 0);
+		speak(pu.get_value("Mostrando apenas consumíveis"));
+	}
+	else if(selected_id == "tools") {
+		send_reliable(peer_id, "filterinv tools", 0);
+		speak(pu.get_value("Mostrando apenas ferramentas"));
+	}
+	else if(selected_id == "all") {
+		send_reliable(peer_id, "filterinv all", 0);
+		speak(pu.get_value("Mostrando todos os itens"));
+	}
+	
+	if(selected_id != "back") {
+		inventory_categories_menu();
+	}
+}
+
+// Organizar inventário automaticamente
+void auto_organize_inventory() {
+	speak(pu.get_value("Organizando inventário por categoria..."));
+	send_reliable(peer_id, "organizeinv", 0);
+	wait(500);
+	speak(pu.get_value("Inventário organizado com sucesso!"));
+	inventory_categories_menu();
+}
+
+// Menu para definir categoria padrão
+void set_default_category_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Armas"), "weapons");
+	game_menu.add_item(pu.get_value("Consumíveis"), "consumables");
+	game_menu.add_item(pu.get_value("Ferramentas"), "tools");
+	game_menu.add_item(pu.get_value("Outros"), "other");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Escolha a categoria padrão para novos itens");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id != "back") {
+		send_reliable(peer_id, "setdefaultcategory " + selected_id, 0);
+		speak(pu.get_value("Categoria padrão definida: ") + selected_id);
+	}
+	
+	inventory_categories_menu();
 }
 
 /* // Removidas funções duplicadas

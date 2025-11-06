@@ -60,6 +60,18 @@ void init_command_system() {
     register_command("give", "Dar item para jogador", false, {"offer"}, "give <item> <jogador>");
     register_command("pickup", "Pegar item do chão", false, {"grab"}, "pickup [item]");
     
+    // Comandos de configuração do jogador
+    register_command("setvoice", "Configurar voz do narrador", false, {}, "setvoice <voz>");
+    register_command("hits", "Toggle sons de impacto", false, {}, "hits");
+    register_command("idiomachat", "Configurar idioma do chat", false, {}, "idiomachat <idioma>");
+    register_command("dpassos", "Toggle sons de passos", false, {}, "dpassos");
+    register_command("ndor", "Toggle mensagens de dor", false, {}, "ndor");
+    register_command("nnivel", "Toggle avisos de nível", false, {}, "nnivel");
+    register_command("getversion", "Ver versão do servidor", false, {}, "getversion");
+    register_command("lc", "Listar coords/comandos", false, {}, "lc");
+    register_command("checktime", "Ver hora atual (requer relógio)", false, {}, "checktime");
+    register_command("falarnomapa", "Falar no mapa atual", false, {}, "/falarnomapa <mensagem>");
+
     // Comandos de combate
     register_command("attack", "Atacar inimigo", false, {"kill", "hit"}, "attack <alvo>");
     register_command("flee", "Fugir do combate", false, {"escape", "run"});
@@ -329,6 +341,38 @@ bool execute_command(player@ player, string command, string[] args) {
         return cmd_score(player, args);
     }
     
+    // Comandos de configuração
+    else if(command == "setvoice") {
+        return cmd_setvoice(player, args);
+    }
+    else if(command == "hits") {
+        return cmd_hits(player, args);
+    }
+    else if(command == "idiomachat") {
+        return cmd_idiomachat(player, args);
+    }
+    else if(command == "dpassos") {
+        return cmd_dpassos(player, args);
+    }
+    else if(command == "ndor") {
+        return cmd_ndor(player, args);
+    }
+    else if(command == "nnivel") {
+        return cmd_nnivel(player, args);
+    }
+    else if(command == "getversion") {
+        return cmd_getversion(player, args);
+    }
+    else if(command == "lc") {
+        return cmd_lc(player, args);
+    }
+    else if(command == "checktime") {
+        return cmd_checktime(player, args);
+    }
+    else if(command == "falarnomapa") {
+        return cmd_falarnomapa(player, args);
+    }
+    
     // Comandos de admin
     else if(command == "freeze") {
         return cmd_freeze(player, args);
@@ -493,8 +537,30 @@ bool cmd_say(player@ player, string[] args) {
 }
 
 bool cmd_inventory(player@ player, string[] args) {
-    // TODO: Implementar sistema de inventário
-    player.send_message("say Inventário: Em desenvolvimento");
+    // Obter itens do inventário do jogador
+    string[] inv_keys = player.inventory.get_keys();
+
+    if(inv_keys.length() == 0) {
+        player.send_message("say Seu inventário está vazio.");
+        debug_log("📦 " + player.charname + " verificou inventário vazio");
+        return true;
+    }
+
+    // Construir mensagem de inventário
+    string inv_msg = "=== INVENTÁRIO ===\n";
+    inv_msg += "Total de itens: " + inv_keys.length() + "\n\n";
+
+    for(uint i = 0; i < inv_keys.length(); i++) {
+        int quantity = 0;
+        player.inventory.get(inv_keys[i], quantity);
+
+        if(quantity > 0) {
+            inv_msg += "- " + inv_keys[i] + ": " + quantity + "\n";
+        }
+    }
+
+    player.send_message("say " + inv_msg);
+    debug_log("📦 " + player.charname + " verificou inventário (" + inv_keys.length() + " itens)");
     return true;
 }
 
@@ -513,7 +579,134 @@ bool cmd_score(player@ player, string[] args) {
     return true;
 }
 
-// Comandos de admin
+// === COMANDOS DE CONFIGURAÇÃO DO JOGADOR ===
+
+bool cmd_setvoice(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: setvoice <voz>");
+        return false;
+    }
+    player.voice_id = args[0];
+    save_player_to_database(player);
+    debug_log("🎤 Jogador " + player.name + " configurou voz: " + args[0]);
+    return true;
+}
+
+bool cmd_hits(player@ player, string[] args) {
+    player.ouvirhits = !player.ouvirhits;
+    save_player_to_database(player);
+    string status = player.ouvirhits ? "ativados" : "desativados";
+    player.send_message("say Sons de impacto " + status);
+    return true;
+}
+
+bool cmd_idiomachat(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: idiomachat <idioma>");
+        return false;
+    }
+    player.idiomachat = args[0];
+    save_player_to_database(player);
+    player.send_message("say Idioma do chat configurado: " + args[0]);
+    return true;
+}
+
+bool cmd_dpassos(player@ player, string[] args) {
+    player.ouvirpassos = (player.ouvirpassos == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.ouvirpassos == 0) ? "desativados" : "ativados";
+    player.send_message("say Sons de passos " + status);
+    return true;
+}
+
+bool cmd_ndor(player@ player, string[] args) {
+    player.mdor = (player.mdor == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.mdor == 0) ? "ativadas" : "desativadas";
+    player.send_message("say Mensagens de dor " + status);
+    return true;
+}
+
+bool cmd_nnivel(player@ player, string[] args) {
+    player.avisanivel = (player.avisanivel == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.avisanivel == 0) ? "ativados" : "desativados";
+    player.send_message("say Avisos de nível " + status);
+    return true;
+}
+
+bool cmd_getversion(player@ player, string[] args) {
+    player.send_message("version " + server_version);
+    return true;
+}
+
+bool cmd_lc(player@ player, string[] args) {
+    // Formato corrigido para português brasileiro correto
+    // "Você está no nível X, e na patente Y. Você está com X% de sede, X% de fome, X% sujo/suja, e X% doente."
+
+    // Determinar sufixo baseado no sexo (0=masculino, 1=feminino)
+    string sufixo_sujo = (player.sexo == 0) ? "o" : "a";
+
+    // Formatar mensagem
+    string msg = "Você está no nível " + player.level;
+
+    // Só mostrar patente se ela existir
+    if(player.title != "") {
+        msg += ", e na patente " + player.title;
+    }
+
+    msg += ". Você está com " + round(player.nsede, 1) + "% de sede, " +
+           round(player.nfome, 1) + "% de fome, " +
+           round(player.sujo, 1) + "% suj" + sufixo_sujo + ", e " +
+           round(player.doente, 1) + "% doente.";
+
+    player.send_message("say " + msg);
+    debug_log("📊 [V-KEY] " + player.charname + " verificou status: nível=" + player.level);
+    return true;
+}
+
+bool cmd_checktime(player@ player, string[] args) {
+    // Verificar se o jogador tem relógio
+    if(player.relogio == 0) {
+        player.send_message("say Você precisa de um relógio para ver as horas.");
+        debug_log("⌚ [H-KEY] " + player.charname + " tentou ver hora sem relógio");
+        return false;
+    }
+
+    // Pegar hora atual do sistema usando constantes globais TIME_*
+    int hora_atual = TIME_HOUR;
+    int minuto_atual = TIME_MINUTE;
+
+    // Formatar hora com zero à esquerda se necessário
+    string hora = hora_atual < 10 ? "0" + hora_atual : "" + hora_atual;
+    string minuto = minuto_atual < 10 ? "0" + minuto_atual : "" + minuto_atual;
+
+    player.send_message("say São " + hora + " horas e " + minuto + " minutos.");
+    debug_log("⌚ [H-KEY] " + player.charname + " verificou hora: " + hora + ":" + minuto);
+    return true;
+}
+
+bool cmd_falarnomapa(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: /falarnomapa <mensagem>");
+        return false;
+    }
+
+    string message = join(args, " ");
+
+    // Broadcast para todos no mesmo mapa
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map_name == player.map_name && players[i].peer_id != 0) {
+            send_reliable(players[i].peer_id, "say [" + player.map_name + "] " + player.name + ": " + message, 0);
+        }
+    }
+
+    debug_log("💬 [" + player.map_name + "] " + player.name + ": " + message);
+    return true;
+}
+
+// === COMANDOS DE ADMIN ===
+
 bool cmd_freeze(player@ player, string[] args) {
     // TODO: Implementar freeze global
     player.send_message("say Comando freeze: Em desenvolvimento");

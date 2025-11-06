@@ -1,0 +1,161 @@
+/*
+*Weather Data API
+*This is a class which facilitates the retrieval of weather data from the OpenWeatherMap API (https://openweathermap.org/api) in NVGT.
+*I hope that this class will be useful to you in your projects.
+*Eduardo Ferreira
+*Renova Games
+*/
+
+enum weather_data_api_errors
+{
+        error_none=0,
+        API_KEY_NOT_SET,
+        CITY_NOT_SET,
+        invalid_city_name,
+        invalid_api_key,
+        error_parsing_json
+};
+
+class weather_data_api
+{
+private string weather_map_url = "api.openweathermap.org";
+        private string api_key;
+        private string city_name;
+int error_code = error_none;
+
+
+private double feels_like;
+private double grnd_level;
+private double sea_level;
+private double humidity;
+private double pressure;
+private double temp_min;
+double temp;
+private double temp_max;
+private string visibility;
+private double sunrise;
+private double sunset;
+private string condition;
+private double wind_deg;
+private double wind_speed;
+
+        weather_data_api(string api_key)
+        { //Constructor that accepts the API key as a parameter. You can also set the API key using the set_api_key method.
+                this.set_api_key(api_key);
+        }
+        void reset_info()
+        {
+                this.set_city("");
+                this.set_error_code(error_none);
+        }
+        int get_error_code() {
+                return this.error_code;
+        }
+        void set_error_code(int code) {
+                this.error_code = code;
+        }
+        void set_api_key(string key)
+        {
+                this.api_key = key;
+        }
+
+        void set_city(string city) {
+this.city_name = city;
+        }
+
+        bool request() {
+                if (this.api_key.empty())
+                {
+                        this.set_error_code(API_KEY_NOT_SET);
+                        return false;
+                }
+                if (this.city_name.empty())
+                {
+                        this.set_error_code(CITY_NOT_SET);
+                        return false;
+                }
+                http_request request(HTTP_GET, "/data/2.5/weather?units=metric&q=" + this.city_name + "&appid=" + this.api_key);
+                http_response response;
+                https_client client(weather_map_url);
+                client.send_request(request);
+                datastream@ stream = client.receive_response(response);
+                if (response.status != HTTP_OK)
+                {
+                        alert("Error: " + response.status, "HTTP Status");
+this.set_error_code(invalid_city_name);
+                        return false;
+                }
+                json_object@ json = parse_json(stream);
+                if(@json == null)
+                {
+                        alert("Error", "Error parsing json");
+                        this.set_error_code(error_parsing_json);
+                        return false;
+                }
+                extract_data(json);
+                return true;
+        }
+        void extract_data(json_object@ json)
+        {
+                //Extract the data you need from the JSON object
+this.feels_like = json("main.feels_like");
+this.grnd_level = json("main.grnd_level");
+this.sea_level = json("main.sea_level");
+this.humidity = json("main.humidity");
+this.pressure = json("main.pressure");
+this.temp_min = json("main.temp_min");
+this.temp = json("main.temp");
+this.temp_max = json("main.temp_max");
+this.visibility = json("visibility");
+this.sunrise = json("sys.sunrise");
+this.sunset = json("sys.sunset");
+this.condition = json("weather[0].description");
+this.wind_deg = json("wind.deg");
+this.wind_speed = json("wind.speed");
+                }
+
+string get_weather(bool all = true) {
+string result = "Current temperature for %0. %1 degrees Celcius with the feeling of %2, %3. The wind speed is %4 meters per second.".format(this.city_name, this.temp, this.feels_like, this.condition, this.wind_speed);
+return result;
+//this.feels_like = json("main.feels_like");
+//this.grnd_level = json("main.grnd_level");
+//this.sea_level = json("main.sea_level");
+//this.humidity = json("main.humidity");
+//this.pressure = json("main.pressure");
+//this.temp_min = json("main.temp_min");
+//this.temp = json("main.temp");
+//this.temp_max = json("main.temp_max");
+//this.visibility = json("visibility");
+//this.sunrise = json("sys.sunrise");
+//this.sunset = json("sys.sunset");
+//this.condition = json("weather[0].description");
+//this.wind_deg = json("wind.deg");
+//this.wind_speed = json("wind.speed");
+return result;
+}
+}
+
+void main()
+{
+        show_window("Testing Weather Data API");
+        weather_data_api weather_api("4daa21565b39d1496c9f4aef99eb8bcd");
+        weather_api.set_city("Philadelphia");
+        weather_api.request();
+alert(weather_api.get_weather(), "");
+}
+string get_error_message(int error_code)
+{
+        switch (error_code)
+        {
+        case API_KEY_NOT_SET:
+                return "API Key not set";
+        case CITY_NOT_SET:
+                return "City not set";
+        case invalid_city_name:
+                return "Invalid City Name";
+        case invalid_api_key:
+                return "Invalid API Key";
+        default:
+                return "Unknown Error";
+        }
+}

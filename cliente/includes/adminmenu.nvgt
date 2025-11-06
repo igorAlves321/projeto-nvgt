@@ -267,19 +267,320 @@ void admin_mute_player() {
 	}
 }
 
-// Placeholder para funções que serão implementadas em outros lugares
+// Upload de arquivo de áudio para o servidor
 void uploadfile() {
-	// TODO: Implementar upload de arquivo
-	speak(pu.get_value("Upload de arquivo ainda não implementado"));
+	// Listar arquivos .ogg disponíveis para upload
+	string file = soundsmenu();
+	
+	if(file == "") {
+		speak(pu.get_value("Upload cancelado."));
+		return;
+	}
+	
+	// Verificar se o arquivo existe
+	if(!file_exists(file)) {
+		speak(pu.get_value("Arquivo não encontrado: ") + file);
+		return;
+	}
+	
+	// Ler o conteúdo do arquivo
+	file f;
+	if(!f.open(file, "rb")) {
+		speak(pu.get_value("Erro ao abrir arquivo para leitura."));
+		return;
+	}
+	
+	// Obter tamanho do arquivo
+	f.seek(0, file_seek_end);
+	int file_size = f.tell();
+	f.seek(0, file_seek_set);
+	
+	// Verificar tamanho máximo (5 MB)
+	if(file_size > 5 * 1024 * 1024) {
+		speak(pu.get_value("Arquivo muito grande. Máximo: 5 MB"));
+		f.close();
+		return;
+	}
+	
+	// Ler dados do arquivo
+	string file_data = f.read(file_size);
+	f.close();
+	
+	// Codificar em base64 para transmissão segura
+	string encoded_data = string_base64_encode(file_data);
+	
+	// Extrair nome do arquivo
+	string filename = string_split(file, "/")[-1];
+	
+	// Confirmar upload
+	bool confirm = simple_yes_no(pu.get_value("Confirma upload de ") + filename + " (" + 
+	                             (file_size / 1024) + " KB)?");
+	
+	if(!confirm) {
+		speak(pu.get_value("Upload cancelado."));
+		return;
+	}
+	
+	speak(pu.get_value("Enviando arquivo... Aguarde."));
+	
+	// Enviar ao servidor (dividir em chunks se necessário)
+	int chunk_size = 8192; // 8 KB por chunk
+	int total_chunks = (encoded_data.length() + chunk_size - 1) / chunk_size;
+	
+	// Iniciar upload
+	game_net.send(net_peer_id, encrypt_packet("/upload_start " + filename + " " + total_chunks), 1, true);
+	wait(100);
+	
+	// Enviar chunks
+	for(int i = 0; i < total_chunks; i++) {
+		int start = i * chunk_size;
+		int end = start + chunk_size;
+		if(end > int(encoded_data.length())) end = encoded_data.length();
+		
+		string chunk = encoded_data.substr(start, end - start);
+		game_net.send(net_peer_id, encrypt_packet("/upload_chunk " + i + " " + chunk), 1, true);
+		
+		wait(50); // Pequeno delay entre chunks
+		
+		if(i % 10 == 0) {
+			speak(pu.get_value("Enviando... ") + ((i * 100) / total_chunks) + "%");
+		}
+	}
+	
+	// Finalizar upload
+	game_net.send(net_peer_id, encrypt_packet("/upload_finish"), 1, true);
+	speak(pu.get_value("Upload concluído com sucesso!"));
 }
 
+// Menu de gerenciamento de traduções e idiomas
 void langs_menu() {
-	// TODO: Implementar menu de traduções (já existe stub em menu.nvgt)
-	speak(pu.get_value("Menu de traduções ainda não implementado"));
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Adicionar nova tradução"), "add");
+	game_menu.add_item(pu.get_value("Editar tradução existente"), "edit");
+	game_menu.add_item(pu.get_value("Listar todas as traduções"), "list");
+	game_menu.add_item(pu.get_value("Exportar traduções"), "export");
+	game_menu.add_item(pu.get_value("Importar traduções"), "import");
+	game_menu.add_item(pu.get_value("Testar tradução"), "test");
+	game_menu.add_item(pu.get_value("Estatísticas de tradução"), "stats");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Gerenciamento de traduções. O que deseja fazer?");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "add") {
+		langs_add_translation();
+	}
+	else if(selected_id == "edit") {
+		langs_edit_translation();
+	}
+	else if(selected_id == "list") {
+		langs_list_translations();
+	}
+	else if(selected_id == "export") {
+		langs_export();
+	}
+	else if(selected_id == "import") {
+		langs_import();
+	}
+	else if(selected_id == "test") {
+		langs_test();
+	}
+	else if(selected_id == "stats") {
+		langs_stats();
+	}
+	else if(selected_id != "back") {
+		langs_menu(); // Retornar ao menu
+	}
+}
+
+// Adicionar nova tradução
+void langs_add_translation() {
+	input_form form(pu.get_value("Nova tradução"));
+	form.description = pu.get_value("Adicione uma nova string de tradução ao sistema.");
+	form.add_text_field("key", pu.get_value("Chave (identificador único)"), "", true);
+	form.add_text_field("pt", pu.get_value("Português"), "", true);
+	form.add_text_field("en", pu.get_value("Inglês"), "", false);
+	form.add_text_field("es", pu.get_value("Espanhol"), "", false);
+	form.add_text_field("fr", pu.get_value("Francês"), "", false);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string key, pt, en, es, fr;
+		result.get("key", key);
+		result.get("pt", pt);
+		result.get("en", en);
+		result.get("es", es);
+		result.get("fr", fr);
+		
+		if(key != "" && pt != "") {
+			string data = "add_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr;
+			game_net.send(net_peer_id, encrypt_packet(data), 1, true);
+			speak(pu.get_value("Tradução adicionada com sucesso!"));
+		}
+		else {
+			speak(pu.get_value("Chave e português são obrigatórios."));
+		}
+	}
+	langs_menu();
+}
+
+// Editar tradução existente
+void langs_edit_translation() {
+	input_form form(pu.get_value("Editar tradução"));
+	form.add_text_field("key", pu.get_value("Chave da tradução a editar"), "", true);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string key;
+		result.get("key", key);
+		
+		if(key != "") {
+			// Solicitar ao servidor os dados atuais
+			game_net.send(net_peer_id, encrypt_packet("get_translation:" + key), 1, true);
+			speak(pu.get_value("Solicitando dados da tradução..."));
+			
+			// O servidor enviará os dados e o cliente abrirá outro form
+			// Por enquanto, permitir edição direta
+			input_form form2(pu.get_value("Editar: ") + key);
+			form2.add_text_field("pt", pu.get_value("Português"), "", false);
+			form2.add_text_field("en", pu.get_value("Inglês"), "", false);
+			form2.add_text_field("es", pu.get_value("Espanhol"), "", false);
+			form2.add_text_field("fr", pu.get_value("Francês"), "", false);
+			
+			dictionary@ result2 = form2.run();
+			if(!form2.user_canceled) {
+				string pt, en, es, fr;
+				result2.get("pt", pt);
+				result2.get("en", en);
+				result2.get("es", es);
+				result2.get("fr", fr);
+				
+				string data = "edit_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr;
+				game_net.send(net_peer_id, encrypt_packet(data), 1, true);
+				speak(pu.get_value("Tradução atualizada!"));
+			}
+		}
+	}
+	langs_menu();
+}
+
+// Listar traduções
+void langs_list_translations() {
+	input_form form(pu.get_value("Filtrar traduções"));
+	form.add_text_field("filter", pu.get_value("Filtro (deixe vazio para listar todas)"), "", false);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string filter;
+		result.get("filter", filter);
+		
+		game_net.send(net_peer_id, encrypt_packet("list_translations:" + filter), 1, true);
+		speak(pu.get_value("Solicitando lista de traduções ao servidor..."));
+	}
+	langs_menu();
+}
+
+// Exportar traduções
+void langs_export() {
+	input_form form(pu.get_value("Exportar traduções"));
+	form.add_text_field("language", pu.get_value("Idioma (pt, en, es, fr, ou 'all')"), "all", true);
+	form.add_text_field("filename", pu.get_value("Nome do arquivo de saída"), "translations.txt", true);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string language, filename;
+		result.get("language", language);
+		result.get("filename", filename);
+		
+		if(language != "" && filename != "") {
+			game_net.send(net_peer_id, encrypt_packet("export_translations:" + language + "|" + filename), 1, true);
+			speak(pu.get_value("Exportação solicitada. Arquivo será salvo no servidor."));
+		}
+	}
+	langs_menu();
+}
+
+// Importar traduções
+void langs_import() {
+	input_form form(pu.get_value("Importar traduções"));
+	form.description = pu.get_value("Importe traduções de um arquivo .txt ou .csv");
+	form.add_text_field("filename", pu.get_value("Nome do arquivo no servidor"), "", true);
+	form.add_text_field("format", pu.get_value("Formato (csv ou txt)"), "csv", true);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string filename, format;
+		result.get("filename", filename);
+		result.get("format", format);
+		
+		if(filename != "") {
+			bool confirm = simple_yes_no(pu.get_value("Importar traduções pode sobrescrever dados existentes. Continuar?"));
+			if(confirm) {
+				game_net.send(net_peer_id, encrypt_packet("import_translations:" + filename + "|" + format), 1, true);
+				speak(pu.get_value("Importação iniciada..."));
+			}
+		}
+	}
+	langs_menu();
+}
+
+// Testar tradução
+void langs_test() {
+	input_form form(pu.get_value("Testar tradução"));
+	form.add_text_field("key", pu.get_value("Chave da tradução"), "", true);
+	form.add_text_field("language", pu.get_value("Idioma (pt, en, es, fr)"), "pt", true);
+	
+	dictionary@ result = form.run();
+	if(!form.user_canceled) {
+		string key, language;
+		result.get("key", key);
+		result.get("language", language);
+		
+		if(key != "") {
+			game_net.send(net_peer_id, encrypt_packet("test_translation:" + key + "|" + language), 1, true);
+			speak(pu.get_value("Solicitando teste de tradução..."));
+		}
+	}
+	langs_menu();
+}
+
+// Estatísticas de tradução
+void langs_stats() {
+	game_net.send(net_peer_id, encrypt_packet("translation_stats"), 1, true);
+	speak(pu.get_value("Solicitando estatísticas de tradução ao servidor..."));
+	wait(500);
+	langs_menu();
 }
 
 string get_sound(string title, string filter, bool first_letter) {
-	// TODO: Implementar busca de sons
-	speak(pu.get_value("Busca de sons ainda não implementado"));
+	// Buscar sons no diretório de sons
+	string pattern = first_letter ? ("sounds/" + filter + "*.ogg") : ("sounds/*" + filter + "*.ogg");
+	string[]@ sound_files = glob(pattern);
+	
+	if(sound_files.length() == 0) {
+		speak(pu.get_value("Nenhum som encontrado com o filtro: ") + filter);
+		return "";
+	}
+	
+	setupmenu();
+	
+	for(uint i = 0; i < sound_files.length(); i++) {
+		// Extrair nome do arquivo
+		string filename = string_split(sound_files[i], "/")[-1];
+		filename = filename.replace(".ogg", "");
+		game_menu.add_item(filename, sound_files[i]);
+	}
+	
+	game_menu.intro_text = title + " - " + sound_files.length() + " " + pu.get_value("sons encontrados.");
+	int mres = game_menu.run();
+	
+	if(mres > 0) {
+		string selected = game_menu.get_item_id(mres);
+		// Extrair apenas nome do arquivo sem path
+		return string_split(selected, "/")[-1].replace(".ogg", "");
+	}
+	
 	return "";
 }

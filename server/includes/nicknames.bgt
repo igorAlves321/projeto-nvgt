@@ -1,0 +1,253 @@
+void validate_nick(int index, string name){
+	if(players[index].title=="Cheater" || file_exists("players/"+players[index].charname+"/cheater.usr")) {
+		send_reliable(players[index].peer_id, "msg2 ;Por alguna razón no puedes hacer esto...;", 0);
+		return;
+	}
+	if(directory_exists("players/"+name)){
+		send_reliable(players[index].peer_id, "msg2 ;Cuentan las leyendas que la suplantación de identidad es un delito que se paga caro...;", 0);
+		return;
+	}
+	if(players[index].stryx<10000){
+		send_reliable(players[index].peer_id, "msg2 ;Lamentablemente necesitas 10000 Stryx para poder concretar esto. ¡Suerte para la próxima!;", 0);
+		return;
+	}
+	if(is_incorrect(name)||name.length()>=30){
+		send_reliable(players[index].peer_id, "msg2 ;¿Y si intentas escribir tu nuevo nombre otra vez?;", 0);
+		return;
+	}
+	if(!directory_exists("players/"+players[index].charname)) return;
+	file f;
+	if(!file_exists("nicks_to_validate.db")) {
+		f.open("nicks_validate.db", "w");
+		f.close();
+	}
+	f.open("nicks_to_validate.db", "r");
+	string[] lines=string_split(f.read(), "\r\n", false);
+	f.close();
+	if(lines.length()>0) {
+		for(int x=0; x<lines.length(); x++){
+			string[] data=string_split(lines[x], "=", false);
+			if(data.length()>1&&string_to_lower_case(data[1])==string_to_lower_case(name)){
+				send_reliable(players[index].peer_id, "msg2 ;¿Qué pasaría si intentas usar otro nombre?;", 0);
+				return;
+			}
+		}
+		lines.insert_last(players[index].charname+"="+name);
+		f.open("nicks_to_validate.db", "w");
+		f.write(linear(lines));
+		f.close();
+		players[index].validated_name=name;
+		sconfigs(index);
+		send_reliable(players[index].peer_id, "ps notify51.ogg", 0);
+		send_reliable(players[index].peer_id, "msg2 ;¡Hecho! Solo queda esperar a que un arcángel dé por válido tu nuevo nombre. Cuando esto suceda, la conexión que actualmente tienes con esta dimensión se perderá para dar lugar a tu nueva identidad.;", 0);
+		eadm("Se ha generado una petición de revisión y/o validación de nombre de usuario por parte de"+players[index].charname+". Para revisarla, escriba /cntv. Si el nick es apropiado, escriba /validate a y el nombre de quien solicita, en caso contrario ejecute el mismo comando solamente sustituyendo la letra a por r.", "notify5.ogg", 150);
+	}
+	else{
+		f.open("nicks_to_validate.db", "w");
+		f.write(players[index].charname+"="+name+"\r\n");
+		f.close();
+		players[index].validated_name=name;
+		sconfigs(index);
+		send_reliable(players[index].peer_id, "ps notify51.ogg", 0);
+		send_reliable(players[index].peer_id, "msg2 ;¡Hecho! Solo queda esperar a que un arcángel dé por válido tu nuevo nombre. Cuando esto suceda, la conexión que actualmente tienes con esta dimensión se perderá para dar lugar a tu nueva identidad.;", 0);
+		eadm("Se ha generado una petición de revisión y/o validación de nombre de usuario por parte de"+players[index].charname+". Para revisarla, escriba /cntv. Si el nick es apropiado, escriba /validate a y el nombre de quien solicita, en caso contrario ejecute el mismo comando solamente sustituyendo la letra a por r.", "notify5.ogg", 150);
+	}
+}
+
+bool validate_or_reject(string name, int action){
+if(!directory_exists("players/"+name)) return false;
+file f;
+f.open("nicks_to_validate.db", "r");
+string[] lines=delinear(f.read());
+f.close();
+if(action==1){
+int index, find=-1;
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data.length()>1&&string_to_lower_case(data[0])==string_to_lower_case(name)){
+find=x;
+break;
+}
+}
+if(find>-1){
+index=get_player_index_from(name);
+if(index>-1){
+changename(index, players[index].validated_name);
+}
+else{
+f.open("players/"+name+"/configs.ini", "rb");
+dictionary@ sd=deserialize(f.read());
+f.close();
+sd.set("needs_to_change", 1);
+f.open("players/"+name+"/configs.ini", "wb");
+f.write(serialize(sd));
+f.close();
+}
+lines.remove_at(find);
+f.open("nicks_to_validate.db", "w");
+f.write(linear(lines));
+f.close();
+return true;
+}
+}
+if(action==2){
+int index, find=-1;
+for(int x=0; x<lines.length(); x++){
+string[] data=string_split(lines[x], "=", false);
+if(data.length()>1&&string_to_lower_case(data[0])==string_to_lower_case(name)){
+find=x;
+break;
+}
+}
+if(find>-1){
+index=get_player_index_from(name);
+if(index>-1){
+players[index].validated_name="";
+sconfigs(index);
+}
+else{
+f.open("players/"+name+"/configs.ini", "rb");
+dictionary@ sd=deserialize(f.read());
+f.close();
+sd.set("validated_name", "");
+f.open("players/"+name+"/configs.ini", "wb");
+f.write(serialize(sd));
+f.close();
+}
+lines.remove_at(find);
+f.open("nicks_to_validate.db", "w");
+f.write(linear(lines));
+f.close();
+f.open("players/"+name+"/eagle_message.txt", "w");
+f.write(";Tu petición ha sido rechazada por los arcángeles, suerte a la próxima.;");
+f.close();
+return true;
+}
+}
+return false;
+}
+void changename(int index, string name){
+file f;
+players[index].stryx-=10000;
+players[index].nomesequipe[0] =name;
+for(int x=0; x<players.length(); x++){
+if(players[x].charname!=players[index].charname){
+int find=players[x].nomesequipe.find(players[index].charname);
+if(find>-1){
+players[x].nomesequipe.remove_at(find);
+players[x].nomesequipe.insert_at(find, name);
+}
+}
+}
+int mapindex=get_map_index_from("planeta_aquaphil");
+if(mapindex>-1&&players[index].have_island==1){
+string content=linear(server_maps[mapindex].mapdata);
+content=string_replace(content, players[index].charname, name, true);
+server_maps[mapindex].mapdata=delinear(content);
+save_map(server_maps[mapindex].name);
+}
+if(file_exists("maps/isla_privada_de_"+players[index].charname+".map")){
+file_copy("maps/isla_privada_de_"+players[index].charname+".map", "maps/isla_privada_de_"+name+".map", true);
+file_delete("maps/isla_privada_de_"+players[index].charname+".map");
+insert_map("isla_privada_de_"+name);
+remove_map("isla_privada_de_"+players[index].charname, "isla_privada_de_"+name);
+mapindex=get_map_index_from("isla_privada_de_"+name);
+if(mapindex>-1){
+string content=linear(server_maps[mapindex].mapdata);
+content=string_replace(content, players[index].charname, name, true);
+server_maps[mapindex].mapdata=delinear(content);
+save_map(server_maps[mapindex].name);
+}
+}
+if(players[index].inv_item_number("llave_de_la_reja_de_entrada_a_la_isla_de_"+players[index].charname)>0){
+double cantity=players[index].inv_item_number("llave_de_la_reja_de_entrada_a_la_isla_de_"+players[index].charname);
+players[index].inv_add_item("llave_de_la_reja_de_entrada_a_la_isla_de_"+players[index].charname, -cantity);
+players[index].inv_add_item("llave_de_la_reja_de_entrada_a_la_isla_de_"+name, cantity);
+}
+if(file_exists("maps/jaula_del_cachorro_de_"+players[index].charname+".map")){
+file_copy("maps/jaula_del_cachorro_de_"+players[index].charname+".map", "maps/jaula_del_cachorro_de_"+name+".map", true);
+file_delete("maps/jaula_del_cachorro_de_"+players[index].charname+".map");
+insert_map("jaula_del_cachorro_de_"+name);
+remove_map("jaula_del_cachorro_de_"+players[index].charname, "jaula_del_cachorro_de_"+name);
+mapindex=get_map_index_from("jaula_del_cachorro_de_"+name);
+if(mapindex>-1){
+string content=linear(server_maps[mapindex].mapdata);
+content=string_replace(content, players[index].charname, name, true);
+server_maps[mapindex].mapdata=delinear(content);
+save_map(server_maps[mapindex].name);
+}
+}
+for(int x=0; x<cachorromascotas.length(); x++){
+if(cachorromascotas[x].dueno==players[index].charname){
+cachorromascotas[x].dueno=name;
+cachorromascotas[x].owner_is_online=0;
+salvarcachorromascotas();
+}
+}
+for(int x=0; x<jaulas.length(); x++){
+if(jaulas[x].dueno==players[index].charname){
+jaulas[x].map="isla_privada_de_"+name;
+jaulas[x].dueno=name;
+salvarjaulas();
+}
+}
+if(players[index].whomarried!=""){
+int index2=get_player_index_from(players[index].whomarried);
+if(index2>-1){
+players[index2].whomarried=name;
+sconfigs(index2);
+}
+else{
+if(!file_exists("players/"+players[index].whomarried+"/configs.ini")) return;
+f.open("players/"+players[index].whomarried+"/configs.ini","rb");
+dictionary@ sd=deserialize(f.read());
+f.close();
+if(sd.exists("married")){
+sd.set("married", name);
+}
+f.open("players/"+players[index].whomarried+"/configs.ini","wb");
+f.write(serialize(sd));
+f.close();
+}
+}
+if(players[index].whoparabatai!=""){
+int index2=get_player_index_from(players[index].whoparabatai);
+if(index2>-1){
+players[index2].whoparabatai=name;
+sconfigs(index2);
+}
+else{
+if(!file_exists("players/"+players[index].whoparabatai+"/configs.ini")) return;
+f.open("players/"+players[index].whoparabatai+"/configs.ini","rb");
+dictionary@ sd=deserialize(f.read());
+f.close();
+if(sd.exists("parabatai")){
+sd.set("parabatai", name);
+}
+f.open("players/"+players[index].whoparabatai+"/configs.ini","wb");
+f.write(serialize(sd));
+f.close();
+}
+}
+string[] files=find_files("commands/*.txt");
+for(int x=0; x<files.length(); x++){
+int find;
+f.open("commands/"+files[x], "r");
+string[] lines=delinear(f.read());
+f.close();
+find=lines.find(players[index].charname);
+if(find>-1){
+lines[find] =name;
+}
+f.open("commands/"+files[x], "w");
+f.write(linear(lines));
+f.close();
+}
+players[index].validated_name="";
+players[index].needs_to_change=0;
+sconfigs(index);
+directory_copy("players/"+players[index].charname, "players/"+name, true);
+string player_to_delete ="players/"+players[index].charname;
+terminar(index);
+directory_delete(player_to_delete);
+}

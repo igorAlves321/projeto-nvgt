@@ -1,0 +1,541 @@
+store@[] stores;
+class store{
+int minx, maxx, miny, maxy;
+string name;
+store(int min_x, int max_x, int min_y, int max_y, string name2){
+this.minx=min_x;
+this.maxx=max_x;
+this.miny=min_y;
+this.maxy=max_y;
+this.name=name2;
+}
+bool deploy(){
+bool success=send_reliable(peer_id, "tiendasgeneral "+this.name, 14);
+if(success){
+return true;
+}
+return false;
+}
+}
+int get_store_index(int x, int y){
+for(int i=0; i<stores.length(); i++){
+int minx=stores[i].minx;
+int maxx=stores[i].maxx;
+int miny=stores[i].miny;
+int maxy=stores[i].maxy;
+if(minx>x)continue;
+if(minx<=x && maxx>=x && miny<=y && maxy>=y){
+return i;
+}
+}
+return -1;
+}
+void destroy_stores(){
+stores.resize(0);
+}
+void stores_building_menu(){
+setupmenu2();
+m.add_item_tts(pu.get_value("crear tienda nueva."), "create");
+m.add_item_tts(pu.get_value("gestionar tiendas actualmente activas."), "manage");
+m.add_item_tts(pu.get_value("volver al menú del constructor."), "back");
+int get=m.run(pu.get_value("menú de creación y administración de tiendas. elija una opción y presione enter en ella para activarla."), true);
+if(m.get_item_name(get)=="back"||get==0){
+buildermenu();
+}
+if(m.get_item_name(get)=="create"){
+string minx=v.input(pu.get_value("escriba la coordenada x mínima de la tienda."));
+string maxx=v.input(pu.get_value("escriba la coordenada x máxima de la tienda."));
+string miny=v.input(pu.get_value("escriba la coordenada y mínima de la tienda."));
+string maxy=v.input(pu.get_value("escriba la coordenada y máxima de la tienda."));
+string store_name=v.input(pu.get_value("escriba el nombre de la tienda (sin espacios)."));
+if(minx!=""&&maxx!=""&&miny!=""&&maxy!=""&&store_name!=""){
+string[] data=map2;
+data.remove_at(data.length()-1);
+data.remove_at(data.length()-1);
+data.insert_last("store:"+minx+":"+maxx+":"+miny+":"+maxy+":"+store_name);
+send_reliable(peer_id, "/rawdata "+linear(data), 1);
+send_reliable(peer_id, "create_store "+store_name, 14);
+}
+}
+if(m.get_item_name(get)=="manage"){
+send_reliable(peer_id, "manage_stores", 14);
+}
+}
+void manage_store(string content){
+string[] data=string_split(content, "|", true);
+setupmenu2();
+m.add_item_tts(pu.get_value("gestionar objetos a la venta."), "items_for_sale");
+m.add_item_tts(pu.get_value("gestionar objetos colocados en tiendas."), "stores");
+m.add_item_tts(pu.get_value("volver al menú de las tiendas."), "back");
+int get=m.run(pu.get_value("menú de gestión de tiendas. seleccione la opción que desee con enter."), true);
+if(m.get_item_name(get)=="back"||get==0){
+stores_building_menu();
+}
+if(m.get_item_name(get)=="items_for_sale"){
+manage_items_for_sale(data[0]);
+}
+if(m.get_item_name(get)=="stores"){
+show_stores(data[1]);
+}
+}
+void manage_items_for_sale(string content){
+string[] lines=delinear(content);
+string[] data;
+string old_line;
+int counter=-1, counter2=-1, old_counter=-1;
+speak(pu.get_value("gestor de objetos puestos a la venta en el servidor."));
+string cl;
+while(true){
+wait(5);
+mainloop();
+if(key_pressed(KEY_ESCAPE)||lines.length()==0){
+break;
+}
+cl=get_characters();
+if(cl!="" and cl!=" " and cl.length()==1 and lines.length()>0){
+int f=0;
+int oc=counter;
+for(uint i=counter; i<lines.length(); i++){
+if(i==counter){
+continue;
+}
+data=string_split(lines[i], "=", false);
+if(data[0][0]==cl){
+counter=i;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+cl="";
+f=1;
+break;
+}
+}
+if(f==0){
+counter=0;
+for(uint i=counter; i<lines.length(); i++){
+data=string_split(lines[i], "=", false);
+if(data[0][0]==cl){
+counter=i;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+cl="";
+f=1;
+break;
+}
+}
+}
+}
+if(left.pressing()&&counter>0&&counter2==-1){
+counter--;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+}
+if(right.pressing()&&counter<lines.length()-1&&counter2==-1){
+counter++;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+}
+if(key_pressed(KEY_HOME)&&counter>0&&counter2==-1){
+counter=0;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+}
+if(key_pressed(KEY_END)&&counter<lines.length()-1&&counter2==-1){
+counter=lines.length()-1;
+data=string_split(lines[counter], "=", true);
+speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+}
+if(up.pressing()&&counter>-1&&counter2<data.length()-1){
+counter2++;
+speak(data[counter2]);
+}
+if(down.pressing()&&counter>-1&&counter2>-1){
+counter2--;
+if(counter2>-1) speak(data[counter2]);
+else speak(pu.get_value("item a la venta:")+" "+data[0]+". "+pu.get_value("moneda con la que se comprará:")+" "+data[1]+". "+pu.get_value("cantidad necesaria de la moneda anteriormente mencionada para poder adquirir el objeto:")+" "+data[2]+". "+pu.get_value("descripción:")+" "+data[3]);
+}
+if(key_pressed(KEY_RETURN)&&counter2>-1||key_pressed(KEY_NUMPADENTER)&&counter2>-1){
+if(old_line.length()>0) return;
+string key=data[counter2];
+string new=v.input(pu.get_value("está modificando el término")+" "+data[counter2]+". "+pu.get_value("escriba con cuidado."), key);
+if(new!=""){
+old_line=lines[counter];
+old_counter=counter;
+data[counter2]=string_replace(data[counter2], key, new, true);
+lines[counter]=string_replace(lines[counter], key, data[counter2], true);
+speak(pu.get_value("actualizado."));
+}
+}
+if(key_pressed(KEY_DELETE)&&counter>-1){
+int opt=q_pro(pu.get_value("esta línea está apunto de ser eliminada, ¿realmente quieres continuar?"));
+if(opt==1){
+send_reliable(peer_id, "remove_item_for_sale "+data[0], 14);
+lines.remove_at(counter);
+}
+else{
+speak(pu.get_value("cancelado."));
+}
+}
+if(key_down(KEY_LCONTROL)||key_down(KEY_RCONTROL)){
+if(key_pressed(KEY_R)&&old_line.length()>0&&counter==old_counter){
+send_reliable(peer_id, "replace_item_for_sale "+lines[counter]+"|"+old_line, 14);
+old_line.resize(0);
+old_counter=-1;
+}
+if(key_pressed(KEY_A)){
+string item=v.input(pu.get_value("escriba el nombre del item a añadir."));
+string money=v.input(pu.get_value("¿con qué moneda quiere que sea posible comprar este item?"));
+string price=v.input(pu.get_value("¿cuál será el precio?"));
+string description=v.input(pu.get_value("escriba la descripción del item."));
+string id=v.input(pu.get_value("escriba un número entre 1000 y 9999 que sirva de identificador interno del objeto."));
+if(item!=""&&money!=""&&price!=""&&description!=""&&id!=""){
+send_reliable(peer_id, "add_item_for_sale "+item+" "+money+" "+price+" "+id+" "+description, 14);
+return;
+}
+}
+}
+
+}
+}
+void show_stores(string content){
+string[] lines=delinear(content);
+int counter=-1;
+string cl;
+speak(pu.get_value("elija la tienda cuyo contenido quiere ver."));
+while(true){
+wait(5);
+mainloop();
+if(key_pressed(KEY_ESCAPE)||lines.length()==0){
+break;
+}
+cl=get_characters();
+if(cl!="" and cl!=" " and cl.length()==1 and lines.length()>0){
+int f=0;
+int oc=counter;
+for(uint i=counter; i<lines.length(); i++){
+if(i==counter){
+continue;
+}
+string item=get_item_translation(lines[i]);
+if(item=="") item=pu.get_value(lines[i]);
+if(item[0]==cl){
+counter=i;
+speak(item);
+cl="";
+f=1;
+break;
+}
+}
+if(f==0){
+counter=0;
+for(uint i=counter; i<lines.length(); i++){
+string item=get_item_translation(lines[i]);
+if(item=="") item=pu.get_value(lines[i]);
+if(item[0]==cl){
+counter=i;
+speak(item);
+cl="";
+f=1;
+break;
+}
+}
+}
+}
+if(left.pressing()&&counter>0){
+counter--;
+speak(lines[counter]);
+}
+if(right.pressing()&&counter<lines.length()-1){
+counter++;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_HOME)&&counter>0){
+counter=0;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_END)&&counter<lines.length()-1){
+counter=lines.length()-1;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_RETURN)&&counter>-1||key_pressed(KEY_NUMPADENTER)&&counter>-1){
+send_reliable(peer_id, "show_store "+lines[counter], 14);
+}
+if(key_pressed(KEY_DELETE)&&counter>-1){
+int opt=q_pro(pu.get_value("esta tienda está apunto de ser eliminada, ¿realmente quieres continuar?"));
+if(opt==1){
+send_reliable(peer_id, "delete_store "+lines[counter], 14);
+lines.remove_at(counter);
+}
+else{
+speak(pu.get_value("cancelado."));
+}
+}
+
+}
+}
+void manage_items_on_store(string store_name, string content){
+string[] lines=delinear(content);
+int counter=-1;
+string cl;
+speak(pu.get_value("gestor de objetos en las tiendas actualmente puestas en el servidor."));
+while(true){
+wait(5);
+mainloop();
+if(key_pressed(KEY_ESCAPE)||lines.length()==0){
+break;
+}
+cl=get_characters();
+if(cl!="" and cl!=" " and cl.length()==1 and lines.length()>0){
+int f=0;
+int oc=counter;
+for(uint i=counter; i<lines.length(); i++){
+if(i==counter){
+continue;
+}
+string item=get_item_translation(lines[i]);
+if(item=="") item=pu.get_value(lines[i]);
+if(item[0]==cl){
+counter=i;
+speak(item);
+cl="";
+f=1;
+break;
+}
+}
+if(f==0){
+counter=0;
+for(uint i=counter; i<lines.length(); i++){
+string item=get_item_translation(lines[i]);
+if(item=="") item=pu.get_value(lines[i]);
+if(item[0]==cl){
+counter=i;
+speak(item);
+cl="";
+f=1;
+break;
+}
+}
+}
+}
+if(left.pressing()&&counter>0){
+counter--;
+speak(lines[counter]);
+}
+if(right.pressing()&&counter<lines.length()-1){
+counter++;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_HOME)&&counter>0){
+counter=0;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_END)&&counter<lines.length()-1){
+counter=lines.length()-1;
+speak(lines[counter]);
+}
+if(key_pressed(KEY_RETURN)&&counter>-1||key_pressed(KEY_NUMPADENTER)&&counter>-1){
+string key=lines[counter];
+string new=v.input(pu.get_value("está modificando el término")+" "+lines[counter]+". "+pu.get_value("escriba con cuidado."), key);
+if(new!=""){
+lines[counter]=string_replace(lines[counter], key, new, true);
+speak(pu.get_value("actualizado."));
+}
+}
+if(key_pressed(KEY_DELETE)&&counter>-1){
+int opt=q_pro(pu.get_value("esta línea está apunto de ser eliminada, ¿realmente quieres continuar?"));
+if(opt==1){
+send_reliable(peer_id, "remove_item_on_store "+store_name+" "+lines[counter], 14);
+lines.remove_at(counter);
+}
+else{
+speak(pu.get_value("cancelado."));
+}
+}
+if(key_down(KEY_LCONTROL)||key_down(KEY_RCONTROL)){
+if(key_pressed(KEY_R)&&counter>-1){
+send_reliable(peer_id, "replace_item_on_store "+store_name+" "+lines[counter]+" "+counter, 14);
+}
+if(key_pressed(KEY_A)){
+string item=v.input(pu.get_value("escriba el nombre del item que quiere añadir a esta tienda."));
+if(item!=""){
+send_reliable(peer_id, "add_item_to_store "+store_name+" "+item, 14);
+}
+}
+
+}
+}
+}
+void comidas2(string[] articles){
+string[] div=string_split(articles[0], bell, false);
+	reset_all_forced_keys();
+	key_hold ileft(KEY_LEFT,500,50);
+	key_hold iright(KEY_RIGHT,500,50);
+emchat=true;
+speak(pu.get_value("Esta es la comida que está disponible por el momento."));
+int contador=-1;
+get_characters();
+string cl;
+while(true){
+wait(5);
+mainloop();
+if(key_pressed(KEY_ESCAPE)){
+emchat=false;
+break;
+}
+if(key_pressed(KEY_RETURN)&&contador>-1||key_pressed(KEY_NUMPADENTER)&&contador>-1){
+p.play_stationary("menuenter3.ogg", false);
+string valor=v.input(pu.get_value("¿Cuántos de este objeto quieres?"));
+emchat=true;
+send_unreliable(peer_id,"comida comprar "+valor+" "+articles[contador]+" "+destinocomida,0);
+}
+		if(key_pressed(KEY_HOME)&&contador>0){
+			contador=0;
+speak(pu.get_value(articles[contador]));
+p.play_stationary("menuopcion.ogg", false);
+		}
+		if(key_pressed(KEY_END)&&contador<articles.length()){
+contador=articles.length()-1;
+speak(pu.get_value(articles[contador]));
+p.play_stationary("menuopcion.ogg", false);
+		}
+		if(ileft.pressing()&&contador>0){
+				contador--;
+speak(pu.get_value(articles[contador]));
+p.play_stationary("menuopcion.ogg", false);
+			}
+		if(iright.pressing()&&contador<articles.length()-1){
+				contador++;
+speak(pu.get_value(articles[contador]));
+p.play_stationary("menuopcion.ogg", false);
+}
+cl=get_characters();
+if(cl!="" and cl!=" " and cl.length()==1 and articles.length()>0){
+int f=0;
+int oc=contador;
+for(uint i=contador; i<articles.length(); i++){
+if(i==contador){
+continue;
+}
+if(articles[i][0]==cl){
+contador=i;
+string msg=articles[contador];
+speak(pu.get_value(msg));
+p.play_stationary("menuopcion.ogg", false);
+copiaragora=pu.get_value(msg);
+cl="";
+f=1;
+break;
+}
+}
+if(f==0){
+contador=0;
+for(uint i=contador; i<articles.length(); i++){
+if(articles[i][0]==cl){
+contador=i;
+string msg=articles[contador];
+speak(pu.get_value(msg));
+p.play_stationary("menuopcion.ogg", false);
+copiaragora=pu.get_value(msg);
+cl="";
+f=1;
+break;
+}
+}
+}
+}
+}
+}
+void open_store(string[] articles){
+string[] div=string_split(articles[0], bell, false);
+	reset_all_forced_keys();
+	key_hold ileft(KEY_LEFT,500,50);
+	key_hold iright(KEY_RIGHT,500,50);
+emchat=true;
+speak(pu.get_value("Menú de la tienda. Pulse f2 en cada producto para obtener información adicional."));
+int contador=-1;
+get_characters();
+string cl;
+while(true){
+wait(5);
+mainloop();
+if(key_pressed(KEY_ESCAPE)){
+emchat=false;
+break;
+}
+if(key_pressed(KEY_F1)&&contador>-1){
+string[] data=string_split(articles[contador], "=", false);
+if(data.length()>1) send_unreliable(peer_id, "check_price "+data[1], 14);
+}
+if(key_pressed(KEY_F2)&&contador>-1){
+string[] data=string_split(articles[contador], "=", false);
+if(data.length()>1) send_unreliable(peer_id, "check_desc "+data[1], 14);
+}
+if(key_pressed(KEY_RETURN)&&contador>-1||key_pressed(KEY_NUMPADENTER)&&contador>-1){
+p.play_stationary("menuenter3.ogg", false);
+string valor=v.input(pu.get_value("¿Cuántos de este objeto quieres?"));
+emchat=true;
+string[] data=string_split(articles[contador], "=", false);
+if(data.length()>1) send_unreliable(peer_id,"buy "+valor+" "+data[1],14);
+}
+		if(key_pressed(KEY_HOME)&&contador>0){
+			contador=0;
+string[] data=string_split(articles[contador], "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+		}
+		if(key_pressed(KEY_END)&&contador<articles.length()){
+contador=articles.length()-1;
+string[] data=string_split(articles[contador], "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+		}
+		if(ileft.pressing()&&contador>0){
+				contador--;
+string[] data=string_split(articles[contador], "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+			}
+		if(iright.pressing()&&contador<articles.length()-1){
+				contador++;
+string[] data=string_split(articles[contador], "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+}
+cl=get_characters();
+if(cl!="" and cl!=" " and cl.length()==1 and articles.length()>0){
+int f=0;
+int oc=contador;
+for(uint i=contador; i<articles.length(); i++){
+if(i==contador){
+continue;
+}
+if(articles[i][0]==cl){
+contador=i;
+string msg=articles[contador];
+string[] data=string_split(msg, "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+copiaragora=pu.get_value(msg);
+cl="";
+f=1;
+break;
+}
+}
+if(f==0){
+contador=0;
+for(uint i=contador; i<articles.length(); i++){
+if(articles[i][0]==cl){
+contador=i;
+string msg=articles[contador];
+string[] data=string_split(msg, "=", false);
+speak(pu.get_value(data[0]));
+p.play_stationary("menuopcion.ogg", false);
+copiaragora=pu.get_value(msg);
+cl="";
+f=1;
+break;
+}
+}
+}
+}
+}
+}
