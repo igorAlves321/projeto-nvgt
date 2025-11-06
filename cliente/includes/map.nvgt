@@ -273,10 +273,34 @@ void init_data(string data_line, bool complete = true) {
 	else if(parsed[0] == "areia_movedissa" || parsed[0] == "am") {
 		colocar_areia_movedissa(string_to_number(parsed[1]), string_to_number(parsed[2]), mapname);
 	}
+	// Handler para Diálogos (dlg)
+	else if(parsed[0] == "dlg" && parsed.length() >= 4) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		string message = parsed[3];
+		// Opcional: reproduzir som se fornecido (parsed[4])
+		spawn_dialog(message, x, y);
+	}
+	// Handler para Sound Streams (ss2) - música de fundo
+	else if(parsed[0] == "ss2" && parsed.length() >= 3) {
+		// Formato: ss2:min_x:max_x:min_y:max_y:arquivo.ogg:volume
+		// Por enquanto, ignorar a zona e apenas tocar a música
+		string sound_file = parsed[5];
+		sound_file = sound_file.replace(".wav", ".ogg");
+		int volume = (parsed.length() >= 7) ? string_to_number(parsed[6]) : 0;
+		// TODO: Implementar suporte a múltiplos streams com zonas
+		// Por enquanto: apenas carregar a primeira ss2 encontrada
+		if(!stream_loaded) {
+			if(audio_stream.load(sound_file)) {
+				audio_stream.volume = volume;
+				audio_stream.play_looped();
+				stream_loaded = true;
+			}
+		}
+	}
 	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb" || parsed[0] == "congelar" 
 	        || parsed[0] == "tp" || parsed[0] == "pm" || parsed[0] == "pm2" || parsed[0] == "ptm"
-	        || parsed[0] == "dlg" || parsed[0] == "ss" || parsed[0] == "ss2" 
-	        || parsed[0] == "w2" || parsed[0] == "sc" || parsed[0] == "ex"
+	        || parsed[0] == "w2" || parsed[0] == "ex"
 	        || parsed[0] == "where") {
 		// Ignorar estes elementos por enquanto (elementos BGT não implementados)
 	}
@@ -293,7 +317,7 @@ void init_data(string data_line, bool complete = true) {
 			game_net.send(net_peer_id, "iamsafe", 0, true); // reliable
 		}
 	}
-	else if(parsed[0] == "safezone" && parsed.length() == 5) {
+	else if((parsed[0] == "safezone" || parsed[0] == "safez") && parsed.length() == 5) {
 		// Criar safezone e adicionar ao array
 		safezone sz(string_to_number(parsed[1]), string_to_number(parsed[2]), 
 		            string_to_number(parsed[3]), string_to_number(parsed[4]));
