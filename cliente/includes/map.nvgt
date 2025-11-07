@@ -319,6 +319,87 @@ void init_data(string data_line, bool complete = true) {
 		
 		debug_log("📍 Travel Point criado: " + dest_map + " (" + dest_x + "," + dest_y + ")");
 	}
+	// PTM: Portal customizado com som (igual tp mas com som extra)
+	else if(parsed[0] == "ptm" && parsed.length() >= 9) {
+		int zone_x1 = string_to_number(parsed[1]);
+		int zone_y1 = string_to_number(parsed[2]);
+		int zone_x2 = string_to_number(parsed[3]);
+		int zone_y2 = string_to_number(parsed[4]);
+		int dest_x = string_to_number(parsed[5]);
+		int dest_y = string_to_number(parsed[6]);
+		string dest_map = parsed[7];
+		string message = (parsed.length() > 8) ? parsed[8] : "Portal activado.";
+		string sound = (parsed.length() > 9) ? parsed[9] : "door17open"; // Som customizado
+		
+		// Criar e armazenar travel point customizado
+		travel_point_class tp;
+		tp.zone_x1 = zone_x1;
+		tp.zone_y1 = zone_y1;
+		tp.zone_x2 = zone_x2;
+		tp.zone_y2 = zone_y2;
+		tp.dest_x = dest_x;
+		tp.dest_y = dest_y;
+		tp.dest_map = dest_map;
+		tp.message = message;
+		tp.activated = false;
+		travel_points.insert_last(tp);
+		
+		debug_log("🌀 Portal PTM criado em " + dest_map + " com som: " + sound);
+	}
+	// DEATH: Zona de morte com teleporte
+	else if(parsed[0] == "death" && parsed.length() >= 8) {
+		int zone_x1 = string_to_number(parsed[1]);
+		int zone_y1 = string_to_number(parsed[2]);
+		int zone_x2 = string_to_number(parsed[3]);
+		int zone_y2 = string_to_number(parsed[4]);
+		int dest_x = string_to_number(parsed[5]);
+		int dest_y = string_to_number(parsed[6]);
+		// dest_z não é usado em NVGT (2D)
+		string message = (parsed.length() > 8) ? parsed[8] : "Você morreu!";
+		
+		// Armazenar como travel point especial (zona de morte)
+		travel_point_class tp;
+		tp.zone_x1 = zone_x1;
+		tp.zone_y1 = zone_y1;
+		tp.zone_x2 = zone_x2;
+		tp.zone_y2 = zone_y2;
+		tp.dest_x = dest_x;
+		tp.dest_y = dest_y;
+		tp.dest_map = mapname; // Mesmo mapa (respawn local)
+		tp.message = message;
+		tp.activated = false;
+		travel_points.insert_last(tp);
+		
+		debug_log("💀 Zona de morte criada em (" + zone_x1 + "," + zone_y1 + ")");
+	}
+	// PM: Ponto de entrada/pickup com item
+	else if(parsed[0] == "pm" && parsed.length() >= 10) {
+		int zone_x1 = string_to_number(parsed[1]);
+		int zone_y1 = string_to_number(parsed[2]);
+		int zone_x2 = string_to_number(parsed[3]);
+		int zone_y2 = string_to_number(parsed[4]);
+		int dest_x = string_to_number(parsed[5]);
+		int dest_y = string_to_number(parsed[6]);
+		string dest_map = parsed[7];
+		string message = (parsed.length() > 8) ? parsed[8] : "Item coletado.";
+		string sound = (parsed.length() > 9) ? parsed[9] : "door17open";
+		string item_type = (parsed.length() > 10) ? parsed[10] : "item";
+		
+		// Criar travel point com item
+		travel_point_class tp;
+		tp.zone_x1 = zone_x1;
+		tp.zone_y1 = zone_y1;
+		tp.zone_x2 = zone_x2;
+		tp.zone_y2 = zone_y2;
+		tp.dest_x = dest_x;
+		tp.dest_y = dest_y;
+		tp.dest_map = dest_map;
+		tp.message = message;
+		tp.activated = false;
+		travel_points.insert_last(tp);
+		
+		debug_log("🎁 Ponto PM criado com item: " + item_type);
+	}
 	// WHERE: Descrição de localização
 	else if(parsed[0] == "where" && parsed.length() >= 2) {
 		string location = data_line.substr(6); // Pega tudo após "where:"
@@ -336,10 +417,58 @@ void init_data(string data_line, bool complete = true) {
 		spawn_obj(x, y, item_type, quantity);
 		debug_log("📍 Item criado: " + item_type + " em (" + x + "," + y + ") qtd: " + quantity);
 	}
-	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb" || parsed[0] == "congelar" 
-	        || parsed[0] == "pm" || parsed[0] == "pm2" || parsed[0] == "ptm"
-	        || parsed[0] == "w2" || parsed[0] == "ex") {
-		// Ignorar estes elementos por enquanto (elementos BGT não implementados)
+	// CPM: Portal customizado com tempo de viagem
+	else if(parsed[0] == "cpm" && parsed.length() >= 13) {
+		int zone_x1 = string_to_number(parsed[1]);
+		int zone_y1 = string_to_number(parsed[2]);
+		int zone_x2 = string_to_number(parsed[3]);
+		int zone_y2 = string_to_number(parsed[4]);
+		int dest_x = string_to_number(parsed[5]);
+		int dest_y = string_to_number(parsed[6]);
+		string dest_map = parsed[7];
+		string travel_msg = (parsed.length() > 8) ? parsed[8] : "viajando...";
+		string color = (parsed.length() > 9) ? parsed[9] : "ffffff";
+		int travel_time = (parsed.length() > 10) ? string_to_number(parsed[10]) : 5000;
+		string arrival_msg = (parsed.length() > 11) ? parsed[11] : "Chegou ao destino";
+		string effect = (parsed.length() > 12) ? parsed[12] : "appear";
+		
+		// Criar travel point customizado com tempo
+		travel_point_class tp;
+		tp.zone_x1 = zone_x1;
+		tp.zone_y1 = zone_y1;
+		tp.zone_x2 = zone_x2;
+		tp.zone_y2 = zone_y2;
+		tp.dest_x = dest_x;
+		tp.dest_y = dest_y;
+		tp.dest_map = dest_map;
+		tp.message = travel_msg;
+		tp.activated = false;
+		travel_points.insert_last(tp);
+		
+		debug_log("⏱️ Portal CPM criado com tempo: " + travel_time + "ms");
+	}
+	// DISABLE_GAME: Desabilitar funcionalidades do jogo
+	else if(parsed[0] == "disable_game" && parsed.length() >= 4) {
+		int x1 = string_to_number(parsed[1]);
+		int y1 = string_to_number(parsed[2]);
+		int x2 = string_to_number(parsed[3]);
+		// Zona onde funcionalidades são desabilitadas
+		// TODO: Implementar sistema de zones desabilitadas
+		debug_log("⚠️ Disable_game zone criado");
+	}
+	// DARMAS: Desabilitar armas específicas
+	else if(parsed[0] == "darmas" && parsed.length() >= 2) {
+		string weapon = parsed[1];
+		// TODO: Adicionar arma à lista de bloqueadas
+		debug_log("🔒 Arma bloqueada: " + weapon);
+	}
+	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb"
+	        || parsed[0] == "pm2" || parsed[0] == "w2" || parsed[0] == "ex"
+	        || parsed[0] == "npc" || parsed[0] == "pnpc" || parsed[0] == "arbol") {
+		// Ignorar estes elementos por enquanto (TODO: implementar npc, pnpc, arbol)
+		if(parsed[0] == "npc") {
+			debug_log("⚠️ NPC encontrado (não implementado ainda)");
+		}
 	}
 	else if(parsed[0] == "desativar") {
 		if(parsed[1] == "coordenadas") dcoordenadas = 1;
