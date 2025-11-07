@@ -304,33 +304,37 @@ void init_data(string data_line, bool complete = true) {
 		string dest_map = parsed[7];
 		string message = (parsed.length() > 8) ? parsed[8] : "Você foi teleportado.";
 		
-		// Criar zona de ativação para o teleporte
-		// Formato: tp_map:zona_x1:zona_y1:zona_x2:zona_y2:dest_x:dest_y:dest_map:mensagem
-		// TODO: Implementar detecção de entrada do player na zona
-		// Por enquanto, armazenar dados do teleporte em uma estrutura
+		// Criar e armazenar travel point
+		travel_point_class tp;
+		tp.zone_x1 = zone_x1;
+		tp.zone_y1 = zone_y1;
+		tp.zone_x2 = zone_x2;
+		tp.zone_y2 = zone_y2;
+		tp.dest_x = dest_x;
+		tp.dest_y = dest_y;
+		tp.dest_map = dest_map;
+		tp.message = message;
+		tp.activated = false;
+		travel_points.insert_last(tp);
+		
 		debug_log("📍 Travel Point criado: " + dest_map + " (" + dest_x + "," + dest_y + ")");
 	}
 	// WHERE: Descrição de localização
 	else if(parsed[0] == "where" && parsed.length() >= 2) {
 		string location = data_line.substr(6); // Pega tudo após "where:"
-		// Armazenar localização para exibição em HUD ou TTS
+		current_location = location; // Armazenar localização global
 		debug_log("📍 Localização: " + location);
-		// TODO: Implementar armazenamento e exibição da localização
-		// speak(location); // Para TTS
 	}
 	// ITEM: Itens coleccionáveis no mapa
 	else if(parsed[0] == "item" && parsed.length() >= 9) {
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
-		int gold = string_to_number(parsed[3]);
 		int quantity = string_to_number(parsed[5]);
 		string item_type = parsed[6];
-		string action = parsed[7];
-		int price = string_to_number(parsed[8]);
 		
-		// Criar item no mapa
-		// TODO: Implementar sistema de items
-		debug_log("📍 Item criado: " + item_type + " em (" + x + "," + y + ")");
+		// Chamar spawn_obj() do sistema de items
+		spawn_obj(x, y, item_type, quantity);
+		debug_log("📍 Item criado: " + item_type + " em (" + x + "," + y + ") qtd: " + quantity);
 	}
 	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb" || parsed[0] == "congelar" 
 	        || parsed[0] == "pm" || parsed[0] == "pm2" || parsed[0] == "ptm"
@@ -470,6 +474,38 @@ void safeloop() {
 	if(v == true && inansz == false) {
 		inansz = true;
 		game_net.send(net_peer_id, "s", 0, true);
+	}
+}
+
+// Loop de detecção de travel points
+void travel_point_loop() {
+	for(uint i = 0; i < travel_points.length(); i++) {
+		// Verificar se o player está dentro da zona de ativação
+		if(me.x >= travel_points[i].zone_x1 && me.x <= travel_points[i].zone_x2 &&
+		   me.y >= travel_points[i].zone_y1 && me.y <= travel_points[i].zone_y2) {
+			
+			// Se não foi ativado ainda, ativar teleporte
+			if(!travel_points[i].activated) {
+				travel_points[i].activated = true;
+				travel_points[i].activation_timer.restart();
+				
+				// Exibir mensagem
+				if(travel_points[i].message != "") {
+					speak(travel_points[i].message);
+				}
+				
+				// Enviar comando de teleporte para o servidor
+				// Formato: tp:dest_map:dest_x:dest_y
+				game_net.send(net_peer_id, "tp:" + travel_points[i].dest_map + ":" + travel_points[i].dest_x + ":" + travel_points[i].dest_y, 0, true);
+				
+				debug_log("🌀 Teleportando para: " + travel_points[i].dest_map);
+			}
+		} else {
+			// Se saiu da zona, resetar a ativação após 5 segundos
+			if(travel_points[i].activated && travel_points[i].activation_timer.elapsed > 5000) {
+				travel_points[i].activated = false;
+			}
+		}
 	}
 }
 
