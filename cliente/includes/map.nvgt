@@ -345,7 +345,7 @@ void init_data(string data_line, bool complete = true) {
 		int dest_y = string_to_number(parsed[6]);
 		string dest_map = parsed[7];
 		string message = (parsed.length() > 8) ? parsed[8] : "Portal activado.";
-		string sound = (parsed.length() > 9) ? parsed[9] : "door17open"; // Som customizado
+		string som_portal = (parsed.length() > 9) ? parsed[9] : "door17open"; // Som customizado
 		
 		// Criar e armazenar travel point customizado
 		travel_point_class tp;
@@ -360,7 +360,7 @@ void init_data(string data_line, bool complete = true) {
 		tp.activated = false;
 		travel_points.insert_last(tp);
 		
-		debug_log("🌀 Portal PTM criado em " + dest_map + " com som: " + sound);
+		debug_log("🌀 Portal PTM criado em " + dest_map + " com som: " + som_portal);
 	}
 	// DEATH: Zona de morte com teleporte
 	else if(parsed[0] == "death" && parsed.length() >= 8) {
@@ -398,7 +398,7 @@ void init_data(string data_line, bool complete = true) {
 		int dest_y = string_to_number(parsed[6]);
 		string dest_map = parsed[7];
 		string message = (parsed.length() > 8) ? parsed[8] : "Item coletado.";
-		string sound = (parsed.length() > 9) ? parsed[9] : "door17open";
+		string som_item = (parsed.length() > 9) ? parsed[9] : "door17open";
 		string item_type = (parsed.length() > 10) ? parsed[10] : "item";
 		
 		// Criar travel point com item
@@ -480,13 +480,8 @@ void init_data(string data_line, bool complete = true) {
 		int y2 = string_to_number(parsed[4]);
 		
 		// Criar zona de congelamento (usar mesmo tipo de safezone)
-		zone_class freeze_zone;
-		freeze_zone.x1 = x1;
-		freeze_zone.x2 = x2;
-		freeze_zone.y1 = y1;
-		freeze_zone.y2 = y2;
-		freeze_zone.type = "freeze"; // Tipo especial para congelamento
-		zones.insert_last(freeze_zone);
+		safezone freeze_zone(x1, x2, y1, y2);
+		safezones.push_back(freeze_zone);
 		
 		debug_log("❄️ Zona de congelamento criada");
 	}
@@ -527,8 +522,8 @@ void init_data(string data_line, bool complete = true) {
 		novo_npc.y = y;
 		novo_npc.x_inicial = x;
 		novo_npc.y_inicial = y;
-		novo_npc.hp = (int)vida;
-		novo_npc.max_hp = (int)vida;
+		novo_npc.hp = int(vida);
+		novo_npc.max_hp = int(vida);
 		novo_npc.name = nombre;
 		novo_npc.id = random(1000, 9999);
 		novo_npc.map = mapname;
@@ -629,15 +624,6 @@ void npc_loop() {
 	// Detecta NPCs próximos ao jogador e atualiza estado
 	// Este é um loop de manutenção básico do cliente
 	
-	static timer npc_timer;
-	if(!npc_timer.is_playing()) {
-		npc_timer.restart();
-		npc_timer.set_interval(500); // Verifica a cada 500ms
-	}
-	
-	if(!npc_timer.is_finished()) return;
-	npc_timer.restart();
-	
 	// Debug: mostrar quantos NPCs existem no mapa
 	if(npc_objects.length() > 0) {
 		// debug_log("👹 NPCs no mapa: " + npc_objects.length());
@@ -646,7 +632,7 @@ void npc_loop() {
 	// Loop através de todos os NPCs
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		// Verificar se NPC ainda está ativo (timeout de 60 segundos)
-		if(npc_objects[i].last_seen.elapsed() > 60000) {
+		if(npc_objects[i].last_seen.elapsed >= 60000) {
 			// NPC desapareceu por muito tempo
 			debug_log("💀 NPC " + npc_objects[i].name + " desapareceu (timeout)");
 			npc_objects.remove_at(i);
