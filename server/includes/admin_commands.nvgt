@@ -1,5 +1,114 @@
 // admin_commands.nvgt - Sistema de Comandos Administrativos
 // ✅ ITEM 4: COMANDOS ADMINISTRATIVOS
+// ✅ Task 1.2.1: Validação de Inputs Admin
+
+// ============================================================================
+// 🔒 CONSTANTES DE SEGURANÇA (Task 1.2.1)
+// ============================================================================
+// Limites para validação de inputs em comandos administrativos
+
+const int ADMIN_MIN_LEVEL = 1;
+const int ADMIN_MAX_LEVEL = 100;
+const int ADMIN_MAX_GOLD = 999999999;   // ~1 bilhão
+const int ADMIN_MAX_XP = 999999999;
+const int ADMIN_MAX_ITEM_QTY = 9999;
+const int ADMIN_MAX_DURATION = 525600;  // 1 ano em minutos
+const int ADMIN_MAX_COORD = 99999;      // Limite de coordenadas
+const int ADMIN_MIN_COORD = -99999;
+const int ADMIN_MAX_REASON_LEN = 500;   // Tamanho máximo de razão para ban/kick
+
+// ============================================================================
+// 🔒 FUNÇÕES DE VALIDAÇÃO (Task 1.2.1)
+// ============================================================================
+
+// Envia erro formatado para o admin e retorna false para interromper execução
+bool send_admin_error(int player_index, string command, string message) {
+    send_reliable(players[player_index].peer_id, "msg2 [ERRO] /" + command + ": " + message, 0);
+    debug_log("ADMIN ERROR: " + players[player_index].charname + " - /" + command + " - " + message);
+    return false;
+}
+
+// Valida se uma string contém apenas dígitos (números positivos)
+bool is_valid_number(string str) {
+    if(str.length() == 0) return false;
+    
+    // Permite sinal negativo no início
+    uint start = 0;
+    if(str[0] == '-') {
+        if(str.length() == 1) return false; // Apenas "-" não é válido
+        start = 1;
+    }
+    
+    for(uint i = start; i < str.length(); i++) {
+        if(str[i] < '0' || str[i] > '9') return false;
+    }
+    return true;
+}
+
+// Valida se uma string contém apenas dígitos positivos (sem sinal negativo)
+bool is_positive_number(string str) {
+    if(str.length() == 0) return false;
+    for(uint i = 0; i < str.length(); i++) {
+        if(str[i] < '0' || str[i] > '9') return false;
+    }
+    return true;
+}
+
+// Valida nome de jogador (não vazio, sem caracteres especiais perigosos)
+bool is_valid_player_name(string name) {
+    if(name.length() == 0) return false;
+    if(name.length() > 32) return false; // Limite razoável
+    
+    // Verificar caracteres perigosos
+    if(name.find(";") >= 0) return false;
+    if(name.find("|") >= 0) return false;
+    if(name.find("\\") >= 0) return false;
+    if(name.find("\"") >= 0) return false;
+    if(name.find("'") >= 0) return false;
+    
+    return true;
+}
+
+// Valida nome de item (não vazio, caracteres válidos)
+bool is_valid_item_name(string item) {
+    if(item.length() == 0) return false;
+    if(item.length() > 64) return false;
+    
+    // Verificar caracteres perigosos
+    if(item.find(";") >= 0) return false;
+    if(item.find("|") >= 0) return false;
+    if(item.find("\\") >= 0) return false;
+    
+    return true;
+}
+
+// Valida nome de mapa
+bool is_valid_map_name(string map_name) {
+    if(map_name.length() == 0) return false;
+    if(map_name.length() > 64) return false;
+    
+    // Verificar caracteres perigosos para path traversal
+    if(map_name.find("..") >= 0) return false;
+    if(map_name.find("/") >= 0) return false;
+    if(map_name.find("\\") >= 0) return false;
+    if(map_name.find(":") >= 0) return false;
+    
+    return true;
+}
+
+// Valida se um valor inteiro está dentro dos limites
+bool is_within_limits(int value, int min_val, int max_val) {
+    return (value >= min_val && value <= max_val);
+}
+
+// Valida coordenada
+bool is_valid_coord(int coord) {
+    return is_within_limits(coord, ADMIN_MIN_COORD, ADMIN_MAX_COORD);
+}
+
+// ============================================================================
+// 🔒 VERIFICAÇÃO DE PERMISSÕES
+// ============================================================================
 
 // Verifica permissão de admin
 bool is_admin(int player_index) {
@@ -23,10 +132,16 @@ void cmd_playtime(int player_index, string target_name = "") {
 		int minutes = int(players[player_index].playtimer.elapsed / 60000);
 		send_reliable(players[player_index].peer_id, "msg2 Seu tempo conectado: " + minutes + " minutos", 0);
 	} else {
-		// Mostrar tempo de outro jogador
+		// 2. Validação de Nome do Jogador
+		if(!is_valid_player_name(target_name)) {
+			send_admin_error(player_index, "playtime", "Nome de jogador inválido!");
+			return;
+		}
+		
+		// 3. Validação de Entidade
 		int target = get_player_index_from(target_name);
 		if(target == -1) {
-			send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+			send_admin_error(player_index, "playtime", "Jogador '" + target_name + "' não encontrado ou offline.");
 			return;
 		}
 		
@@ -38,24 +153,39 @@ void cmd_playtime(int player_index, string target_name = "") {
 }
 
 // Comando /kick
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_kick(int player_index, string target_name, string reason = "Expulso por admin") {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "kick", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "kick", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "kick", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
-	// Não pode kickar outro admin
+	// 4. Proteção: Não pode kickar outro admin
 	if(players[target].admin) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não pode kickar este jogador!", 0);
+		send_admin_error(player_index, "kick", "Você não pode kickar este jogador (admin protegido)!");
 		return;
 	}
 	
+	// 5. Validação do tamanho da razão
+	if(reason.length() > 256) {
+		reason = reason.substr(0, 256); // Truncar razão muito longa
+	}
+	
+	// --- EXECUÇÃO DA LÓGICA ---
 	// Broadcast
 	for(uint i = 0; i < players.length(); i++) {
 		send_reliable(players[i].peer_id, "msg2 " + target_name + " foi expulso. Razão: " + reason, 0);
@@ -68,18 +198,28 @@ void cmd_kick(int player_index, string target_name, string reason = "Expulso por
 }
 
 // Comando /inventory
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_inventory(int player_index, string target_name) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "inventory", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "inventory", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "inventory", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
+	// --- EXECUÇÃO DA LÓGICA ---
 	// Serializar inventário
 	string inv = players[target].inv.serialize();
 	string[] items = inv.split("|");
@@ -97,12 +237,21 @@ void cmd_inventory(int player_index, string target_name) {
 }
 
 // Comando /freezeall
+// ✅ Task 1.2.1: Validação de inputs
 void cmd_freezeall(int player_index, int duration = 10) {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		send_admin_error(player_index, "freezeall", "Você precisa ser super admin!");
 		return;
 	}
 	
+	// 2. Validação de Duração
+	if(!is_within_limits(duration, 1, 3600)) { // Máximo 1 hora
+		send_admin_error(player_index, "freezeall", "Duração deve ser entre 1 e 3600 segundos.");
+		return;
+	}
+	
+	// --- EXECUÇÃO DA LÓGICA ---
 	for(uint i = 0; i < players.length(); i++) {
 		if(!players[i].admin) { // Não congelar admins
 			players[i].congelado = 1;
@@ -119,9 +268,10 @@ void cmd_freezeall(int player_index, int duration = 10) {
 }
 
 // Comando /backup
+// ✅ Task 1.2.1: Validação de permissão
 void cmd_backup(int player_index) {
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		send_admin_error(player_index, "backup", "Você precisa ser super admin!");
 		return;
 	}
 	
@@ -138,9 +288,10 @@ void cmd_backup(int player_index) {
 }
 
 // Comando /forcedc (força desconexão de todos)
+// ✅ Task 1.2.1: Validação de permissão
 void cmd_forcedc(int player_index) {
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você precisa ser super admin!", 0);
+		send_admin_error(player_index, "forcedc", "Você precisa ser super admin!");
 		return;
 	}
 	
@@ -159,19 +310,28 @@ void cmd_forcedc(int player_index) {
 }
 
 // Comando /tp (teleportar)
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_tp(int player_index, string target_name) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "tp", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tp", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "tp", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
-	// Teleportar para o jogador alvo
+	// --- EXECUÇÃO DA LÓGICA ---
 	players[player_index].x = players[target].x;
 	players[player_index].y = players[target].y;
 	players[player_index].map = players[target].map;
@@ -181,19 +341,28 @@ void cmd_tp(int player_index, string target_name) {
 }
 
 // Comando /tphere (trazer jogador)
+// ✅ Task 1.2.1: Validação de inputs
 void cmd_tphere(int player_index, string target_name) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "tphere", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tphere", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "tphere", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
-	// Trazer jogador
+	// --- EXECUÇÃO DA LÓGICA ---
 	players[target].x = players[player_index].x;
 	players[target].y = players[player_index].y;
 	players[target].map = players[player_index].map;
@@ -204,36 +373,74 @@ void cmd_tphere(int player_index, string target_name) {
 }
 
 // Comando /givexp
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_givexp(int player_index, string target_name, int xp_amount) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "givexp", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "givexp", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "givexp", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
+	// 4. Validação de Limites de XP
+	if(!is_within_limits(xp_amount, 1, ADMIN_MAX_XP)) {
+		send_admin_error(player_index, "givexp", "Quantidade de XP deve ser entre 1 e " + ADMIN_MAX_XP + ".");
+		return;
+	}
+	
+	// --- EXECUÇÃO DA LÓGICA ---
 	ganhaxp(target, xp_amount, 0);
 	send_reliable(players[player_index].peer_id, "msg2 Você deu " + xp_amount + " XP para " + target_name, 0);
 	debug_log("ADMIN: " + players[player_index].charname + " deu " + xp_amount + " XP para " + target_name);
 }
 
 // Comando /giveitem
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_giveitem(int player_index, string target_name, string item_name, int quantity = 1) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "giveitem", "Você não tem permissão!");
 		return;
 	}
 	
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "giveitem", "Nome de jogador inválido!");
+		return;
+	}
+	
+	// 3. Validação de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "giveitem", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
 	
+	// 4. Validação de Nome do Item
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "giveitem", "Nome de item inválido!");
+		return;
+	}
+	
+	// 5. Validação de Quantidade
+	if(!is_within_limits(quantity, 1, ADMIN_MAX_ITEM_QTY)) {
+		send_admin_error(player_index, "giveitem", "Quantidade deve ser entre 1 e " + ADMIN_MAX_ITEM_QTY + ".");
+		return;
+	}
+	
+	// --- EXECUÇÃO DA LÓGICA ---
 	players[target].inv_add_item(item_name, quantity);
 	send_reliable(players[player_index].peer_id, "msg2 Você deu " + quantity + "x " + item_name + " para " + target_name, 0);
 	send_reliable(players[target].peer_id, "msg2 Você recebeu " + quantity + "x " + item_name + " de um admin", 0);
@@ -245,13 +452,38 @@ void cmd_giveitem(int player_index, string target_name, string item_name, int qu
 // ============================================================================
 
 // Comando /addzone - Adicionar nova zona desabilitada
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_addzone(int player_index, int minx, int maxx, int miny, int maxy, string map_name, string message = "Zona Segura") {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		send_admin_error(player_index, "addzone", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
-	// Criar nova zona
+	// 2. Validação de Coordenadas
+	if(!is_valid_coord(minx) || !is_valid_coord(maxx) || !is_valid_coord(miny) || !is_valid_coord(maxy)) {
+		send_admin_error(player_index, "addzone", "Coordenadas fora dos limites permitidos (" + ADMIN_MIN_COORD + " a " + ADMIN_MAX_COORD + ").");
+		return;
+	}
+
+	// 3. Validação de Lógica das Coordenadas
+	if(minx > maxx || miny > maxy) {
+		send_admin_error(player_index, "addzone", "Coordenadas inválidas: min deve ser menor que max.");
+		return;
+	}
+
+	// 4. Validação de Nome do Mapa
+	if(!is_valid_map_name(map_name)) {
+		send_admin_error(player_index, "addzone", "Nome de mapa inválido!");
+		return;
+	}
+
+	// 5. Validação de Mensagem
+	if(message.length() > 128) {
+		message = message.substr(0, 128); // Truncar mensagem muito longa
+	}
+
+	// --- EXECUÇÃO DA LÓGICA ---
 	game_disabled_zone@ nova_zona = game_disabled_zone(minx, maxx, miny, maxy, map_name, message);
 	nova_zona.disable_pvp = true;
 	nova_zona.disable_items = false;
@@ -265,17 +497,21 @@ void cmd_addzone(int player_index, int minx, int maxx, int miny, int maxy, strin
 }
 
 // Comando /removezone - Remover zona desabilitada por índice
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_removezone(int player_index, int zone_index) {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		send_admin_error(player_index, "removezone", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
+	// 2. Validação de Índice
 	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
-		send_reliable(players[player_index].peer_id, "msg2 Índice de zona inválido! Use /listzones para ver as zonas", 0);
+		send_admin_error(player_index, "removezone", "Índice de zona inválido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
 		return;
 	}
 
+	// --- EXECUÇÃO DA LÓGICA ---
 	string map_removed = game_disabled_zones[zone_index].map;
 	game_disabled_zones.remove_at(zone_index);
 
@@ -284,9 +520,10 @@ void cmd_removezone(int player_index, int zone_index) {
 }
 
 // Comando /listzones - Listar todas as zonas desabilitadas
+// ✅ Task 1.2.1: Validação de permissão
 void cmd_listzones(int player_index) {
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "listzones", "Você não tem permissão!");
 		return;
 	}
 
@@ -313,17 +550,21 @@ void cmd_listzones(int player_index) {
 }
 
 // Comando /togglezonepvp - Alternar PvP em uma zona
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_togglezonepvp(int player_index, int zone_index) {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		send_admin_error(player_index, "togglezonepvp", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
+	// 2. Validação de Índice
 	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
-		send_reliable(players[player_index].peer_id, "msg2 Índice de zona inválido!", 0);
+		send_admin_error(player_index, "togglezonepvp", "Índice de zona inválido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
 		return;
 	}
 
+	// --- EXECUÇÃO DA LÓGICA ---
 	game_disabled_zones[zone_index].disable_pvp = !game_disabled_zones[zone_index].disable_pvp;
 
 	string status = game_disabled_zones[zone_index].disable_pvp ? "desabilitado" : "habilitado";
@@ -334,7 +575,13 @@ void cmd_togglezonepvp(int player_index, int zone_index) {
 }
 
 // Comando /checkzone - Verificar se posição atual está em zona desabilitada
+// ✅ Task 1.2.1: Comando público (sem restrição de admin) - validação básica de índice
 void cmd_checkzone(int player_index) {
+	// Validação básica de player_index
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+
 	bool in_zone = false;
 	int zone_id = -1;
 
@@ -356,15 +603,18 @@ void cmd_checkzone(int player_index) {
 }
 
 // Comando /savezones - Salvar zonas em arquivo de configuração
+// ✅ Task 1.2.1: Validação de permissão
 void cmd_savezones(int player_index) {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		send_admin_error(player_index, "savezones", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
+	// --- EXECUÇÃO DA LÓGICA ---
 	file f;
 	if(!f.open("disabled_zones.cfg", "wb")) {
-		send_reliable(players[player_index].peer_id, "msg2 Erro ao abrir arquivo para salvar!", 0);
+		send_admin_error(player_index, "savezones", "Erro ao abrir arquivo para salvar!");
 		return;
 	}
 
@@ -393,15 +643,18 @@ void cmd_savezones(int player_index) {
 }
 
 // Comando /loadzones - Carregar zonas de arquivo de configuração
+// ✅ Task 1.2.1: Validação de permissão
 void cmd_loadzones(int player_index) {
+	// 1. Validação de Permissão
 	if(!is_super_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Apenas super admins podem usar este comando!", 0);
+		send_admin_error(player_index, "loadzones", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
+	// --- EXECUÇÃO DA LÓGICA ---
 	file f;
 	if(!f.open("disabled_zones.cfg", "rb")) {
-		send_reliable(players[player_index].peer_id, "msg2 Arquivo disabled_zones.cfg não encontrado!", 0);
+		send_admin_error(player_index, "loadzones", "Arquivo disabled_zones.cfg não encontrado!");
 		return;
 	}
 
@@ -444,41 +697,68 @@ void cmd_loadzones(int player_index) {
 }
 
 // Comando /createportal - Criar portal de teletransporte
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_createportal(int player_index, string destination_map, int dest_x, int dest_y) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "createportal", "Você não tem permissão!");
 		return;
 	}
-	
-	// Verificar se o mapa de destino existe
+
+	// 2. Validação de Nome do Mapa de Destino
+	if(!is_valid_map_name(destination_map)) {
+		send_admin_error(player_index, "createportal", "Nome de mapa inválido! Use apenas letras, números e underscore.");
+		return;
+	}
+
+	// 3. Validação de Coordenadas
+	if(!is_valid_coord(dest_x) || !is_valid_coord(dest_y)) {
+		send_admin_error(player_index, "createportal", "Coordenadas inválidas! Use valores entre " + ADMIN_MIN_COORD + " e " + ADMIN_MAX_COORD + ".");
+		return;
+	}
+
+	// 4. Verificar se o mapa de destino existe
 	int dest_map_index = get_map_index_from(destination_map);
 	if(dest_map_index == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Mapa de destino não encontrado: " + destination_map, 0);
+		send_admin_error(player_index, "createportal", "Mapa de destino não encontrado: " + destination_map);
 		return;
 	}
-	
-	// Criar portal
+
+	// --- EXECUÇÃO DA LÓGICA ---
 	spawn_portal(player_index, players[player_index].x, players[player_index].y, 
 	             players[player_index].map, destination_map, dest_x, dest_y);
-	
+
+	send_reliable(players[player_index].peer_id, "msg2 Portal criado para " + destination_map + " em (" + dest_x + ", " + dest_y + ")", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " criou portal para " + destination_map);
 }
 
 // Comando /deleteportal - Deletar portal próximo
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_deleteportal(int player_index, int range = 10) {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "deleteportal", "Você não tem permissão!");
 		return;
 	}
-	
+
+	// 2. Validação de Range
+	if(range < 1 || range > 100) {
+		send_admin_error(player_index, "deleteportal", "Range inválido! Use valores entre 1 e 100.");
+		return;
+	}
+
+	// 3. Validação do Mapa
 	int map_index = get_map_index_from(players[player_index].map);
-	if(map_index == -1) return;
-	
-	// Procurar portal próximo
+	if(map_index == -1) {
+		send_admin_error(player_index, "deleteportal", "Erro ao obter mapa atual!");
+		return;
+	}
+
+	// --- EXECUÇÃO DA LÓGICA ---
 	for(uint i = 0; i < server_maps[map_index].portals.length(); i++) {
 		portal@ pt = server_maps[map_index].portals[i];
 		int distance = int(get_distance(players[player_index].x, players[player_index].y, pt.x, pt.y));
-		
+
 		if(distance <= range) {
 			send_reliable(players[player_index].peer_id, "msg2 Portal deletado!", 0);
 			server_maps[map_index].portals.remove_at(i);
@@ -486,41 +766,61 @@ void cmd_deleteportal(int player_index, int range = 10) {
 			return;
 		}
 	}
-	
-	send_reliable(players[player_index].peer_id, "msg2 Nenhum portal encontrado próximo!", 0);
+
+	send_admin_error(player_index, "deleteportal", "Nenhum portal encontrado em um raio de " + range + " tiles.");
 }
 
 // Comando /tempban - Banir temporariamente
+// ✅ Task 1.2.1: Validação completa de inputs
 void cmd_tempban(int player_index, string target_name, double days, string reason = "Violação das regras") {
+	// 1. Validação de Permissão
 	if(!is_admin(player_index)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		send_admin_error(player_index, "tempban", "Você não tem permissão!");
 		return;
 	}
-	
+
+	// 2. Validação de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tempban", "Nome de jogador inválido!");
+		return;
+	}
+
+	// 3. Validação de Duração
+	if(days < 0.001 || days > 365.0) {
+		send_admin_error(player_index, "tempban", "Duração inválida! Use valores entre 0.001 e 365 dias.");
+		return;
+	}
+
+	// 4. Validação de Razão
+	if(reason.length() > ADMIN_MAX_REASON_LEN) {
+		reason = reason.substr(0, ADMIN_MAX_REASON_LEN);
+	}
+
+	// 5. Verificar se jogador existe
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_admin_error(player_index, "tempban", "Jogador '" + target_name + "' não encontrado!");
 		return;
 	}
-	
-	// Não pode banir outro admin
+
+	// 6. Não pode banir outro admin
 	if(players[target].admin) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não pode banir este jogador!", 0);
+		send_admin_error(player_index, "tempban", "Você não pode banir outro administrador!");
 		return;
 	}
-	
-	// Criar ban temporário
+
+	// --- EXECUÇÃO DA LÓGICA ---
 	double minutes = days * 1440.0; // 1 dia = 1440 minutos
 	create_temp_ban(target_name, minutes, 0.0, reason, players[target].computer_id);
-	
+
 	// Broadcast
 	eadm(players[player_index].charname + " baniu temporariamente " + target_name + " por " + days + " dias. Razão: " + reason);
-	
+
 	// Notificar jogador banido
 	send_reliable(players[target].peer_id, "msg2 Você foi banido temporariamente por " + days + " dias. Razão: " + reason, 0);
-	
+
 	debug_log("ADMIN: " + players[player_index].charname + " baniu " + target_name + " por " + days + " dias");
-	
+
 	// Desconectar jogador (TODO: Implementar quando network estiver pronto)
 	// server_net.disconnect_peer(players[target].peer_id);
 }

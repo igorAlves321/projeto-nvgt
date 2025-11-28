@@ -10,6 +10,7 @@
 // Incluir SQLite primeiro para tipos de dados
 #include "../include/sqlite3constants.nvgt"
 #include "../include/logger.nvgt"
+#include "../include/token_gen.nvgt"  // ✅ Task 1.2.2: Geração de salt
 
 // Configurações do servidor
 const int SERVER_PORT = 9317;
@@ -29,6 +30,9 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/player.nvgt"
 #include "includes/settitle.nvgt"  // Sistema de patentes/títulos
 #include "includes/bounty.nvgt"    // Sistema de recompensas
+#include "includes/store.nvgt"     // ✅ Task 1.4.1: Sistema de Lojas NPC
+#include "includes/builder.nvgt"   // ✅ Task 1.5.3: Sistema de Construção de Mapas
+#include "includes/auction.nvgt"   // ✅ Task 1.4.2: Sistema de Leilões Thread-Safe
 #include "includes/arena.nvgt"     // Sistema de Arena PvP
 #include "includes/progressive_death.nvgt"  // Sistema de morte progressiva
 #include "includes/clothing.nvgt"  // Sistema avançado de vestimentas
@@ -110,6 +114,13 @@ const string DATABASE_FILE = "server/database/evm.db";
 timer server_uptime;
 timer last_save;
 timer last_backup;
+timer last_combat_cleanup; // 🆕 Timer para cleanup de combates
+timer last_items_cleanup;  // 🆕 Timer para cleanup de itens expirados (Task 1.1.2)
+
+// 🆕 PASSO 3: Rastreador da tarefa assíncrona de limpeza de combates
+async<void>@ cleanup_task;
+// 🆕 Rastreador da tarefa assíncrona de limpeza de itens (Task 1.1.2)
+async<void>@ items_cleanup_task;
 
 // Inicialização do banco de dados
 bool init_database() {
@@ -157,6 +168,7 @@ void create_database_tables() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            password_salt TEXT DEFAULT '',
             email TEXT,
             gender INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -471,6 +483,27 @@ void process_player_command(uint64 peer_id, string command) {
     
     // Log do comando
     log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
+    
+    // ✅ Task 1.5.3: Handler de Builder Mode (add_line::)
+    // Formato: add_line::<dados_do_elemento>
+    if(command.find("add_line::") == 0) {
+        string element_data = command.substr(10);  // Remove "add_line::"
+        req_builder_create_element(player, element_data);
+        return;
+    }
+    
+    // ✅ Task 1.5.3: Handler de salvamento de mapa
+    if(command == "/savemap" || command == "savemap") {
+        map@ current_map = builder_get_player_map(player);
+        builder_save_map(player, current_map);
+        return;
+    }
+    
+    // ✅ Task 1.5.3: Handler de atualização de mapa
+    if(command == "/mapupdate" || command == "mapupdate") {
+        builder_update_map(player);
+        return;
+    }
     
     // Verificar se o jogo está congelado
     if(game_frozen && !player.admin_status) {
@@ -958,7 +991,10 @@ void main() {
         
         // 🆕 FASE 4: Sistema de Trading - Verificar timeouts de trocas
         trading_loop();
-        
+
+        // 🆕 Task 1.4.2: Sistema de Leilões - Verificar expiração e finalizar leilões
+        auction_cleanup_loop();
+
         // 🆕 FASE 5: Sistema de Quests - Processar quests
         quests_loop();
         
@@ -1000,7 +1036,24 @@ void main() {
                 magnetic_item_pull(i, 5); // Raio de 5 tiles
             }
         }
-        
+
+        // 🆕 PASSO 3: Agendamento da Limpeza de Combates Expirados (Async)
+        // Executa a limpeza a cada 30 segundos (intervalos razoáveis)
+        if(last_combat_cleanup.elapsed >= 30000) { // 30 segundos
+            // Agenda a execução da função em uma nova thread
+            @cleanup_task = async<void>(cleanup_expired_combats_task);
+            last_combat_cleanup.restart();
+        }
+
+        // 🆕 Task 1.1.2: Agendamento da Limpeza de Itens Expirados (Async)
+        // Executa a limpeza a cada 60 segundos para evitar acúmulo de objetos
+        // que atingiram seu tempo limite no chão dos mapas
+        if(last_items_cleanup.elapsed >= 60000) { // 60 segundos
+            // Agenda a execução da função em uma nova thread
+            @items_cleanup_task = async<void>(cleanup_expired_items_task);
+            last_items_cleanup.restart();
+        }
+
         // Auto-save a cada 5 minutos
         if(last_save.elapsed >= 300000) { // 5 minutos
             auto_save_all_players();
@@ -1077,10 +1130,14 @@ LISTA DE FUNCIONALIDADES DESATIVADAS:
    
    - Statistics System (linha 464, 775)
      Status: Funções save_daily_statistics() não implementadas
-   
+
    - Combat Cleanup (linha 583)
-     Status: cleanup_expired_combats() não implementado
-   
+     Status: ✅ IMPLEMENTADO - cleanup_expired_combats() com mutex + async + iteração reversa
+
+   - Items Cleanup (Task 1.1.2)
+     Status: ✅ IMPLEMENTADO - cleanup_expired_items_task() em server_map.nvgt
+     Detalhes: mutex map_global_mutex + async + iteração reversa sobre objs[] de cada mapa
+
    - GameMap Class (linha 609)
      Status: Classe de mapas não implementada
    

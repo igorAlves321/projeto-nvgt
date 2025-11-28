@@ -1,6 +1,13 @@
 // weapon.nvgt - Sistema de Armas do Cliente EVM
 // Conversão de weapon.bgt para NVGT
 
+#include "../../include/settings.nvgt"
+
+// ============================================================================
+// CONSTANTES E CONFIGURAÇÕES DE FAVORITOS
+// ============================================================================
+const int FAVORITES_COUNT = 10;  // Teclas F0-F9
+
 // Array global de armas do jogador
 weapon[] player_weapons;
 
@@ -9,6 +16,10 @@ string current_weapon = "";
 
 // Dicionário de armas favoritas (teclas 0-9)
 dictionary favorite_weapons;
+
+// Sistema de persistência de favoritos
+settings favorites_config;
+bool favorites_initialized = false;
 
 // Classe para representar uma arma no inventário do jogador
 class weapon {
@@ -165,6 +176,95 @@ class weapon {
 // FUNÇÕES AUXILIARES
 // ============================================================================
 
+// ============================================================================
+// SISTEMA DE FAVORITOS DE ARMAS - PERSISTÊNCIA
+// ============================================================================
+
+/**
+ * Inicializa o sistema de favoritos e carrega configurações salvas
+ * Deve ser chamado na inicialização do cliente
+ */
+bool init_weapon_favorites() {
+	if(favorites_initialized) return true;
+	
+	// Configura o sistema de settings
+	// Usa "EVM" como company e "WeaponFavorites" como product, formato INI
+	if(!favorites_config.setup("EVM", "WeaponFavorites", false, "ini")) {
+		// Falha silenciosa - favoritos não serão persistidos mas o jogo continua
+		favorites_initialized = false;
+		return false;
+	}
+	
+	// Carrega favoritos salvos
+	load_weapon_favorites();
+	favorites_initialized = true;
+	return true;
+}
+
+/**
+ * Carrega favoritos do arquivo de configuração
+ */
+void load_weapon_favorites() {
+	if(!favorites_config.active) return;
+	
+	for(uint i = 0; i < FAVORITES_COUNT; i++) {
+		string key = "F" + i;
+		string stored_id = favorites_config.read_string(key, "");
+		
+		if(stored_id != "") {
+			favorite_weapons.set("f" + i, stored_id);
+		}
+	}
+}
+
+/**
+ * Salva todos os favoritos no arquivo de configuração
+ */
+bool save_weapon_favorites() {
+	if(!favorites_config.active) return false;
+	
+	bool success = true;
+	
+	for(uint i = 0; i < FAVORITES_COUNT; i++) {
+		string key = "F" + i;
+		string fav_key = "f" + i;
+		string weapon_name = "";
+		
+		if(favorite_weapons.exists(fav_key)) {
+			favorite_weapons.get(fav_key, weapon_name);
+		}
+		
+		if(!favorites_config.write_string(key, weapon_name)) {
+			success = false;
+		}
+	}
+	
+	return success;
+}
+
+/**
+ * Configura uma arma como favorita (Shift+número)
+ * @param slot O slot de favorito (0-9)
+ */
+void set_favorite_weapon(int slot) {
+	if(slot < 0 || slot >= FAVORITES_COUNT) return;
+	if(selected < 0 || selected >= int(player_weapons.length())) return;
+	
+	string weapon_name = player_weapons[selected].name;
+	string fav_key = "f" + slot;
+	
+	favorite_weapons.set(fav_key, weapon_name);
+	
+	// Salva imediatamente
+	if(favorites_config.active) {
+		string key = "F" + slot;
+		favorites_config.write_string(key, weapon_name);
+	}
+	
+	// Mensagem simples que funciona em qualquer idioma
+	speak(weapon_name + ", slot " + slot);
+}
+
 /**
  * Obtém o índice de uma arma pelo nome
  */
@@ -290,6 +390,20 @@ void weaponloop() {
 		if(key_pressed(KEY_7)) select_favorite_weapon("f7");
 		if(key_pressed(KEY_8)) select_favorite_weapon("f8");
 		if(key_pressed(KEY_9)) select_favorite_weapon("f9");
+	}
+	
+	// Shift + Teclas numéricas 0-9 - Configurar arma favorita
+	if(moveable && shift_pressionado() && player_weapons[selected].loading == 0 && selected > -1) {
+		if(key_pressed(KEY_0)) set_favorite_weapon(0);
+		if(key_pressed(KEY_1)) set_favorite_weapon(1);
+		if(key_pressed(KEY_2)) set_favorite_weapon(2);
+		if(key_pressed(KEY_3)) set_favorite_weapon(3);
+		if(key_pressed(KEY_4)) set_favorite_weapon(4);
+		if(key_pressed(KEY_5)) set_favorite_weapon(5);
+		if(key_pressed(KEY_6)) set_favorite_weapon(6);
+		if(key_pressed(KEY_7)) set_favorite_weapon(7);
+		if(key_pressed(KEY_8)) set_favorite_weapon(8);
+		if(key_pressed(KEY_9)) set_favorite_weapon(9);
 	}
 	
 	// Tecla T - Alternar modo de tiro (semi/auto)

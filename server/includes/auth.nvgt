@@ -1,7 +1,9 @@
 // auth.nvgt - Sistema de Autenticação do Servidor EVM
-// Usa hash SHA-256 para armazenamento seguro de senhas
+// ✅ Task 1.2.2: Usa hash SHA-256 + Salt para armazenamento seguro de senhas
 
 // Criar nova conta de jogador
+// NOTA: password_hash pode ser a senha bruta ou hash do cliente
+// O salt é gerado no servidor em create_player_account()
 void handle_create_account(uint64 peer_id, string username, string password_hash, string email, int gender) {
     debug_log("Tentativa de criação de conta: " + username + " (peer: " + peer_id + ")");
 
@@ -26,8 +28,7 @@ void handle_create_account(uint64 peer_id, string username, string password_hash
         return;
     }
 
-    // Criar conta no banco de dados
-    // IMPORTANTE: password_hash JÁ vem com hash SHA-256 do cliente
+    // ✅ Task 1.2.2: Criar conta no banco de dados (salt é gerado internamente)
     if(!create_player_account(username, password_hash, email, gender)) {
         send_reliable(peer_id, "Erro: Falha ao criar conta. Tente novamente.", 0);
         debug_log("ERRO: Falha ao criar conta no banco - " + username);
@@ -36,13 +37,12 @@ void handle_create_account(uint64 peer_id, string username, string password_hash
 
     // Sucesso
     send_reliable(peer_id, "created", 0);
-    debug_log("✓ Conta criada: " + username + " (" + email + ")");
-    // screen_reader_speak("Nova conta criada: " + username, false); // Comentado para não bugar NVDA
+    debug_log("✓ Conta criada: " + username + " (" + email + ") [COM SALT]");
     log_to_database("INFO", "AUTH", "Nova conta criada: " + username, 0, username);
 }
 
-// Processar login de jogador
-void handle_login(uint64 peer_id, string username, string password_hash, double client_version, string computer_id) {
+// ✅ Task 1.2.2: Processar login de jogador COM SALT
+void handle_login(uint64 peer_id, string username, string password_input, double client_version, string computer_id) {
     debug_log("Tentativa de login: " + username + " (peer: " + peer_id + ")");
 
     // Verificar se conta existe
@@ -52,21 +52,47 @@ void handle_login(uint64 peer_id, string username, string password_hash, double 
         return;
     }
 
-    // Obter hash armazenado do banco
+    // ✅ Task 1.2.2: Obter hash E salt armazenados do banco
     string stored_hash = get_player_password_hash(username);
+    string stored_salt = get_player_password_salt(username);
+    
     if(stored_hash == "") {
         send_reliable(peer_id, "Erro: Dados da conta corrompidos.", 0);
         debug_log("ERRO: Hash vazio para conta - " + username);
         return;
     }
 
-    // Verificar senha (comparar hashes)
-    // IMPORTANTE: password_hash JÁ vem com hash SHA-256 do cliente
-    if(password_hash != stored_hash) {
+    // ✅ Task 1.2.2: Verificar senha usando salt
+    // Se salt existe, usar sistema novo; senão, usar sistema legado
+    bool password_valid = false;
+    
+    if(stored_salt != "" && stored_salt.length() > 0) {
+        // Sistema NOVO com salt: recalcular hash com salt + senha de entrada
+        string calculated_hash = hash_password_with_salt(password_input, stored_salt);
+        password_valid = (calculated_hash == stored_hash);
+        debug_log("Login usando sistema COM SALT para " + username);
+    } else {
+        // Sistema LEGADO: comparação direta (para contas antigas sem salt)
+        password_valid = (password_input == stored_hash);
+        debug_log("Login usando sistema LEGADO (sem salt) para " + username);
+    }
+    
+    if(!password_valid) {
         send_reliable(peer_id, "Erro: Senha incorreta.", 0);
         debug_log("Login falhou: senha incorreta - " + username);
         log_to_database("WARNING", "AUTH", "Tentativa de login com senha incorreta", 0, username);
         return;
+    }
+
+    // ✅ Task 1.2.2: Migração automática de contas legadas
+    // Se o login foi bem-sucedido mas a conta não tem salt, migrar agora
+    if(stored_salt == "" || stored_salt.length() == 0) {
+        if(migrate_account_to_salt(username, password_input)) {
+            debug_log("✅ Conta " + username + " migrada automaticamente para sistema com salt");
+            log_to_database("INFO", "AUTH", "Conta migrada para sistema com salt", 0, username);
+        } else {
+            debug_log("⚠ Falha ao migrar conta " + username + " para sistema com salt");
+        }
     }
 
     // Verificar versão do cliente

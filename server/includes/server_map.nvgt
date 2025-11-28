@@ -5,6 +5,7 @@
 // Includes necessários
 // TODO: Converter estes arquivos para NVGT quando necessário
 #include "placeholder_classes.nvgt"  // Classes temporárias para compilação
+#include "map_elements.nvgt"         // 🆕 Task 1.3.1: Elementos de mapa completos
 #include "mine/mina.nvgt"
 #include "portals.nvgt"
 // #include "vehicles.nvgt"
@@ -31,8 +32,86 @@ int get_damage(int base_damage, int distance, int max_range = 20) {
     return int(base_damage * damage_ratio);
 }
 
+// ============================================================================
+// 🔒 MUTEX GLOBAL PARA ACESSO AOS MAPAS
+// ============================================================================
+// Protege o acesso e modificação do array server_maps e seus objetos
+// durante operações assíncronas de limpeza
+mutex map_global_mutex;
+
 // Array global de mapas do servidor
 map@[] server_maps;
+
+// ============================================================================
+// 🗑️ SISTEMA DE LIMPEZA DE ITENS EXPIRADOS (Task 1.1.2)
+// ============================================================================
+// Limpa objetos coletáveis (objs[]) que atingiram seu tempo limite
+// Executa de forma assíncrona para não bloquear o main loop
+
+void cleanup_expired_items_task() {
+    map_global_mutex.lock(); // 🔒 Travar o Mutex para acesso exclusivo
+    
+    uint64 current_time = ticks(); // Tempo atual em millisegundos
+    int total_removed = 0;
+    int maps_processed = 0;
+    
+    // Iterar sobre todos os mapas carregados
+    for(uint map_idx = 0; map_idx < server_maps.length(); map_idx++) {
+        map@ current_map = server_maps[map_idx];
+        if(current_map is null) continue;
+        
+        // Pular mapas pausados (sem jogadores) para otimização
+        // NOTA: Ainda assim processamos para evitar acúmulo de lixo
+        
+        // 🆕 Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
+        // Itera de trás para frente para evitar pular elementos ao remover
+        for(int obj_idx = int(current_map.objs.length()) - 1; obj_idx >= 0; obj_idx--) {
+            obj@ item = current_map.objs[obj_idx];
+            if(item is null) {
+                // Item nulo, remover do array
+                current_map.objs.remove_at(obj_idx);
+                total_removed++;
+                continue;
+            }
+            
+            // Verificar se o item expirou
+            // Um item expira quando ttime_out.elapsed >= time_out (em ms)
+            // OU quando a flag taked está ativa (já foi coletado)
+            bool is_expired = false;
+            
+            // Item com timeout definido e tempo esgotado
+            if(item.time_out > 0 && item.ttime_out.elapsed >= uint64(item.time_out)) {
+                is_expired = true;
+            }
+            
+            // Item marcado como coletado
+            if(item.taked) {
+                is_expired = true;
+            }
+            
+            // Item com flag delete ativa
+            if(item.delete) {
+                is_expired = true;
+            }
+            
+            // Remover item expirado
+            if(is_expired) {
+                // NOTA: A desalocação da memória é automática pelo NVGT (contagem de referências)
+                current_map.objs.remove_at(obj_idx);
+                total_removed++;
+            }
+        }
+        
+        maps_processed++;
+    }
+    
+    // Log apenas se removeu algum item (evita spam no console)
+    if(total_removed > 0) {
+        debug_log("[CLEANUP] Removidos " + total_removed + " itens expirados de " + maps_processed + " mapas");
+    }
+    
+    map_global_mutex.unlock(); // 🔓 Libera o Mutex
+}
 
 // Classe principal de mapa
 class map {
@@ -113,6 +192,32 @@ class map {
 	// ============================================================================
 	// game_disabled@[] disableds; // Zonas onde jogos são desativados // TODO: Classe não convertida ainda
 	dictionary desactivados;    // Itens desativados neste mapa
+
+	// ============================================================================
+	// 🆕 NOVOS ELEMENTOS DE MAPA (Task 1.3.1)
+	// ============================================================================
+	door@[] doors;                      // Portas interativas
+	sound_source@[] sound_sources;      // Fontes sonoras ambientes
+	sound_stream@[] sound_streams;      // Streams de música de fundo
+	texto@[] textos;                    // Objetos de texto
+	dialog@[] dialogs;                  // Diálogos pop-up
+	quicksand@[] quicksands;            // Areias movediças
+	travel_point@[] travel_points;      // Pontos de viagem/teleporte
+	custom_portal@[] custom_portals;    // Portais customizados (ptm)
+	pickup_point@[] pickup_points;      // Pontos de pickup com items (pm)
+	timed_portal@[] timed_portals;      // Portais com tempo (cpm)
+	freeze_zone@[] freeze_zones;        // Zonas de congelamento
+	reverb_zone@[] reverb_zones;        // Zonas de reverb
+	description@[] descriptions;        // Descrições de áreas
+
+	// Configurações adicionais do mapa
+	string map_name_display = "";       // Nome de exibição do mapa (map:)
+	string background_music_url = "";   // URL de música de fundo (url:)
+	string ceiling_sound = "";          // Som de teto/chuva (teto:)
+	int player_spawn_x = 0;             // Spawn X do jogador (x:)
+	int player_spawn_y = 0;             // Spawn Y do jogador (y:)
+	bool is_safe_map = false;           // Se o mapa inteiro é safezone (safemap)
+	string[] disabled_weapons;          // Armas desabilitadas (darmas)
 	
 	// ============================================================================
 	// CONSTRUTOR
@@ -160,32 +265,32 @@ class map {
 				continue;
 			}
 			
-			// Plataformas (p = platform)
-			if (parsed[0] == "p" && parsed.length() == 5) {
+			// Plataformas (p = platform) - suporta alias "platform"
+			if ((parsed[0] == "p" || parsed[0] == "platform") && parsed.length() >= 5) {
 				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]), 
 				           parse_int(parsed[3]), parse_int(parsed[3]), parsed[4]);
 				platforms.insert_last(p1);
 				continue;
 			}
 			
-			// Escadas (sc = staircase)
-			if (parsed[0] == "sc" && parsed.length() == 6) {
+			// Escadas (sc = staircase) - suporta alias "staircase"
+			if ((parsed[0] == "sc" || parsed[0] == "staircase") && parsed.length() >= 6) {
 				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]), 
 				           parse_int(parsed[3]), parse_int(parsed[4]), parsed[5]);
 				platforms.insert_last(p1);
 				continue;
 			}
 			
-			// Paredes (w = wall)
-			if (parsed[0] == "w" && parsed.length() == 5) {
+			// Paredes (w = wall) - suporta aliases "wall" e "pwall"
+			if ((parsed[0] == "w" || parsed[0] == "wall" || parsed[0] == "pwall") && parsed.length() >= 5) {
 				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[1]), 
 				           parse_int(parsed[2]), parse_int(parsed[3]), parsed[4]);
 				platforms.insert_last(p1);
 				continue;
 			}
 			
-			// Zonas (z = zone)
-			if (parsed[0] == "z" && parsed.length() == 6) {
+			// Zonas (z = zone) - suporta alias "zone"
+			if ((parsed[0] == "z" || parsed[0] == "zone") && parsed.length() >= 6) {
 				zone z1(parse_int(parsed[1]), parse_int(parsed[2]), 
 				       parse_int(parsed[3]), parse_int(parsed[4]), parsed[5]);
 				zones.insert_last(z1);
@@ -291,12 +396,364 @@ class map {
 			
 			// Items/Objetos coletáveis
 			if (parsed[0] == "item" && parsed.length() > 8) {
-				spawn_obj(parsed[1], parse_int(parsed[2]), 
-				         parse_int(parsed[3]), parse_int(parsed[4]), 
-				         parse_int(parsed[5]), parsed[6], parsed[7], 
+				spawn_obj(parsed[1], parse_int(parsed[2]),
+				         parse_int(parsed[3]), parse_int(parsed[4]),
+				         parse_int(parsed[5]), parsed[6], parsed[7],
 				         parse_int(parsed[8]));
 				continue;
 			}
+
+			// ========================================================================
+			// 🆕 TASK 1.3.1: PARSING COMPLETO DOS 27+ TIPOS FALTANTES
+			// ========================================================================
+
+			// MAP NAME - Nome de exibição do mapa
+			if (parsed[0] == "map" && parsed.length() > 1) {
+				map_name_display = lines[x].substr(4); // Pega tudo após "map:"
+				continue;
+			}
+
+			// URL - Música de fundo via URL
+			if (parsed[0] == "url" && parsed.length() > 1) {
+				background_music_url = lines[x].substr(4); // Pega tudo após "url:"
+				continue;
+			}
+
+			// TETO - Som de teto/chuva
+			if (parsed[0] == "teto" && parsed.length() > 1) {
+				ceiling_sound = parsed[1];
+				continue;
+			}
+
+			// X - Coordenada X de spawn do jogador
+			if (parsed[0] == "x" && parsed.length() > 1) {
+				player_spawn_x = parse_int(parsed[1]);
+				continue;
+			}
+
+			// Y - Coordenada Y de spawn do jogador
+			if (parsed[0] == "y" && parsed.length() > 1) {
+				player_spawn_y = parse_int(parsed[1]);
+				continue;
+			}
+
+			// DOOR / PORTA / DR - Portas (10 parâmetros)
+			if ((parsed[0] == "door" || parsed[0] == "porta" || parsed[0] == "dr") && parsed.length() >= 10) {
+				door d(parse_int(parsed[1]), parse_int(parsed[2]),
+				      parse_int(parsed[3]), parse_int(parsed[4]),
+				      parse_int(parsed[5]), parsed[6], parsed[7], parsed[8], parsed[9]);
+				d.map = this.name;
+				doors.insert_last(d);
+				continue;
+			}
+
+			// SOUND_SOURCE / SOM / SS - Fontes sonoras (6 parâmetros)
+			if ((parsed[0] == "sound_source" || parsed[0] == "som" || parsed[0] == "ss") && parsed.length() >= 6) {
+				// Validação de parâmetros
+				int lx = parse_int(parsed[1]);
+				int rx = parse_int(parsed[2]);
+				int miny = parse_int(parsed[3]);
+				int maxy = parse_int(parsed[4]);
+				string sound_file = parsed[5].replace(".wav", ".ogg");
+
+				// Validação de limites
+				if (lx < 0 || rx > max_x || miny < 0 || maxy > max_y) {
+					debug_log("[PARSE_ERROR] sound_source fora dos limites do mapa: " + lines[x]);
+					continue;
+				}
+
+				// Validação de arquivo
+				if (sound_file.is_empty() || !sound_file.ends_with(".ogg")) {
+					debug_log("[PARSE_ERROR] sound_source com arquivo inválido: " + sound_file);
+					continue;
+				}
+
+				sound_source ss(lx, rx, miny, maxy, sound_file, "ss_" + lx + "_" + miny);
+				ss.map = this.name;
+				sound_sources.insert_last(ss);
+				continue;
+			}
+
+			// SS2 - Sound Streams (zonas com música de fundo)
+			if (parsed[0] == "ss2" && parsed.length() >= 6) {
+				int minx = parse_int(parsed[1]);
+				int maxx = parse_int(parsed[2]);
+				int miny = parse_int(parsed[3]);
+				int maxy = parse_int(parsed[4]);
+				string sound_file = parsed[5].replace(".wav", ".ogg");
+				int volume = (parsed.length() >= 7) ? parse_int(parsed[6]) : 100;
+
+				sound_stream stream(minx, maxx, miny, maxy, sound_file, volume);
+				stream.map = this.name;
+				sound_streams.insert_last(stream);
+				continue;
+			}
+
+			// TEXTO / TXT - Objetos de texto (4 parâmetros)
+			if ((parsed[0] == "texto" || parsed[0] == "txt") && parsed.length() >= 4) {
+				int x = parse_int(parsed[1]);
+				int y = parse_int(parsed[2]);
+				string text = parsed[3];
+
+				// Validação de coordenadas
+				if (x < 0 || x > max_x || y < 0 || y > max_y) {
+					debug_log("[PARSE_ERROR] texto fora dos limites: " + lines[x]);
+					continue;
+				}
+
+				texto t(x, y, text);
+				t.map = this.name;
+				textos.insert_last(t);
+				continue;
+			}
+
+			// DLG - Diálogos (4 parâmetros)
+			if (parsed[0] == "dlg" && parsed.length() >= 4) {
+				int x = parse_int(parsed[1]);
+				int y = parse_int(parsed[2]);
+				string message = parsed[3];
+				string snd = (parsed.length() >= 5) ? parsed[4] : "";
+
+				// Validação de coordenadas
+				if (x < 0 || x > max_x || y < 0 || y > max_y) {
+					debug_log("[PARSE_ERROR] dlg fora dos limites: " + lines[x]);
+					continue;
+				}
+
+				dialog dlg(x, y, message, snd);
+				dlg.map = this.name;
+				dialogs.insert_last(dlg);
+				continue;
+			}
+
+			// AREIA_MOVEDISSA / AM - Areia movediça (quicksand)
+			if ((parsed[0] == "areia_movedissa" || parsed[0] == "am") && parsed.length() >= 3) {
+				int x = parse_int(parsed[1]);
+				int y = parse_int(parsed[2]);
+
+				quicksand qs(x, y, this.name);
+				quicksands.insert_last(qs);
+				continue;
+			}
+
+			// TP / TRAVELPOINT - Pontos de viagem (8 parâmetros)
+			if ((parsed[0] == "tp" || parsed[0] == "travelpoint") && parsed.length() >= 8) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string message = (parsed.length() > 8) ? parsed[8] : "Teleportado.";
+
+				travel_point tp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map, message);
+				tp.map = this.name;
+				travel_points.insert_last(tp);
+				continue;
+			}
+
+			// PTM - Portal customizado com som (9 parâmetros)
+			if (parsed[0] == "ptm" && parsed.length() >= 9) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string message = (parsed.length() > 8) ? parsed[8] : "Portal ativado.";
+				string snd = (parsed.length() > 9) ? parsed[9] : "door17open.ogg";
+
+				custom_portal cp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map, message, snd);
+				cp.map = this.name;
+				custom_portals.insert_last(cp);
+				continue;
+			}
+
+			// PM - Ponto de pickup com item (10 parâmetros)
+			if (parsed[0] == "pm" && parsed.length() >= 10) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string message = (parsed.length() > 8) ? parsed[8] : "Item coletado.";
+				string snd = (parsed.length() > 9) ? parsed[9] : "door17open.ogg";
+				string item = (parsed.length() > 10) ? parsed[10] : "item";
+
+				pickup_point pp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map, message, snd, item);
+				pp.map = this.name;
+				pickup_points.insert_last(pp);
+				continue;
+			}
+
+			// CPM - Portal customizado com tempo (13 parâmetros)
+			if (parsed[0] == "cpm" && parsed.length() >= 13) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string travel_msg = (parsed.length() > 8) ? parsed[8] : "Viajando...";
+				string color = (parsed.length() > 9) ? parsed[9] : "ffffff";
+				int travel_time = (parsed.length() > 10) ? parse_int(parsed[10]) : 5000;
+				string arrival_msg = (parsed.length() > 11) ? parsed[11] : "Chegou.";
+				string effect = (parsed.length() > 12) ? parsed[12] : "appear";
+
+				timed_portal tp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map,
+				               travel_msg, color, travel_time, arrival_msg, effect);
+				tp.map = this.name;
+				timed_portals.insert_last(tp);
+				continue;
+			}
+
+			// CONGELAR - Zona de congelamento (4 parâmetros)
+			if (parsed[0] == "congelar" && parsed.length() >= 5) {
+				int x1 = parse_int(parsed[1]);
+				int x2 = parse_int(parsed[2]);
+				int y1 = parse_int(parsed[3]);
+				int y2 = parse_int(parsed[4]);
+
+				freeze_zone fz(x1, x2, y1, y2);
+				fz.map = this.name;
+				freeze_zones.insert_last(fz);
+				continue;
+			}
+
+			// DARMAS - Desabilitar arma específica
+			if (parsed[0] == "darmas" && parsed.length() >= 2) {
+				string weapon = parsed[1];
+				disabled_weapons.insert_last(weapon);
+				continue;
+			}
+
+			// DESC - Descrição de área (formato completo com 6 parâmetros)
+			if (parsed[0] == "desc" && parsed.length() >= 6) {
+				int x = parse_int(parsed[1]);
+				int y = parse_int(parsed[2]);
+				int fx = parse_int(parsed[3]);
+				int fy = parse_int(parsed[4]);
+				string text = parsed[5];
+
+				description desc(x, y, fx, fy, text);
+				desc.map = this.name;
+				descriptions.insert_last(desc);
+				continue;
+			}
+
+			// DESATIVAR - Desabilitar funcionalidades do jogo
+			if (parsed[0] == "desativar" && parsed.length() >= 2) {
+				string feature = parsed[1];
+				desactivados.set(feature, feature);
+				continue;
+			}
+
+			// SAFEMAP - Marcar mapa inteiro como safezone
+			if (parsed[0] == "safemap") {
+				is_safe_map = true;
+				continue;
+			}
+
+			// SAFEZONE / SAFEZ - Aliases para sz (safezone)
+			if ((parsed[0] == "safezone" || parsed[0] == "safez") && parsed.length() >= 5) {
+				safezone sz(parse_int(parsed[1]), parse_int(parsed[2]),
+				           parse_int(parsed[3]), parse_int(parsed[4]));
+				safezones.insert_last(sz);
+				continue;
+			}
+
+			// REVERB - Zona de reverberação (4+ parâmetros)
+			if (parsed[0] == "reverb" && parsed.length() >= 5) {
+				int x1 = parse_int(parsed[1]);
+				int x2 = parse_int(parsed[2]);
+				int y1 = parse_int(parsed[3]);
+				int y2 = parse_int(parsed[4]);
+				int intensity = (parsed.length() >= 6) ? parse_int(parsed[5]) : 50;
+
+				reverb_zone rz(x1, x2, y1, y2, intensity);
+				rz.map = this.name;
+				reverb_zones.insert_last(rz);
+				continue;
+			}
+
+			// PORTAMAPA - Alias para travelpoint
+			if (parsed[0] == "portamapa" && parsed.length() >= 8) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string message = (parsed.length() > 8) ? parsed[8] : "Teleportado.";
+
+				travel_point tp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map, message);
+				tp.map = this.name;
+				travel_points.insert_last(tp);
+				continue;
+			}
+
+			// PM2 - Variante de PM (mesmo parsing que PM)
+			if (parsed[0] == "pm2" && parsed.length() >= 10) {
+				int zone_x1 = parse_int(parsed[1]);
+				int zone_y1 = parse_int(parsed[2]);
+				int zone_x2 = parse_int(parsed[3]);
+				int zone_y2 = parse_int(parsed[4]);
+				int dest_x = parse_int(parsed[5]);
+				int dest_y = parse_int(parsed[6]);
+				string dest_map = parsed[7];
+				string message = (parsed.length() > 8) ? parsed[8] : "Item coletado.";
+				string snd = (parsed.length() > 9) ? parsed[9] : "door17open.ogg";
+				string item = (parsed.length() > 10) ? parsed[10] : "item";
+
+				pickup_point pp(zone_x1, zone_y1, zone_x2, zone_y2, dest_x, dest_y, dest_map, message, snd, item);
+				pp.map = this.name;
+				pickup_points.insert_last(pp);
+				continue;
+			}
+
+			// W2 - Variante de parede (mesmo parsing que W)
+			if (parsed[0] == "w2" && parsed.length() >= 5) {
+				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[1]),
+				           parse_int(parsed[2]), parse_int(parsed[3]), parsed[4]);
+				platforms.insert_last(p1);
+				continue;
+			}
+
+			// PNPC - NPC passivo (mesmo parsing que NPC, sem agressão)
+			if (parsed[0] == "pnpc" && parsed.length() > 25) {
+				npc b(parse_int(parsed[1]), parse_int(parsed[2]),
+				     parse_int(parsed[3]), parse_int(parsed[4]),
+				     parse_int(parsed[5]), parse_int(parsed[6]),
+				     parse_int(parsed[7]), parse_int(parsed[8]),
+				     parse_int(parsed[9]), parse_int(parsed[10]),
+				     parse_int(parsed[11]), parsed[12], parsed[13],
+				     parsed[14], parsed[15], parsed[16], parsed[17],
+				     parse_int(parsed[18]), (parse_int(parsed[19]) != 0),
+				     (parse_int(parsed[20]) != 0), this.name, parsed[21],
+				     parse_int(parsed[22]), parse_int(parsed[23]),
+				     parsed[24], parse_int(parsed[25]));
+				// Marcar como passivo (não ataca) - TODO: adicionar campo pacifista à classe npc
+				// b.pacifista = 1;
+				npcs.insert_last(b);
+				continue;
+			}
+
+			// WHERE - Localização atual (parsing simples)
+			if (parsed[0] == "where" && parsed.length() >= 2) {
+				// WHERE já existe mais abaixo no código (linha 1868+)
+				// Então vamos apenas registrar aqui para consistência
+				continue;
+			}
+
+			// ========================================================================
+			// FIM DO PARSING DOS NOVOS TIPOS (Task 1.3.1)
+			// ========================================================================
 		}
 	}
 	
@@ -1248,8 +1705,6 @@ class map {
 	}
 	
 	void npcDataLoop() {
-		int npcs_total = 0;
-		
 		for (uint i = 0; i < npcs_data.length(); i++) {
 			// Verificar se é hora de fazer respawn
 			if (npcs_data[i].respawn_timer.elapsed >= npcs_data[i].tiempoaparicion) {
@@ -1258,36 +1713,13 @@ class map {
 				if (!npcs_data[i].enablerespawn) {
 					// Verificar se NPC já existe
 					if (get_npc_index(npcs_data[i].nombrenpc) > -1) {
-						npcs_total++;
+						// NPC já está ativo, não criar outro
+						continue;
 					}
 					
 					// Só cria se não existir nenhum NPC deste tipo
-					if (npcs_total == 0) {
-						// TODO: Criar construtor NPC compatível com npc_data
-						/*npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida,
-						     npcs_data[i].xp, npcs_data[i].distanciaataques,
-						     npcs_data[i].danoquerecibira, npcs_data[i].danoquedara,
-						     npcs_data[i].danodelespejo, npcs_data[i].tiempoparaatacar,
-						     npcs_data[i].tiempoparacaminar, npcs_data[i].tiempodelossonidos,
-						     npcs_data[i].itemsadar, npcs_data[i].sonidoataque,
-						     npcs_data[i].sonidonervioso, npcs_data[i].sonidomuerte,
-						     npcs_data[i].nombrenpc, npcs_data[i].msgmuerte,
-						     npcs_data[i].tiempoaparicion, npcs_data[i].enablerespawn,
-						     npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc,
-						     npcs_data[i].left_range, npcs_data[i].right_range,
-						     npcs_data[i].impactosbala, npcs_data[i].degradation);*/
-
-						@npcs_data[i] = null;
-						npcs_data.remove_at(i);
-						//npcs.insert_last(n);
-						break;
-					}
-				}
-				// Modo: Respawn múltiplo (enablerespawn == true)
-				else if (npcs_data[i].enablerespawn) {
-					// TODO: Criar construtor NPC compatível com npc_data
-					/*npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida,
-					     npcs_data[i].xp, npcs_data[i].distanciaataques,
+					npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida,
+					     npcs_data[i].xp_reward, npcs_data[i].distanciaataques,
 					     npcs_data[i].danoquerecibira, npcs_data[i].danoquedara,
 					     npcs_data[i].danodelespejo, npcs_data[i].tiempoparaatacar,
 					     npcs_data[i].tiempoparacaminar, npcs_data[i].tiempodelossonidos,
@@ -1297,11 +1729,32 @@ class map {
 					     npcs_data[i].tiempoaparicion, npcs_data[i].enablerespawn,
 					     npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc,
 					     npcs_data[i].left_range, npcs_data[i].right_range,
-					     npcs_data[i].impactosbala, npcs_data[i].degradation);*/
+					     npcs_data[i].impactosbala, npcs_data[i].degradation);
 
 					@npcs_data[i] = null;
 					npcs_data.remove_at(i);
-					//npcs.insert_last(n);
+					npcs.insert_last(n);
+					break;
+				}
+				// Modo: Respawn múltiplo (enablerespawn == true)
+				else if (npcs_data[i].enablerespawn) {
+					// Sempre criar novo NPC quando respawnar
+					npc n(npcs_data[i].x, npcs_data[i].y, npcs_data[i].vida,
+					     npcs_data[i].xp_reward, npcs_data[i].distanciaataques,
+					     npcs_data[i].danoquerecibira, npcs_data[i].danoquedara,
+					     npcs_data[i].danodelespejo, npcs_data[i].tiempoparaatacar,
+					     npcs_data[i].tiempoparacaminar, npcs_data[i].tiempodelossonidos,
+					     npcs_data[i].itemsadar, npcs_data[i].sonidoataque,
+					     npcs_data[i].sonidonervioso, npcs_data[i].sonidomuerte,
+					     npcs_data[i].nombrenpc, npcs_data[i].msgmuerte,
+					     npcs_data[i].tiempoaparicion, npcs_data[i].enablerespawn,
+					     npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc,
+					     npcs_data[i].left_range, npcs_data[i].right_range,
+					     npcs_data[i].impactosbala, npcs_data[i].degradation);
+
+					@npcs_data[i] = null;
+					npcs_data.remove_at(i);
+					npcs.insert_last(n);
 					break;
 				}
 			}
@@ -1987,7 +2440,153 @@ class map {
 		}
 	}
 	
-	// A CONTINUAR COM OUTROS MÉTODOS...
+	// ============================================================================
+	// MÉTODOS DE QUERY E GERENCIAMENTO DE NPCs
+	// ============================================================================
+	// NOTA: get_npc_index() sobrecargas já existem acima (linhas 1667-1685)
+	
+	npc@ get_npc_by_name(string npc_name) {
+		int idx = get_npc_index(npc_name);
+		if (idx > -1) return @npcs[idx];
+		return null;
+	}
+	
+	npc@ get_npc_by_id(int npc_id) {
+		int idx = get_npc_index(npc_id);
+		if (idx > -1) return @npcs[idx];
+		return null;
+	}
+	
+	npc@ get_npc_nearest(int x, int y, int max_range = 50) {
+		int nearest_index = -1;
+		double nearest_distance = double(max_range + 1);
+		
+		for (uint i = 0; i < npcs.length(); i++) {
+			double dist = get_distance(x, npcs[i].x, y, npcs[i].y);
+			if (dist <= max_range && dist < nearest_distance) {
+				nearest_distance = dist;
+				nearest_index = i;
+			}
+		}
+		
+		if (nearest_index > -1) return @npcs[nearest_index];
+		return null;
+	}
+	
+	int get_npcs_in_range(int x, int y, int range) {
+		int count = 0;
+		for (uint i = 0; i < npcs.length(); i++) {
+			if (get_distance(x, npcs[i].x, y, npcs[i].y) <= range) {
+				count++;
+			}
+		}
+		return count;
+	}
+	
+	void broadcast_npc_spawn(npc@ n) {
+		if (@n == null) return;
+		
+		string packet = "npc_spawn " + n.id + " " + n.nombrenpc + " " + 
+		               n.x + " " + n.y + " " + n.vida + " " + n.vida;
+		send_packet(5, packet, n.x, n.y, 50, true);
+	}
+	
+	void broadcast_npc_move(npc@ n) {
+		if (@n == null) return;
+		
+		string packet = "npc_move " + n.id + " " + n.x + " " + n.y;
+		send_packet(5, packet, n.x, n.y, 50, false);
+	}
+	
+	void broadcast_npc_attack(npc@ n, int damage) {
+		if (@n == null) return;
+		
+		string packet = "npc_attack " + n.id + " " + damage;
+		send_packet(5, packet, n.x, n.y, 30, true);
+	}
+	
+	void broadcast_npc_death(npc@ n) {
+		if (@n == null) return;
+		
+		string packet = "npc_die " + n.id;
+		send_packet(5, packet, n.x, n.y, 50, true);
+	}
+	
+	void broadcast_npc_hp(npc@ n) {
+		if (@n == null) return;
+		
+		string packet = "npc_hp " + n.id + " " + n.vida;
+		send_packet(5, packet, n.x, n.y, 50, false);
+	}
+	
+	// ============================================================================
+	// MÉTODOS DE SINCRONIZAÇÃO INICIAL
+	// ============================================================================
+	
+	void sync_npcs_to_player(int peer_id) {
+		// Enviar todos os NPCs ativos para o jogador que conectou
+		for (uint i = 0; i < npcs.length(); i++) {
+			string packet = "npc_spawn " + npcs[i].id + " " + npcs[i].nombrenpc + " " + 
+			               npcs[i].x + " " + npcs[i].y + " " + npcs[i].vida + " " + npcs[i].vida;
+			send_reliable(peer_id, packet, 5);
+		}
+	}
+	
+	// ============================================================================
+	// MÉTODOS DE GERENCIAMENTO DE RECURSOS
+	// ============================================================================
+	
+	void cleanup_dead_npcs() {
+		// Remover NPCs com vida <= 0 que já foram processados
+		for (uint i = 0; i < npcs.length(); i++) {
+			if (npcs[i].vida <= 0 && npcs[i].morrendo) {
+				@npcs[i] = null;
+				npcs.remove_at(i);
+				break;
+			}
+		}
+	}
+	
+	void cleanup_dead_objects() {
+		// Remover objetos coletados
+		for (uint i = 0; i < objs.length(); i++) {
+			if (objs[i].taked) {
+				@objs[i] = null;
+				objs.remove_at(i);
+				break;
+			}
+		}
+	}
+	
+	void reset_npc_spawn_data() {
+		// Limpar dados de respawn de NPCs que já nasceram
+		for (uint i = 0; i < npcs_data.length(); i++) {
+			if (npcs_data[i].respawn_timer.elapsed >= npcs_data[i].tiempoaparicion) {
+				// Este NPC já nasceu, será recriado ou removido em npcDataLoop
+				continue;
+			}
+		}
+	}
+	
+	// ============================================================================
+	// MÉTODOS DE DESCRIÇÃO
+	// ============================================================================
+	
+	string get_npc_description(npc@ n) {
+		if (@n == null) return "sem npc";
+		
+		string desc = n.nombrenpc + " com " + n.vida + " de vida";
+		return desc;
+	}
+	
+	string get_map_stats() {
+		string stats = "Mapa: " + this.name + ", ";
+		stats += "Jogadores: " + mapplayers.length() + ", ";
+		stats += "NPCs: " + npcs.length() + ", ";
+		stats += "Objetos: " + objs.length() + ", ";
+		stats += "Limites: [" + max_x + "x" + max_y + "]";
+		return stats;
+	}
 	
 } // end class map
 

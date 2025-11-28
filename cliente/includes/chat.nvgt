@@ -134,9 +134,11 @@ void chat_add_message(string channel_name, string message, bool should_speak = t
     
     // Verificar se o canal existe
     bool channel_exists = false;
+    uint channel_index = 0;
     for(uint i = 0; i < chat_channels.length(); i++) {
         if(chat_channels[i].name == channel_name) {
             channel_exists = true;
+            channel_index = i;
             break;
         }
     }
@@ -144,6 +146,13 @@ void chat_add_message(string channel_name, string message, bool should_speak = t
     // Se não existe, criar
     if(!channel_exists) {
         chat_create_channel(channel_name);
+        // Encontrar o índice do canal recém-criado
+        for(uint i = 0; i < chat_channels.length(); i++) {
+            if(chat_channels[i].name == channel_name) {
+                channel_index = i;
+                break;
+            }
+        }
     }
     
     // Adicionar ao canal e ao general
@@ -152,10 +161,47 @@ void chat_add_message(string channel_name, string message, bool should_speak = t
            chat_channels[i].name == CHAT_GENERAL) {
             
             chat_channels[i].add_message(message);
+        }
+    }
+    
+    // 🆕 MOVER AUTOMATICAMENTE PARA O NOVO CANAL SE NÃO FOR GENERAL/SYSTEM
+    // Isso faz o chat aparecer dinamicamente quando mensagem chega
+    if(channel_name != CHAT_GENERAL && channel_name != CHAT_SYSTEM) {
+        current_channel_index = channel_index;
+        
+        // 🎵 TOCAR SOM APROPRIADO PARA CADA TIPO DE CANAL
+        if(should_speak && (ouviremoutrasjanelas == 1 || is_game_window_active())) {
+            // Selecionar som baseado no tipo de canal
+            string sound_to_play = "";
             
-            // Vocalizar se não for general
-            if(should_speak && channel_name != CHAT_GENERAL) {
+            if(channel_name == CHAT_LOCAL) {
+                sound_to_play = get_sound_path("chatmap.ogg");  // Som de chat local
+            } else if(channel_name == CHAT_GLOBAL) {
+                sound_to_play = get_sound_path("chat.ogg");     // Som de chat global
+            } else if(channel_name == CHAT_PRIVATE) {
+                sound_to_play = get_sound_path("pm.ogg");       // Som de PM
+            } else if(channel_name == CHAT_TEAM) {
+                sound_to_play = get_sound_path("teamchat.ogg"); // Som de team
+            } else if(channel_name == CHAT_TRADE) {
+                sound_to_play = get_sound_path("trade.ogg");    // Som de trade
+            }
+            
+            // Tocar som se foi definido
+            if(sound_to_play != "") {
+                p.play_stationary(sound_to_play, false);
+            }
+            
+            // Anunciar qual canal e a mensagem
+            speak(channel_name);  // Anuncia o nome do canal
+            speak(message);       // Anuncia a mensagem
+        }
+    } else {
+        // Para mensagens do sistema, apenas tocar som e falar se habilitado
+        if(should_speak) {
+            if(channel_name == CHAT_SYSTEM) {
+                // Som genérico de sistema
                 if(ouviremoutrasjanelas == 1 || is_game_window_active()) {
+                    p.play_stationary(get_sound_path("system.ogg"), false);
                     speak(message);
                 }
             }

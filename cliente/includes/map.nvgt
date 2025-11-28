@@ -2,9 +2,11 @@
 #include "platforms.nvgt"
 #include "zones.nvgt"
 #include "safezones.nvgt"
+#include "extract.nvgt"
 
 // Variáveis globais de mapa
 dictionary fail;
+dictionary desactivados;
 string[] map2;
 string[] map;
 bool amisafe = false;
@@ -95,6 +97,7 @@ void mapreset(bool complete = true) {
 	destroy_all_txts();
 	destroy_all_dialogs();
 	destroy_stores();
+	destroy_all_npcs(); // 🆕 Destruir todos os NPCs visuais
 	
 	if(complete) p.destroy_all();
 	
@@ -539,8 +542,79 @@ void init_data(string data_line, bool complete = true) {
 		
 		debug_log("👹 NPC criado: " + nombre + " em (" + x + "," + y + ") HP:" + vida + " XP:" + xp);
 	}
+	// ZONE: Áreas de trigger/diálogo
+	else if(parsed[0] == "z" && parsed.length() >= 6) {
+		int min_x = string_to_number(parsed[1]);
+		int max_x = string_to_number(parsed[2]);
+		int min_y = string_to_number(parsed[3]);
+		int max_y = string_to_number(parsed[4]);
+		string text = parsed[5];
+		
+		// Se houver mais parâmetros, concatenar como texto
+		if(parsed.length() > 6) {
+			for(int i = 6; i < parsed.length(); i++) {
+				text += ":" + parsed[i];
+			}
+		}
+		
+		zones.insert_at(zones.length(), zone(min_x, max_x, min_y, max_y, text));
+		
+		debug_log("📍 Zone criada: (" + min_x + "," + max_x + ") x (" + min_y + "," + max_y + ")");
+	}
+	// PLATFORM: Plataformas, escadas, paredes
+	else if(parsed[0] == "p" && parsed.length() >= 5) {
+		string plattype = parsed[1];
+		int min_x = string_to_number(parsed[2]);
+		int max_x = string_to_number(parsed[3]);
+		int min_y = string_to_number(parsed[4]);
+		int max_y = string_to_number(parsed[5]);
+		string tiles = (parsed.length() > 6) ? parsed[6] : "";
+		
+		platforms.insert_at(platforms.length(), platform(plattype, min_x, max_x, min_y, max_y, tiles));
+		
+		string tipo_nome = "Plataforma";
+		if(plattype == "sc") tipo_nome = "Escada";
+		else if(plattype == "w") tipo_nome = "Parede";
+		
+		debug_log("🏗️ " + tipo_nome + " criada: (" + min_x + "," + max_x + ") x (" + min_y + "," + max_y + ")");
+	}
+	// EXTRACT: Zonas de extração (minerar, cortar, etc)
+	else if(parsed[0] == "ex" && parsed.length() >= 11) {
+		int min_x = string_to_number(parsed[1]);
+		int max_x = string_to_number(parsed[2]);
+		int min_y = string_to_number(parsed[3]);
+		int max_y = string_to_number(parsed[4]);
+		int items = string_to_number(parsed[5]);
+		int attempts = string_to_number(parsed[6]);
+		int time = string_to_number(parsed[7]);
+		string item = parsed[8];
+		string snd_ext = parsed[9];
+		string snd_extracted = parsed[10];
+		
+		extracts.insert_at(extracts.length(), extract(min_x, max_x, min_y, max_y, 
+		                                               items, attempts, time, 
+		                                               item, snd_ext, snd_extracted));
+		
+		debug_log("⛏️ Extract zone criada: (" + min_x + "," + max_x + ") - Item: " + item);
+	}
+	// DESACTIVADO (dv): Marcar elemento como desativado
+	else if(parsed[0] == "dv" && parsed.length() >= 2) {
+		string id = parsed[1];
+		disableds.insert_at(disableds.length(), id);
+		debug_log("❌ Elemento desativado: " + id);
+	}
+	// SOUND SPAWN (ss): Ponto de spawn de som ambiente
+	else if(parsed[0] == "ss" && parsed.length() >= 6) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		// parsed[3], parsed[4] são parâmetros desconhecidos (possivelmente volume, loop, etc)
+		string arquivo = parsed[5];
+		// Armazenar para possível uso futuro em HUD ou efeitos sonoros
+		// Por enquanto apenas logar
+		debug_log("🔊 Sound spawn em (" + x + "," + y + "): " + arquivo);
+	}
 	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb"
-	        || parsed[0] == "pm2" || parsed[0] == "w2" || parsed[0] == "ex"
+	        || parsed[0] == "pm2" || parsed[0] == "w2"
 	        || parsed[0] == "pnpc") {
 		// Ignorar estes elementos por enquanto (TODO: implementar pnpc)
 		if(parsed[0] == "pnpc") {
@@ -837,4 +911,56 @@ void update_hud_npcs() {
 	// Versão simplificada que apenas atualiza periodicamente
 	// Chamar desta função a cada 1-2 segundos do game loop
 	display_npcs_hud();
+}
+
+// ====== NPC MANAGEMENT: Gerenciar array de NPCs ======
+
+void destroy_all_npcs() {
+	// Destruir todos os NPCs visuais do cliente
+	for(uint i = 0; i < npc_objects.length(); i++) {
+		@npc_objects[i] = null;
+	}
+	npc_objects.resize(0);
+	debug_log("✓ Todos os NPCs foram destruídos");
+}
+
+void remove_npc_by_id(int npc_id) {
+	// Remover NPC específico pelo ID
+	for(uint i = 0; i < npc_objects.length(); i++) {
+		if(npc_objects[i].id == npc_id) {
+			@npc_objects[i] = null;
+			npc_objects.remove_at(i);
+			debug_log("🗑️ NPC ID " + npc_id + " removido");
+			break;
+		}
+	}
+}
+
+npc_client_class@ get_npc_by_id(int npc_id) {
+	// Buscar NPC pelo ID (retorna referência ou null)
+	for(uint i = 0; i < npc_objects.length(); i++) {
+		if(npc_objects[i].id == npc_id) {
+			return @npc_objects[i];
+		}
+	}
+	return null;
+}
+
+npc_client_class@ get_nearest_npc(int max_distance = 10) {
+	// Retorna o NPC mais próximo dentro de max_distance
+	npc_client_class@ nearest = null;
+	int min_distance = max_distance;
+	
+	for(uint i = 0; i < npc_objects.length(); i++) {
+		int dx = me.x - npc_objects[i].x;
+		int dy = me.y - npc_objects[i].y;
+		int distance = sqrt(dx * dx + dy * dy);
+		
+		if(distance < min_distance) {
+			min_distance = distance;
+			@nearest = @npc_objects[i];
+		}
+	}
+	
+	return @nearest;
 }

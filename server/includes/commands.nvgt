@@ -151,6 +151,26 @@ void init_command_system() {
     register_command("transfer", "Transferir item entre jogadores", true, {}, "transfer <origem> <destino> <item> <quantidade>");
     register_command("checkweight", "Ver peso do inventário", false, {}, "checkweight [jogador]");
 
+    // ✅ Task 1.5.2: Sistema de Recompensas (Bounty)
+    register_command("bounty", "Colocar recompensa na cabeça de jogador", false, {"recompensa"}, "bounty <jogador> <valor>");
+    register_command("checkbounty", "Ver recompensa na cabeça de jogador", false, {"verbounty"}, "checkbounty <jogador>");
+    register_command("mybounty", "Ver recompensa na sua cabeça", false, {"minharecompensa"}, "mybounty");
+    register_command("cancelbounty", "Cancelar recompensa que você colocou", false, {"cancelarbounty"}, "cancelbounty <jogador>");
+    register_command("listbounties", "Listar todos jogadores com recompensa", false, {"bounties", "recompensas"}, "listbounties");
+
+    // ✅ Task 1.4.1: Sistema de Lojas NPC - Handlers de Compra
+    register_command("buy", "Comprar item de loja NPC", false, {"comprar"}, "buy <item> <quantidade>");
+    register_command("buy123321123", "Comprar item (código interno)", false, {}, "buy123321123 <quantidade> <item>");
+    register_command("buy2123321123", "Comprar item especial (código interno)", false, {}, "buy2123321123 <quantidade> <item>");
+    register_command("store", "Abrir menu de loja", false, {"loja"}, "store");
+    register_command("sell", "Vender item para loja", false, {"vender"}, "sell <item> <quantidade>");
+
+    // ✅ Task 1.5.3: Sistema de Construção de Mapas (Builder Mode)
+    register_command("savemap", "Salvar alterações do mapa atual", true, {"salvarmapa"}, "savemap");
+    register_command("mapupdate", "Atualizar/recarregar mapa", true, {"atualizarmapa", "reloadmap"}, "mapupdate [mapa]");
+    register_command("builderstats", "Ver estatísticas de construção do mapa", true, {"bstats"}, "builderstats");
+    register_command("sell", "Vender item para loja", false, {"vender"}, "sell <item> <quantidade>");
+
     debug_log("Sistema de comandos inicializado com " + registered_commands.get_size() + " comandos");
 }
 
@@ -334,6 +354,86 @@ bool execute_command(player@ player, string command, string[] args) {
     else if(command == "say") {
         return cmd_say(player, args);
     }
+    // 🆕 COMANDOS DE CHAT AVANÇADO
+    else if(command == "global" || command == "g") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /global <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_global(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "local" || command == "l") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /local <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_local(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "trade" || command == "t") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /trade <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_tradechat(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "channel") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /channel <global|local|party|guild|trade>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_channel(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "togglechannel") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /togglechannel <global|local|party|guild|trade>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_togglechannel(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "mute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /mute <jogador> [duração em minutos]");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        int duration = args.length() > 1 ? string_to_number(args[1]) : 30;
+        cmd_mute(player_idx, args[0], duration);
+        return true;
+    }
+    else if(command == "unmute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /unmute <jogador>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_unmute(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "blockword") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /blockword <palavra>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_blockword(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "listblockedwords") {
+        int player_idx = get_player_index_from(player.charname);
+        cmd_listblockedwords(player_idx);
+        return true;
+    }
+    // FIM: COMANDOS DE CHAT AVANÇADO
     else if(command == "inventory") {
         return cmd_inventory(player, args);
     }
@@ -427,6 +527,42 @@ bool execute_command(player@ player, string command, string[] args) {
     // 🆕 Comandos de itens consumíveis
     else if(command == "use" || command == "usar") {
         return cmd_use(player, args);
+    }
+    
+    // ✅ Task 1.5.2: Comandos do Sistema de Recompensas (Bounty)
+    else if(command == "bounty" || command == "recompensa") {
+        return cmd_bounty(player, args);
+    }
+    else if(command == "checkbounty" || command == "verbounty") {
+        return cmd_checkbounty(player, args);
+    }
+    else if(command == "mybounty" || command == "minharecompensa") {
+        return cmd_mybounty(player, args);
+    }
+    else if(command == "cancelbounty" || command == "cancelarbounty") {
+        return cmd_cancelbounty(player, args);
+    }
+    else if(command == "listbounties" || command == "bounties" || command == "recompensas") {
+        return cmd_listbounties(player, args);
+    }
+    
+    // ✅ Task 1.4.1: Comandos do Sistema de Lojas NPC
+    else if(command == "buy" || command == "comprar") {
+        return cmd_buy(player, args);
+    }
+    else if(command == "buy123321123") {
+        // Formato interno do cliente: buy123321123 <quantidade> <item>
+        return cmd_buy_internal(player, args);
+    }
+    else if(command == "buy2123321123") {
+        // Formato interno do cliente para itens especiais: buy2123321123 <quantidade> <item>
+        return cmd_buy_special(player, args);
+    }
+    else if(command == "store" || command == "loja") {
+        return cmd_store(player, args);
+    }
+    else if(command == "sell" || command == "vender") {
+        return cmd_sell(player, args);
     }
     
     // Comando não implementado ainda
@@ -1020,7 +1156,7 @@ bool cmd_combat_status(player@ player, string[] args) {
         return false;
     }
     
-    CombatInstance@ combat = cast<CombatInstance@>(combat_instances[player.name]);
+    CombatInstance@ combat = get_player_combat(player.name);
     if(combat is null) {
         player.send_message("say Erro: Dados de combate não encontrados.");
         return false;
@@ -1069,4 +1205,505 @@ bool cmd_use(player@ player, string[] args) {
         // Mensagem de erro já enviada pelo sistema de consumíveis
         return false;
     }
+}
+
+// ============================================
+// ✅ Task 1.5.2: SISTEMA DE RECOMPENSAS (BOUNTY)
+// ============================================
+
+// Constantes do sistema de bounty
+const int BOUNTY_MIN_VALUE = 100;       // Valor mínimo da recompensa
+const int BOUNTY_MAX_VALUE = 10000000;  // Valor máximo da recompensa
+const int BOUNTY_CANCEL_FEE = 50;       // Taxa de cancelamento (50%)
+
+// Comando /bounty - Colocar recompensa na cabeça de um jogador
+bool cmd_bounty(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: /bounty <jogador> <valor>");
+        player.send_message("say Valor mínimo: " + BOUNTY_MIN_VALUE + " moedas");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int value = string_to_number(args[1]);
+    
+    // Obter índice do jogador que está colocando a recompensa
+    int setter_index = get_player_index_from(player.charname);
+    if(setter_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    // Validar valor
+    if(value < BOUNTY_MIN_VALUE) {
+        player.send_message("say O valor mínimo da recompensa é " + BOUNTY_MIN_VALUE + " moedas.");
+        return false;
+    }
+    
+    if(value > BOUNTY_MAX_VALUE) {
+        player.send_message("say O valor máximo da recompensa é " + BOUNTY_MAX_VALUE + " moedas.");
+        return false;
+    }
+    
+    // Encontrar o alvo
+    int target_index = get_player_index_from(target_name);
+    if(target_index < 0) {
+        player.send_message("say Jogador '" + target_name + "' não está online.");
+        return false;
+    }
+    
+    // Verificar se tem saldo suficiente
+    if(players[setter_index].saldo < value) {
+        player.send_message("say Você não tem moedas suficientes. Seu saldo: " + players[setter_index].saldo);
+        return false;
+    }
+    
+    // Tentar colocar a recompensa
+    if(set_bounty(target_index, setter_index, value)) {
+        // Sucesso - notificar todos
+        player.send_message("say ✅ Você colocou uma recompensa de " + value + " moedas na cabeça de " + players[target_index].charname + "!");
+        
+        // Notificar o alvo
+        send_reliable(players[target_index].peer_id, 
+            "msg2 ⚠️ ALERTA: " + player.charname + " colocou uma recompensa de " + value + " moedas na sua cabeça!", 0);
+        
+        // Broadcast global
+        server_broadcast("msg2 📢 " + player.charname + " colocou uma recompensa de " + value + " moedas na cabeça de " + players[target_index].charname + "!");
+        
+        debug_log("BOUNTY: " + player.charname + " colocou " + value + " na cabeça de " + players[target_index].charname);
+        return true;
+    } else {
+        // Falhou - verificar motivo
+        if(target_index == setter_index) {
+            player.send_message("say Você não pode colocar recompensa em si mesmo!");
+        } else if(players[target_index].pacifico == 1) {
+            player.send_message("say Este jogador está em modo pacífico e não pode receber recompensas.");
+        } else if(players[target_index].newbie == true) {
+            player.send_message("say Este jogador é novato e não pode receber recompensas.");
+        } else {
+            player.send_message("say Não foi possível colocar a recompensa. Tente novamente.");
+        }
+        return false;
+    }
+}
+
+// Comando /checkbounty - Ver recompensa na cabeça de um jogador
+bool cmd_checkbounty(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: /checkbounty <jogador>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int target_index = get_player_index_from(target_name);
+    
+    if(target_index < 0) {
+        player.send_message("say Jogador '" + target_name + "' não está online.");
+        return false;
+    }
+    
+    string info = get_bounty_info(target_index);
+    player.send_message("say " + info);
+    return true;
+}
+
+// Comando /mybounty - Ver recompensa na sua própria cabeça
+bool cmd_mybounty(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    if(!has_bounty(player_index)) {
+        player.send_message("say Você não tem recompensa na sua cabeça. 😊");
+        return true;
+    }
+    
+    string info = get_bounty_info(player_index);
+    player.send_message("say ⚠️ " + info);
+    
+    // Mostrar tempo online com recompensa
+    if(players[player_index].bounty_online_time > 0) {
+        int minutes = players[player_index].bounty_online_time / 60;
+        player.send_message("say Tempo com recompensa: " + minutes + " minutos");
+    }
+    
+    return true;
+}
+
+// Comando /cancelbounty - Cancelar recompensa que você colocou
+bool cmd_cancelbounty(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: /cancelbounty <jogador>");
+        player.send_message("say ⚠️ Taxa de cancelamento: " + BOUNTY_CANCEL_FEE + "% do valor");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int canceller_index = get_player_index_from(player.charname);
+    
+    if(canceller_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    // Verificar se este jogador colocou recompensa no alvo
+    if(players[canceller_index].bounty_target != target_name) {
+        player.send_message("say Você não colocou recompensa em " + target_name + ".");
+        return false;
+    }
+    
+    // Tentar cancelar
+    if(cancel_bounty(canceller_index, target_name)) {
+        int target_index = get_player_index_from(target_name);
+        
+        player.send_message("say ✅ Recompensa cancelada! Você recebeu de volta 50% do valor.");
+        
+        // Notificar o alvo se estiver online
+        if(target_index >= 0) {
+            send_reliable(players[target_index].peer_id, 
+                "msg2 A recompensa na sua cabeça colocada por " + player.charname + " foi cancelada!", 0);
+        }
+        
+        debug_log("BOUNTY CANCELADO: " + player.charname + " cancelou bounty em " + target_name);
+        return true;
+    } else {
+        player.send_message("say Não foi possível cancelar a recompensa. O jogador pode estar offline.");
+        return false;
+    }
+}
+
+// Comando /listbounties - Listar todos jogadores com recompensa
+bool cmd_listbounties(player@ player, string[] args) {
+    string[] bounties = list_all_bounties();
+    
+    if(bounties.length() == 0) {
+        player.send_message("say Não há jogadores com recompensa na cabeça no momento.");
+        return true;
+    }
+    
+    player.send_message("say === 💰 LISTA DE RECOMPENSAS (" + bounties.length() + ") ===");
+    
+    for(uint i = 0; i < bounties.length(); i++) {
+        player.send_message("say " + (i+1) + ". " + bounties[i]);
+    }
+    
+    return true;
+}
+
+// =========================================================
+// ✅ Task 1.4.1: SISTEMA DE LOJAS NPC - HANDLERS DE COMPRA
+// =========================================================
+// Este módulo implementa a validação encadeada para garantir
+// integridade econômica nas transações de compra de NPC.
+// =========================================================
+
+// Comando /buy (formato amigável) - Comprar item de loja
+bool cmd_buy(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: /buy <item> <quantidade>");
+        player.send_message("say Exemplo: /buy espada 1");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = string_to_number(args[1]);
+    
+    // Converter para formato interno e processar
+    string[] internal_args = {string(quantity), item_name};
+    return cmd_buy_internal(player, internal_args);
+}
+
+// Comando /buy123321123 (formato interno do cliente) - Handler Principal de Compra
+// IMPLEMENTAÇÃO CRÍTICA: Validação Encadeada para Segurança Econômica
+bool cmd_buy_internal(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    // --- VALIDAÇÃO 1: Dados de Entrada ---
+    if(args.length() < 2) {
+        player.send_message("say Dados de compra inválidos.");
+        return false;  // Interrupção: Dados de entrada inválidos
+    }
+    
+    int quantity = string_to_number(args[0]);
+    string item_name = args[1];
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade inválida. Use um valor maior que zero.");
+        return false;  // Interrupção: Quantidade inválida
+    }
+    
+    // --- VALIDAÇÃO 2: Item Existe na Loja ---
+    int store_index = item_exists_for_sale(item_name);
+    if(store_index < 0) {
+        player.send_message("say Item '" + item_name + "' não encontrado na loja.");
+        return false;  // Interrupção: Item não existe
+    }
+    
+    // Obter dados do item da loja
+    double unit_price = items_sale[store_index].price;
+    string currency_type = items_sale[store_index].money;
+    double total_cost = unit_price * quantity;
+    
+    // --- VALIDAÇÃO 3: Moeda Suficiente (Primeira Camada de Segurança) ---
+    bool has_funds = false;
+    string currency_name = "";
+    
+    if(currency_type == "stryx") {
+        has_funds = players[player_index].has_stryx(total_cost);
+        currency_name = "Stryx";
+    }
+    else if(currency_type == "creditos") {
+        has_funds = players[player_index].has_credits(total_cost);
+        currency_name = "Créditos";
+    }
+    else if(currency_type == "saldo" || currency_type == "dinheiro" || currency_type == "reais") {
+        has_funds = players[player_index].has_money(total_cost);
+        currency_name = "Reais";
+    }
+    else {
+        // Moeda é um item do inventário (ex: euro, coins, etc.)
+        has_funds = players[player_index].inv_item_number(currency_type) >= int(total_cost);
+        currency_name = currency_type;
+    }
+    
+    if(!has_funds) {
+        player.send_message("say " + currency_name + " insuficiente. Requer: " + total_cost + " " + currency_name);
+        return false;  // Interrupção: Falha na Economia (Camada 1)
+    }
+    
+    // --- VALIDAÇÃO 4: Espaço no Inventário (Segunda Camada de Segurança) ---
+    // Verificar limite de slots do inventário
+    int current_items = int(players[player_index].inv.get_keys().length());
+    bool item_exists = players[player_index].inv_item_exists(item_name);
+    
+    // Se o item não existe no inventário e já está no limite de slots
+    if(!item_exists && current_items >= players[player_index].max_inventory_slots) {
+        player.send_message("say Inventário cheio! Você não tem mais slots disponíveis.");
+        player.send_message("say Slots: " + current_items + "/" + players[player_index].max_inventory_slots);
+        return false;  // Interrupção: Falha no Inventário (Camada 2)
+    }
+    
+    // --- EXECUÇÃO DA TRANSAÇÃO (Sucesso após todas validações) ---
+    // A transação só é executada se TODAS as validações passarem
+    
+    // Ação 1: Subtrair a moeda correta
+    if(currency_type == "stryx") {
+        players[player_index].remove_stryx(total_cost);
+    }
+    else if(currency_type == "creditos") {
+        players[player_index].remove_credits(total_cost);
+    }
+    else if(currency_type == "saldo" || currency_type == "dinheiro" || currency_type == "reais") {
+        players[player_index].remove_money(total_cost, "compra de " + quantity + "x " + item_name);
+    }
+    else {
+        // Item como moeda
+        players[player_index].inv_add_item(currency_type, -int(total_cost), true);
+    }
+    
+    // Ação 2: Adicionar o item ao inventário
+    players[player_index].inv_add_item(item_name, quantity, true);
+    
+    // --- FEEDBACK E LOG ---
+    player.send_message("say ✅ Compra realizada com sucesso!");
+    player.send_message("say 📦 Você comprou " + quantity + "x " + item_name);
+    player.send_message("say 💰 Total: " + total_cost + " " + currency_name);
+    
+    // Salvar jogador após transação
+    save_player_to_database(players[player_index]);
+    
+    // Log para auditoria
+    debug_log("COMPRA: " + player.charname + " comprou " + quantity + "x " + item_name + 
+              " por " + total_cost + " " + currency_name);
+    log_to_database("INFO", "ECONOMY", "Compra: " + quantity + "x " + item_name + 
+                    " por " + total_cost + " " + currency_name, player_index, player.charname);
+    
+    return true;
+}
+
+// Comando /buy2123321123 - Compra de Itens Especiais (Explosivos, etc.)
+// Mesmo padrão de validação encadeada
+bool cmd_buy_special(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    // --- VALIDAÇÃO 1: Dados de Entrada ---
+    if(args.length() < 2) {
+        player.send_message("say Dados de compra inválidos.");
+        return false;
+    }
+    
+    int quantity = string_to_number(args[0]);
+    string item_name = args[1];
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade inválida.");
+        return false;
+    }
+    
+    // --- PREÇOS ESPECIAIS (Loja de Explosivos) ---
+    // Esses itens têm preços fixos em "euro" (moeda do inventário)
+    dictionary special_prices;
+    special_prices.set("mina", 20);
+    special_prices.set("bomba_relógio", 100);
+    special_prices.set("bomba_remota", 200);
+    special_prices.set("míssil_teleguiado", 200);
+    special_prices.set("max_bomba", 250);
+    special_prices.set("bomba_de_fogo", 250);
+    special_prices.set("bomba_atômica", 300);
+    special_prices.set("mega_laser", 5000);
+    special_prices.set("sub_laser", 100000);
+    special_prices.set("cuernitoarmani", 1000000);
+    special_prices.set("galil", 100000);
+    special_prices.set("míssil", 15);
+    special_prices.set("laser", 5);
+    special_prices.set("7.62mm", 3);
+    special_prices.set("5.56mm", 2);
+    special_prices.set("9mm", 2);
+    
+    // --- VALIDAÇÃO 2: Item Existe ---
+    if(!special_prices.exists(item_name)) {
+        player.send_message("say Item especial '" + item_name + "' não encontrado.");
+        return false;
+    }
+    
+    int unit_price;
+    special_prices.get(item_name, unit_price);
+    int total_cost = unit_price * quantity;
+    
+    // --- VALIDAÇÃO 3: Moeda Suficiente (Euro do Inventário) ---
+    int player_euros = players[player_index].inv_item_number("euro");
+    if(player_euros < total_cost) {
+        player.send_message("say Euros insuficientes. Requer: " + total_cost + " euro");
+        player.send_message("say Você tem: " + player_euros + " euro");
+        return false;
+    }
+    
+    // --- VALIDAÇÃO 4: Espaço no Inventário ---
+    int current_items = int(players[player_index].inv.get_keys().length());
+    bool item_exists = players[player_index].inv_item_exists(item_name);
+    
+    if(!item_exists && current_items >= players[player_index].max_inventory_slots) {
+        player.send_message("say Inventário cheio!");
+        return false;
+    }
+    
+    // --- EXECUÇÃO DA TRANSAÇÃO ---
+    players[player_index].inv_add_item("euro", -total_cost, true);
+    players[player_index].inv_add_item(item_name, quantity, true);
+    
+    // --- FEEDBACK ---
+    player.send_message("say ✅ Compra especial realizada!");
+    player.send_message("say 💣 Você comprou " + quantity + "x " + item_name);
+    player.send_message("say 💰 Total: " + total_cost + " euro");
+    
+    save_player_to_database(players[player_index]);
+    
+    debug_log("COMPRA ESPECIAL: " + player.charname + " comprou " + quantity + "x " + item_name + 
+              " por " + total_cost + " euro");
+    
+    return true;
+}
+
+// Comando /store - Abrir Menu de Loja (envia lista de itens para cliente)
+bool cmd_store(player@ player, string[] args) {
+    if(items_sale.length() == 0) {
+        player.send_message("say Não há itens disponíveis na loja no momento.");
+        return true;
+    }
+    
+    // Montar lista de itens para o cliente
+    string store_list = "";
+    for(uint i = 0; i < items_sale.length(); i++) {
+        if(i > 0) store_list += "\r\n";
+        // Formato: "item, preço moeda - descrição"
+        store_list += items_sale[i].item + ", " + items_sale[i].price + " " + 
+                      items_sale[i].money + " - " + items_sale[i].description;
+    }
+    
+    // Enviar lista para o cliente abrir o menu
+    send_reliable(player.peer_id, "store " + store_list, 0);
+    
+    debug_log("STORE: " + player.charname + " abriu loja com " + items_sale.length() + " itens");
+    return true;
+}
+
+// Comando /sell - Vender Item para Loja
+bool cmd_sell(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador não encontrado.");
+        return false;
+    }
+    
+    if(args.length() < 2) {
+        player.send_message("say Uso: /sell <item> <quantidade>");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = string_to_number(args[1]);
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade inválida.");
+        return false;
+    }
+    
+    // Verificar se jogador tem o item
+    int player_quantity = players[player_index].inv_item_number(item_name);
+    if(player_quantity < quantity) {
+        player.send_message("say Você não tem " + quantity + "x " + item_name + ".");
+        player.send_message("say Você tem: " + player_quantity + "x " + item_name);
+        return false;
+    }
+    
+    // Verificar se item está na loja (para obter preço de venda)
+    int store_index = item_exists_for_sale(item_name);
+    double sell_price = 0;
+    string currency_type = "saldo";
+    
+    if(store_index >= 0) {
+        // Item existe na loja - vende por 50% do preço de compra
+        sell_price = items_sale[store_index].price * 0.5;
+        currency_type = items_sale[store_index].money;
+    } else {
+        // Item não está na loja - preço base
+        sell_price = 1;  // 1 real por item genérico
+    }
+    
+    double total_value = sell_price * quantity;
+    
+    // Executar venda
+    players[player_index].inv_add_item(item_name, -quantity, true);
+    
+    // Adicionar moeda
+    if(currency_type == "stryx") {
+        players[player_index].add_stryx(total_value);
+    }
+    else if(currency_type == "creditos") {
+        players[player_index].add_credits(total_value);
+    }
+    else {
+        players[player_index].add_money(total_value, "venda de " + quantity + "x " + item_name);
+    }
+    
+    player.send_message("say ✅ Venda realizada!");
+    player.send_message("say 📦 Você vendeu " + quantity + "x " + item_name);
+    player.send_message("say 💰 Recebeu: " + total_value + " " + currency_type);
+    
+    save_player_to_database(players[player_index]);
+    
+    debug_log("VENDA: " + player.charname + " vendeu " + quantity + "x " + item_name + 
+              " por " + total_value + " " + currency_type);
+    
+    return true;
 }
