@@ -1,0 +1,122 @@
+// cachorro.nvgt - Sistema de Cachorro do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+cachorro@[] cachorros;
+
+class cachorro {
+	int x, y, ladoandar = 2;
+	uint tiros = 1;
+	int vida = random(2000, 2300);
+	string golpeado;
+	string map;
+	timer cachorrotimer;
+	timer tempoatirar;
+	timer tsom;
+	int asom = 4000;
+	int cachorrotime = 290;
+	
+	cachorro(int cx, int cy, string cmap) {
+		x = cx;
+		y = cy;
+		map = cmap;
+	}
+}
+
+// Calcula distância entre cachorro e jogador
+int get_cachorro_distance(cachorro@ c, player@ p) {
+	if (c.map != p.map) return -1;
+	return get_distance(c.x, p.x, c.y, p.y);
+}
+
+void cachorroloop() {
+	for (uint i = 0; i < cachorros.length(); i++) {
+		// Sistema de morte
+		if (cachorros[i].vida <= 0) {
+			net.send_packet(0, "play m_cachorro.ogg " + cachorros[i].x + " " + cachorros[i].y, cachorros[i].map);
+			string golp = cachorros[i].golpeado;
+			
+			if (golp.find("magnet_") > -1) {
+				golp = golp.replace("magnet_", "");
+				send_reliable(0, "msg2 um; ;cachorro; ;morreu no; ;item_magnético; ;de; ;" + golp + ";!", 3);
+			} else {
+				send_reliable(0, "msg2 " + golp + "; ;matou um; ;cachorro;!", 3);
+			}
+			
+			int xx = get_player_index_from(golp);
+			if (xx > -1) {
+				players[xx].inv_add_item("corpo_de_cachorro", 1);
+				ganhaxp(players[xx].charname, random(10, 20));
+				
+				// 🆕 INTEGRAÇÃO: Atualizar quests e achievements
+				quest_update_kill(players[xx].charname, "cachorro");
+				update_achievement_progress(players[xx].charname, "kills", 1);
+			}
+			cachorros.remove_at(i);
+			break;
+		}
+		
+		// Sons periódicos (nervoso)
+		if (cachorros[i].tsom.elapsed >= cachorros[i].asom + random(1000, 3200)) {
+			cachorros[i].tsom.restart();
+			string ss = "cachorronervoso" + random(1, 5) + ".ogg";
+			net.send_packet(0, "play " + ss + " " + cachorros[i].x + " " + cachorros[i].y, cachorros[i].map);
+		}
+		
+		// Sistema de movimento e combate
+		if (cachorros[i].cachorrotimer.elapsed >= cachorros[i].cachorrotime) {
+			cachorros[i].cachorrotimer.restart();
+			
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				// Movimento - seguir jogador (apenas no chão y<=1)
+				if (cachorros[i].x > players[i2].x + 2 && players[i2].insz == false && players[i2].map == cachorros[i].map && players[i2].newbie == false && players[i2].afk == false && players[i2].pacifico == 0 && cachorros[i].y <= 1) {
+					cachorros[i].x -= 2;
+					string ss = get_tile_at(cachorros[i].x, cachorros[i].y, cachorros[i].map);
+					net.send_packet(0, "play " + ss + "step" + random(1, 5) + ".ogg " + cachorros[i].x + " " + cachorros[i].y, cachorros[i].map);
+					cachorros[i].cachorrotimer.restart();
+					break;
+				}
+				else if (cachorros[i].x < players[i2].x - 2 && players[i2].insz == false && cachorros[i].map == players[i2].map && players[i2].afk == false && players[i2].pacifico == 0 && players[i2].newbie == false && cachorros[i].y <= 1) {
+					cachorros[i].x += 2;
+					string ss = get_tile_at(cachorros[i].x, cachorros[i].y, cachorros[i].map);
+					net.send_packet(0, "play " + ss + "step" + random(1, 5) + ".ogg " + cachorros[i].x + " " + cachorros[i].y, cachorros[i].map);
+					cachorros[i].cachorrotimer.restart();
+					break;
+				}
+				
+				// Sistema de ataque (dano 300-500)
+				if (get_cachorro_distance(cachorros[i], players[i2]) > -1 && get_cachorro_distance(cachorros[i], players[i2]) <= 2 && players[i2].afk == false && players[i2].pacifico == 0 && players[i2].newbie == false && cachorros[i].tempoatirar.elapsed >= 500 && cachorros[i].tiros > 0) {
+					cachorros[i].tempoatirar.restart();
+					net.send_packet(0, "play cachorrobater.ogg " + cachorros[i].x + " " + cachorros[i].y, cachorros[i].map);
+					
+					// Verificar reflexão de dano
+					int dano = random(300, 500);
+					int r = refletir(i2, "cachorro", cachorros[i].x, cachorros[i].y, dano);
+					if (r > 0) {
+						cachorros[i].vida -= r;
+						cachorros[i].golpeado = players[i2].charname;
+						break;
+					}
+					
+					players[i2].health -= dano;
+					net.send_packet(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y, players[i2].map);
+					players[i2].lasthit = "cachorro";
+					cachorros[i].tiros--;
+					break;
+				}
+				
+				// Reset de tiros
+				if (cachorros[i].tiros <= 0) {
+					cachorros[i].tiros = 1;
+					cachorros[i].tempoatirar.restart();
+				}
+			}
+		}
+	}
+	netloop();
+}
+
+void spawn_cachorro(int x, int y, string map) {
+	if (!pvp) return;
+	cachorro c(x, y, map);
+	cachorros.insert_last(c);
+}

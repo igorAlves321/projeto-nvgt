@@ -546,6 +546,47 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		me.x = string_to_number(parsed[1]);
 		me.y = string_to_number(parsed[2]);
 	}
+	// ✅ Task 2.2: Handler de rotação (yaw)
+	else if(parsed[0] == "yaw" && parsed.length() >= 2) {
+		me.yaw = string_to_number(parsed[1]);
+		debug_log("🧭 Yaw atualizado: " + me.yaw + "°");
+	}
+	// ✅ Task 2.2: Handler de stance (agachar/sentar)
+	else if(parsed[0] == "stance" && parsed.length() >= 2) {
+		int new_stance = string_to_number(parsed[1]);
+		me.stance = new_stance;
+
+		// Feedback sonoro baseado na postura
+		string stance_name = "em pé";
+		string stance_sound = "stance_stand.ogg";
+
+		if(new_stance == 1) {
+			stance_name = "agachado";
+			stance_sound = "stance_crouch.ogg";
+		} else if(new_stance == 2) {
+			stance_name = "sentado";
+			stance_sound = "stance_sit.ogg";
+		}
+
+		p.play_stationary(stance_sound, false);
+		speak("Agora você está " + stance_name + ".", true);
+		debug_log("🧍 Stance atualizado: " + stance_name + " (" + new_stance + ")");
+	}
+	// ✅ Task 2.2: Handler de stance de outros jogadores
+	else if(parsed[0] == "player_stance" && parsed.length() >= 3) {
+		// player_stance peer_id stance
+		uint64 other_peer_id = string_to_number(parsed[1]);
+		int other_stance = string_to_number(parsed[2]);
+
+		// Atualizar stance do jogador no array
+		for(uint i = 0; i < players.length(); i++) {
+			if(players[i].peer_id == other_peer_id) {
+				players[i].stance = other_stance;
+				debug_log("🧍 Player " + players[i].charname + " mudou stance para: " + other_stance);
+				break;
+			}
+		}
+	}
 	else if(parsed[0] == "turn" && parsed.length() >= 4) {
 		if(parsed[1] != un && parsed[4] == mapname) {
 			p.play_2d("turn.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
@@ -769,6 +810,31 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "msgnormal") {
 		string m = full_msg.replace(parsed[0] + " ", "");
 		add_add_item("avisos", pu.get_value(m));
+	}
+	// 🆕 CHAT LOCAL: fm |titulo| nome |ação| mensagem
+	else if(parsed[0] == "fm") {
+		process_fm(full_msg, parsed);
+	}
+	// 🆕 MENSAGEM PRIVADA: pm de/para nome: mensagem
+	else if(parsed[0] == "pm") {
+		process_pm(full_msg, parsed);
+	}
+	// 🆕 NOTIFICAÇÃO DE CONEXÃO: msgconexoes mensagem
+	else if(parsed[0] == "msgconexoes") {
+		process_msgconexoes(full_msg, parsed);
+	}
+	// ✅ TASK 3.3 QOL: Tradução recebida
+	else if(parsed[0] == "translated") {
+		string data = full_msg.replace("translated ", "");
+		process_translated_message(data);
+	}
+	// ✅ TASK 3.3 QOL: Habilitar tradução
+	else if(parsed[0] == "enabletranslate") {
+		process_enable_translate();
+	}
+	// ✅ TASK 3.3 QOL: Desabilitar tradução
+	else if(parsed[0] == "disabletranslate") {
+		process_disable_translate();
 	}
 	
 	// === GRUPO 8: COMBATE ===
@@ -1240,7 +1306,16 @@ void process_msg(string full_msg, string[] parsed) {
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item(parsed[1], m);
+	
+	// Mapear nomes de canal antigos (BGT) para novos
+	string channel = parsed[1];
+	if(channel == "canal_principal") channel = "global";
+	else if(channel == "canal_local") channel = "local";
+	else if(channel == "mensajes_del_equipo") channel = "equipe";
+	else if(channel == "conversaciones_privadas") channel = "privado";
+	else if(channel == "visiones_angelicales") channel = "admin";
+	
+	add_add_item(channel, m);
 }
 
 void process_msg2(string full_msg, string[] parsed) {
@@ -1251,7 +1326,7 @@ void process_msg2(string full_msg, string[] parsed) {
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item("avisos", m);
+	add_add_item("tudo", m);  // Avisos vão pro canal "tudo"
 }
 
 void process_msg3(string full_msg, string[] parsed) {
@@ -1262,18 +1337,36 @@ void process_msg3(string full_msg, string[] parsed) {
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item("mensajes_del_equipo", m);
+	add_add_item("equipe", m);  // Chat de equipe
 }
 
 void process_msg4(string full_msg, string[] parsed) {
 	string m;
 	string a = full_msg;
 	a = a.replace(parsed[0] + " ", "");
+	
+	// ✅ Task 2.6.2: Detectar e processar [LOGO_CHATTER] no chat administrativo
+	// Se a mensagem contém [LOGO_CHATTER], tocar som especial e adicionar prefixo "Chatter:"
+	bool is_chatter = false;
+	if(a.find("[LOGO_CHATTER]") != -1) {
+		is_chatter = true;
+		a = a.replace("[LOGO_CHATTER] ", ""); // Remove o marcador
+		a = a.replace("[LOGO_CHATTER]", "");  // Remove caso não tenha espaço
+		// Tocar som especial do Chatter
+		p.play("chatter_logo.ogg", false);
+	}
+	
 	string[] b = a.split(";");
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item("visiones_angelicales", m);
+	
+	// Adicionar prefixo "Chatter:" se for uma mensagem de chatter
+	if(is_chatter) {
+		m = "Chatter: " + m;
+	}
+	
+	add_add_item("admin", m);  // Chat de administração
 }
 
 void process_msg_translated(string full_msg, string[] parsed, string channel) {
@@ -1311,4 +1404,74 @@ string translate_character_types(string text) {
 	text = text.replace("príncipe_del_infierno", pu.get_value("príncipe_do_inferno"));
 	text = text.replace("princesa_del_infierno", pu.get_value("princesa_do_inferno"));
 	return text;
+}
+
+// ============================================================================
+// 🆕 SISTEMA DE CHAT COMPLETO - HANDLERS ADICIONAIS
+// ============================================================================
+
+// process_fm - Fala Mapa (Chat Local)
+// Formato BGT: fm |titulo| nome |ação| mensagem
+// Exemplo: fm |Guerreiro| João |diz:| Olá pessoal!
+void process_fm(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", ""); // Remove "fm "
+	
+	// Separar por | e traduzir cada parte
+	string[] parts = a.split("|");
+	for(uint i = 0; i < parts.length(); i++) {
+		// Traduzir partes conhecidas
+		string part = parts[i].trim(" \t\r\n");
+		if(part != "") {
+			m += pu.get_value(part);
+			if(i < parts.length() - 1) m += " ";
+		}
+	}
+	
+	// Adicionar ao canal de chat local
+	add_add_item("local", m);
+}
+
+// process_pm - Mensagem Privada
+// Formato BGT: pm de/para nome: mensagem
+// Exemplo: pm de João: Olá! ou pm para Maria: Oi!
+void process_pm(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", ""); // Remove "pm "
+	
+	// Traduzir "de" e "para" se necessário
+	if(a.length() > 3) {
+		if(a.substr(0, 3) == "de ") {
+			a = pu.get_value("de") + " " + a.substr(3);
+		} else if(a.substr(0, 5) == "para ") {
+			a = pu.get_value("para") + " " + a.substr(5);
+		}
+	}
+	
+	m = a;
+	
+	// Adicionar ao canal de mensagens privadas
+	add_add_item("privado", m);
+	
+	// Tocar som de notificação
+	p.play("notify_pm.ogg", false);
+}
+
+// process_msgconexoes - Notificação de Conexão/Desconexão
+// Formato BGT: msgconexoes mensagem
+void process_msgconexoes(string full_msg, string[] parsed) {
+	string m;
+	string a = full_msg;
+	a = a.replace(parsed[0] + " ", ""); // Remove "msgconexoes "
+	
+	// Traduzir partes separadas por ;
+	string[] parts = a.split(";");
+	for(uint i = 0; i < parts.length(); i++) {
+		m += pu.get_value(parts[i]);
+	}
+	
+	// Adicionar ao canal "tudo" (notificações de conexão)
+	add_add_item("tudo", m);
 }

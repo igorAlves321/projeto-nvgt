@@ -1,38 +1,41 @@
 // ============================================================================
-// inv.nvgt - Sistema de Inventário Simplificado (NVGT 0.92.5+)
+// inv.nvgt - Sistema de Inventário Completo (NVGT 0.92.5+)
 // ============================================================================
-// Versão: 3.0 ULTRA-SIMPLIFICADA
-// Data: 6 de novembro de 2025
-// Status: ✅ SEM DEPENDÊNCIAS EXTERNAS
-//
-// NOTA IMPORTANTE: Este arquivo contém APENAS a classe inv_category
-// Todas as funções de inventário estão em client.nvgt:
-//  - inv_add_item()
-//  - inv_item_exists()
-//  - inv_item_number()
-//  - inv_item()
-//  - inv_delete_item()
-//  - give()
-//  - drop()
-//  - auction()
-//
-// Este arquivo foi totalmente simplificado para remover dependências
-// de funções/variáveis não definidas em cliente.
+// Versão: 5.0 - Replicação completa do BGT
+// Data: 28 de novembro de 2025
+// 
+// FUNCIONALIDADES:
+//  ✅ Navegação (↑/↓/Home/End)
+//  ✅ Busca por Letra
+//  ✅ Seleção Múltipla (Shift+Space)
+//  ✅ Categorias (←/→ para navegar)
+//  ✅ Gerenciar Categorias (criar/excluir/renomear)
+//  ✅ Adicionar/Remover de categorias (Alt+A/Alt+D)
+//  ✅ Reordenação (Alt+Enter após selecionar)
+//  ✅ Give (Enter - dar para jogador)
+//  ✅ Drop (Delete - descartar)
+//  ✅ Leilão (Shift+Enter)
+//  ✅ Interagir (Space)
+//  ✅ Copiar (Ctrl+C)
 // ============================================================================
 
+// =========== VARIÁVEIS GLOBAIS ===========
+
+string[] items_selected;           // Itens selecionados
+string item_to_move = "";          // Item sendo movido
+int item_to_move_index = -1;       // Índice do item sendo movido
+int cindex = 0;                    // Índice da categoria atual
+
 // =========== CLASSE inv_category ===========
-// Classe simples para representar uma categoria de inventário
 
 class inv_category {
 	string name;
 	string[] items_in_category;
 	
-	// Construtor vazio (necessário para arrays em NVGT)
 	inv_category() {
 		name = "";
 	}
 	
-	// Construtor com parâmetro
 	inv_category(string category_name) {
 		name = category_name;
 	}
@@ -65,11 +68,17 @@ class inv_category {
 	uint get_item_count() {
 		return items_in_category.size();
 	}
+	
+	bool rename(string new_name) {
+		if(new_name == "") return false;
+		name = new_name;
+		return true;
+	}
 }
 
 // =========== ARRAY GLOBAL DE CATEGORIAS ===========
 
-inv_category[] inv_categories;  // Array global contendo todas as categorias
+inv_category@[] inv_categories;
 
 // =========== FUNÇÕES DE CARREGAMENTO E SINCRONIZAÇÃO ===========
 
@@ -77,23 +86,19 @@ void load_inv(string invdata) {
 	string content = invdata.replace("inv ", "");
 	string[] lines = content.split("\r\n");
 	
-	if(lines.size() == 0) {
-		return;
-	}
+	if(lines.size() == 0) return;
 	
 	for(uint i = 0; i < lines.size(); i++) {
 		if(lines[i].length() > 0) {
 			string[] values = lines[i].split("=");
 			if(values.size() >= 2) {
 				player_inv.set(values[0], values[1]);
-				
 				if(string_to_number(values[1]) == 0) {
 					player_inv.delete(values[0]);
 				}
 			}
 		}
 	}
-	
 	debug_log("📦 Inventário carregado: " + player_inv.get_keys().size() + " itens");
 }
 
@@ -101,9 +106,7 @@ void setinv(string invdata) {
 	string content = invdata.replace("setinv ", "");
 	string[] lines = content.split("\r\n");
 	
-	if(lines.size() == 0) {
-		return;
-	}
+	if(lines.size() == 0) return;
 	
 	player_inv.delete_all();
 	
@@ -112,57 +115,557 @@ void setinv(string invdata) {
 			string[] values = lines[i].split("=");
 			if(values.size() >= 2) {
 				player_inv.set(values[0], values[1]);
-				
 				if(string_to_number(values[1]) == 0) {
 					player_inv.delete(values[0]);
 				}
 			}
 		}
 	}
-	
 	debug_log("📦 Inventário setado: " + player_inv.get_keys().size() + " itens");
 }
 
-// =========== FUNÇÃO MENU INVENTÁRIO SIMPLIFICADA ===========
+// =========== FUNÇÕES DE REORDENAÇÃO ===========
+
+void sort_inv(string itemname, int range) {
+	if(player_inv.exists(itemname) && inv_item_number(itemname) > 0) {
+		// Envia comando de ordenação para o servidor
+		send_reliable(peer_id, "sortinv " + itemname + " " + range, 0);
+	}
+}
+
+// =========== FUNÇÕES DE SELEÇÃO ===========
+
+bool select_item(string item) {
+	if(items_selected.find(item) > -1) {
+		return false;
+	}
+	items_selected.insert_last(item);
+	return true;
+}
+
+bool unselect_item(string item) {
+	int find = items_selected.find(item);
+	if(find < 0) {
+		return false;
+	}
+	items_selected.remove_at(find);
+	return true;
+}
+
+bool item_is_selected(string item) {
+	return (items_selected.find(item) > -1);
+}
+
+void view_selected_items() {
+	if(items_selected.size() == 0) {
+		speak(pu.get_value("Você não tem nenhum item selecionado."));
+	} else if(items_selected.size() == 1) {
+		speak(pu.get_value("Você só tem") + " " + pu.get_value(items_selected[0]) + " " + pu.get_value("selecionado."));
+	} else {
+		string final = pu.get_value("Você tem selecionados") + " ";
+		for(uint i = 0; i < items_selected.size(); i++) {
+			final += pu.get_value(items_selected[i]) + ", ";
+		}
+		speak(final);
+	}
+}
+
+// =========== FUNÇÕES DE CATEGORIAS ===========
+
+void create_category(string name, bool save = true) {
+	inv_category@ cat = inv_category(name);
+	inv_categories.insert_last(cat);
+	if(save) save_categories_or_items();
+}
+
+int get_category_index(string name) {
+	for(uint x = 0; x < inv_categories.size(); x++) {
+		if(inv_categories[x].name == name) return int(x);
+	}
+	return -1;
+}
+
+void save_categories_or_items() {
+	file f;
+	string categories_line = "categories=";
+	string items_line = "items_to_set=";
+	
+	// Salvar nomes das categorias
+	for(uint y = 0; y < inv_categories.size(); y++) {
+		categories_line += inv_categories[y].name + ",";
+	}
+	
+	// Salvar itens de cada categoria
+	for(uint y = 0; y < inv_categories.size(); y++) {
+		if(inv_categories[y].items_in_category.size() > 0) {
+			for(uint z = 0; z < inv_categories[y].items_in_category.size(); z++) {
+				items_line += inv_categories[y].items_in_category[z] + ":" + inv_categories[y].name + ",";
+			}
+		}
+	}
+	
+	f.open("categories.db", "wb");
+	f.write(string_encrypt(categories_line + "\r\n" + items_line, PREFS_ENCRYPTION_KEY));
+	f.close();
+}
+
+void load_categories_and_items() {
+	// Criar categoria "all" padrão
+	if(inv_categories.size() == 0) {
+		create_category("all", false);
+	}
+	
+	if(!file_exists("categories.db")) return;
+	
+	file f;
+	f.open("categories.db", "rb");
+	string content = string_decrypt(f.read(), PREFS_ENCRYPTION_KEY);
+	f.close();
+	
+	string[] lines = content.split("\r\n");
+	
+	for(uint x = 0; x < lines.size(); x++) {
+		string[] data = lines[x].split("=");
+		if(data.size() < 2) continue;
+		
+		if(data[0] == "categories") {
+			string[] categories = data[1].split(",");
+			for(uint y = 0; y < categories.size(); y++) {
+				if(categories[y] != "" && categories[y] != "all") {
+					create_category(categories[y], false);
+				}
+			}
+		}
+		
+		if(data[0] == "items_to_set") {
+			string[] items = data[1].split(",");
+			for(uint y = 0; y < items.size(); y++) {
+				string[] item_data = items[y].split(":");
+				if(item_data.size() >= 2) {
+					int cat_idx = get_category_index(item_data[1]);
+					if(cat_idx > -1) {
+						inv_categories[cat_idx].add_item(item_data[0]);
+					}
+				}
+			}
+		}
+	}
+}
+
+// =========== FUNÇÕES DE AÇÃO ===========
+
+void give(string item) {
+	string char_name = daritem();  // Função que retorna nome do jogador próximo
+	if(char_name == "") {
+		speak(pu.get_value("Ninguém perto de você."));
+	} else {
+		string amount = v.input(pu.get_value("Quantos você quer dar para") + " " + char_name + "?");
+		if(char_name != "" && amount != "") {
+			send_reliable(peer_id, "give " + char_name + " " + item + " " + amount, 0);
+		}
+	}
+}
+
+void drop(string item, double amount = 1) {
+	if(amount < 1 || amount > 100000000000) return;
+	send_reliable(peer_id, "drop " + amount + " " + item, 0);
+}
+
+void auction(string item) {
+	double amount = string_to_number(v.input(pu.get_value("Quantidade de") + " " + pu.get_value(item) + " " + pu.get_value("que deseja colocar em leilão:")));
+	string minbid2 = v.input(pu.get_value("Preço inicial do leilão:"));
+	double minbid = string_to_number(minbid2);
+	
+	if(amount > 0 && amount < 1000000000000 && minbid > 0 && minbid < 100000000000000) {
+		send_unreliable(peer_id, "/auction " + amount + " " + item + " " + minbid, 1);
+	} else {
+		speak(pu.get_value("Por favor, certifique-se de que todos os valores estão corretos e tente novamente."));
+	}
+}
+
+void interact(string item) {
+	// Envia comando de interação com o item para o servidor
+	send_reliable(peer_id, "interact " + item, 0);
+}
+
+void retirar(string item) {
+	// Envia comando de retirar item
+	send_reliable(peer_id, "retirar " + item, 0);
+}
+
+void descitem(string item) {
+	// Descrição detalhada do item
+	send_reliable(peer_id, "descitem " + item, 0);
+}
+
+// =========== TRADUÇÃO DE ITENS ===========
+
+string get_item_translation(string itemname) {
+	// Tenta traduzir o item
+	string translated = pu.get_value(itemname);
+	if(translated != itemname) {
+		return translated;
+	}
+	return "";
+}
+
+// =========== MENU DE CATEGORIAS ===========
+
+void actions_menu(string type, string text) {
+	dynamic_menu m;
+	
+	if(type == "inv") {
+		m.add_item(pu.get_value("Criar categoria"), "create_category");
+		m.add_item(pu.get_value("Excluir categoria"), "delete_category");
+		m.add_item(pu.get_value("Renomear categoria"), "rename_category");
+	}
+	
+	int mres = m.run(pu.get_value(text), true);
+	if(mres < 0) return;
+	
+	string selected = m.get_item_name(mres);
+	
+	if(selected == "create_category") {
+		string name = v.input(pu.get_value("Nome da categoria:"));
+		if(name != "" && name.length() < 1025 && name != "all") {
+			int index = get_category_index(name);
+			if(index < 0) {
+				create_category(name);
+				speak(pu.get_value("Categoria criada!"));
+			}
+		}
+	}
+	
+	if(selected == "delete_category") {
+		string name = v.input(pu.get_value("Nome da categoria para excluir:"));
+		if(name != "" && name != "all") {
+			int index = get_category_index(name);
+			if(index > -1) {
+				inv_categories.remove_at(index);
+				speak(pu.get_value("Categoria excluída!"));
+				cindex = 0;
+				save_categories_or_items();
+			}
+		}
+	}
+	
+	if(selected == "rename_category") {
+		string name = v.input(pu.get_value("Nome da categoria para renomear:"));
+		if(name != "" && name != "all") {
+			int index = get_category_index(name);
+			if(index > -1) {
+				string new_name = v.input(pu.get_value("Novo nome da categoria:"));
+				if(new_name != "") {
+					bool success = inv_categories[index].rename(new_name);
+					if(success) {
+						speak(pu.get_value("Categoria renomeada!"));
+						save_categories_or_items();
+					}
+				}
+			}
+		}
+	}
+}
+
+// =========== MENU INVENTÁRIO PRINCIPAL ===========
 
 void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
-	string[]@ peramitors = player_inv.get_keys();
 	int counter = 0;
+	string[] peramitors;
+	string[] peramitors2;
+	string copiaragora = "";
 	
-	if(peramitors.size() == 0) {
-		speak(pu.get_value("Inventário vazio"));
-		return;
+	// Limpar seleções se não estiver movendo item
+	if(item_to_move == "") {
+		items_selected.resize(0);
 	}
 	
 	send_unreliable(peer_id, "playsocial " + sonido, 0);
-	speak(pu.get_value("compartimento_geral") + " " + peramitors.size() + " " + pu.get_value("itens"));
 	
-	if(peramitors.size() > 0) {
-		speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
+	// Anunciar categoria atual
+	if(inv_categories.size() > 0 && cindex < int(inv_categories.size())) {
+		if(inv_categories[cindex].name == "all") {
+			peramitors2 = player_inv.get_keys();
+			speak(pu.get_value("Compartimento geral") + " " + peramitors2.size() + " " + pu.get_value("itens"));
+		} else {
+			int cantity = 0;
+			for(uint x = 0; x < inv_categories[cindex].items_in_category.size(); x++) {
+				if(inv_item_number(inv_categories[cindex].items_in_category[x]) > 0) cantity++;
+			}
+			speak(inv_categories[cindex].name + ", " + cantity + " " + pu.get_value("elementos."));
+		}
+	} else {
+		peramitors2 = player_inv.get_keys();
+		speak(pu.get_value("Compartimento geral") + " " + peramitors2.size() + " " + pu.get_value("itens"));
 	}
 	
 	while(true) {
 		wait(5);
+		
+		// Atualizar lista de itens baseado na categoria
+		peramitors.resize(0);
+		peramitors2 = player_inv.get_keys();
+		
+		if(peramitors2.size() == 0) break;
+		
+		if(cindex == 0 || inv_categories.size() == 0 || inv_categories[cindex].name == "all") {
+			// Categoria "all" - mostra tudo
+			for(uint i = 0; i < peramitors2.size(); i++) {
+				peramitors.insert_last(peramitors2[i]);
+			}
+		} else {
+			// Categoria específica - filtra itens
+			for(uint x = 0; x < inv_categories[cindex].items_in_category.size(); x++) {
+				if(inv_item_number(inv_categories[cindex].items_in_category[x]) > 0) {
+					peramitors.insert_last(inv_categories[cindex].items_in_category[x]);
+				}
+			}
+		}
+		
+		if(peramitors.size() == 0) {
+			speak(pu.get_value("Categoria vazia."));
+			break;
+		}
+		
+		// Ajustar contador se passou do limite
+		if(counter >= int(peramitors.size())) {
+			counter = int(peramitors.size()) - 1;
+		}
+		
+		bool shift_down = key_down(KEY_LSHIFT) || key_down(KEY_RSHIFT);
+		bool alt_down = key_down(KEY_LALT) || key_down(KEY_RALT);
+		bool ctrl_down = key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL);
+		
+		// ===== NAVEGAÇÃO ENTRE CATEGORIAS (←/→) =====
+		if(key_pressed(KEY_LEFT) && inv_categories.size() > 1) {
+			cindex--;
+			if(cindex < 0) cindex = int(inv_categories.size()) - 1;
+			invmenu(inv_categories[cindex].name, "mobeziper.ogg");
+			return;
+		}
+		
+		if(key_pressed(KEY_RIGHT) && inv_categories.size() > 1) {
+			cindex++;
+			if(cindex >= int(inv_categories.size())) cindex = 0;
+			invmenu(inv_categories[cindex].name, "mobeziper.ogg");
+			return;
+		}
+		
+		// ===== NAVEGAÇÃO DENTRO DA CATEGORIA (↑/↓) =====
 		if(key_pressed(KEY_UP) && counter > 0) {
 			counter--;
-			speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
+			speak_inv_item(peramitors, counter);
 		}
 		
 		if(key_pressed(KEY_DOWN) && counter < int(peramitors.size()) - 1) {
 			counter++;
-			speak(pu.get_value(peramitors[counter]) + ", " + inv_item_number(peramitors[counter]));
+			speak_inv_item(peramitors, counter);
 		}
 		
+		if(key_pressed(KEY_HOME) && peramitors.size() > 0) {
+			counter = 0;
+			speak_inv_item(peramitors, counter);
+		}
+		
+		if(key_pressed(KEY_END) && peramitors.size() > 0) {
+			counter = int(peramitors.size()) - 1;
+			speak_inv_item(peramitors, counter);
+		}
+		
+		// ===== BUSCA POR LETRA =====
+		string cl = get_characters();
+		if(cl != "" && cl != " " && cl.length() == 1 && peramitors.size() > 0) {
+			cl = cl.lower();
+			bool found = false;
+			
+			// Busca a partir da posição atual
+			for(uint i = counter + 1; i < peramitors.size(); i++) {
+				string invitem = get_item_translation(peramitors[i]);
+				if(invitem == "") invitem = pu.get_value(peramitors[i]);
+				if(invitem.length() > 0 && invitem.substr(0, 1).lower() == cl) {
+					counter = int(i);
+					p.play("invmove6.ogg", false);
+					speak_inv_item(peramitors, counter);
+					found = true;
+					break;
+				}
+			}
+			
+			// Se não encontrou, busca do início
+			if(!found) {
+				for(uint i = 0; i <= uint(counter); i++) {
+					string invitem = get_item_translation(peramitors[i]);
+					if(invitem == "") invitem = pu.get_value(peramitors[i]);
+					if(invitem.length() > 0 && invitem.substr(0, 1).lower() == cl) {
+						counter = int(i);
+						p.play("invmove6.ogg", false);
+						speak_inv_item(peramitors, counter);
+						break;
+					}
+				}
+			}
+		}
+		
+		// ===== SELEÇÃO MÚLTIPLA (Shift+Space) =====
+		if(shift_down && key_pressed(KEY_SPACE) && peramitors.size() > 0) {
+			if(item_is_selected(peramitors[counter])) {
+				unselect_item(peramitors[counter]);
+				speak(pu.get_value(peramitors[counter]) + " " + pu.get_value("desmarcado."));
+				item_to_move = "";
+				item_to_move_index = -1;
+			} else {
+				select_item(peramitors[counter]);
+				speak(pu.get_value(peramitors[counter]) + " " + pu.get_value("selecionado."));
+				item_to_move = peramitors[counter];
+				item_to_move_index = counter;
+			}
+		}
+		
+		// ===== ADICIONAR À CATEGORIA (Alt+A) =====
+		if(alt_down && key_pressed(KEY_A) && cindex > 0 && items_selected.size() > 0) {
+			for(uint x = 0; x < items_selected.size(); x++) {
+				inv_categories[cindex].add_item(items_selected[x]);
+			}
+			if(items_selected.size() == 1) {
+				speak(pu.get_value("Item adicionado à categoria") + " " + inv_categories[cindex].name);
+			} else {
+				speak(pu.get_value("Itens adicionados à categoria") + " " + inv_categories[cindex].name);
+			}
+			items_selected.resize(0);
+			save_categories_or_items();
+		}
+		
+		// ===== REMOVER DA CATEGORIA (Alt+D) =====
+		if(alt_down && key_pressed(KEY_D) && cindex > 0 && items_selected.size() > 0) {
+			for(uint x = 0; x < items_selected.size(); x++) {
+				inv_categories[cindex].remove_item(items_selected[x]);
+			}
+			if(items_selected.size() == 1) {
+				speak(pu.get_value("Item removido da categoria") + " " + inv_categories[cindex].name);
+			} else {
+				speak(pu.get_value("Itens removidos da categoria") + " " + inv_categories[cindex].name);
+			}
+			items_selected.resize(0);
+			save_categories_or_items();
+		}
+		
+		// ===== REORDENAÇÃO (Alt+Enter após selecionar) =====
+		if(alt_down && key_pressed(KEY_RETURN) && items_selected.size() == 1 && inv_item_number(items_selected[0]) > 0) {
+			int new_position;
+			if(item_to_move_index > counter) {
+				new_position = item_to_move_index - counter;
+				sort_inv(item_to_move, -new_position);
+				p.play("invmove5.ogg", false);
+			} else if(item_to_move_index < counter) {
+				new_position = item_to_move_index - counter;
+				sort_inv(item_to_move, -new_position);
+				p.play("invmove5.ogg", false);
+			}
+			item_to_move_index = -1;
+			item_to_move = "";
+			items_selected.resize(0);
+		}
+		
+		// ===== INTERAGIR (Space) =====
+		if(!shift_down && key_pressed(KEY_SPACE) && peramitors.size() > 0) {
+			interact(peramitors[counter]);
+		}
+		
+		// ===== RETIRAR (Alt+Space) =====
+		if(alt_down && key_pressed(KEY_SPACE) && peramitors.size() > 0) {
+			retirar(peramitors[counter]);
+		}
+		
+		// ===== GIVE (Enter) =====
+		if(!shift_down && !alt_down && !ctrl_down && (key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && peramitors.size() > 0) {
+			give(peramitors[counter]);
+		}
+		
+		// ===== LEILÃO (Shift+Enter) =====
+		if(shift_down && (key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && peramitors.size() > 0) {
+			auction(peramitors[counter]);
+		}
+		
+		// ===== DESCRIÇÃO (Ctrl+Enter) =====
+		if(ctrl_down && (key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && peramitors.size() > 0) {
+			descitem(peramitors[counter]);
+		}
+		
+		// ===== DROP (Delete) =====
+		if(key_pressed(KEY_DELETE) && peramitors.size() > 0) {
+			if(shift_down) {
+				// Drop quantidade específica
+				string stuff = v.input(pu.get_value("Quantos desse item você quer deletar?"));
+				double s = string_to_number(stuff);
+				if(s > 0) drop(peramitors[counter], s);
+			} else if(ctrl_down) {
+				// Drop todos
+				double s = inv_item_number(peramitors[counter]);
+				drop(peramitors[counter], s);
+			} else {
+				// Drop 1
+				drop(peramitors[counter]);
+			}
+		}
+		
+		// ===== COPIAR (Ctrl+C) =====
+		if(ctrl_down && key_pressed(KEY_C)) {
+			string invitem = get_item_translation(peramitors[counter]);
+			if(invitem == "") invitem = pu.get_value(peramitors[counter]);
+			clipboard_copy_text(invitem + ", " + inv_item_number(peramitors[counter]));
+			speak(pu.get_value("Copiado!"));
+		}
+		
+		// ===== MENU DE OPÇÕES (F2) =====
+		if(key_pressed(KEY_F2)) {
+			actions_menu("inv", "Escolha uma opção:");
+		}
+		
+		// ===== VER SELECIONADOS (F3) =====
+		if(key_pressed(KEY_F3)) {
+			view_selected_items();
+		}
+		
+		// ===== AJUDA (F1) =====
+		if(key_pressed(KEY_F1)) {
+			speak(pu.get_value("Controles: Setas para navegar, ") +
+				  pu.get_value("Esquerda/Direita para categorias, ") +
+				  pu.get_value("Shift+Espaço para selecionar, ") +
+				  pu.get_value("Alt+Enter para mover, ") +
+				  pu.get_value("Enter para dar, ") +
+				  pu.get_value("Shift+Enter para leiloar, ") +
+				  pu.get_value("Delete para descartar, ") +
+				  pu.get_value("Digite letra para buscar"));
+		}
+		
+		// ===== SAIR (Escape) =====
 		if(key_pressed(KEY_ESCAPE)) {
-			break;
+			send_unreliable(peer_id, "playsocial fecharziper.ogg", 0);
+			return;
 		}
 	}
+}
+
+// Função auxiliar para falar item do inventário
+void speak_inv_item(string[]@ items, int index) {
+	string invitem = get_item_translation(items[index]);
+	if(invitem == "") invitem = pu.get_value(items[index]);
+	p.play("invmove6.ogg", false);
+	speak(invitem + ", " + inv_item_number(items[index]));
 }
 
 // =========== FUNÇÃO INICIALIZAÇÃO ===========
 
 void init_inventory() {
 	debug_log("📦 Inicializando sistema de inventário...");
+	
+	// Criar categoria padrão "all"
+	if(inv_categories.size() == 0) {
+		create_category("all", false);
+	}
+	
+	// Carregar categorias salvas
+	load_categories_and_items();
 }
 
 // ============================================================================

@@ -376,3 +376,53 @@ void daily_rewards_loop() {
 		}
 	}
 }
+
+// ============================================================================
+// ALIASES DE COMANDOS (para compatibilidade com server.nvgt)
+// ============================================================================
+
+// Alias: /daily - Status das recompensas diárias
+void cmd_daily_status(int player_index) {
+	cmd_dailystreak(player_index);
+}
+
+// Alias: /claimdaily - Coletar recompensa diária
+void cmd_claim_daily(int player_index) {
+	cmd_dailyreward(player_index);
+}
+
+// Alias: /spin - Girar roda da sorte
+void cmd_spin_wheel(int player_index) {
+	cmd_luckywheel(player_index);
+}
+
+// Alias: /box - Abrir caixa misteriosa
+void cmd_mystery_box(int player_index) {
+	cmd_mysterybox(player_index);
+}
+
+// ============================================================================
+// INTEGRAÇÃO: Verificar daily no login do jogador
+// ============================================================================
+
+void check_daily_on_login(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	// Verificar se precisa resetar
+	if(dt.last_reset.elapsed >= 86400000) {
+		// Verificar se quebrou o streak (passou mais de 48h)
+		if(dt.last_claim.elapsed >= 172800000) {
+			dt.reset_streak();
+			send_reliable(players[player_index].peer_id, "msg2 Seu streak de login foi reiniciado por inatividade!", 0);
+		}
+		dt.reset_daily();
+		dt.save();
+	}
+	
+	// Notificar sobre recompensa disponível
+	if(dt.can_claim()) {
+		send_reliable(players[player_index].peer_id, "msg2 🎁 Sua recompensa diária está disponível!", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Use /claimdaily ou /coletardiario para coletar.", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Streak atual: " + dt.current_streak + " dia(s) consecutivo(s)", 0);
+	}
+}

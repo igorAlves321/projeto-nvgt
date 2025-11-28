@@ -1,0 +1,191 @@
+// admin_tools.nvgt - Ferramentas Especiais de Administração
+// ✅ Task 2.6.3: Lanterna e Detector (restritos a admins)
+
+// ============================================================================
+// 🔦 SISTEMA DE LANTERNA (Admin)
+// ============================================================================
+// A lanterna permite ao admin iluminar a área, tornando visível para outros jogadores
+
+// Constantes
+const int ADMIN_TOOL_MIN_RANK = 5;  // Rank mínimo para usar ferramentas admin
+const int LANTERNA_RANGE = 15;       // Raio de alcance da lanterna
+const int DETECTOR_RANGE = 20;       // Raio de alcance do detector
+
+// Toggle da lanterna do admin
+void admin_toggle_lanterna(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    
+    player@ p = @players[player_index];
+    
+    // Verificar permissão de admin
+    if(p.rank < ADMIN_TOOL_MIN_RANK && !p.dev && !p.admin) {
+        send_reliable(p.peer_id, "say Você não tem permissão para usar a lanterna.", 0);
+        return;
+    }
+    
+    // Toggle estado da lanterna (usar campo existente ou criar novo)
+    // Usaremos um campo auxiliar que será adicionado ao player
+    bool lanterna_on = p.item_active == "lanterna";
+    
+    if(lanterna_on) {
+        // Desligar lanterna
+        p.item_active = "";
+        send_reliable(p.peer_id, "ps lanterna_off.ogg", 0);
+        send_reliable(p.peer_id, "say Lanterna desligada.", 0);
+        
+        // Notificar outros jogadores no mapa
+        broadcast_to_map_except(p.map_name, "sound lanterna_off.ogg " + p.x + " " + p.y, p.peer_id);
+        
+        debug_log("🔦 Admin " + p.name + " desligou a lanterna em " + p.map_name);
+    }
+    else {
+        // Ligar lanterna
+        p.item_active = "lanterna";
+        send_reliable(p.peer_id, "ps lanterna_on.ogg", 0);
+        send_reliable(p.peer_id, "say Lanterna ligada. Iluminando área.", 0);
+        
+        // Notificar outros jogadores no mapa com som posicional
+        broadcast_to_map_except(p.map_name, "sound lanterna_on.ogg " + p.x + " " + p.y, p.peer_id);
+        
+        debug_log("🔦 Admin " + p.name + " ligou a lanterna em " + p.map_name);
+    }
+}
+
+// Atualizar efeito da lanterna (chamado periodicamente se lanterna está ativa)
+void admin_lanterna_pulse(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    
+    player@ p = @players[player_index];
+    
+    if(p.item_active != "lanterna") return;
+    
+    // Enviar pulso de luz para jogadores próximos
+    for(uint i = 0; i < players.length(); i++) {
+        if(!players[i].is_logged_in) continue;
+        if(players[i].map_name != p.map_name) continue;
+        if(players[i].peer_id == p.peer_id) continue;
+        
+        // Calcular distância
+        int dx = players[i].x - p.x;
+        int dy = players[i].y - p.y;
+        double dist = sqrt(double(dx * dx + dy * dy));
+        
+        if(dist <= LANTERNA_RANGE) {
+            // Jogador está no alcance da lanterna - enviar som posicional
+            send_reliable(players[i].peer_id, "sound2d lanterna_pulse.ogg " + p.x + " " + p.y, 0);
+        }
+    }
+}
+
+// ============================================================================
+// 🔍 SISTEMA DE DETECTOR (Admin)
+// ============================================================================
+// O detector revela objetos invisíveis, jogadores escondidos e anomalias
+
+void admin_use_detector(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    
+    player@ p = @players[player_index];
+    
+    // Verificar permissão de admin
+    if(p.rank < ADMIN_TOOL_MIN_RANK && !p.dev && !p.admin) {
+        send_reliable(p.peer_id, "say Você não tem permissão para usar o detector.", 0);
+        return;
+    }
+    
+    // Tocar som de escaneamento
+    send_reliable(p.peer_id, "ps detector_scan.ogg", 0);
+    
+    // Resultados da varredura
+    string results = "";
+    int found_count = 0;
+    
+    // 1. Detectar jogadores invisíveis ou escondidos no raio
+    for(uint i = 0; i < players.length(); i++) {
+        if(!players[i].is_logged_in) continue;
+        if(players[i].map_name != p.map_name) continue;
+        if(players[i].peer_id == p.peer_id) continue;
+        
+        // Calcular distância
+        int dx = players[i].x - p.x;
+        int dy = players[i].y - p.y;
+        double dist = sqrt(double(dx * dx + dy * dy));
+        
+        if(dist <= DETECTOR_RANGE) {
+            // Verificar se jogador está invisível ou camuflado
+            if(players[i].invisible || players[i].inv_item_exists("pocao_invisibilidade")) {
+                results += "Jogador invisível detectado: " + players[i].charname + " em (" + players[i].x + ", " + players[i].y + "). ";
+                found_count++;
+                // Tocar bip de detecção
+                send_reliable(p.peer_id, "ps detector_bip.ogg", 0);
+            }
+            
+            // Verificar se está agachado (tentando se esconder)
+            if(players[i].crouched) {
+                results += "Jogador agachado: " + players[i].charname + " em (" + players[i].x + ", " + players[i].y + "). ";
+                found_count++;
+            }
+        }
+    }
+    
+    // 2. Detectar itens escondidos no chão (se o sistema de itens no chão existir)
+    // TODO: Implementar quando sistema de itens no chão for criado
+    
+    // 3. Detectar anomalias/bugs (posições inválidas, etc)
+    for(uint i = 0; i < players.length(); i++) {
+        if(!players[i].is_logged_in) continue;
+        if(players[i].map_name != p.map_name) continue;
+        
+        // Detectar posições suspeitas (negativas ou muito grandes)
+        if(players[i].x < -1000 || players[i].x > 10000 || 
+           players[i].y < -1000 || players[i].y > 10000) {
+            results += "Anomalia de posição: " + players[i].charname + " em posição suspeita (" + players[i].x + ", " + players[i].y + "). ";
+            found_count++;
+            send_reliable(p.peer_id, "ps detector_anomaly.ogg", 0);
+        }
+        
+        // Detectar jogadores com velocidade suspeita (speedhack)
+        // TODO: Implementar verificação de velocidade quando tracking de movimento for melhorado
+    }
+    
+    // Enviar resultados ao admin
+    if(found_count == 0) {
+        send_reliable(p.peer_id, "say Varredura completa. Nenhuma anomalia ou objeto oculto detectado no raio de " + DETECTOR_RANGE + " metros.", 0);
+    }
+    else {
+        send_reliable(p.peer_id, "say Varredura completa. " + found_count + " detecção(ões): " + results, 0);
+    }
+    
+    debug_log("🔍 Admin " + p.name + " usou detector em " + p.map_name + ": " + found_count + " detecções");
+}
+
+// ============================================================================
+// 📡 COMANDOS DE REDE PARA FERRAMENTAS ADMIN
+// ============================================================================
+
+// Handler para comando de lanterna do cliente: "admin_lanterna"
+void handle_admin_lanterna_command(uint64 peer_id) {
+    player@ p = get_player_by_peer(peer_id);
+    if(p is null) return;
+    
+    int player_index = get_player_index_from(p.name);
+    admin_toggle_lanterna(player_index);
+}
+
+// Handler para comando de detector do cliente: "admin_detector"
+void handle_admin_detector_command(uint64 peer_id) {
+    player@ p = get_player_by_peer(peer_id);
+    if(p is null) return;
+    
+    int player_index = get_player_index_from(p.name);
+    admin_use_detector(player_index);
+}
+
+// Função auxiliar para broadcast exceto um peer
+void broadcast_to_map_except(string map_name, string message, uint64 except_peer) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map_name == map_name && players[i].peer_id != except_peer && players[i].is_logged_in) {
+            send_reliable(players[i].peer_id, message, 0);
+        }
+    }
+}

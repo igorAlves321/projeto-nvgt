@@ -2,6 +2,12 @@
 // Conversão: Novo sistema para NVGT
 // Fase 4: Sistemas Sociais
 
+// ============================================================================
+// ✅ TASK 2.8.1: PERSISTÊNCIA DE GUILDS EM ARQUIVO
+// ============================================================================
+
+const string GUILDS_FILE = "database/guilds.dat";
+
 class guild {
 	string name;
 	string leader;
@@ -257,6 +263,7 @@ void cmd_createguild(int player_index, string guild_name, string guild_tag = "")
 	send_reliable(players[player_index].peer_id, "msg2 Você é o líder. Use /inviteguild para convidar membros", 0);
 	
 	debug_log("GUILD: " + players[player_index].charname + " criou guild '" + guild_name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Convidar para guild
@@ -335,6 +342,7 @@ void cmd_joinguild(int player_index) {
 	found_guild.broadcast_message(players[player_index].charname + " entrou na guild!");
 	
 	debug_log("GUILD: " + players[player_index].charname + " entrou em '" + found_guild.name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Sair da guild
@@ -361,6 +369,7 @@ void cmd_leaveguild(int player_index) {
 	send_reliable(players[player_index].peer_id, "msg2 Você saiu da guild", 0);
 	
 	debug_log("GUILD: " + pname + " saiu de '" + g.name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Expulsar membro
@@ -404,6 +413,7 @@ void cmd_kickguild(int player_index, string target_name) {
 	g.broadcast_message(target_name + " foi expulso da guild");
 	
 	debug_log("GUILD: " + players[player_index].charname + " expulsou " + target_name + " de '" + g.name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Dissolver guild (líder)
@@ -440,6 +450,7 @@ void cmd_disbandguild(int player_index) {
 	}
 	
 	debug_log("GUILD: '" + g.name + "' dissolvida por " + players[player_index].charname);
+	save_guilds(); // Persistir
 }
 
 // Comando: Chat da guild
@@ -498,6 +509,7 @@ void cmd_promoteguild(int player_index, string target_name) {
 	g.broadcast_message(target_name + " foi promovido a oficial!");
 	
 	debug_log("GUILD: " + target_name + " promovido em '" + g.name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Rebaixar a membro
@@ -517,6 +529,7 @@ void cmd_demoteguild(int player_index, string target_name) {
 	g.broadcast_message(target_name + " foi rebaixado a membro");
 	
 	debug_log("GUILD: " + target_name + " rebaixado em '" + g.name + "'");
+	save_guilds(); // Persistir
 }
 
 // Comando: Doar gold para guild
@@ -543,4 +556,154 @@ void cmd_donateguild(int player_index, int amount) {
 	g.broadcast_message(players[player_index].charname + " doou " + amount + " gold!");
 	
 	debug_log("GUILD: " + players[player_index].charname + " doou " + amount + " gold para '" + g.name + "'");
+	
+	// Salvar após doação
+	save_guilds();
+}
+
+// ============================================================================
+// ✅ TASK 2.8.1: FUNÇÕES DE PERSISTÊNCIA DE GUILDS
+// ============================================================================
+
+// Serializar guild para string
+string serialize_guild(guild@ g) {
+	string data = "";
+	data += g.name + "|";
+	data += g.leader + "|";
+	data += g.tag + "|";
+	data += g.guild_gold + "|";
+	data += g.level + "|";
+	data += g.xp + "|";
+	
+	// Officers (separados por vírgula)
+	string off = "";
+	for(uint i = 0; i < g.officers.length(); i++) {
+		if(i > 0) off += ",";
+		off += g.officers[i];
+	}
+	data += off + "|";
+	
+	// Members (separados por vírgula)
+	string mem = "";
+	for(uint i = 0; i < g.members.length(); i++) {
+		if(i > 0) mem += ",";
+		mem += g.members[i];
+	}
+	data += mem;
+	
+	return data;
+}
+
+// Deserializar string para guild
+guild@ deserialize_guild(string data) {
+	string[] parts = data.split("|");
+	if(parts.length() < 8) return null;
+	
+	string name = parts[0];
+	string leader = parts[1];
+	string tag = parts[2];
+	int gold = parse_int(parts[3]);
+	int lvl = parse_int(parts[4]);
+	int gxp = parse_int(parts[5]);
+	string officers_str = parts[6];
+	string members_str = parts[7];
+	
+	guild g(name, leader, tag);
+	g.guild_gold = gold;
+	g.level = lvl;
+	g.xp = gxp;
+	
+	// Limpar members padrão (líder já adicionado no construtor)
+	g.members.resize(0);
+	
+	// Adicionar oficiais
+	if(officers_str != "") {
+		string[] offs = officers_str.split(",");
+		for(uint i = 0; i < offs.length(); i++) {
+			if(offs[i] != "") {
+				g.officers.insert_last(offs[i]);
+			}
+		}
+	}
+	
+	// Adicionar membros
+	if(members_str != "") {
+		string[] mems = members_str.split(",");
+		for(uint i = 0; i < mems.length(); i++) {
+			if(mems[i] != "") {
+				g.members.insert_last(mems[i]);
+			}
+		}
+	}
+	
+	return g;
+}
+
+// Salvar todas as guilds em arquivo
+void save_guilds() {
+	file f;
+	if(!f.open(GUILDS_FILE, "w")) {
+		debug_log("GUILD: Erro ao salvar guilds");
+		return;
+	}
+	
+	string content = "";
+	for(uint i = 0; i < active_guilds.length(); i++) {
+		if(i > 0) content += "\n";
+		content += serialize_guild(active_guilds[i]);
+	}
+	
+	f.write(content);
+	f.close();
+	
+	debug_log("GUILD: Salvo " + active_guilds.length() + " guilds");
+}
+
+// Carregar todas as guilds de arquivo
+void load_guilds() {
+	if(!file_exists(GUILDS_FILE)) {
+		debug_log("GUILD: Arquivo de guilds não encontrado, criando novo");
+		return;
+	}
+	
+	file f;
+	if(!f.open(GUILDS_FILE, "r")) {
+		debug_log("GUILD: Erro ao carregar guilds");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") return;
+	
+	// Limpar arrays existentes
+	active_guilds.resize(0);
+	player_guilds.delete_all();
+	
+	string[] lines = content.split("\n");
+	for(uint i = 0; i < lines.length(); i++) {
+		if(lines[i] == "") continue;
+		
+		guild@ g = deserialize_guild(lines[i]);
+		if(g !is null) {
+			active_guilds.insert_last(g);
+			
+			// Mapear jogadores para guild
+			player_guilds.set(g.leader, g.name);
+			for(uint j = 0; j < g.officers.length(); j++) {
+				player_guilds.set(g.officers[j], g.name);
+			}
+			for(uint j = 0; j < g.members.length(); j++) {
+				player_guilds.set(g.members[j], g.name);
+			}
+		}
+	}
+	
+	debug_log("GUILD: Carregado " + active_guilds.length() + " guilds");
+}
+
+// Inicializar sistema de guilds (chamar no startup do servidor)
+void init_guilds() {
+	load_guilds();
 }

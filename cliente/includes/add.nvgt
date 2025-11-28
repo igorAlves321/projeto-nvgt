@@ -1,5 +1,6 @@
 // Sistema de gerenciamento de adds convertido para NVGT
 // Convertido de add.bgt
+// Canais só aparecem na navegação quando têm mensagens (exceto "tudo")
 
 int addpos;
 add@[] adds;
@@ -12,6 +13,11 @@ class add{
 	add(string n){
 		name=n;
 	}
+	
+	// Verifica se o canal deve ser visível (tem mensagens ou é "tudo")
+	bool is_visible() {
+		return (name == "tudo" || items.length() > 0);
+	}
 }
 
 void create_add(string bname){
@@ -20,31 +26,57 @@ void create_add(string bname){
 }
 
 void firstadd(){
-	addpos=0;
+	// Ir para primeiro canal visível
+	for(int i = 0; i < int(adds.length()); i++) {
+		if(adds[i].is_visible()) {
+			addpos = i;
+			speakfocusedadd();
+			return;
+		}
+	}
+	addpos = 0;
 	speakfocusedadd();
 }
 
 void lastadd(){
-	addpos=adds.length()-1;
+	// Ir para último canal visível
+	for(int i = int(adds.length()) - 1; i >= 0; i--) {
+		if(adds[i].is_visible()) {
+			addpos = i;
+			speakfocusedadd();
+			return;
+		}
+	}
+	addpos = int(adds.length()) - 1;
 	speakfocusedadd();
 }
 
 void addleft(){
-	if (addpos<=0)addpos=0;
-	else{
-		addpos-=1;
-		speakfocusedadd();
+	// Navegar para canal anterior visível
+	int newpos = addpos - 1;
+	while(newpos >= 0) {
+		if(adds[newpos].is_visible()) {
+			addpos = newpos;
+			speakfocusedadd();
+			return;
+		}
+		newpos--;
 	}
+	// Se não encontrou, fica no atual
 }
 
 void addright(){
-	if (addpos>=(adds.length()-1)){
-		if (adds.length()>0)addpos=adds.length()-1;
+	// Navegar para próximo canal visível
+	int newpos = addpos + 1;
+	while(newpos < int(adds.length())) {
+		if(adds[newpos].is_visible()) {
+			addpos = newpos;
+			speakfocusedadd();
+			return;
+		}
+		newpos++;
 	}
-	else{
-		addpos+=1;
-		speakfocusedadd();
-	}
+	// Se não encontrou, fica no atual
 }
 
 void nextadditem(){
@@ -85,8 +117,16 @@ void add_add_item(string addname, string item,bool speakitem=true){
 }
 
 void speakfocusedadd(){
-	if (adds[addpos].items.length()>0)speak(pu.get_value(adds[addpos].name)+". "+(adds[addpos].pos+1)+" "+pu.get_value("de")+" "+adds[addpos].items.length()+".");
-	else speak(pu.get_value(adds[addpos].name)+". "+pu.get_value("Vazio."));
+	// Formato: "chat global. 444 de 615" (onde 444 é a posição atual, 615 é o total)
+	string channel_name = pu.get_value(adds[addpos].name);
+	if (adds[addpos].items.length() > 0) {
+		// Posição é baseada em 1 para o usuário
+		int current_pos = adds[addpos].pos + 1;
+		int total = int(adds[addpos].items.length());
+		speak(channel_name + ". " + current_pos + " " + pu.get_value("de") + " " + total + ".");
+	} else {
+		speak(channel_name + ". " + pu.get_value("Vazio."));
+	}
 }
 
 int add_active(string addname){

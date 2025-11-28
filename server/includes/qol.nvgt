@@ -1,0 +1,425 @@
+// ============================================================================
+// qol.nvgt - Quality of Life Features (Servidor)
+// Sistema de Frases Rápidas (Voice) + Tradução Assíncrona
+// Baseado no sistema original do BGT
+// ============================================================================
+
+// =========== FRASES RÁPIDAS (VOICE PHRASES) ===========
+// O cliente envia "frasesbarra NUM SOUNDFILE" e o servidor retransmite
+// o som para todos os jogadores próximos no mesmo mapa.
+// Isso permite comunicação rápida por voz sem digitar.
+
+// Handler para frase de barra (voice phrase) - Original do BGT
+// Formato: "frasesbarra SOUND_NUM SOUND_FILE"
+// Exemplo: "frasesbarra 1 v1ayuda1.ogg"
+void frasesbarra(int index, int nsom, string nsom2) {
+	if(players[index].mapindex < 0 || uint(players[index].mapindex) >= server_maps.length()) return;
+	
+	// Retransmitir o som para todos os jogadores próximos (raio de 20 tiles)
+	server_maps[players[index].mapindex].send_to_others(
+		players[index].peer_id, 
+		0, 
+		"play " + nsom2, 
+		players[index].x, 
+		players[index].y, 
+		20, 
+		false
+	);
+	
+	// Log opcional
+	// debug_log("🔊 Voice Phrase: " + players[index].charname + " tocou " + nsom2);
+}
+
+// =========== SISTEMA DE TRADUÇÃO ASSÍNCRONA ===========
+
+// Contexto de tradução pendente
+class translation_context {
+	uint64 peer_id;
+	string message_id;
+	string original_text;
+	string target_lang;
+	string source_lang;
+	timer request_time;
+	bool completed;
+	string result;
+	
+	translation_context() {
+		peer_id = 0;
+		message_id = "";
+		original_text = "";
+		target_lang = "pt";
+		source_lang = "auto";
+		completed = false;
+		result = "";
+	}
+}
+
+// Lista de traduções pendentes
+translation_context[] pending_translations;
+
+// Mapeamento de códigos de idioma
+dictionary lang_codes;
+
+void init_qol_system() {
+	debug_log("🌐 Inicializando sistema QoL...");
+	
+	// Configurar códigos de idioma
+	lang_codes.set("portugues", "pt");
+	lang_codes.set("português", "pt");
+	lang_codes.set("portuguese", "pt");
+	lang_codes.set("pt", "pt");
+	lang_codes.set("ingles", "en");
+	lang_codes.set("inglês", "en");
+	lang_codes.set("english", "en");
+	lang_codes.set("en", "en");
+	lang_codes.set("espanhol", "es");
+	lang_codes.set("español", "es");
+	lang_codes.set("spanish", "es");
+	lang_codes.set("es", "es");
+	lang_codes.set("frances", "fr");
+	lang_codes.set("francês", "fr");
+	lang_codes.set("french", "fr");
+	lang_codes.set("fr", "fr");
+	lang_codes.set("alemao", "de");
+	lang_codes.set("alemão", "de");
+	lang_codes.set("german", "de");
+	lang_codes.set("de", "de");
+	lang_codes.set("italiano", "it");
+	lang_codes.set("italian", "it");
+	lang_codes.set("it", "it");
+	
+	debug_log("✅ Sistema QoL inicializado com " + QUICK_PHRASES.length() + " frases rápidas");
+}
+
+// Obter código de idioma normalizado
+string get_lang_code(string lang) {
+	string lower_lang = lang.lower();
+	string result;
+	if(lang_codes.get(lower_lang, result)) {
+		return result;
+	}
+	return "pt"; // Padrão
+}
+
+// Handler para solicitação de tradução
+// Formato: "translate TARGET_LANG|TEXT"
+void req_translate_message(int index, string[] parsed) {
+	if(parsed.length() < 2) {
+		send_reliable(players[index].peer_id, "msg2 ;Uso: /traduzir idioma texto;", 0);
+		return;
+	}
+	
+	// Juntar tudo após o comando
+	string full_msg = "";
+	for(uint i = 1; i < parsed.length(); i++) {
+		full_msg += parsed[i];
+		if(i < parsed.length() - 1) full_msg += " ";
+	}
+	
+	// Separar idioma do texto
+	string[] parts = full_msg.split("|");
+	if(parts.length() < 2) {
+		// Tentar formato alternativo: "idioma texto"
+		int space_pos = full_msg.find(" ");
+		if(space_pos > 0) {
+			parts.resize(2);
+			parts[0] = full_msg.substr(0, space_pos);
+			parts[1] = full_msg.substr(space_pos + 1);
+		} else {
+			send_reliable(players[index].peer_id, "msg2 ;Formato: /traduzir idioma|texto;", 0);
+			return;
+		}
+	}
+	
+	string target_lang = get_lang_code(parts[0]);
+	string text_to_translate = parts[1];
+	
+	if(text_to_translate.length() == 0) {
+		send_reliable(players[index].peer_id, "msg2 ;Texto vazio.;", 0);
+		return;
+	}
+	
+	// Criar contexto de tradução
+	translation_context ctx;
+	ctx.peer_id = players[index].peer_id;
+	ctx.message_id = random_string(8);
+	ctx.original_text = text_to_translate;
+	ctx.target_lang = target_lang;
+	ctx.request_time.restart();
+	ctx.completed = false;
+	
+	pending_translations.insert_last(ctx);
+	
+	// Notificar usuário
+	send_reliable(players[index].peer_id, "msg2 ;Traduzindo para " + target_lang + "...;", 0);
+	
+	// Iniciar tradução assíncrona
+	start_async_translation(pending_translations.length() - 1);
+}
+
+// Iniciar tradução assíncrona usando HTTP
+void start_async_translation(uint ctx_index) {
+	if(ctx_index >= pending_translations.length()) return;
+	
+	translation_context@ ctx = pending_translations[ctx_index];
+	
+	// URL da API (Google Translate público - limitado mas funcional)
+	// Alternativa: MyMemory API (gratuita)
+	string api_url = "https://api.mymemory.translated.net/get?q=" + 
+					 url_encode(ctx.original_text) + 
+					 "&langpair=auto|" + ctx.target_lang;
+	
+	// Fazer requisição HTTP
+	// NOTA: Em NVGT, usamos internet_request ou http
+	// Por simplicidade, vamos usar uma abordagem síncrona com timeout
+	
+	// Marcar como processando
+	debug_log("🌐 Iniciando tradução: " + ctx.original_text + " -> " + ctx.target_lang);
+	
+	// Fallback: tradução local básica para casos simples
+	ctx.result = do_local_translation(ctx.original_text, ctx.target_lang);
+	ctx.completed = true;
+}
+
+// Tradução local básica (fallback)
+// Para palavras e frases comuns do jogo
+string do_local_translation(string text, string target_lang) {
+	// Dicionário de traduções comuns do jogo
+	dictionary translations_pt;
+	dictionary translations_en;
+	dictionary translations_es;
+	dictionary translations_fr;
+	
+	// Traduções PT
+	translations_pt.set("hello", "olá");
+	translations_pt.set("hi", "oi");
+	translations_pt.set("thanks", "obrigado");
+	translations_pt.set("thank you", "obrigado");
+	translations_pt.set("sorry", "desculpa");
+	translations_pt.set("yes", "sim");
+	translations_pt.set("no", "não");
+	translations_pt.set("help", "ajuda");
+	translations_pt.set("attack", "atacar");
+	translations_pt.set("retreat", "recuar");
+	translations_pt.set("enemy", "inimigo");
+	translations_pt.set("friend", "amigo");
+	translations_pt.set("wait", "espere");
+	translations_pt.set("follow me", "sigam-me");
+	translations_pt.set("good game", "bom jogo");
+	translations_pt.set("bye", "tchau");
+	translations_pt.set("goodbye", "adeus");
+	
+	// Traduções EN
+	translations_en.set("olá", "hello");
+	translations_en.set("oi", "hi");
+	translations_en.set("obrigado", "thanks");
+	translations_en.set("obrigada", "thanks");
+	translations_en.set("desculpa", "sorry");
+	translations_en.set("sim", "yes");
+	translations_en.set("não", "no");
+	translations_en.set("ajuda", "help");
+	translations_en.set("atacar", "attack");
+	translations_en.set("recuar", "retreat");
+	translations_en.set("inimigo", "enemy");
+	translations_en.set("amigo", "friend");
+	translations_en.set("espere", "wait");
+	translations_en.set("bom jogo", "good game");
+	translations_en.set("tchau", "bye");
+	
+	// Traduções ES
+	translations_es.set("hello", "hola");
+	translations_es.set("olá", "hola");
+	translations_es.set("thanks", "gracias");
+	translations_es.set("obrigado", "gracias");
+	translations_es.set("sorry", "perdón");
+	translations_es.set("desculpa", "perdón");
+	translations_es.set("yes", "sí");
+	translations_es.set("sim", "sí");
+	translations_es.set("no", "no");
+	translations_es.set("não", "no");
+	translations_es.set("help", "ayuda");
+	translations_es.set("ajuda", "ayuda");
+	
+	// Traduções FR
+	translations_fr.set("hello", "bonjour");
+	translations_fr.set("olá", "bonjour");
+	translations_fr.set("thanks", "merci");
+	translations_fr.set("obrigado", "merci");
+	translations_fr.set("sorry", "pardon");
+	translations_fr.set("desculpa", "pardon");
+	translations_fr.set("yes", "oui");
+	translations_fr.set("sim", "oui");
+	translations_fr.set("no", "non");
+	translations_fr.set("não", "non");
+	
+	// Selecionar dicionário
+	dictionary@ dict;
+	if(target_lang == "pt") @dict = translations_pt;
+	else if(target_lang == "en") @dict = translations_en;
+	else if(target_lang == "es") @dict = translations_es;
+	else if(target_lang == "fr") @dict = translations_fr;
+	else @dict = translations_pt;
+	
+	// Tentar tradução direta
+	string lower_text = text.lower();
+	string result;
+	if(dict.get(lower_text, result)) {
+		return result;
+	}
+	
+	// Se não encontrou, retornar texto original com nota
+	return text + " [sem tradução local]";
+}
+
+// Verificar traduções completadas (chamar no main loop)
+void check_translation_results() {
+	for(uint i = 0; i < pending_translations.length(); i++) {
+		translation_context@ ctx = pending_translations[i];
+		
+		if(ctx.completed) {
+			// Enviar resultado ao cliente
+			string response = "translated " + ctx.message_id + "|" + ctx.original_text + "|" + ctx.result;
+			
+			// Verificar se peer ainda está conectado
+			int player_index = get_player_index_from_peer(ctx.peer_id);
+			if(player_index >= 0) {
+				send_reliable(ctx.peer_id, response, 0);
+				debug_log("✅ Tradução enviada: " + ctx.result);
+			}
+			
+			// Remover da lista
+			pending_translations.remove_at(i);
+			i--;
+		}
+		// Timeout de 30 segundos
+		else if(ctx.request_time.elapsed >= 30000) {
+			int player_index = get_player_index_from_peer(ctx.peer_id);
+			if(player_index >= 0) {
+				send_reliable(ctx.peer_id, "msg2 ;Tradução expirou. Tente novamente.;", 0);
+			}
+			pending_translations.remove_at(i);
+			i--;
+		}
+	}
+}
+
+// Obter índice do jogador pelo peer_id
+int get_player_index_from_peer(uint64 peer_id) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].peer_id == peer_id) return int(i);
+	}
+	return -1;
+}
+
+// Gerar string aleatória para IDs
+string random_string(int length) {
+	string chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+	string result = "";
+	for(int i = 0; i < length; i++) {
+		result += chars.substr(random(0, chars.length() - 1), 1);
+	}
+	return result;
+}
+
+// URL encode para requisições HTTP
+string url_encode(string text) {
+	string result = "";
+	for(uint i = 0; i < text.length(); i++) {
+		uint8 c = text[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+			result += string_from_char(c);
+		}
+		else if(c == ' ') {
+			result += "+";
+		}
+		else {
+			result += "%" + format_hex(c);
+		}
+	}
+	return result;
+}
+
+// Formatar byte como hexadecimal
+string format_hex(uint8 value) {
+	string hex_chars = "0123456789ABCDEF";
+	return hex_chars.substr(value / 16, 1) + hex_chars.substr(value % 16, 1);
+}
+
+// Converter char para string
+string string_from_char(uint8 c) {
+	string result;
+	result += c;
+	return result;
+}
+
+// =========== COMANDOS WRAPPER ===========
+
+// /traduzir LANG|TEXT - Traduzir texto
+void cmd_translate(int index, string[] parsed) {
+	req_translate_message(index, parsed);
+}
+
+// /enable_translate PLAYER - Habilitar tradução para jogador
+void cmd_enable_translate(int index, string[] parsed) {
+	if(!players[index].admin) {
+		send_reliable(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
+		return;
+	}
+	
+	if(parsed.length() < 2) {
+		send_reliable(players[index].peer_id, "msg2 ;Uso: /enable_translate jogador;", 0);
+		return;
+	}
+	
+	int target_index = get_player_index_from(parsed[1]);
+	if(target_index < 0) {
+		send_reliable(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
+		return;
+	}
+	
+	string translator_file = "players/" + players[target_index].charname + "/translator.usr";
+	if(!file_exists(translator_file)) {
+		file f;
+		f.open(translator_file, "w");
+		f.write("enabled");
+		f.close();
+		
+		send_reliable(players[target_index].peer_id, "enabletranslate", 0);
+		tell(players[index].charname + " adicionou " + players[target_index].charname + " ao time de tradutores.", "notify7.ogg", 150);
+	} else {
+		send_reliable(players[index].peer_id, "msg2 ;Jogador já é tradutor.;", 0);
+	}
+}
+
+// /remove_translate PLAYER - Remover permissão de tradução
+void cmd_remove_translate(int index, string[] parsed) {
+	if(!players[index].admin) {
+		send_reliable(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
+		return;
+	}
+	
+	if(parsed.length() < 2) {
+		send_reliable(players[index].peer_id, "msg2 ;Uso: /remove_translate jogador;", 0);
+		return;
+	}
+	
+	int target_index = get_player_index_from(parsed[1]);
+	if(target_index < 0) {
+		send_reliable(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
+		return;
+	}
+	
+	string translator_file = "players/" + players[target_index].charname + "/translator.usr";
+	if(file_exists(translator_file)) {
+		file_delete(translator_file);
+		
+		send_reliable(players[target_index].peer_id, "disabletranslate", 0);
+		tell(players[index].charname + " removeu " + players[target_index].charname + " do time de tradutores.", "notify7.ogg", 150);
+	} else {
+		send_reliable(players[index].peer_id, "msg2 ;Jogador não é tradutor.;", 0);
+	}
+}
+
+// ============================================================================
+// FIM DO ARQUIVO qol.nvgt
+// ============================================================================

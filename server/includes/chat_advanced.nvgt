@@ -419,3 +419,238 @@ void chat_loop() {
 	// Verificar mutes expirados (implementar se necessário persistência com tempo)
 	// Por enquanto, mutes manuais são permanentes até unmute
 }
+
+// ============================================================================
+// 🆕 SISTEMA DE CHAT COMPLETO - REPLICAÇÃO DO BGT
+// ============================================================================
+
+// telllocal - Chat local (fala no mapa)
+// Envia mensagem para jogadores próximos (range 15 em X, mesmo mapa)
+// Formato BGT: fm |titulo| nome |diz:| mensagem
+void telllocal(int index, string message) {
+	if(index < 0 || index >= int(players.length())) return;
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[index].charname);
+	if(!st.can_send_message()) {
+		if(st.is_muted) {
+			send_reliable(players[index].peer_id, "msg2 Você está mutado por spam! Tempo restante: " + st.get_remaining_mute_time() + "s", 0);
+		} else {
+			send_reliable(players[index].peer_id, "msg2 Você está enviando mensagens muito rápido! Aviso " + st.warnings + "/3", 0);
+		}
+		return;
+	}
+	
+	// Verificar se está silenciado
+	if(file_exists("players/" + players[index].charname + "/silencio.usr") || players[index].silenciado == 1) {
+		send_reliable(players[index].peer_id, "msg2 Por alguma razão, algo te impede de falar...", 0);
+		return;
+	}
+	
+	// Verificar mute manual
+	if(is_manually_muted(players[index].charname)) {
+		send_reliable(players[index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Verificar comando /me para ações
+	bool is_action = false;
+	if(filtered.length() > 4 && filtered.substr(0, 4) == "/me ") {
+		is_action = true;
+		filtered = filtered.substr(4); // Remove "/me "
+	}
+	
+	// Enviar para jogadores no range 15 do mesmo mapa
+	int range = 15;
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		if(players[i].map_name != players[index].map_name) continue;
+		if(players[i].has_muted(players[index].charname)) continue;
+		
+		// Verificar distância em X
+		int dist = absolute(players[i].x - players[index].x);
+		if(dist <= range) {
+			string packet;
+			string titulo = players[index].title;
+			string nome = players[index].charname;
+			
+			// Se invisível, mostrar como desconhecido
+			if(players[index].invs == 1) {
+				nome = "alguém";
+				titulo = "";
+			}
+			
+			if(is_action) {
+				// Ação /me
+				packet = "fm |" + titulo + "| " + nome + " " + filtered;
+			} else {
+				// Fala normal
+				packet = "fm |" + titulo + "| " + nome + " |diz:| " + filtered;
+			}
+			
+			send_reliable(players[i].peer_id, packet, 0);
+		}
+	}
+	
+	debug_log("💬 Chat Local de " + players[index].charname + ": " + message);
+}
+
+// tellteam - Chat de equipe
+// Envia mensagem para todos os membros da equipe
+// Formato BGT: msg3 nome ;disse:; mensagem
+void tellteam(int index, string message) {
+	if(index < 0 || index >= int(players.length())) return;
+	
+	// Verificar se tem equipe
+	if(players[index].nomesequipe.length() == 0) {
+		send_reliable(players[index].peer_id, "msg2 Você não está em nenhuma equipe!", 0);
+		return;
+	}
+	
+	// Verificar se chat de equipe está desativado
+	if(players[index].dequipo == 1) {
+		send_reliable(players[index].peer_id, "msg2 Você não pode enviar mensagens para um chat desativado.", 0);
+		return;
+	}
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[index].charname);
+	if(!st.can_send_message()) {
+		send_reliable(players[index].peer_id, "msg2 Você está enviando mensagens muito rápido!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Enviar para todos da equipe
+	for(uint i = 0; i < players[index].nomesequipe.length(); i++) {
+		int member_index = get_player_index_from(players[index].nomesequipe[i]);
+		if(member_index >= 0) {
+			// Verificar se membro tem chat de equipe ativado
+			if(players[member_index].dequipo == 0) {
+				send_reliable(players[member_index].peer_id, "msg3 " + players[index].charname + " ;disse:; " + filtered, 0);
+				send_reliable(players[member_index].peer_id, "ps notify_trumpet.ogg", 0);
+			}
+		}
+	}
+	
+	debug_log("💬 Chat Equipe de " + players[index].charname + ": " + message);
+}
+
+// send_pm - Mensagem privada
+// Envia mensagem direta para outro jogador
+// Formato BGT: pm de/para nome: mensagem
+void send_pm(int sender_index, string target_name, string message) {
+	if(sender_index < 0 || sender_index >= int(players.length())) return;
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[sender_index].charname);
+	if(!st.can_send_message()) {
+		send_reliable(players[sender_index].peer_id, "msg2 Você está enviando mensagens muito rápido!", 0);
+		return;
+	}
+	
+	// Verificar mute
+	if(is_manually_muted(players[sender_index].charname)) {
+		send_reliable(players[sender_index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Buscar jogador alvo
+	int target_index = get_player_index_from(target_name);
+	
+	if(target_index >= 0) {
+		// Jogador online
+		
+		// Verificar se está silenciado
+		if(file_exists("players/" + target_name + "/silencio.usr")) {
+			send_reliable(players[sender_index].peer_id, "msg2 " + target_name + " lamentavelmente não pode te ouvir.", 0);
+			return;
+		}
+		
+		// Verificar se tem PM desativado
+		if(players[target_index].dpm == 1) {
+			send_reliable(players[sender_index].peer_id, "msg2 " + target_name + " tem suas mensagens privadas desativadas.", 0);
+			return;
+		}
+		
+		// Verificar se foi mutado pelo alvo
+		if(players[target_index].has_muted(players[sender_index].charname)) {
+			send_reliable(players[sender_index].peer_id, "msg2 Você não pode fazer isto.", 0);
+			return;
+		}
+		
+		// Enviar mensagem
+		players[target_index].replyname = players[sender_index].charname;
+		send_reliable(players[target_index].peer_id, "pm de " + players[sender_index].charname + ": " + filtered, 0);
+		send_reliable(players[sender_index].peer_id, "pm para " + target_name + ": " + filtered, 0);
+		
+		debug_log("💬 PM de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
+	} else {
+		// Jogador offline - verificar se existe
+		if(!directory_exists("players/" + target_name)) {
+			send_reliable(players[sender_index].peer_id, "msg2 Que curioso, uma mensagem tentando ser enviada para uma pessoa inexistente.", 0);
+			return;
+		}
+		
+		// Salvar mensagem permanente para quando o jogador logar
+		send_reliable(players[sender_index].peer_id, "msg2 Sua mensagem foi enviada para " + target_name + "!", 0);
+		file f;
+		f.open("players/" + target_name + "/pm.md", "a");
+		f.write("Mensagem permanente não lida de " + players[sender_index].charname + ": " + filtered + "\r\n");
+		f.close();
+		
+		debug_log("💬 PM offline de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
+	}
+}
+
+// reply_pm - Responder última PM
+// Responde para o último jogador que enviou PM
+void reply_pm(int sender_index, string message) {
+	if(sender_index < 0 || sender_index >= int(players.length())) return;
+	
+	string reply_to = players[sender_index].replyname;
+	if(reply_to == "") {
+		send_reliable(players[sender_index].peer_id, "msg2 Você não tem ninguém para responder!", 0);
+		return;
+	}
+	
+	send_pm(sender_index, reply_to, message);
+}
+
+// ============================================================================
+// COMANDOS DE CHAT - Wrappers para handlers
+// ============================================================================
+
+// cmd_falarnomapa - Wrapper para /falarnomapa
+void cmd_falarnomapa(int player_index, string message) {
+	telllocal(player_index, message);
+}
+
+// cmd_team - Wrapper para /e ou /t
+void cmd_team(int player_index, string message) {
+	tellteam(player_index, message);
+}
+
+// cmd_pm - Wrapper para /pm
+void cmd_pm(int player_index, string target, string message) {
+	send_pm(player_index, target, message);
+}
+
+// cmd_reply - Wrapper para /r ou /reply
+void cmd_reply(int player_index, string message) {
+	reply_pm(player_index, message);
+}

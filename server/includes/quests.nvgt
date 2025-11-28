@@ -635,3 +635,44 @@ void quests_loop() {
 	// Verificar reset diário de quests diárias
 	// (implementar quando necessário)
 }
+
+// ============================================================================
+// COMANDO: Ver quests disponíveis para aceitar
+// ============================================================================
+
+void cmd_availablequests(int player_index) {
+	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
+	int player_level = int(players[player_index].level);
+	
+	send_reliable(players[player_index].peer_id, "msg2 === Quests Disponíveis ===", 0);
+	
+	int count = 0;
+	for(uint i = 0; i < quest_database.length(); i++) {
+		quest_definition@ qdef = quest_database[i];
+		
+		// Verificar se pode aceitar
+		if(!qdef.can_accept(player_level, qlog.completed_quests)) continue;
+		
+		// Verificar se já está ativa
+		if(qlog.has_active_quest(qdef.id)) continue;
+		
+		// Verificar se já completou (para não repetíveis)
+		if(!qdef.is_repeatable && qlog.has_completed_quest(qdef.id)) continue;
+		
+		string line = "#" + qdef.id + " - " + qdef.name;
+		if(qdef.is_daily) line += " [DIÁRIA]";
+		line += " (Nível " + qdef.required_level + "+)";
+		
+		send_reliable(players[player_index].peer_id, "msg2 " + line, 0);
+		count++;
+	}
+	
+	if(count == 0) {
+		send_reliable(players[player_index].peer_id, "msg2 Nenhuma quest disponível no momento.", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Suba de nível para desbloquear mais quests!", 0);
+	} else {
+		send_reliable(players[player_index].peer_id, "msg2 ===", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Use /acceptquest <id> para aceitar uma quest", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Use /questinfo <id> para ver detalhes", 0);
+	}
+}

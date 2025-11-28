@@ -92,12 +92,14 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/friends.nvgt"  // 🆕 FASE 4: Sistema de amigos
 #include "includes/guilds.nvgt"  // 🆕 FASE 4: Sistema de guilds/clans
 #include "includes/chat_advanced.nvgt"  // 🆕 FASE 4: Sistema de chat avançado
+#include "includes/qol.nvgt"  // ✅ Task 3.3: Sistema QoL (Frases Rápidas + Tradução)
 #include "includes/mail.nvgt"  // 🆕 FASE 4: Sistema de correio/mail
 #include "includes/quests.nvgt"  // 🆕 FASE 5: Sistema de quests/missões
 #include "includes/achievements.nvgt"  // 🆕 FASE 5: Sistema de conquistas
 #include "includes/daily_rewards.nvgt"  // 🆕 FASE 5: Sistema de recompensas diárias
 #include "includes/bosses.nvgt"  // 🆕 FASE 5: Sistema de bosses
 #include "includes/dungeons.nvgt"  // 🆕 FASE 5: Sistema de dungeons
+#include "includes/admin_tools.nvgt"  // ✅ Task 2.6.3: Ferramentas de admin (lanterna/detector)
 #include "includes/events.nvgt"  // 🆕 FASE 5: Sistema de eventos
 #include "includes/weapons.nvgt"  // 🆕 Sistema de armas
 #include "includes/crafting.nvgt"  // Sistema de crafting
@@ -633,6 +635,81 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
 
+        // ===== ✅ TASK 2.2: SISTEMA DE STANCE (AGACHAR/SENTAR) =====
+        
+        // crouched::on/off - Sistema de agachar (Shift+Space no cliente BGT)
+        if(cmd == "crouched" && parts.length() >= 2) {
+            string action = parts[1];
+            if(action == "on") {
+                player.crouched = true;
+                debug_log("🦵 " + player.name + " agachou");
+                // Broadcast para outros jogadores no mesmo mapa
+                broadcast_to_map(player.map_name, "crouched " + player.name + " on", peer_id);
+            }
+            else if(action == "off") {
+                player.crouched = false;
+                debug_log("🧍 " + player.name + " levantou (de agachado)");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " off", peer_id);
+            }
+            return;
+        }
+        
+        // Sistema alternativo: crouched::on e crouched::off (formato BGT original)
+        if(command.find("crouched::") == 0) {
+            string action = command.substr(10);  // Remove "crouched::"
+            if(action == "on") {
+                player.crouched = true;
+                debug_log("🦵 " + player.name + " agachou");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " on", peer_id);
+            }
+            else if(action == "off") {
+                player.crouched = false;
+                debug_log("🧍 " + player.name + " levantou (de agachado)");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " off", peer_id);
+            }
+            return;
+        }
+        
+        // sentar/levantar - Sistema de sentar (Z no cliente)
+        // Cliente envia som "centar.ogg" ou "levantar.ogg" para sincronizar
+        if(cmd == "sentar" || cmd == "sit") {
+            if(!player.centado) {
+                player.centado = true;
+                debug_log("🪑 " + player.name + " sentou");
+                // Broadcast som de sentar para outros jogadores
+                broadcast_to_map(player.map_name, "sound centar.ogg " + player.x + " " + player.y, peer_id);
+            }
+            return;
+        }
+        
+        if(cmd == "levantar" || cmd == "stand") {
+            if(player.centado) {
+                player.centado = false;
+                debug_log("🧍 " + player.name + " levantou (de sentado)");
+                broadcast_to_map(player.map_name, "sound levantar.ogg " + player.x + " " + player.y, peer_id);
+            }
+            return;
+        }
+        
+        // Handler de som que também sincroniza estado (compatibilidade BGT)
+        // Cliente envia: sound centar.ogg ou sound levantar.ogg
+        if(cmd == "sound" && parts.length() >= 2) {
+            string sound_name = parts[1];
+            if(sound_name == "centar.ogg") {
+                player.centado = true;
+                debug_log("🪑 " + player.name + " sentou (via som)");
+            }
+            else if(sound_name == "levantar.ogg") {
+                player.centado = false;
+                debug_log("🧍 " + player.name + " levantou (via som)");
+            }
+            // Broadcast o som para outros jogadores
+            int sound_x = (parts.length() >= 3) ? parse_int(parts[2]) : player.x;
+            int sound_y = (parts.length() >= 4) ? parse_int(parts[3]) : player.y;
+            broadcast_to_map(player.map_name, "sound " + sound_name + " " + sound_x + " " + sound_y, peer_id);
+            return;
+        }
+
         // ===== FIM DOS COMANDOS DE CONFIGURAÇÃO =====
 
         // ping - Responder ao ping do cliente
@@ -671,6 +748,147 @@ void process_player_command(uint64 peer_id, string command) {
             
             send_reliable(peer_id, "msg2 " + stats_msg, 0);
             debug_log("📊 " + player.name + " verificou stats: Lv" + player.player_level + " AFK:" + player.afk + " Sede:" + player.nsede + "% Fome:" + player.nfome + "%");
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 TASK 2.6.2: CHAT ADMINISTRATIVO (comando "adm")
+        // ============================================================================
+        // Formato: adm <mensagem>
+        // Envia mensagem para todos os admins/mods conectados
+        // Jogadores com título "CHATTER" ou "Bugueiro" recebem prefixo [LOGO_CHATTER]
+        if(cmd == "adm" && parts.length() > 1) {
+            // Reconstruir a mensagem (remove o "adm " do início)
+            string msg_text = command.substr(4); // Remove "adm "
+            
+            // Verificar se o jogador tem título Chatter/Bugueiro
+            string msg_prefix = "";
+            string player_title = player.title.lower();
+            if(player_title == "chatter" || player_title == "bugueiro") {
+                msg_prefix = "[LOGO_CHATTER] ";
+            }
+            
+            // Montar mensagem no formato BGT: "msg4 <nome>; ;diz:; <mensagem>"
+            string mensagem = "msg4 " + msg_prefix + player.name + "; ;diz:; " + msg_text;
+            string sound_packet = "ps notify5.ogg";
+            
+            // Enviar para todos os admins e moderadores conectados
+            for(uint i = 0; i < players.length(); i++) {
+                if(!players[i].is_logged_in) continue;
+                if(players[i].has_muted(player.name)) continue; // Não enviar para quem mutou
+                
+                // Verificar se é admin, moderador ou tem permissão de chat admin
+                bool can_receive = players[i].check_admin() || players[i].moderador;
+                if(!can_receive) {
+                    // Verificar arquivo de permissão específico
+                    if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
+                       file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
+                        can_receive = true;
+                    }
+                }
+                
+                if(can_receive) {
+                    send_reliable(players[i].peer_id, sound_packet, 0);
+                    send_reliable(players[i].peer_id, mensagem, 0);
+                }
+            }
+            
+            debug_log("💬 Chat Admin de " + player.name + ": " + msg_text);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 SISTEMA DE CHAT COMPLETO (Chat Local, Equipe, PM)
+        // ============================================================================
+        
+        // /falarnomapa <mensagem> - Chat local (fala para jogadores próximos)
+        if(cmd == "/falarnomapa" && parts.length() >= 2) {
+            // Reconstruir a mensagem (remove o comando do início)
+            string msg_text = command.substr(13); // Remove "/falarnomapa "
+            cmd_falarnomapa(player_index, msg_text);
+            return;
+        }
+        
+        // /e <mensagem> ou /t <mensagem> - Chat de equipe
+        if((cmd == "/e" || cmd == "/t") && parts.length() >= 2) {
+            string msg_text = command.substr(3); // Remove "/e " ou "/t "
+            cmd_team(player_index, msg_text);
+            return;
+        }
+        
+        // /pm <nome> <mensagem> - Mensagem privada
+        if(cmd == "/pm" && parts.length() >= 3) {
+            string target_name = parts[1];
+            // Reconstruir a mensagem (remove "/pm nome ")
+            int msg_start = command.find(parts[1]) + parts[1].length() + 1;
+            if(msg_start < int(command.length())) {
+                string msg_text = command.substr(msg_start);
+                cmd_pm(player_index, target_name, msg_text);
+            }
+            return;
+        }
+        
+        // /reply <mensagem> ou /r <mensagem> - Responder última PM
+        if((cmd == "/reply" || cmd == "/r") && parts.length() >= 2) {
+            string msg_text;
+            if(cmd == "/reply") {
+                msg_text = command.substr(7); // Remove "/reply "
+            } else {
+                msg_text = command.substr(3); // Remove "/r "
+            }
+            cmd_reply(player_index, msg_text);
+            return;
+        }
+        
+        // ============================================================================
+        // ✅ TASK 3.3: SISTEMA QoL (Voice Phrases + Tradução)
+        // ============================================================================
+        
+        // frasesbarra <nsom> <som2> - Voice phrases (sistema original BGT)
+        // Cliente envia: "frasesbarra 1 v1ayuda1.ogg"
+        // Servidor retransmite o som para jogadores próximos
+        if(cmd == "frasesbarra" && parts.length() >= 3) {
+            frasesbarra(player_index, parse_int(parts[1]), parts[2]);
+            return;
+        }
+        
+        // translate <lang>|<text> - Traduzir texto
+        if(cmd == "translate" && parts.length() >= 2) {
+            cmd_translate(player_index, parts);
+            return;
+        }
+        
+        // /traduzir <lang> <texto> - Traduzir (comando amigável)
+        if((cmd == "/traduzir" || cmd == "traduzir" || cmd == "/translate") && parts.length() >= 3) {
+            cmd_translate(player_index, parts);
+            return;
+        }
+        
+        // /enable_translate <player> - Habilitar tradutor (Admin)
+        if((cmd == "/enable_translate" || cmd == "enable_translate") && parts.length() >= 2) {
+            cmd_enable_translate(player_index, parts);
+            return;
+        }
+        
+        // /remove_translate <player> - Remover tradutor (Admin)
+        if((cmd == "/remove_translate" || cmd == "remove_translate") && parts.length() >= 2) {
+            cmd_remove_translate(player_index, parts);
+            return;
+        }
+        
+        // ============================================================================
+        // ✅ TASK 2.6.3: FERRAMENTAS DE ADMIN (Lanterna e Detector)
+        // ============================================================================
+        
+        // /lanterna ou admin_lanterna - Toggle lanterna (Admin nível 5+)
+        if(cmd == "/lanterna" || cmd == "lanterna" || cmd == "admin_lanterna") {
+            handle_admin_lanterna_command(peer_id);
+            return;
+        }
+        
+        // /detector ou admin_detector - Usar detector (Admin nível 5+)
+        if(cmd == "/detector" || cmd == "detector" || cmd == "admin_detector") {
+            handle_admin_detector_command(peer_id);
             return;
         }
         
@@ -749,10 +967,147 @@ void process_player_command(uint64 peer_id, string command) {
             debug_log("👥 " + player.name + " listou jogadores: " + count + " no mapa " + player.map_name);
             return;
         }
+        
+        // ============================================================================
+        // ✅ TASK 2.7: SISTEMA DE VENDA DE ITENS (Multi-Moeda)
+        // ============================================================================
+        
+        // req_sell_item <item> <quantidade> - Vender item para NPC
+        if(cmd == "req_sell_item" && parts.length() >= 3) {
+            handle_sell_item(peer_id, parts);
+            return;
+        }
+        
+        // /vender <item> <quantidade> - Comando amigável para vender
+        if((cmd == "/vender" || cmd == "vender" || cmd == "/sell" || cmd == "sell") && parts.length() >= 3) {
+            string[] sell_parts = {"req_sell_item", parts[1], parts[2]};
+            handle_sell_item(peer_id, sell_parts);
+            return;
+        }
+        
+        // /itensvenda ou /sellable - Listar itens que podem ser vendidos
+        if(cmd == "/itensvenda" || cmd == "itensvenda" || cmd == "/sellable" || cmd == "sellable") {
+            int player_index = get_player_index_from(player.name);
+            list_sellable_items(player_index);
+            return;
+        }
 
         if(cmd == "login") {
             send_reliable(get_player_peer_id(player), "say Sistema de login em desenvolvimento");
         }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE QUESTS (Sistema de Missões)
+        // ============================================================================
+        
+        // /quests - Listar quests ativas
+        if(cmd == "/quests" || cmd == "quests") {
+            cmd_quests(player_index);
+            return;
+        }
+        
+        // /questinfo <id> - Ver detalhes de quest
+        if((cmd == "/questinfo" || cmd == "questinfo") && parts.length() >= 2) {
+            int quest_id = parse_int(parts[1]);
+            cmd_questinfo(player_index, quest_id);
+            return;
+        }
+        
+        // /acceptquest <id> - Aceitar quest
+        if((cmd == "/acceptquest" || cmd == "acceptquest") && parts.length() >= 2) {
+            int quest_id = parse_int(parts[1]);
+            cmd_acceptquest(player_index, quest_id);
+            return;
+        }
+        
+        // /abandonquest <id> - Abandonar quest
+        if((cmd == "/abandonquest" || cmd == "abandonquest") && parts.length() >= 2) {
+            int quest_id = parse_int(parts[1]);
+            cmd_abandonquest(player_index, quest_id);
+            return;
+        }
+        
+        // /completequest <id> - Completar quest
+        if((cmd == "/completequest" || cmd == "completequest") && parts.length() >= 2) {
+            int quest_id = parse_int(parts[1]);
+            cmd_completequest(player_index, quest_id);
+            return;
+        }
+        
+        // /availablequests - Ver quests disponíveis
+        if(cmd == "/availablequests" || cmd == "availablequests") {
+            cmd_availablequests(player_index);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE ACHIEVEMENTS (Sistema de Conquistas)
+        // ============================================================================
+        
+        // /achievements - Listar conquistas
+        if(cmd == "/achievements" || cmd == "achievements" || cmd == "/conquistas" || cmd == "conquistas") {
+            string filter = (parts.length() >= 2) ? parts[1] : "all";
+            cmd_achievements(player_index, filter);
+            return;
+        }
+        
+        // /achievementinfo <id> - Ver detalhes de conquista
+        if((cmd == "/achievementinfo" || cmd == "achievementinfo") && parts.length() >= 2) {
+            int ach_id = parse_int(parts[1]);
+            cmd_achievementinfo(player_index, ach_id);
+            return;
+        }
+        
+        // /titles - Listar títulos desbloqueados
+        if(cmd == "/titles" || cmd == "titles" || cmd == "/titulos" || cmd == "titulos") {
+            cmd_titles(player_index);
+            return;
+        }
+        
+        // /settitle <titulo> - Equipar título
+        if((cmd == "/settitle" || cmd == "settitle") && parts.length() >= 2) {
+            string title = parts[1];
+            for(uint i = 2; i < parts.length(); i++) {
+                title += " " + parts[i];
+            }
+            cmd_settitle(player_index, title);
+            return;
+        }
+        
+        // /removetitle - Remover título
+        if(cmd == "/removetitle" || cmd == "removetitle") {
+            cmd_removetitle(player_index);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE DAILY REWARDS (Sistema de Recompensas Diárias)
+        // ============================================================================
+        
+        // /daily - Ver status das recompensas diárias
+        if(cmd == "/daily" || cmd == "daily" || cmd == "/diario" || cmd == "diario") {
+            cmd_daily_status(player_index);
+            return;
+        }
+        
+        // /claimdaily - Coletar recompensa diária
+        if(cmd == "/claimdaily" || cmd == "claimdaily" || cmd == "/coletardiario" || cmd == "coletardiario") {
+            cmd_claim_daily(player_index);
+            return;
+        }
+        
+        // /spin - Girar a roleta diária
+        if(cmd == "/spin" || cmd == "spin" || cmd == "/roleta" || cmd == "roleta") {
+            cmd_spin_wheel(player_index);
+            return;
+        }
+        
+        // /box - Abrir caixa misteriosa diária
+        if(cmd == "/box" || cmd == "box" || cmd == "/caixa" || cmd == "caixa") {
+            cmd_mystery_box(player_index);
+            return;
+        }
+        
         else {
             send_reliable(get_player_peer_id(player), "say Comando não reconhecido: " + cmd + ". Digite 'help' para ver comandos disponíveis.");
         }
@@ -864,6 +1219,7 @@ void main() {
     init_bosses_system();   // 🆕 FASE 5: Inicializar sistema de bosses
     init_dungeons_system(); // 🆕 FASE 5: Inicializar sistema de dungeons
     init_events_system();   // 🆕 FASE 5: Inicializar sistema de eventos
+    init_qol_system();      // ✅ Task 3.3: Inicializar sistema QoL (Frases Rápidas + Tradução)
     debug_log("Sistemas avançados inicializados");
     
     // Inicializar servidor de rede
@@ -1009,6 +1365,9 @@ void main() {
         
         // 🆕 FASE 5: Sistema de Eventos - Processar eventos ativos
         events_loop();
+        
+        // ✅ Task 3.3: Sistema QoL - Verificar traduções completadas
+        check_translation_results();
         
         // Sistema de Itens Magnéticos - Processar atração de itens
         for(uint i = 0; i < players.length(); i++) {

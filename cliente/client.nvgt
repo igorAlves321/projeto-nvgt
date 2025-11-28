@@ -8,6 +8,7 @@
 
 // Includes do cliente - globals DEVE vir antes do sound_pool para get_sound_path()
 #include"includes/globals.nvgt"
+#include"includes/localization.nvgt"    // ✅ Task 3.4: Sistema de Localização I18N
 
 // Agora podemos incluir sound_pool que usará get_sound_path()
 #include "../include/sound_pool.nvgt"
@@ -20,15 +21,20 @@
 #include"includes/ambiente.nvgt"
 #include"includes/classes.nvgt"
 #include"includes/player.nvgt"          // Player classes precisam vir antes
+#include"includes/rotation.nvgt"        // ✅ Task 2.2: Funções de rotação e geometria
+#include"includes/echo.nvgt"            // ✅ Task 2.2: Sistema de eco para navegação
+#include"includes/stance.nvgt"          // ✅ Task 2.2: Sistema de postura (agachar/sentar)
 #include"includes/weapon.nvgt"          // Weapon system
 #include"includes/item.nvgt"
 #include"includes/inv.nvgt"             // Sistema de inventário
+#include"includes/qol.nvgt"             // ✅ Task 3.3: Sistema QoL (Frases Rápidas + Tradução)
 #include"includes/clima.nvgt"
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
 #include"includes/elevador.nvgt"
 #include"includes/key_hold.nvgt"
 #include"includes/map.nvgt"
+#include"includes/camera.nvgt"          // Sistema de câmera de exploração (G+teclas)
 #include"includes/net.nvgt"
 #include"includes/parsed_data.nvgt"
 #include"includes/src.nvgt"
@@ -285,9 +291,17 @@ void main(){
 	init_inventory();
 	debug_log("✅ Sistema de inventário inicializado");
 	
+	// Inicializar sistema QoL (Frases Rápidas + Tradução)
+	init_qol_client();
+	debug_log("✅ Sistema QoL inicializado");
+	
 	// Inicializar sistema de favoritos de armas
 	init_weapon_favorites();
 	debug_log("✅ Sistema de favoritos de armas inicializado");
+	
+	// Inicializar sistema de localização I18N
+	init_localization_system();
+	debug_log("✅ Sistema de localização I18N inicializado");
 	
 	p.max_distance=30;
 	bool achou=false;
@@ -448,15 +462,15 @@ void main(){
 	weapons[36]="lançador_de_dardos";
 	weapons[37]="ak48";
 	weapons[38]="mk1";
-	create_add("tudo");
-	create_add("chats");
-	create_add("pm");
-	create_add("variado");
-	create_add("player");
-	create_add("leilão");
-	create_add("hits");
-	create_add("mortes");
-	create_add("conexões");
+	// Sistema de canais de chat simplificado
+	// Canais só aparecem na navegação quando têm mensagens
+	create_add("tudo");      // Sempre existe - recebe cópia de todas as mensagens
+	create_add("global");    // Chat global
+	create_add("local");     // Chat local (fala no mapa)
+	create_add("equipe");    // Chat de equipe
+	create_add("privado");   // Mensagens privadas (PM)
+	create_add("admin");     // Chat de administração
+	create_add("leilão");    // Chat de leilão
 	if(screen_reader_is_running()) install_keyhook();
 	show_game_window(nomejogo+" - "+pu.get_value("Versão")+" "+ver);
 	if(primeiravez==0){
@@ -598,12 +612,14 @@ void game(){
 				if(key_down(KEY_LEFT)) {
 					// Rotacionar para esquerda
 					facing = Left;
+					me.yaw = 270.0; // ✅ Task 2.2: Atualizar yaw (esquerda = 270°)
 					speak("Virando para esquerda");
 					debug_log("↶ [VERTICAL] Rotacionou para esquerda");
 				}
 				else if(key_down(KEY_RIGHT)) {
 					// Rotacionar para direita
 					facing = Right;
+					me.yaw = 90.0; // ✅ Task 2.2: Atualizar yaw (direita = 90°)
 					speak("Virando para direita");
 					debug_log("↷ [VERTICAL] Rotacionou para direita");
 				}
@@ -674,7 +690,63 @@ void game(){
 			}
 		}
 		// ===== FIM DA MOVIMENTAÇÃO =====
-		
+
+		// ===== ✅ TASK 2.2: SISTEMA DE ECO PARA NAVEGAÇÃO =====
+		if(key_pressed(KEY_E) && moveable) {
+			// Acionar eco para detecção de paredes
+			calculate_echo_feedback();
+			debug_log("🔊 Eco acionado - yaw: " + me.yaw);
+		}
+
+		// Eco direcional (Shift+E)
+		if(key_pressed(KEY_E) && (key_down(KEY_LSHIFT) || key_down(KEY_RSHIFT)) && moveable) {
+			directional_echo();
+			debug_log("🧭 Eco direcional acionado");
+		}
+
+		// Eco rápido (Ctrl+E)
+		if(key_pressed(KEY_E) && (key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL)) && moveable) {
+			quick_echo();
+			debug_log("⚡ Eco rápido acionado");
+		}
+		// ===== FIM DO SISTEMA DE ECO =====
+
+		// ===== ✅ TASK 2.2: SISTEMA DE STANCE (AGACHAR/SENTAR) =====
+		if(key_pressed(KEY_C) && moveable) {
+			// Alternar entre em pé (0) e agachado (1)
+			if(me.stance == 0) {
+				me.stance = 1;
+				p.play_stationary("stance_crouch.ogg", false);
+				speak("Você agachou.", true);
+				game_net.send(server_peer_id, "stance 1", 0, true);
+				debug_log("🧍 Stance: Agachado");
+			} else if(me.stance == 1) {
+				me.stance = 0;
+				p.play_stationary("stance_stand.ogg", false);
+				speak("Você levantou.", true);
+				game_net.send(server_peer_id, "stance 0", 0, true);
+				debug_log("🧍 Stance: Em pé");
+			}
+		}
+
+		if(key_pressed(KEY_X) && moveable) {
+			// Alternar entre em pé (0) e sentado (2)
+			if(me.stance == 0) {
+				me.stance = 2;
+				p.play_stationary("stance_sit.ogg", false);
+				speak("Você sentou.", true);
+				game_net.send(server_peer_id, "stance 2", 0, true);
+				debug_log("🧍 Stance: Sentado");
+			} else if(me.stance == 2) {
+				me.stance = 0;
+				p.play_stationary("stance_stand.ogg", false);
+				speak("Você levantou.", true);
+				game_net.send(server_peer_id, "stance 0", 0, true);
+				debug_log("🧍 Stance: Em pé");
+			}
+		}
+		// ===== FIM DO SISTEMA DE STANCE =====
+
 		if(nandar>-1){
 			int id=game_p.play_stationary(get_sound_path("elevador.ogg"), true);
 			int d=-1;
@@ -743,6 +815,36 @@ void game(){
 				debug_log("🎮 tprincipais() sendo chamado (connected=" + connected + ", ausente=" + ausente + ", exiting=" + exiting + ")");
 			}
 			tprincipais(); // Processa F1-F8, Shift+teclas, menus, etc.
+			
+			// ===== SISTEMA DE CÂMERA DE EXPLORAÇÃO (G+teclas) =====
+			camera_exploration_loop();  // Processa G+setas para mover câmera
+			camera_check_release();     // Reseta câmera quando G é solto
+			
+			// ===== ✅ TASK 2.2: SISTEMA DE POSTURA (AGACHAR/SENTAR) =====
+			stance_control_loop();      // Processa Shift+Space (agachar) e Z (sentar)
+			
+			// ===== ✅ TASK 2.6: SISTEMA DE BEACON E RASTREAMENTO =====
+			// Beacon loop (sons de outros jogadores no mapa)
+			if(beaconing == 1) {
+				looping = false;
+				beaconloop();
+			}
+			
+			// Rastreamento de jogador específico (F4)
+			if(playertrack != "" && looping) {
+				int tracked_index = get_player(playertrack);
+				if(tracked_index == -1) {
+					// Jogador saiu do mapa ou desconectou
+					speak(pu.get_value("Rastreamento perdido."));
+					looping = false;
+					playertrack = "";
+				}
+				else if(looptimer.elapsed >= looptime) {
+					looptimer.restart();
+					// Tocar beacon na posição do jogador rastreado
+					p.play_2d("beacon.ogg", me.x, me.y, players[tracked_index].x, players[tracked_index].y, false);
+				}
+			}
 		} else {
 			// DEBUG: Por que não está chamando tprincipais?
 			if(loop_count % 500 == 0) {
@@ -822,6 +924,9 @@ void game(){
 				debug_log("🎒 Inventário aberto com " + player_inv.get_keys().length() + " itens");
 			}
 		}
+		
+		// ✅ Task 3.3: Verificar teclas de atalho para frases rápidas e tradução
+		check_quick_phrase_keys();
 		
 		// Log de teclas de movimento
 		if(key_down(KEY_UP) || key_down(KEY_DOWN) || key_down(KEY_LEFT) || key_down(KEY_RIGHT)) {

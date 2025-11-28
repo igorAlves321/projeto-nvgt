@@ -1,0 +1,225 @@
+// stance.nvgt - Sistema de Postura do Jogador (Agachar/Sentar)
+// Task 2.2: Implementar Sistema de Movimento Faltantes
+// Baseado no código original BGT de Projeto Ig.bgt
+
+// ============================================================================
+// CONSTANTES DE ESTADO
+// ============================================================================
+const int STANCE_STANDING = 0;  // Em pé
+const int STANCE_CROUCHED = 1;  // Agachado
+const int STANCE_SITTING = 2;   // Sentado
+
+// ============================================================================
+// FUNÇÕES DE AGACHAR (CROUCH)
+// ============================================================================
+
+/**
+ * Verifica se o jogador pode agachar
+ * Não pode agachar se estiver sentado, pulando, em veículo, etc.
+ */
+bool can_crouch() {
+    if(centado) return false;           // Já está sentado
+    if(jumping == 1) return false;      // Está pulando
+    if(bicicleta == 1) return false;    // Na bicicleta
+    if(!moveable) return false;         // Não pode se mover
+    if(ausente) return false;           // Modo ausente
+    return true;
+}
+
+/**
+ * Ativa o modo agachado
+ * Envia pacote crouched::on para o servidor
+ */
+void crouch_on() {
+    if(!can_crouch()) return;
+    if(crouched == 1) return;  // Já está agachado
+    
+    crouched = 1;
+    me.stance = STANCE_CROUCHED;
+    
+    // Enviar para servidor
+    send_unreliable(peer_id, "crouched::on", 13);
+    
+    // Feedback auditivo
+    speak(pu.get_value("mantienes tu cuerpo agachado."));
+}
+
+/**
+ * Desativa o modo agachado
+ * Envia pacote crouched::off para o servidor
+ */
+void crouch_off() {
+    if(crouched == 0) return;  // Já está em pé
+    
+    crouched = 0;
+    me.stance = STANCE_STANDING;
+    
+    // Enviar para servidor
+    send_unreliable(peer_id, "crouched::off", 13);
+    
+    // Não precisa de feedback (ação automática ao soltar tecla)
+}
+
+/**
+ * Toggle agachar
+ * Alterna entre agachado e em pé
+ */
+void toggle_crouch() {
+    if(crouched == 0) {
+        crouch_on();
+    } else {
+        crouch_off();
+    }
+}
+
+// ============================================================================
+// FUNÇÕES DE SENTAR (SIT)
+// ============================================================================
+
+/**
+ * Verifica se o jogador pode sentar
+ * Não pode sentar se estiver agachado, pulando, em veículo, etc.
+ */
+bool can_sit() {
+    if(crouched == 1) return false;     // Está agachado
+    if(jumping == 1) return false;      // Está pulando
+    if(bicicleta == 1) return false;    // Na bicicleta
+    if(!moveable) return false;         // Não pode se mover
+    if(ausente) return false;           // Modo ausente
+    if(falling) return false;           // Está caindo
+    return true;
+}
+
+/**
+ * Senta o jogador
+ * Envia pacote sound centar.ogg para o servidor (compatível com BGT)
+ */
+void sit_down() {
+    if(!can_sit()) return;
+    if(centado) return;  // Já está sentado
+    
+    centado = true;
+    me.stance = STANCE_SITTING;
+    
+    // Tocar som local
+    p.play_stationary("centar.ogg", false);
+    
+    // Enviar para servidor (compatível com BGT original)
+    send_unreliable(peer_id, "sound centar.ogg " + me.x + " " + me.y, 0);
+    
+    // Feedback
+    speak(pu.get_value("te sientas."));
+}
+
+/**
+ * Levanta o jogador (de sentado)
+ * Envia pacote sound levantar.ogg para o servidor (compatível com BGT)
+ */
+void stand_up() {
+    if(!centado) return;  // Já está em pé
+    
+    centado = false;
+    me.stance = STANCE_STANDING;
+    
+    // Tocar som local
+    p.play_stationary("levantar.ogg", false);
+    
+    // Enviar para servidor (compatível com BGT original)
+    send_unreliable(peer_id, "sound levantar.ogg " + me.x + " " + me.y, 0);
+    
+    // Feedback
+    speak(pu.get_value("te levantas."));
+}
+
+/**
+ * Toggle sentar
+ * Alterna entre sentado e em pé
+ */
+void toggle_sit() {
+    if(centado) {
+        stand_up();
+    } else {
+        sit_down();
+    }
+}
+
+// ============================================================================
+// LOOP DE CONTROLE DE STANCE (CHAMADO NO GAME LOOP)
+// ============================================================================
+
+/**
+ * Processa as teclas de controle de postura
+ * Deve ser chamado no loop principal do cliente
+ * 
+ * Controles (baseado no BGT original):
+ * - Shift + Space (segurar): Agachar
+ * - Soltar Shift ou Space: Levantar do agachado
+ * - Z: Toggle sentar/levantar
+ */
+void stance_control_loop() {
+    // ===== SISTEMA DE AGACHAR (Shift + Space) =====
+    // Baseado em: Projeto Ig.bgt linhas 527-535
+    
+    // Agachar: Shift + Space (ambos pressionados)
+    if((key_down(KEY_LSHIFT) || key_down(KEY_RSHIFT)) && key_down(KEY_SPACE) && crouched == 0) {
+        if(can_crouch()) {
+            crouch_on();
+        }
+    }
+    
+    // Levantar: Soltar Shift OU Space enquanto agachado
+    if(crouched == 1) {
+        if(key_released(KEY_LSHIFT) || key_released(KEY_RSHIFT) || key_released(KEY_SPACE)) {
+            crouch_off();
+        }
+    }
+    
+    // ===== SISTEMA DE SENTAR (Tecla Z) =====
+    // Toggle sentar/levantar
+    if(key_pressed(KEY_Z) && !shift_pressionado()) {
+        toggle_sit();
+    }
+}
+
+// ============================================================================
+// FUNÇÕES AUXILIARES
+// ============================================================================
+
+/**
+ * Retorna o nome do estado atual de postura
+ */
+string get_stance_name() {
+    if(crouched == 1) return pu.get_value("agachado");
+    if(centado) return pu.get_value("sentado");
+    return pu.get_value("em pé");
+}
+
+/**
+ * Verifica se o jogador está em pé (stance normal)
+ */
+bool is_standing() {
+    return crouched == 0 && !centado;
+}
+
+/**
+ * Verifica se o jogador está agachado
+ */
+bool is_crouched() {
+    return crouched == 1;
+}
+
+/**
+ * Verifica se o jogador está sentado
+ */
+bool is_sitting() {
+    return centado;
+}
+
+/**
+ * Força o jogador a ficar em pé (útil para teleportes, mudança de mapa, etc.)
+ */
+void force_stand() {
+    if(crouched == 1) crouch_off();
+    if(centado) stand_up();
+    me.stance = STANCE_STANDING;
+}

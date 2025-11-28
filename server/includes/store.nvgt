@@ -202,3 +202,199 @@ void save_items_for_sale() {
 		f.close();
 	}
 }
+
+// ============================================================================
+// ✅ TASK 2.7: SISTEMA DE VENDA DE ITENS (Multi-Moeda)
+// ============================================================================
+
+// Configuração de taxa de venda (porcentagem do preço de compra)
+const double SELL_RATE = 0.5; // 50% do preço de compra
+
+// Classe para definir preços de venda customizados
+class sell_item_config {
+	string item_name;
+	double sell_price;
+	string sell_currency; // "gold", "stryx", "creditos", ou nome do item de moeda
+	
+	sell_item_config(string name, double price, string currency) {
+		this.item_name = name;
+		this.sell_price = price;
+		this.sell_currency = currency;
+	}
+}
+
+// Array de configurações de venda customizadas
+sell_item_config@[] custom_sell_prices;
+
+// Inicializar preços de venda customizados
+void init_sell_prices() {
+	// Itens especiais com preços de venda diferentes
+	custom_sell_prices.insert_last(sell_item_config("diamante", 500, "gold"));
+	custom_sell_prices.insert_last(sell_item_config("rubi", 300, "gold"));
+	custom_sell_prices.insert_last(sell_item_config("esmeralda", 250, "gold"));
+	custom_sell_prices.insert_last(sell_item_config("ouro_em_barra", 1000, "gold"));
+	custom_sell_prices.insert_last(sell_item_config("prata_em_barra", 200, "gold"));
+	custom_sell_prices.insert_last(sell_item_config("item_raro", 100, "stryx"));
+	custom_sell_prices.insert_last(sell_item_config("item_lendario", 500, "stryx"));
+}
+
+// Obter configuração de venda customizada para um item
+sell_item_config@ get_custom_sell_config(string item_name) {
+	for(uint i = 0; i < custom_sell_prices.length(); i++) {
+		if(custom_sell_prices[i].item_name == item_name) {
+			return custom_sell_prices[i];
+		}
+	}
+	return null;
+}
+
+// Obter preço de venda de um item (baseado no preço de compra ou configuração customizada)
+double get_sell_price(string item_name) {
+	// Primeiro, verificar se há preço customizado
+	sell_item_config@ custom = get_custom_sell_config(item_name);
+	if(custom !is null) {
+		return custom.sell_price;
+	}
+	
+	// Caso contrário, verificar se o item está à venda na loja
+	int sale_index = item_exists_for_sale(item_name);
+	if(sale_index >= 0) {
+		// Retornar 50% do preço de compra
+		return items_sale[sale_index].price * SELL_RATE;
+	}
+	
+	// Item não tem preço definido - usar valor padrão baseado no nome
+	// Itens comuns: 1 gold por unidade
+	return 1.0;
+}
+
+// Obter tipo de moeda que o jogador recebe ao vender um item
+string get_sell_currency(string item_name) {
+	// Primeiro, verificar se há configuração customizada
+	sell_item_config@ custom = get_custom_sell_config(item_name);
+	if(custom !is null) {
+		return custom.sell_currency;
+	}
+	
+	// Caso contrário, verificar a moeda usada para comprar o item
+	int sale_index = item_exists_for_sale(item_name);
+	if(sale_index >= 0) {
+		return items_sale[sale_index].money;
+	}
+	
+	// Padrão: gold
+	return "gold";
+}
+
+// Função principal de venda de item
+// Retorna true se a venda foi bem-sucedida
+bool sell_item(int player_index, string item_name, int quantidade) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	if(quantidade <= 0) return false;
+	
+	player@ p = @players[player_index];
+	
+	// Verificar se o jogador possui o item na quantidade especificada
+	int owned = p.inv_item_number(item_name);
+	if(owned < quantidade) {
+		send_reliable(p.peer_id, "msgnormal Você não tem " + quantidade + " " + item_name + " para vender. Você possui " + owned + ".", 0);
+		return false;
+	}
+	
+	// Itens que não podem ser vendidos
+	if(item_name.find("chave_") == 0 || item_name.find("quest_") == 0 || 
+	   item_name == "relógio" || item_name == "bússola") {
+		send_reliable(p.peer_id, "msgnormal Este item não pode ser vendido.", 0);
+		return false;
+	}
+	
+	// Calcular valor de venda
+	double sell_price = get_sell_price(item_name);
+	double total_value = sell_price * quantidade;
+	string currency = get_sell_currency(item_name);
+	
+	// Remover item do inventário
+	p.inv_add_item(item_name, -quantidade);
+	
+	// Adicionar moeda ao jogador
+	if(currency == "gold" || currency == "reais" || currency == "coins") {
+		p.gold += int(total_value);
+		send_reliable(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + int(total_value) + " gold.", 0);
+	}
+	else if(currency == "stryx") {
+		p.stryx += total_value;
+		send_reliable(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + total_value + " Stryx.", 0);
+	}
+	else if(currency == "creditos") {
+		p.creditos += total_value;
+		send_reliable(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + total_value + " créditos.", 0);
+	}
+	else {
+		// Moeda é um item (ex: "euros", "dólares")
+		p.inv_add_item(currency, int(total_value));
+		send_reliable(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + int(total_value) + " " + currency + ".", 0);
+	}
+	
+	// Log da venda
+	debug_log("💰 " + p.name + " vendeu " + quantidade + " " + item_name + " por " + total_value + " " + currency);
+	
+	// Salvar transferência
+	save_transfer(p.charname, "sistema", item_name, "mediante venda", quantidade);
+	
+	return true;
+}
+
+// Handler de rede para venda de item
+// Formato: req_sell_item <item_name> <quantidade>
+void handle_sell_item(uint64 peer_id, string[] parsed) {
+	if(parsed.length() < 3) {
+		send_reliable(peer_id, "msgnormal Uso: req_sell_item <item> <quantidade>", 0);
+		return;
+	}
+	
+	player@ p = get_player_by_peer(peer_id);
+	if(p is null) return;
+	
+	int player_index = get_player_index_from(p.name);
+	if(player_index < 0) return;
+	
+	string item_name = parsed[1];
+	int quantidade = parse_int(parsed[2]);
+	
+	sell_item(player_index, item_name, quantidade);
+}
+
+// Listar itens que o jogador pode vender
+void list_sellable_items(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	player@ p = @players[player_index];
+	string[] keys = p.inv.get_keys();
+	
+	string msg = "Itens que você pode vender:\n";
+	int count = 0;
+	
+	for(uint i = 0; i < keys.length(); i++) {
+		string item_name = keys[i];
+		int quantidade = p.inv_item_number(item_name);
+		
+		// Pular itens que não podem ser vendidos
+		if(item_name.find("chave_") == 0 || item_name.find("quest_") == 0 || 
+		   item_name == "relógio" || item_name == "bússola") {
+			continue;
+		}
+		
+		if(quantidade > 0) {
+			double price = get_sell_price(item_name);
+			string currency = get_sell_currency(item_name);
+			msg += item_name + " x" + quantidade + " (valor: " + price + " " + currency + " cada)\n";
+			count++;
+		}
+	}
+	
+	if(count == 0) {
+		msg = "Você não tem itens para vender.";
+	}
+	
+	send_reliable(p.peer_id, "say " + msg, 0);
+}

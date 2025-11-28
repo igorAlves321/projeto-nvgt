@@ -285,3 +285,66 @@ void save_player_friends(string player_name) {
 		}
 	}
 }
+
+// ============================================================================
+// ✅ TASK 2.8.3: NOTIFICAÇÃO DE STATUS ONLINE/OFFLINE
+// ============================================================================
+
+// Notificar amigos quando jogador faz LOGIN
+void notify_friends_login(string player_name) {
+	friend_list@ fl = get_friend_list(player_name);
+	
+	// Notificar todos os amigos online que este jogador logou
+	for(uint i = 0; i < fl.friends.length(); i++) {
+		int friend_idx = get_player_index_from(fl.friends[i]);
+		if(friend_idx >= 0) {
+			// Verificar se o amigo também tem esse jogador na lista
+			friend_list@ friend_fl = get_friend_list(fl.friends[i]);
+			if(friend_fl !is null && friend_fl.is_friend(player_name)) {
+				send_reliable(players[friend_idx].peer_id, "ps friend_online.ogg", 0);
+				send_reliable(players[friend_idx].peer_id, "msg2 [Amigo Online] " + player_name + " entrou no jogo!", 0);
+			}
+		}
+	}
+	
+	debug_log("FRIENDS: Notificado login de " + player_name);
+}
+
+// Notificar amigos quando jogador faz LOGOUT
+void notify_friends_logout(string player_name) {
+	if(!player_friends.exists(player_name)) return;
+	
+	friend_list@ fl = cast<friend_list@>(player_friends[player_name]);
+	if(fl is null) return;
+	
+	// Notificar todos os amigos online que este jogador saiu
+	for(uint i = 0; i < fl.friends.length(); i++) {
+		int friend_idx = get_player_index_from(fl.friends[i]);
+		if(friend_idx >= 0) {
+			// Verificar se o amigo também tem esse jogador na lista
+			friend_list@ friend_fl = get_friend_list(fl.friends[i]);
+			if(friend_fl !is null && friend_fl.is_friend(player_name)) {
+				send_reliable(players[friend_idx].peer_id, "ps friend_offline.ogg", 0);
+				send_reliable(players[friend_idx].peer_id, "msg2 [Amigo Offline] " + player_name + " saiu do jogo", 0);
+			}
+		}
+	}
+	
+	debug_log("FRIENDS: Notificado logout de " + player_name);
+}
+
+// Verificar quais amigos estão online no momento do login
+void check_online_friends(int player_index) {
+	friend_list@ fl = get_friend_list(players[player_index].charname);
+	
+	string[] online = fl.get_online_friends();
+	if(online.length() > 0) {
+		send_reliable(players[player_index].peer_id, "msg2 [Amigos Online] " + online.length() + " amigo(s) online:", 0);
+		for(uint i = 0; i < online.length() && i < 5; i++) {  // Mostrar no máximo 5
+			send_reliable(players[player_index].peer_id, "msg2 - " + online[i], 0);
+		}
+		if(online.length() > 5) {
+			send_reliable(players[player_index].peer_id, "msg2 E mais " + (online.length() - 5) + " amigo(s)...", 0);
+		}
+	}
+}

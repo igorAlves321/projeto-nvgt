@@ -1,0 +1,229 @@
+// ============================================================
+// localization.nvgt - Sistema de Localização de Texto (I18N)
+// Complementa properties_util com suporte a formatação dinâmica
+// ============================================================
+
+// Arquivo de idioma atual
+string current_language_file = "lang/portuguese.lang";
+
+// Flag de sistema carregado
+bool localization_loaded = false;
+
+// ============================================================
+// INICIALIZAÇÃO
+// ============================================================
+
+// Carrega o arquivo de idioma
+// @param filename: Nome do arquivo (ex: "lang/portuguese.lang")
+// @return: true se carregado com sucesso
+bool load_language_file(const string& in filename) {
+    current_language_file = filename;
+    pu.load(filename);
+    
+    // Verifica se carregou algum dado
+    string test = pu.get_value("MENU_PRINCIPAL");
+    if(test != "MENU_PRINCIPAL") {
+        localization_loaded = true;
+        return true;
+    }
+    
+    // Tenta sem a pasta lang
+    pu.load("lang/" + filename);
+    test = pu.get_value("MENU_PRINCIPAL");
+    if(test != "MENU_PRINCIPAL") {
+        localization_loaded = true;
+        return true;
+    }
+    
+    // Se ainda não carregou, tenta carregar português como fallback
+    if(filename != "lang/portuguese.lang") {
+        pu.load("lang/portuguese.lang");
+        test = pu.get_value("MENU_PRINCIPAL");
+        localization_loaded = (test != "MENU_PRINCIPAL");
+    }
+    
+    return localization_loaded;
+}
+
+// Detecta o idioma do sistema e carrega automaticamente
+bool auto_detect_language() {
+    // Em NVGT, podemos verificar variáveis de ambiente ou arquivo de config
+    string detected_lang = "pt";
+    
+    // Tenta ler a configuração do jogador
+    // Se não existir, usa português como padrão
+    file cfg;
+    if(cfg.open("config.nvgt", "r")) {
+        string content = cfg.read();
+        cfg.close();
+        
+        // Procura por language=XX no config
+        int pos = content.find("language=");
+        if(pos >= 0) {
+            detected_lang = content.substr(pos + 9, 2);
+        }
+    }
+    
+    // Mapeia código para arquivo
+    string lang_file;
+    if(detected_lang == "pt" || detected_lang == "br") {
+        lang_file = "lang/portuguese.lang";
+    }
+    else if(detected_lang == "en") {
+        lang_file = "lang/English.lang";
+    }
+    else if(detected_lang == "es") {
+        lang_file = "lang/español.lang";
+    }
+    else if(detected_lang == "fr") {
+        lang_file = "lang/french.lang";
+    }
+    else {
+        lang_file = "lang/portuguese.lang"; // Fallback
+    }
+    
+    return load_language_file(lang_file);
+}
+
+// ============================================================
+// FUNÇÕES DE ACESSO
+// ============================================================
+
+// Acessa uma chave e retorna o valor localizado
+// @param key: Chave da string (ex: "MENU_PRINCIPAL")
+// @return: String localizada ou a chave como fallback
+string localize(const string& in key) {
+    return pu.get_value(key);
+}
+
+// Alias mais curto para localize
+string L(const string& in key) {
+    return pu.get_value(key);
+}
+
+// ============================================================
+// FORMATAÇÃO DINÂMICA
+// ============================================================
+
+// Localiza a string e substitui placeholders %0, %1, etc.
+// @param key: Chave da string
+// @param args: Array de argumentos para substituição
+// @return: String formatada
+string localize_format(const string& in key, string[]@ args) {
+    string result = pu.get_value(key);
+    
+    if(@args == null || args.length() == 0) {
+        return result;
+    }
+    
+    // Substitui %0, %1, %2, etc. pelos argumentos
+    for(uint i = 0; i < args.length(); i++) {
+        string placeholder = "%" + i;
+        result = result.replace(placeholder, args[i]);
+    }
+    
+    return result;
+}
+
+// Versão com argumentos individuais (até 5 argumentos)
+string localize_format(const string& in key, const string& in arg0) {
+    string[] args = {arg0};
+    return localize_format(key, args);
+}
+
+string localize_format(const string& in key, const string& in arg0, const string& in arg1) {
+    string[] args = {arg0, arg1};
+    return localize_format(key, args);
+}
+
+string localize_format(const string& in key, const string& in arg0, const string& in arg1, const string& in arg2) {
+    string[] args = {arg0, arg1, arg2};
+    return localize_format(key, args);
+}
+
+string localize_format(const string& in key, const string& in arg0, const string& in arg1, const string& in arg2, const string& in arg3) {
+    string[] args = {arg0, arg1, arg2, arg3};
+    return localize_format(key, args);
+}
+
+string localize_format(const string& in key, const string& in arg0, const string& in arg1, const string& in arg2, const string& in arg3, const string& in arg4) {
+    string[] args = {arg0, arg1, arg2, arg3, arg4};
+    return localize_format(key, args);
+}
+
+// ============================================================
+// ALIAS CURTOS COM FORMATAÇÃO (LF = Localize Format)
+// ============================================================
+
+string LF(const string& in key, string[]@ args) {
+    return localize_format(key, args);
+}
+
+string LF(const string& in key, const string& in arg0) {
+    return localize_format(key, arg0);
+}
+
+string LF(const string& in key, const string& in arg0, const string& in arg1) {
+    return localize_format(key, arg0, arg1);
+}
+
+string LF(const string& in key, const string& in arg0, const string& in arg1, const string& in arg2) {
+    return localize_format(key, arg0, arg1, arg2);
+}
+
+// ============================================================
+// UTILIDADES
+// ============================================================
+
+// Retorna o idioma atual carregado
+string get_current_language() {
+    return current_language_file;
+}
+
+// Retorna código do idioma (pt, en, es, fr)
+string get_language_code() {
+    if(current_language_file.find("portuguese") >= 0) return "pt";
+    if(current_language_file.find("English") >= 0) return "en";
+    if(current_language_file.find("español") >= 0) return "es";
+    if(current_language_file.find("french") >= 0) return "fr";
+    return "pt"; // Default
+}
+
+// Troca o idioma em tempo de execução
+bool change_language(const string& in lang_code) {
+    string lang_file;
+    
+    if(lang_code == "pt" || lang_code == "br" || lang_code == "portuguese") {
+        lang_file = "lang/portuguese.lang";
+    }
+    else if(lang_code == "en" || lang_code == "english") {
+        lang_file = "lang/English.lang";
+    }
+    else if(lang_code == "es" || lang_code == "spanish" || lang_code == "español") {
+        lang_file = "lang/español.lang";
+    }
+    else if(lang_code == "fr" || lang_code == "french" || lang_code == "français") {
+        lang_file = "lang/french.lang";
+    }
+    else {
+        return false; // Idioma não suportado
+    }
+    
+    return load_language_file(lang_file);
+}
+
+// Verifica se uma chave existe no arquivo de idioma
+bool has_translation(const string& in key) {
+    string result = pu.get_value(key);
+    return result != key;
+}
+
+// ============================================================
+// INICIALIZAÇÃO DO SISTEMA
+// ============================================================
+
+// Chamada na inicialização do cliente
+void init_localization_system() {
+    // Carrega o idioma padrão ou auto-detecta
+    auto_detect_language();
+}
