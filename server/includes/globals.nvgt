@@ -318,6 +318,12 @@ void changemap(string destination_map, int player_index, int dest_x, int dest_y)
     string old_map = players[player_index].map;
     int old_map_index = get_map_index_from(old_map);
     
+    // Notificar outros jogadores do mapa antigo que o jogador saiu
+    if(old_map_index >= 0 && old_map_index < int(server_maps.length())) {
+        server_maps[old_map_index].send_to_others(players[player_index].peer_id, 0, 
+            "remove_player_from_map " + players[player_index].charname, true);
+    }
+    
     // Atualizar posição e mapa do jogador
     players[player_index].map = destination_map;
     players[player_index].x = dest_x;
@@ -352,6 +358,42 @@ void changemap(string destination_map, int player_index, int dest_x, int dest_y)
         // Se não conseguir ler o arquivo, enviar formato simplificado (fallback)
         send_reliable(players[player_index].peer_id, "changemap " + destination_map + " " + dest_x + " " + dest_y, 0);
         debug_log("⚠️ Arquivo de mapa não encontrado: " + map_file + " - enviando formato simples");
+    }
+    
+    // Enviar lista de jogadores do novo mapa para o jogador
+    if(new_map_index >= 0 && new_map_index < int(server_maps.length())) {
+        // Construir lista de jogadores no mapa
+        string final = "set_map_players ";
+        int count = 0;
+        
+        for(uint x = 0; x < server_maps[new_map_index].mapplayers.length(); x++) {
+            int pindex = server_maps[new_map_index].mapplayers[x];
+            if(pindex >= 0 && pindex < int(players.length())) {
+                final += players[pindex].charname + " ";
+                final += players[pindex].x + " ";
+                final += players[pindex].y + " ";
+                final += players[pindex].bipar + " ";
+                final += players[pindex].pacifico + " ";
+                final += players[pindex].peer_id + "\r\n";
+                count++;
+            }
+        }
+        
+        // Se não há jogadores, enviar "none"
+        if(count == 0) {
+            final = "set_map_players none";
+        }
+        
+        send_reliable(players[player_index].peer_id, final, 6);
+        
+        // Notificar outros jogadores do novo mapa
+        string add_packet = "add_player_to_map " + players[player_index].charname + " " + 
+            players[player_index].x + " " + players[player_index].y + " " + 
+            players[player_index].bipar + " " + players[player_index].pacifico + " " + 
+            players[player_index].peer_id;
+        server_maps[new_map_index].send_to_others(players[player_index].peer_id, 6, add_packet, true);
+        
+        debug_log("📤 Lista de jogadores enviada e notificados (" + count + " no mapa)");
     }
 }
 

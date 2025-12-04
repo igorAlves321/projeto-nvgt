@@ -561,6 +561,15 @@ void update_all_players() {
 void remove_player(uint64 peer_id) {
     for(uint i = 0; i < players.length(); i++) {
         if(players[i].peer_id == peer_id) {
+            // Notificar outros jogadores no mesmo mapa
+            int mapindex = players[i].mapindex;
+            string charname = players[i].charname;
+            
+            if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+                server_maps[mapindex].send_to_others(peer_id, 0, 
+                    "remove_player_from_map " + charname, true);
+            }
+            
             players.erase(i);
             break;
         }
@@ -911,6 +920,104 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "ping") {
             send_reliable(peer_id, "pong", 0);
             debug_log("🏓 Ping respondido para " + player.name);
+            return;
+        }
+        
+        // getplayers - Lista de todos jogadores online (tecla F5)
+        if(cmd == "getplayers") {
+            if(player.afk) return;
+            
+            string bell = "|";
+            string bell2 = "||";
+            string data = "";
+            
+            for(uint i = 0; i < players.length(); i++) {
+                // Admin vê todos, outros não veem invisíveis
+                if(player.check_admin() || players[i].invs != 1) {
+                    data += players[i].charname + bell + players[i].title + bell + players[i].seestatus + bell2;
+                }
+            }
+            
+            send_reliable(peer_id, "listplayers " + data, 0);
+            debug_log("📋 " + player.name + " solicitou lista de jogadores (" + players.length() + " online)");
+            return;
+        }
+        
+        // ============================================================================
+        // J1-J4: Informações de jogadores (F1-F4 no menu de jogadores)
+        // ============================================================================
+        
+        // j1 - Ver localização do jogador (F1)
+        if(cmd == "j1" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string map_name = players[id].map;
+                send_reliable(peer_id, "msg2 " + players[id].charname + " ;está em; ;" + map_name + ";.", 0);
+                debug_log("📍 " + player.name + " verificou localização de " + target_name + ": " + map_name);
+            } else {
+                send_reliable(peer_id, "say Jogador não encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j2 - Ver nível e patente do jogador (F2)
+        if(cmd == "j2" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string title_text = players[id].title != "" ? players[id].title : "Iniciante";
+                send_reliable(peer_id, "msg2 " + players[id].charname + " ;está no nível; " + players[id].level + ", ;e na patente; ;" + title_text + ";.", 0);
+                debug_log("📊 " + player.name + " verificou nível de " + target_name + ": Lv" + players[id].level);
+            } else {
+                send_reliable(peer_id, "say Jogador não encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j3 - Ver quantas pessoas o jogador matou (F3)
+        if(cmd == "j3" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string m = "";
+                int kills = players[id].matou;
+                
+                if(kills == 0) {
+                    m = players[id].charname + " ;ainda não matou ninguém;";
+                } else if(kills == 1) {
+                    m = players[id].charname + " ;matou; 1 ;pessoa;";
+                } else {
+                    m = players[id].charname + " ;matou; " + kills + " ;pessoas;";
+                }
+                
+                send_reliable(peer_id, "msg2 " + m + ".", 0);
+                debug_log("💀 " + player.name + " verificou kills de " + target_name + ": " + kills);
+            } else {
+                send_reliable(peer_id, "say Jogador não encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j4 - Ver em qual chat o jogador está (F4)
+        if(cmd == "j4" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string chat_name = players[id].idiomachat;
+                if(chat_name == "" || chat_name == "Desativado") {
+                    send_reliable(peer_id, "msg2 " + players[id].charname + " ;está com o chat desativado;.", 0);
+                } else {
+                    send_reliable(peer_id, "msg2 " + players[id].charname + " ;está no chat; ;" + chat_name + ";.", 0);
+                }
+                debug_log("💬 " + player.name + " verificou chat de " + target_name + ": " + chat_name);
+            } else {
+                send_reliable(peer_id, "say Jogador não encontrado.", 0);
+            }
             return;
         }
         

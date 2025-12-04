@@ -147,6 +147,176 @@ bool is_disabled(int x, int y){
 	return false;
 }
 
+// ============================================================================
+// MENU DE JOGADORES ONLINE (F5) - Lista global de todos jogadores conectados
+// ============================================================================
+// Recebe dados do servidor no formato: nome|titulo|status||nome2|titulo2|status2||...
+void playersmenu(string data) {
+	debug_log("📋 playersmenu chamado com data='" + data + "'");
+	
+	if(ausente) return;
+	
+	// Se dados vazios, mostrar mensagem
+	if(data == "" || data.length() < 3) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	reset_all_forced_keys();
+	key_hold iup(KEY_UP, 500, 50);
+	key_hold idown(KEY_DOWN, 500, 50);
+	get_characters();
+	string cl;
+	int counter = -1;
+	
+	// Separadores BGT: | (bell) para campos, || (bell2) para registros
+	string bell = "|";
+	string bell2 = "||";
+	
+	string[] lines = data.split(bell2);
+	string[] names;
+	string[] titles;
+	string[] status_list;
+	
+	debug_log("📋 Split por || resultou em " + lines.length() + " linhas");
+	
+	if(lines.length() > 0) {
+		for(uint i = 0; i < lines.length(); i++) {
+			if(lines[i] == "" || lines[i].length() < 1) continue;
+			
+			string[] parsed = lines[i].split(bell);
+			debug_log("📋 Linha " + i + ": '" + lines[i] + "' -> " + parsed.length() + " campos");
+			
+			// Aceitar 1 a 3 campos (nome obrigatório, título e status opcionais)
+			if(parsed.length() >= 1 && parsed[0] != "") {
+				names.insert_last(parsed[0]);
+				titles.insert_last(parsed.length() >= 2 ? parsed[1] : "");
+				status_list.insert_last(parsed.length() >= 3 ? parsed[2] : "");
+			}
+		}
+	}
+	
+	debug_log("📋 Total de jogadores parseados: " + names.length());
+	
+	if(names.length() == 0) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	p.play_stationary("notify37.ogg", false);
+	speak(pu.get_value("Mostrando lista de jogadores.") + " " + names.length() + " " + pu.get_value("online."));
+	emchat = true;
+	
+	while(true) {
+		wait(5);
+		if(ausente) break;
+		if(counter > int(names.length()) - 1) counter = int(names.length()) - 1;
+		
+		cl = get_characters();
+		// Busca por primeira letra
+		if(cl != "" && cl != " " && cl.length() == 1 && names.length() > 0) {
+			int f = 0;
+			for(uint i = counter + 1; i < names.length(); i++) {
+				string first_char = names[i].substr(0, 1).lower();
+				if(first_char == cl.lower()) {
+					counter = i;
+					string statusMsg = status_list[counter];
+					speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + statusMsg);
+					p.play_stationary("invmove6.ogg", false);
+					f = 1;
+					break;
+				}
+			}
+			if(f == 0) {
+				for(uint i = 0; i < uint(counter); i++) {
+					string first_char = names[i].substr(0, 1).lower();
+					if(first_char == cl.lower()) {
+						counter = i;
+						speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
+						p.play_stationary("invmove6.ogg", false);
+						break;
+					}
+				}
+			}
+		}
+		
+		if(key_pressed(KEY_HOME) && names.length() > 0) {
+			counter = 0;
+			speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
+			p.play_stationary("invmove6.ogg", false);
+		}
+		if(key_pressed(KEY_END) && names.length() > 0) {
+			counter = int(names.length()) - 1;
+			speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
+			p.play_stationary("invmove6.ogg", false);
+		}
+		if(iup.pressing()) {
+			if(names.length() == 1) {
+				speak(names[0] + " (" + pu.get_value(titles[0]) + "): " + status_list[0]);
+				counter = 0;
+			} else if(counter > 0) {
+				counter--;
+				speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
+				p.play_stationary("invmove6.ogg", false);
+			}
+		}
+		if(idown.pressing()) {
+			if(names.length() == 1) {
+				speak(names[0] + " (" + pu.get_value(titles[0]) + "): " + status_list[0]);
+				counter = 0;
+			} else if(counter < int(names.length()) - 1) {
+				counter++;
+				speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
+				p.play_stationary("invmove6.ogg", false);
+			}
+		}
+		
+		// Enter: Enviar PM
+		if((key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && counter > -1 && counter < int(names.length())) {
+			p.play_stationary("-old-menuchecked.ogg", false);
+			string msg = v.input(pu.get_value("Digite sua mensagem para") + " " + names[counter]);
+			if(msg != "") send_reliable(peer_id, "/pm " + names[counter] + " " + msg, 1);
+			emchat = true;
+		}
+		
+		// Atalhos ALT+tecla
+		if(key_down(KEY_LMENU) && counter > -1) {
+			if(key_pressed(KEY_I)) send_reliable(peer_id, "/ign " + names[counter], 1);
+			if(key_pressed(KEY_U)) send_reliable(peer_id, "/deign " + names[counter], 1);
+			if(key_pressed(KEY_E)) send_reliable(peer_id, "/eqr " + names[counter], 1);
+			if(key_pressed(KEY_D)) send_reliable(peer_id, "/dqr " + names[counter], 1);
+			if(key_pressed(KEY_S)) send_reliable(peer_id, "/eqs " + names[counter], 1);
+		}
+		
+		// F1-F4: Informações do jogador (enviar e processar resposta)
+		if(key_pressed(KEY_F1) && counter > -1) {
+			send_reliable(peer_id, "j1 " + names[counter], 0);
+		}
+		if(key_pressed(KEY_F2) && counter > -1) {
+			send_reliable(peer_id, "j2 " + names[counter], 0);
+		}
+		if(key_pressed(KEY_F3) && counter > -1) {
+			send_reliable(peer_id, "j3 " + names[counter], 0);
+		}
+		if(key_pressed(KEY_F4) && counter > -1) {
+			send_reliable(peer_id, "j4 " + names[counter], 0);
+		}
+		
+		// Processar mensagens de rede para receber respostas imediatamente
+		netloop();
+		
+		// Escape: Sair
+		if(key_pressed(KEY_ESCAPE)) {
+			emchat = false;
+			break;
+		}
+	}
+	emchat = false;
+}
+
+// ============================================================================
+// MENU DE JOGADORES NO MAPA (usado internamente)
+// ============================================================================
 void jogadoresmenu(){
 	if(players.length()==0||ausente)return;
 	reset_all_forced_keys();
@@ -952,9 +1122,37 @@ void tprincipais(){
 				debug_log("🎯 Rastreamento desativado");
 			}
 		}
-		if(key_pressed(KEY_F5)) {
-			debug_log("✅ [V6-FIXED] F5 SEM SHIFT - abrindo jogadoresmenu()");
-			jogadoresmenu();
+		// F4: Rastrear jogadores no mesmo mapa (usa array local players)
+		if(key_pressed(KEY_F4) && mapname != "portal_espiritual" && !ausente) {
+			if(playertrack == "") {
+				// Verificar se há jogadores disponíveis para rastrear
+				int available_players = 0;
+				for(uint i = 0; i < players.length(); i++) {
+					if(players[i].charname != un && players[i].beeping == 1) {
+						available_players++;
+					}
+				}
+				
+				if(available_players == 0) {
+					speak(pu.get_value("Ninguém no mapa"));
+				} else {
+					playertrack = select_player(pu.get_value("Rastrear quem?"));
+					if(playertrack != "") {
+						looping = true;
+						speak(pu.get_value("Rastreando") + " " + playertrack);
+					}
+				}
+			} else {
+				playertrack = "";
+				looping = false;
+				speak(pu.get_value("Não rastreando."));
+			}
+			debug_log("🎯 F4 - Rastreamento: " + playertrack);
+		}
+		// F5: Lista de todos os jogadores online (pede ao servidor)
+		if(key_pressed(KEY_F5) && !ausente) {
+			debug_log("📋 F5 - Solicitando lista de jogadores online");
+			send_reliable(peer_id, "getplayers", 0);
 		}
 		if(key_pressed(KEY_F6)) {
 			debug_log("✅ [V6-FIXED] F6 SEM SHIFT - abrindo chatmenu()");

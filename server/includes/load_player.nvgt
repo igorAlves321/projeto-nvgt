@@ -82,9 +82,9 @@ bool load_player_data_complete(player@ p) {
         p.is_admin = p.admin_status;
         p.admin = p.admin_status;
 
-        // Gênero
+        // Gênero (sexo2 é usado para sufixos: "o" masculino, "a" feminino)
         p.sexo = stmt.column_int(col++);
-        p.sexo2 = (p.sexo == 0 ? "masculino" : "feminino");
+        p.sexo2 = (p.sexo == 0 ? "o" : "a");
 
         // Inventário e equipamentos (JSON serializado)
         string inventory_json = stmt.column_text(col++);
@@ -449,10 +449,54 @@ void sync_player_state_to_client(player@ p) {
     // Enviar configurações
     send_configs_to_client(p);
 
+    // Enviar lista de jogadores no mapa
+    send_players(p);
+
     // Enviar mensagem de boas-vindas
     send_welcome_message(p);
 
     debug_log("✓ Estado sincronizado com o cliente");
+}
+
+// Enviar lista de jogadores no mapa para o cliente (compatibilidade BGT)
+void send_players(player@ p, bool to_others = true) {
+    // Encontrar índice do mapa do jogador
+    int mapindex = p.mapindex;
+    if(mapindex < 0 || mapindex >= int(server_maps.length())) {
+        debug_log("AVISO: send_players - mapindex inválido para " + p.charname);
+        return;
+    }
+    
+    // Construir lista de jogadores no mapa
+    string final = "set_map_players ";
+    int count = 0;
+    
+    for(uint x = 0; x < server_maps[mapindex].mapplayers.length(); x++) {
+        int pindex = server_maps[mapindex].mapplayers[x];
+        if(pindex >= 0 && pindex < int(players.length())) {
+            final += players[pindex].charname + " ";
+            final += players[pindex].x + " ";
+            final += players[pindex].y + " ";
+            final += players[pindex].bipar + " ";
+            final += players[pindex].pacifico + " ";
+            final += players[pindex].peer_id + "\r\n";
+            count++;
+        }
+    }
+    
+    // Se não há jogadores, enviar "none"
+    if(count == 0) {
+        final = "set_map_players none";
+    }
+    
+    send_reliable(p.peer_id, final, 6);
+    debug_log("  ✓ Lista de jogadores enviada (" + count + " jogadores no mapa)");
+    
+    // Notificar outros jogadores no mapa
+    if(to_others && mapindex >= 0) {
+        string add_packet = "add_player_to_map " + p.charname + " " + p.x + " " + p.y + " " + p.bipar + " " + p.pacifico + " " + p.peer_id;
+        server_maps[mapindex].send_to_others(p.peer_id, 6, add_packet, true);
+    }
 }
 
 void send_inventory_to_client(player@ p) {
