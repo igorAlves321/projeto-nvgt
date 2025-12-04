@@ -484,17 +484,19 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		wait(200);
 		exit();
 	}
-	else if(parsed[0] == "upl" && parsed.length() >= 6) {
-		// upl username x y facedir mapname peer_id
-		if(parsed[1] != un && parsed[4] == mapname) {
-			updateplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), 
-			             string_to_number(parsed[5]), string_to_number(parsed[6]));
-		}
+	else if(parsed[0] == "upl" && parsed.length() >= 4) {
+		// Formato do servidor: upl peer_id x y
+		int sender_peer_id = string_to_number(parsed[1]);
+		int px = string_to_number(parsed[2]);
+		int py = string_to_number(parsed[3]);
+		
+		// Atualizar posição do jogador por peer_id (sem som)
+		update_player_by_peer_id(sender_peer_id, px, py);
 	}
-	else if(parsed[0] == "update_player2" && parsed.length() >= 6) {
+	else if(parsed[0] == "update_player2" && parsed.length() >= 5) {
+		// Formato alternativo: update_player2 name x y map
 		if(parsed[1] != un && parsed[4] == mapname) {
-			updateplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), 
-			             string_to_number(parsed[5]), string_to_number(parsed[6]));
+			update_player(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), parsed[4]);
 		}
 	}
 	else if(parsed[0] == "pp" && parsed.length() > 1) {
@@ -536,10 +538,21 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	
 	// === GRUPO 2: MOVIMENTO E POSICIONAMENTO ===
-	else if(parsed[0] == "s" && parsed.length() >= 4) {
-		// s username x y mapname step_sound
-		if(parsed[1] != un && parsed[4] == mapname) {
-			p.play_2d("step.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	else if(parsed[0] == "s" && parsed.length() >= 5) {
+		// Formato do servidor: s peer_id steps x y
+		int sender_peer_id = string_to_number(parsed[1]);
+		string step_sound = parsed[2];
+		int px = string_to_number(parsed[3]);
+		int py = string_to_number(parsed[4]);
+		
+		// Atualizar posição do jogador no array
+		update_player_by_peer_id(sender_peer_id, px, py);
+		
+		// Tocar som do passo na posição do jogador
+		if(step_sound != "" && step_sound != "0") {
+			p.play_2d(step_sound + ".ogg", me.x, me.y, px, py, false);
+		} else {
+			p.play_2d("step.ogg", me.x, me.y, px, py, false);
 		}
 	}
 	else if(parsed[0] == "move" && parsed.length() >= 3) {
@@ -1266,7 +1279,15 @@ void process_channel_6(string full_msg, string[] parsed, const network_event@ ev
 }
 
 void process_channel_7(string full_msg, string[] parsed, const network_event@ ev) {
-	// Áudio de voz
+	// === NOVO SISTEMA DE VOICE CHAT (Task 1.6.1) ===
+	// Mensagens de voz com posicionamento 3D HRTF
+	if(full_msg.find("VOICE_PLAY|") == 0) {
+		handle_voice_packet(full_msg);
+		return;
+	}
+
+	// === SISTEMA LEGADO DE VOICE CHAT ===
+	// Áudio de voz (antigo)
 	if(parsed[0] == "map_audio" && voicechat == 1) {
 		string vc = full_msg.replace(parsed[0] + " " + parsed[1] + " " + parsed[2] + " ", "");
 		int x = string_to_number(parsed[1]);
@@ -1353,7 +1374,7 @@ void process_msg4(string full_msg, string[] parsed) {
 		a = a.replace("[LOGO_CHATTER] ", ""); // Remove o marcador
 		a = a.replace("[LOGO_CHATTER]", "");  // Remove caso não tenha espaço
 		// Tocar som especial do Chatter
-		p.play("chatter_logo.ogg", false);
+		p.play_stationary("chatter_logo.ogg", false);
 	}
 	
 	string[] b = a.split(";");
@@ -1422,7 +1443,7 @@ void process_fm(string full_msg, string[] parsed) {
 	string[] parts = a.split("|");
 	for(uint i = 0; i < parts.length(); i++) {
 		// Traduzir partes conhecidas
-		string part = parts[i].trim(" \t\r\n");
+		string part = trim_string(parts[i]);
 		if(part != "") {
 			m += pu.get_value(part);
 			if(i < parts.length() - 1) m += " ";
@@ -1456,7 +1477,7 @@ void process_pm(string full_msg, string[] parsed) {
 	add_add_item("privado", m);
 	
 	// Tocar som de notificação
-	p.play("notify_pm.ogg", false);
+	p.play_stationary("notify_pm.ogg", false);
 }
 
 // process_msgconexoes - Notificação de Conexão/Desconexão

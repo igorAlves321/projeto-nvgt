@@ -98,6 +98,9 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/achievements.nvgt"  // 🆕 FASE 5: Sistema de conquistas
 #include "includes/daily_rewards.nvgt"  // 🆕 FASE 5: Sistema de recompensas diárias
 #include "includes/bosses.nvgt"  // 🆕 FASE 5: Sistema de bosses
+#include "includes/inventory_sync.nvgt"  // ✅ Task 1.5: Sistema de Inventário + Sincronização Realtime (JSON)
+#include "includes/equipment_buffs.nvgt"  // ✅ Task 1.6: Sistema de Equipamentos e Buffs (Equip + Buff/Debuff)
+#include "includes/loot_drops.nvgt"  // ✅ Task 1.7: Sistema de Loot / Drops no Mapa
 #include "includes/dungeons.nvgt"  // 🆕 FASE 5: Sistema de dungeons
 #include "includes/admin_tools.nvgt"  // ✅ Task 2.6.3: Ferramentas de admin (lanterna/detector)
 #include "includes/events.nvgt"  // 🆕 FASE 5: Sistema de eventos
@@ -109,6 +112,18 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/systems_advanced.nvgt"  // Sistemas avançados
 #include "../include/db_props.nvgt"
 // sqlite3constants.nvgt já incluído no topo
+
+// ✅ Epic 1 Task 1: Módulo de Inicialização do Servidor
+#include "includes/iniciar.nvgt"
+
+// ✅ Epic 1 Task 2: Módulo de Carregamento do Jogador
+#include "includes/load_player.nvgt"
+
+// ✅ Epic 1 Task 3: Sistema de Rede e Handlers
+#include "includes/network_handlers.nvgt"
+
+// ✅ Epic 1 Task 1.6.1: Sistema de Voice Chat
+#include "includes/voice_chat_handler.nvgt"
 
 // Estados do servidor - variáveis definidas em shared_globals.nvgt
 
@@ -164,7 +179,7 @@ bool init_database() {
 
 // Criar estrutura do banco de dados
 void create_database_tables() {
-    // Tabela de jogadores
+    // ✅ Epic 1 Task 2: Tabela de jogadores expandida com todos os dados necessários
     string create_players = """
         CREATE TABLE IF NOT EXISTS players (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,37 +190,72 @@ void create_database_tables() {
             gender INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login DATETIME,
-            
+
             -- Dados do jogo
             level INTEGER DEFAULT 1,
             experience INTEGER DEFAULT 0,
+            xp_requerida INTEGER DEFAULT 100,
             gold INTEGER DEFAULT 100,
             hp INTEGER DEFAULT 100,
             max_hp INTEGER DEFAULT 100,
             mp INTEGER DEFAULT 50,
             max_mp INTEGER DEFAULT 50,
             race TEXT DEFAULT 'humano',
-            
+
             -- Localização
-            map_name TEXT DEFAULT 'inicio',
+            map_name TEXT DEFAULT 'test',
             x INTEGER DEFAULT 0,
             y INTEGER DEFAULT 0,
             z INTEGER DEFAULT 0,
-            
+
             -- Status
             is_admin BOOLEAN DEFAULT FALSE,
             is_banned BOOLEAN DEFAULT FALSE,
             is_online BOOLEAN DEFAULT FALSE,
             last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-            
-            -- Inventário (JSON serializado)
+
+            -- Inventário e Equipamentos (JSON serializado)
             inventory TEXT DEFAULT '{}',
             equipment TEXT DEFAULT '{}',
-            
-            -- Estatísticas
+
+            -- Estatísticas de jogo
             play_time INTEGER DEFAULT 0,
             deaths INTEGER DEFAULT 0,
-            kills INTEGER DEFAULT 0
+            kills INTEGER DEFAULT 0,
+            matou INTEGER DEFAULT 0,
+            arena_wins INTEGER DEFAULT 0,
+            arena_kills INTEGER DEFAULT 0,
+            reencarnacoes INTEGER DEFAULT 0,
+
+            -- Economia
+            stryx REAL DEFAULT 0,
+            creditos REAL DEFAULT 0,
+            saldo REAL DEFAULT 100,
+            gcoins INTEGER DEFAULT 0,
+            greais INTEGER DEFAULT 0,
+
+            -- Sistema de Bounty
+            bounty_on_head INTEGER DEFAULT 0,
+            bounty_value INTEGER DEFAULT 0,
+            bounty_owner TEXT DEFAULT '',
+
+            -- Título e Rank
+            title TEXT DEFAULT '',
+            rank INTEGER DEFAULT 0,
+
+            -- Status/Condições
+            stamina INTEGER DEFAULT 100,
+            fome INTEGER DEFAULT 0,
+            sanity REAL DEFAULT 100.0,
+            radiation INTEGER DEFAULT 0,
+
+            -- Configurações do Jogador
+            voice_id TEXT DEFAULT 'default',
+            idioma_chat TEXT DEFAULT 'pt',
+
+            -- IDs Sociais
+            guild_id INTEGER DEFAULT 0,
+            party_id INTEGER DEFAULT 0
         );
     """;
     
@@ -265,6 +315,67 @@ void create_database_tables() {
     }
     
     debug_log("Tabelas do banco de dados criadas/verificadas");
+    
+    // Migrar banco de dados se necessário (adicionar colunas faltantes)
+    migrate_database();
+}
+
+// Função de migração para adicionar colunas faltantes em bancos existentes
+void migrate_database() {
+    // Lista de colunas que podem estar faltando em bancos antigos
+    string[][] migrations = {
+        // {nome_coluna, tipo, valor_default}
+        {"password_salt", "TEXT", "''"},
+        {"stryx", "REAL", "0"},
+        {"creditos", "REAL", "0"},
+        {"saldo", "REAL", "100"},
+        {"gcoins", "INTEGER", "0"},
+        {"greais", "INTEGER", "0"},
+        {"xp_requerida", "INTEGER", "100"},
+        {"matou", "INTEGER", "0"},
+        {"reencarnacoes", "INTEGER", "0"},
+        {"stamina", "INTEGER", "100"},
+        {"fome", "INTEGER", "0"},
+        {"sanity", "REAL", "100.0"},
+        {"radiation", "INTEGER", "0"},
+        {"voice_id", "TEXT", "'default'"},
+        {"idioma_chat", "TEXT", "'pt'"},
+        {"guild_id", "INTEGER", "0"},
+        {"party_id", "INTEGER", "0"},
+        {"bounty_on_head", "INTEGER", "0"},
+        {"bounty_value", "INTEGER", "0"},
+        {"bounty_owner", "TEXT", "''"},
+        {"title", "TEXT", "''"},
+        {"rank", "INTEGER", "0"},
+        {"arena_wins", "INTEGER", "0"},
+        {"arena_kills", "INTEGER", "0"},
+        {"kills", "INTEGER", "0"},
+        {"deaths", "INTEGER", "0"},
+        {"play_time", "INTEGER", "0"}
+    };
+    
+    int migrations_applied = 0;
+    
+    for(uint i = 0; i < migrations.length(); i++) {
+        string col_name = migrations[i][0];
+        string col_type = migrations[i][1];
+        string col_default = migrations[i][2];
+        
+        // Tentar adicionar a coluna - se já existir, vai falhar silenciosamente
+        string alter_query = "ALTER TABLE players ADD COLUMN " + col_name + " " + col_type + " DEFAULT " + col_default + ";";
+        
+        // Executar sem verificar erro (coluna já existente gera erro, mas é OK)
+        int result = bancoJogo.execute(alter_query);
+        if(result == SQLITE_OK) {
+            debug_log("MIGRAÇÃO: Coluna '" + col_name + "' adicionada à tabela players");
+            migrations_applied++;
+        }
+        // Se falhar é porque já existe, não precisa logar
+    }
+    
+    if(migrations_applied > 0) {
+        debug_log("MIGRAÇÃO: " + migrations_applied + " colunas adicionadas ao banco de dados");
+    }
 }
 
 // Logging no banco de dados (thread-safe)
@@ -520,21 +631,105 @@ void process_player_command(uint64 peer_id, string command) {
         if(parts.length() == 0) return;
 
         string cmd = parts[0].lower();
+        
+        // Obter índice do jogador para comandos que usam player_index
+        int player_index = get_player_index_from(player.name);
 
-        // Comando de movimento do jogador
-        if(cmd == "move" && parts.length() == 3) {
+        // ===== COMANDO DE MOVIMENTO DO JOGADOR (Task 4) =====
+        // Formato aceito: 
+        //   move X Y           (3 partes - posição apenas)
+        //   move step_sound X Y (4 partes - com som de passo)
+        if(cmd == "move" && (parts.length() == 3 || parts.length() == 4)) {
+            int new_x, new_y;
+            string step_sound = "";
+            
+            if(parts.length() == 3) {
+                // Formato: move X Y
+                new_x = parse_int(parts[1]);
+                new_y = parse_int(parts[2]);
+            } else {
+                // Formato: move step_sound X Y
+                step_sound = parts[1];
+                new_x = parse_int(parts[2]);
+                new_y = parse_int(parts[3]);
+            }
+            
+            // Validar jogador não está paralisado ou AFK
+            if(player.paralisado || player.paralisado2 || player.afk) {
+                send_reliable(peer_id, "msg2 ;Você não pode se mover agora.;", 0);
+                return;
+            }
+            
+            // Validar movimento não é muito grande (anti-cheat)
+            if(!is_valid_movement(player.x, player.y, new_x, new_y, 10)) {
+                debug_log("⚠️ Movimento inválido detectado para " + player.name + ": (" + player.x + "," + player.y + ") → (" + new_x + "," + new_y + ")");
+                send_reliable(peer_id, "move " + player.x + " " + player.y, 0); // Corrigir posição do cliente
+                return;
+            }
+            
+            // Verificar se a posição é caminhável (validação de colisão)
+            if(!is_walkable(new_x, new_y, player.map_name)) {
+                // Posição bloqueada - não mover
+                send_reliable(peer_id, "move " + player.x + " " + player.y, 0); // Corrigir posição do cliente
+                return;
+            }
+            
+            // Obter tipo do tile para sons de passos (usa o enviado pelo cliente ou detecta)
+            string tile_type = step_sound != "" ? step_sound : get_tile_at(new_x, new_y, player.map_name);
+            
+            // Usar a função move() da classe player (inclui toda a lógica de minas, zonas de morte, etc.)
+            player.move(tile_type, new_x, new_y, 0);
+            
+            debug_log("🚶 " + player.name + " → (" + new_x + ", " + new_y + ") [" + tile_type + "]");
+            return;
+        }
+        
+        // ===== COMANDO DE MOVIMENTO DURANTE SALTO/QUEDA (move2) =====
+        // Formato: move2 X Y (atualiza posição sem validação de caminhabilidade)
+        if(cmd == "move2" && parts.length() == 3) {
             int new_x = parse_int(parts[1]);
             int new_y = parse_int(parts[2]);
             
-            // Atualizar posição do jogador
+            // Atualizar posição do jogador (durante salto/queda)
             player.x = new_x;
             player.y = new_y;
             
-            debug_log("🚶 Jogador " + player.name + " moveu para (" + new_x + ", " + new_y + ")");
-            
-            // Broadcast movimento para outros jogadores no mesmo mapa
-            string move_msg = "xt01 " + peer_id + " " + new_x + " " + new_y;
-            broadcast_to_map(player.map_name, move_msg, peer_id); // Envia para todos exceto o próprio jogador
+            // Broadcast para outros jogadores
+            broadcast_to_map(player.map_name, "pp " + player.name + " " + new_x + " " + new_y, peer_id);
+            return;
+        }
+        
+        // ===== COMANDO DE ATERRISSAGEM (land) =====
+        // Formato: land [altura_queda] (altura é opcional)
+        if(cmd == "land") {
+            int fall_height = 0;
+            if(parts.length() >= 2) {
+                fall_height = parse_int(parts[1]);
+            }
+            // Por enquanto apenas log, pode implementar dano de queda depois
+            if(fall_height >= 20) {
+                debug_log("⬇️ " + player.name + " aterrissou de altura " + fall_height);
+            }
+            return;
+        }
+        
+        // ===== COMANDO DE SALTO (jump) =====
+        // Formato: jump [som.ogg]
+        // Notifica outros jogadores que este jogador pulou
+        if(cmd == "jump") {
+            string jump_sound = (parts.length() >= 2) ? parts[1] : "jump.ogg";
+            // Broadcast som de salto para outros jogadores no mapa
+            broadcast_to_map(player.map_name, "play " + jump_sound + " " + player.x + " " + player.y, peer_id);
+            return;
+        }
+        
+        // ===== COMANDO DE SOM BROADCAST (draw) =====
+        // Formato: draw som.ogg
+        // Toca um som para outros jogadores no mesmo mapa
+        if(cmd == "draw" && parts.length() >= 2) {
+            string sound_file = parts[1];
+            // Broadcast som para outros jogadores no mapa
+            broadcast_to_map(player.map_name, "play " + sound_file + " " + player.x + " " + player.y, peer_id);
             return;
         }
         
@@ -1187,44 +1382,10 @@ void server_handle_network_event_const(const network_event@ event) {
 
 // Loop principal do servidor
 void main() {
-    debug_log("=== SERVIDOR IG INICIANDO ===");
-    // screen_reader_speak("Iniciando servidor IG com banco de dados SQLite", true); // Comentado para não bugar NVDA
-    
-    // Inicializar banco de dados
-    if(!init_database()) {
-        // screen_reader_speak("Falha ao inicializar banco de dados", true);
-        debug_log("ERRO CRÍTICO: Falha na inicialização do banco de dados");
-        return;
-    }
-    
-    // Inicializar sistema de comandos
-    init_command_system();
-
-    // Inicializar sistema de itens
-    init_items_system();
-
-    
-    // 🆕 INTEGRAÇÃO: Inicializar sistemas avançados
-    debug_log("Inicializando sistemas avançados...");
-    init_disabled_zones();  // Zonas desabilitadas (PvP bloqueado)
-    load_weapons();         // 🆕 Carregar armas do weapons.db
-    init_item_data();       // 🆕 Inicializar dados de itens (peso e tamanho)
-    init_descriptions();    // 🆕 Inicializar descrições de itens e localizações
-    init_moving_sounds();   // 🆕 Inicializar sistema de sons móveis 3D (Steam Audio HRTF)
-    init_consumables_system();  // 🆕 Inicializar sistema de itens consumíveis (poções, buffs)
-    load_all_tempbans();    // 🆕 Carregar banimentos temporários
-    init_word_filter();     // 🆕 FASE 4: Inicializar filtro de palavras do chat
-    init_quests_system();   // 🆕 FASE 5: Inicializar sistema de quests
-    init_achievements_system();  // 🆕 FASE 5: Inicializar sistema de achievements
-    init_bosses_system();   // 🆕 FASE 5: Inicializar sistema de bosses
-    init_dungeons_system(); // 🆕 FASE 5: Inicializar sistema de dungeons
-    init_events_system();   // 🆕 FASE 5: Inicializar sistema de eventos
-    init_qol_system();      // ✅ Task 3.3: Inicializar sistema QoL (Frases Rápidas + Tradução)
-    debug_log("Sistemas avançados inicializados");
-    
-    // Inicializar servidor de rede
-    if(!server_init(SERVER_PORT)) {
-        debug_log("ERRO CRÍTICO: Falha na inicialização do servidor de rede");
+    // ✅ Epic 1 Task 1: Usar módulo de inicialização moderno
+    // Toda a lógica de inicialização foi movida para iniciar.nvgt
+    if(!inicializar_servidor(SERVER_PORT)) {
+        debug_log("ERRO CRÍTICO: Falha na inicialização do servidor");
         debug_log("");
         debug_log("Pressione ENTER para sair...");
 
@@ -1234,25 +1395,6 @@ void main() {
         }
         return;
     }
-        // GameMap@ inicio_map = load_map("inicio");
-    // if(inicio_map is null) {
-    //     debug_log("AVISO: Mapa 'inicio' não encontrado, criando mapa padrão");
-    // }
-    
-    // Marcar servidor como ativo
-    server_running = true;
-    server_uptime.restart();
-    last_save.restart();
-    last_backup.restart();
-    
-    log_to_database("INFO", "SYSTEM", "Servidor iniciado", -1, "porta:" + SERVER_PORT);
-    // screen_reader_speak("Servidor IG iniciado na porta " + SERVER_PORT, true); // Comentado para não bugar NVDA
-
-    debug_log("Servidor IG rodando na porta " + SERVER_PORT);
-    debug_log("Banco de dados: " + DATABASE_FILE);
-    debug_log("Max jogadores: " + MAX_PLAYERS);
-    debug_log("Pressione ESC ou ALT+F4 para desligar o servidor");
-    debug_log("=== SERVIDOR PRONTO ===");
 
     // Mostrar janela do servidor
     show_window("Servidor IG - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");

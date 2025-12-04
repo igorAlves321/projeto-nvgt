@@ -178,22 +178,30 @@ void init_data(string data_line, bool complete = true) {
 		somchuva = parsed[1];
 	}
 	// PLATAFORMA: suporta "platform" e abreviação "p"
+	// Formato BGT: p:min_x:max_x:min_y:tiles (max_y = min_y)
 	else if((parsed[0] == "platform" || parsed[0] == "p") && parsed.length() >= 5) {
-		string minx, maxx, y, tile;
-		minx = parsed[1];
-		maxx = parsed[2];
-		y = parsed[3];
-		tile = parsed[4];
-		map.push_back(minx + ":" + maxx + ":" + y + ":" + y + ":" + tile);
+		int min_x = string_to_number(parsed[1]);
+		int max_x = string_to_number(parsed[2]);
+		int min_y = string_to_number(parsed[3]);
+		int max_y = min_y;  // No BGT, max_y = min_y para plataformas 2D
+		string tiles = parsed[4];
+		
+		// CRÍTICO: Adicionar ao array platforms (objetos), não ao array map (strings)!
+		platforms.insert_at(platforms.length(), platform("p", min_x, max_x, min_y, max_y, tiles));
+		debug_log("🏗️ Plataforma criada: x(" + min_x + "-" + max_x + ") y=" + min_y + " tiles=" + tiles);
 	}
 	// PAREDE: suporta "wall", "pwall" e abreviação "w"
+	// Formato BGT: w:x:miny:maxy:tile (paredes são verticais, min_x = max_x)
 	else if((parsed[0] == "wall" || parsed[0] == "pwall" || parsed[0] == "w") && parsed.length() >= 5) {
-		string x, miny, maxy, tile;
-		x = parsed[1];
-		miny = parsed[2];
-		maxy = parsed[3];
-		tile = parsed[4];
-		map.push_back(x + ":" + x + ":" + miny + ":" + maxy + ":" + tile);
+		int x = string_to_number(parsed[1]);
+		int min_y = string_to_number(parsed[2]);
+		int max_y = string_to_number(parsed[3]);
+		string tiles = parsed[4];
+		
+		// CRÍTICO: Adicionar ao array platforms com tipo "wall" para colisão
+		// Paredes: min_x = max_x = x (vertical), tiles contém "wall"
+		platforms.insert_at(platforms.length(), platform("w", x, x, min_y, max_y, "wall" + tiles));
+		debug_log("🧱 Parede criada: x=" + x + " y(" + min_y + "-" + max_y + ") tipo=" + tiles);
 	}
 	// ZONA: suporta "zone" e abreviação "z"
 	else if((parsed[0] == "zone" || parsed[0] == "z") && parsed.length() >= 5) {
@@ -564,23 +572,7 @@ void init_data(string data_line, bool complete = true) {
 		
 		debug_log("📍 Zone criada: (" + min_x + "," + max_x + ") x (" + min_y + "," + max_y + ")");
 	}
-	// PLATFORM: Plataformas, escadas, paredes
-	else if(parsed[0] == "p" && parsed.length() >= 5) {
-		string plattype = parsed[1];
-		int min_x = string_to_number(parsed[2]);
-		int max_x = string_to_number(parsed[3]);
-		int min_y = string_to_number(parsed[4]);
-		int max_y = string_to_number(parsed[5]);
-		string tiles = (parsed.length() > 6) ? parsed[6] : "";
-		
-		platforms.insert_at(platforms.length(), platform(plattype, min_x, max_x, min_y, max_y, tiles));
-		
-		string tipo_nome = "Plataforma";
-		if(plattype == "sc") tipo_nome = "Escada";
-		else if(plattype == "w") tipo_nome = "Parede";
-		
-		debug_log("🏗️ " + tipo_nome + " criada: (" + min_x + "," + max_x + ") x (" + min_y + "," + max_y + ")");
-	}
+	// NOTA: Handler de plataforma "p" movido para o início da função init_data()
 	// EXTRACT: Zonas de extração (minerar, cortar, etc)
 	else if(parsed[0] == "ex" && parsed.length() >= 11) {
 		int min_x = string_to_number(parsed[1]);
@@ -623,6 +615,20 @@ void init_data(string data_line, bool complete = true) {
 		if(parsed[0] == "pnpc") {
 			debug_log("⚠️ PNPC encontrado (não implementado ainda)");
 		}
+	}
+	// STORE: Lojas no mapa (processamento no servidor, cliente só armazena posição)
+	else if(parsed[0] == "store" && parsed.length() >= 6) {
+		// Formato: store:min_x:max_x:min_y:max_y:nome_loja
+		int min_x = string_to_number(parsed[1]);
+		int max_x = string_to_number(parsed[2]);
+		int min_y = string_to_number(parsed[3]);
+		int max_y = string_to_number(parsed[4]);
+		string store_name = parsed[5];
+		
+		// Armazenar como zona para trigger de interação
+		zones.insert_at(zones.length(), zone(min_x, max_x, min_y, max_y, "Loja: " + store_name));
+		
+		debug_log("🏪 Loja criada: " + store_name + " em (" + min_x + "," + max_x + ")");
 	}
 	else if(parsed[0] == "desativar") {
 		if(parsed[1] == "coordenadas") dcoordenadas = 1;

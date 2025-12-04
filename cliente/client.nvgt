@@ -28,6 +28,7 @@
 #include"includes/item.nvgt"
 #include"includes/inv.nvgt"             // Sistema de inventário
 #include"includes/qol.nvgt"             // ✅ Task 3.3: Sistema QoL (Frases Rápidas + Tradução)
+#include"includes/voice_chat.nvgt"      // ✅ Task 1.6.1: Sistema de Voice Chat com HRTF
 #include"includes/clima.nvgt"
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
@@ -190,6 +191,9 @@ int echotime=80;
 timer echotimer;
 bool dcheck;
 int fallheight;
+int fallvelocidade = 100;
+int deffallvelocidade = 100;
+timer falltimer;
 bool creating;
 key_hold kleft(KEY_LEFT,300,80);
 key_hold kright(KEY_RIGHT,300,80);
@@ -253,38 +257,44 @@ void main(){
 	// Informar qual método de som está sendo usado
 	if(tem_pasta_sounds) {
 		debug_log("✓ SOUND_STORAGE verificado: usando pasta 'sounds'");
+		// Se for pasta, não precisa abrir pack - os sons são carregados diretamente
+		// Não configuramos sound_default_pack neste caso
 	} else {
 		debug_log("✓ SOUND_STORAGE verificado: usando arquivo pack '" + SOUND_STORAGE + "'");
+		
+		// Abrir pack de sons DIRETAMENTE (método do Batalha Constante)
+		debug_log("🔧 Tentando abrir pack: " + SOUND_STORAGE);
+		if(!global_sound_pack.open(SOUND_STORAGE, PACK_OPEN_MODE_READ)) {
+			debug_log("❌ ERRO: Falha ao abrir " + SOUND_STORAGE);
+			alert("Erro Fatal", "Não foi possível abrir o arquivo de sons: " + SOUND_STORAGE + "\n\nO jogo será encerrado.");
+			exit();
+		}
+		debug_log("✅ Pack aberto com sucesso!");
+		
+		// Atribuir ao sound_default_pack (igual Batalha Constante)
+		@sound_default_pack = @global_sound_pack;
+		debug_log("✅ sound_default_pack configurado!");
+		
+		// Testar listando arquivos
+		string[] pack_files = global_sound_pack.list_files();
+		debug_log("📋 Pack contém " + pack_files.length() + " arquivos");
+		if(pack_files.length() > 0) {
+			debug_log("📄 Primeiros 5 arquivos:");
+			for(uint i = 0; i < 5 && i < pack_files.length(); i++) {
+				debug_log("   - " + pack_files[i]);
+			}
+		}
+		
+		// Chave de descriptografia
+		set_sound_decryption_key(SOUND_ENCRYPTION_KEY, false);
 	}
+	
 	init_bass();
 	
-	// Abrir pack de sons DIRETAMENTE (método do Batalha Constante)
-	debug_log("🔧 Tentando abrir pack: " + SOUND_STORAGE);
-	if(!global_sound_pack.open(SOUND_STORAGE, PACK_OPEN_MODE_READ)) {
-		debug_log("❌ ERRO: Falha ao abrir " + SOUND_STORAGE);
-		alert("Erro Fatal", "Não foi possível abrir o arquivo de sons: " + SOUND_STORAGE + "\n\nO jogo será encerrado.");
-		exit();
-	}
-	debug_log("✅ Pack aberto com sucesso!");
+	// Configurar todos os sound_pools com o pack (igual Batalha Constante)
+	configure_sound_pools();
+	debug_log("✅ Sound pools configurados com pack!");
 	
-	// Atribuir ao sound_default_pack (igual Batalha Constante)
-	// sound_default_pack é um pack@ (handle), então fazemos referência ao global_sound_pack
-	@sound_default_pack = @global_sound_pack;
-	debug_log("✅ sound_default_pack configurado!");
-	
-	// Testar listando arquivos
-	string[] pack_files = global_sound_pack.list_files();
-	debug_log("📋 Pack contém " + pack_files.length() + " arquivos");
-	if(pack_files.length() > 0) {
-		debug_log("📄 Primeiros 5 arquivos:");
-		for(uint i = 0; i < 5 && i < pack_files.length(); i++) {
-			debug_log("   - " + pack_files[i]);
-		}
-	}
-	
-	set_sound_decryption_key(SOUND_ENCRYPTION_KEY, false);
-	// configure_sound_pools_with_pack() - NÃO É NECESSÁRIO!
-	// O sound_default_pack já foi configurado acima (igual Batalha Constante)
 	abrir();
 	
 	// Inicializar sistema de inventário
@@ -302,7 +312,11 @@ void main(){
 	// Inicializar sistema de localização I18N
 	init_localization_system();
 	debug_log("✅ Sistema de localização I18N inicializado");
-	
+
+	// Inicializar sistema de voice chat
+	init_voice_chat();
+	debug_log("✅ Sistema de voice chat inicializado (HRTF ativo)");
+
 	p.max_distance=30;
 	bool achou=false;
 	string pasta="C:/Program Files";
@@ -471,7 +485,17 @@ void main(){
 	create_add("privado");   // Mensagens privadas (PM)
 	create_add("admin");     // Chat de administração
 	create_add("leilão");    // Chat de leilão
-	if(screen_reader_is_running()) install_keyhook();
+	
+	// Instalar keyhook APENAS para JAWS (não instalar para NVDA ou outros leitores!)
+	// O keyhook é específico para JAWS e pode causar problemas com outros leitores
+	string detected_sr = screen_reader_detect();
+	if(detected_sr == "JAWS") {
+		install_keyhook();
+		debug_log("✓ Keyhook instalado para JAWS");
+	} else if(detected_sr != "") {
+		debug_log("✓ Leitor de tela detectado: " + detected_sr + " (keyhook não necessário)");
+	}
+	
 	show_game_window(nomejogo+" - "+pu.get_value("Versão")+" "+ver);
 	if(primeiravez==0){
 		primeiravez=1;
@@ -501,7 +525,7 @@ void main(){
 	if(COMMAND_LINE.find("reiniciar")>=0) autologar=true;
 	if(autologar){
 		wait(1000);
-		logar();
+		net_logar();  // Usar net_logar() ao invés do stub
 	}
 	if(usalogo==0) dlgplay("logo.ogg",true,25);
 	menuprincipal();
@@ -519,6 +543,21 @@ void game(){
 	speak("Entrando no jogo!");
 	debug_log("✅ Mapa já carregado pelo servidor via changemap");
 	speak("Você está no jogo.");
+	
+	// ===== INICIALIZAÇÃO DE TIMERS CRÍTICOS =====
+	walktimer.restart();       // Timer de movimento
+	jumptimer.restart();       // Timer de salto
+	canijumptimer.restart();   // Timer de cooldown de salto
+	falltimer.restart();       // Timer de queda
+	debug_log("✅ Timers de física inicializados");
+	
+	// ===== RESET DE ESTADOS DE FÍSICA =====
+	jumping = false;
+	falling = false;
+	ascending = false;
+	atapex = false;
+	moveable = true;
+	debug_log("✅ Estados de física resetados");
 	
 	// ===== INICIALIZAÇÃO DO SISTEMA DE CHAT =====
 	chat_initialize();
@@ -567,129 +606,147 @@ void game(){
 		pobjs.update_listener_2d(me.x, me.y, facing);
 		ambientepool.update_listener_2d(me.x, me.y, facing);
 		// ===== END sound pool update =====
-		
+
+		// ===== VOICE CHAT UPDATE =====
+		// Atualiza gravador (PTT) e player (cleanup de sons finalizados)
+		update_voice_chat();
+
 		loop_count++;
 		if(loop_count % 100 == 0) {
 			debug_log("♻️ Loop do jogo rodando... iteração " + loop_count);
 		}
 		
-		// ===== MOVIMENTAÇÃO BÁSICA COM SUPORTE A SIDESCROLLING =====
-		if(moveable && walktimer.elapsed >= walktime) {
-			bool moved = false;
-			
-			if(sidescrolling == 1) {
-				// MODO LATERAL (sidescrolling ativado)
-				// LEFT/RIGHT = mover X, UP/DOWN = mover Y
-				
-				if(key_down(KEY_LEFT)) {
-					facing = Left;
-					me.x -= 1;
-					moved = true;
-					debug_log("⬅️ [LATERAL] Moveu para esquerda: x=" + me.x);
+		// ===== ROTAÇÃO COM SHIFT + SETAS (igual ao BGT) =====
+		if(key_down(KEY_LSHIFT) || key_down(KEY_RSHIFT)) {
+			if(key_pressed(KEY_UP) && moveable) {
+				if(facing != Forward) {
+					p.play_stationary("turn.ogg", false);
 				}
-				else if(key_down(KEY_RIGHT)) {
-					facing = Right;
-					me.x += 1;
-					moved = true;
-					debug_log("➡️ [LATERAL] Moveu para direita: x=" + me.x);
-				}
-				else if(key_down(KEY_DOWN)) {
-					me.y -= 1;
-					moved = true;
-					debug_log("⬇️ [LATERAL] Moveu para baixo: y=" + me.y);
-				}
-				else if(key_down(KEY_UP)) {
-					me.y += 1;
-					moved = true;
-					debug_log("⬆️ [LATERAL] Moveu para cima: y=" + me.y);
-				}
+				facing = Forward;
+				me.yaw = 0.0;
+				send_unreliable(peer_id, "turn " + facing, 0);
+				debug_log("↑ Rotacionou para frente");
 			}
-			else {
-				// MODO VERTICAL (sidescrolling desativado - padrão)
-				// UP/DOWN = mover Y (frente/trás baseado em facing)
-				// LEFT/RIGHT = rotacionar (mudar facing)
-				
-				if(key_down(KEY_LEFT)) {
-					// Rotacionar para esquerda
-					facing = Left;
-					me.yaw = 270.0; // ✅ Task 2.2: Atualizar yaw (esquerda = 270°)
-					speak("Virando para esquerda");
-					debug_log("↶ [VERTICAL] Rotacionou para esquerda");
+			if(key_pressed(KEY_DOWN) && moveable) {
+				if(facing != Back) {
+					p.play_stationary("turn.ogg", false);
 				}
-				else if(key_down(KEY_RIGHT)) {
-					// Rotacionar para direita
-					facing = Right;
-					me.yaw = 90.0; // ✅ Task 2.2: Atualizar yaw (direita = 90°)
-					speak("Virando para direita");
-					debug_log("↷ [VERTICAL] Rotacionou para direita");
-				}
-				else if(key_down(KEY_UP)) {
-					// Mover para frente baseado na direção atual
-					if(facing == Right) {
-						me.x += 1;
-						debug_log("⬆️ [VERTICAL] Moveu para frente (direita): x=" + me.x);
-					}
-					else if(facing == Left) {
-						me.x -= 1;
-						debug_log("⬆️ [VERTICAL] Moveu para frente (esquerda): x=" + me.x);
-					}
-					else if(facing == Forward) {
-						me.y += 1;
-						debug_log("⬆️ [VERTICAL] Moveu para frente: y=" + me.y);
-					}
-					else if(facing == Back) {
-						me.y -= 1;
-						debug_log("⬆️ [VERTICAL] Moveu para frente (trás): y=" + me.y);
-					}
-					moved = true;
-				}
-				else if(key_down(KEY_DOWN)) {
-					// Mover para trás (oposto da direção atual)
-					if(facing == Right) {
-						me.x -= 1;
-						debug_log("⬇️ [VERTICAL] Moveu para trás (esquerda): x=" + me.x);
-					}
-					else if(facing == Left) {
-						me.x += 1;
-						debug_log("⬇️ [VERTICAL] Moveu para trás (direita): x=" + me.x);
-					}
-					else if(facing == Forward) {
-						me.y -= 1;
-						debug_log("⬇️ [VERTICAL] Moveu para trás: y=" + me.y);
-					}
-					else if(facing == Back) {
-						me.y += 1;
-						debug_log("⬇️ [VERTICAL] Moveu para trás (frente): y=" + me.y);
-					}
-					moved = true;
-				}
+				facing = Back;
+				me.yaw = 180.0;
+				send_unreliable(peer_id, "turn " + facing, 0);
+				debug_log("↓ Rotacionou para trás");
 			}
-			
-			// Se moveu, envia para o servidor e toca som de passo
-			if(moved) {
-				walktimer.restart();
-
-				// Tocar som de passo baseado no tile
-				string tile = get_tile_at(me.x, me.y);
-				string step_sound = "";
-
-				if(tile != "") {
-					step_sound = tile + "step" + random(1, 5) + ".ogg";
-					debug_log("🔊 Tocando som: " + step_sound);
-					int sound_id = p2.play_stationary(get_sound_path(step_sound), false);
-					if(sound_id == -1) {
-						debug_log("❌ ERRO: play_stationary retornou -1");
-					}
-				} else {
-					debug_log("⚠️ Tile vazio - sem som de passo");
+			if(key_pressed(KEY_LEFT) && moveable) {
+				if(facing != Left) {
+					p.play_stationary("turn.ogg", false);
 				}
-
-				// ✅ CORREÇÃO: Enviar com formato correto: "move step_sound x y"
-				send_reliable(peer_id, "move " + step_sound + " " + me.x + " " + me.y, 0);
-				debug_log("📤 Enviado: move " + step_sound + " " + me.x + " " + me.y);
+				facing = Left;
+				me.yaw = 270.0;
+				send_unreliable(peer_id, "turn " + facing, 0);
+				debug_log("← Rotacionou para esquerda");
+			}
+			if(key_pressed(KEY_RIGHT) && moveable) {
+				if(facing != Right) {
+					p.play_stationary("turn.ogg", false);
+				}
+				facing = Right;
+				me.yaw = 90.0;
+				send_unreliable(peer_id, "turn " + facing, 0);
+				debug_log("→ Rotacionou para direita");
 			}
 		}
-		// ===== FIM DA MOVIMENTAÇÃO =====
+
+		// ===== MOVIMENTAÇÃO LATERAL (LEFT/RIGHT = X) - igual ao BGT =====
+		// No BGT: LEFT/RIGHT sem Shift movem no eixo X, não rotacionam!
+		
+		// DEBUG: Verificar estado das teclas de movimento
+		if(loop_count % 200 == 0 && (key_down(KEY_LEFT) || key_down(KEY_RIGHT))) {
+			debug_log("🎮 [MOVE DEBUG] LEFT=" + key_down(KEY_LEFT) + " RIGHT=" + key_down(KEY_RIGHT));
+			debug_log("🎮 [MOVE DEBUG] G=" + key_down(KEY_G) + " RSHIFT=" + key_down(KEY_RSHIFT) + " LSHIFT=" + key_down(KEY_LSHIFT) + " F=" + key_down(KEY_F));
+			debug_log("🎮 [MOVE DEBUG] moveable=" + moveable + " walktimer.elapsed=" + walktimer.elapsed + " walktime=" + walktime);
+			debug_log("🎮 [MOVE DEBUG] centado=" + centado + " mapname=" + mapname + " jumping=" + jumping);
+			debug_log("🎮 [MOVE DEBUG] platforms.length=" + platforms.length());
+		}
+		
+		if(key_up(KEY_G) && key_up(KEY_RSHIFT) && key_up(KEY_LSHIFT) && !key_down(KEY_F)) {
+			if(moveable && walktimer.elapsed >= walktime && !centado && mapname != "barco") {
+				bool moved = false;
+				
+				// LEFT = mover para esquerda (X-1)
+				if(key_down(KEY_LEFT) && abletomove_direction(Left)) {
+					walktimer.restart();
+					me.x -= 1;
+					moved = true;
+					debug_log("⬅️ Moveu para esquerda: x=" + me.x);
+				}
+				// RIGHT = mover para direita (X+1)
+				else if(key_down(KEY_RIGHT) && abletomove_direction(Right)) {
+					walktimer.restart();
+					me.x += 1;
+					moved = true;
+					debug_log("➡️ Moveu para direita: x=" + me.x);
+				}
+				
+				// Se moveu, verifica lama e toca som
+				if(moved) {
+					// Verificar tile especial (lama)
+					string tile = get_tile_at(me.x, me.y);
+					if(string_contains(tile, "mud", 1) > -1) {
+						int vv = random(0, 1);
+						if(vv == 1) {
+							// Escorrega na lama - volta
+							if(key_down(KEY_LEFT)) me.x += 1;
+							else me.x -= 1;
+						}
+					}
+					
+					// Tocar som de passo
+					playstep();
+					echo = true;
+					echotimer.restart();
+					
+					// Enviar ao servidor
+					string step_sound = tile + "step" + random(1, 5) + ".ogg";
+					send_reliable(peer_id, "move " + step_sound + " " + me.x + " " + me.y, 0);
+					debug_log("📤 Enviado: move " + step_sound + " " + me.x + " " + me.y);
+				}
+			}
+		}
+
+		// ===== MOVIMENTAÇÃO ESPECIAL NO BARCO (key_pressed) =====
+		if(mapname == "barco") {
+			if(key_pressed(KEY_LEFT) && abletomove()) {
+				me.x -= 1;
+				playstep();
+				echo = true;
+				echotimer.restart();
+			}
+			if(key_pressed(KEY_RIGHT) && abletomove()) {
+				me.x += 1;
+				playstep();
+				echo = true;
+				echotimer.restart();
+			}
+		}
+
+		// ===== PULO COM KEY_UP (igual ao BGT) =====
+		// No BGT: KEY_UP sem Shift = pular (não mover!)
+		if(key_up(KEY_LSHIFT) && key_up(KEY_RSHIFT)) {
+			if(key_pressed(KEY_UP) && !jumping && !falling && key_up(KEY_G) && canijumptimer.elapsed > 50 && moveable && !floating && !floating2 && bicicleta == 0 && camion == 0 && !centado && string_contains(get_tile_at(me.x, (me.y+1)), "wall", 1) < 0) {
+				sjumpcheck();
+				if(abletojump2 > 0 && dmoving == false) {
+					jumptimer.restart();
+					p.play_stationary("jump.ogg", false);
+					jumping = true;
+					pulou = 1;
+					ty1 = me.y;
+					ty2 = me.y + jumpheight;
+					ascending = true;
+					send_unreliable(peer_id, "jump", 0);
+					debug_log("🦘 Pulou! y=" + me.y + " -> " + ty2);
+				}
+			}
+		}
 
 		// ===== ✅ TASK 2.2: SISTEMA DE ECO PARA NAVEGAÇÃO =====
 		if(key_pressed(KEY_E) && moveable) {
@@ -711,39 +768,11 @@ void game(){
 		}
 		// ===== FIM DO SISTEMA DE ECO =====
 
-		// ===== ✅ TASK 2.2: SISTEMA DE STANCE (AGACHAR/SENTAR) =====
-		if(key_pressed(KEY_C) && moveable) {
-			// Alternar entre em pé (0) e agachado (1)
-			if(me.stance == 0) {
-				me.stance = 1;
-				p.play_stationary("stance_crouch.ogg", false);
-				speak("Você agachou.", true);
-				game_net.send(server_peer_id, "stance 1", 0, true);
-				debug_log("🧍 Stance: Agachado");
-			} else if(me.stance == 1) {
-				me.stance = 0;
-				p.play_stationary("stance_stand.ogg", false);
-				speak("Você levantou.", true);
-				game_net.send(server_peer_id, "stance 0", 0, true);
-				debug_log("🧍 Stance: Em pé");
-			}
-		}
-
-		if(key_pressed(KEY_X) && moveable) {
-			// Alternar entre em pé (0) e sentado (2)
-			if(me.stance == 0) {
-				me.stance = 2;
-				p.play_stationary("stance_sit.ogg", false);
-				speak("Você sentou.", true);
-				game_net.send(server_peer_id, "stance 2", 0, true);
-				debug_log("🧍 Stance: Sentado");
-			} else if(me.stance == 2) {
-				me.stance = 0;
-				p.play_stationary("stance_stand.ogg", false);
-				speak("Você levantou.", true);
-				game_net.send(server_peer_id, "stance 0", 0, true);
-				debug_log("🧍 Stance: Em pé");
-			}
+		// ===== ✅ TASK 2.2: SISTEMA DE STANCE (SENTAR/LEVANTAR) =====
+		// Tecla Q: Sentar/Levantar (como no BGT original)
+		// Nota: Agachar (Shift+Space) é processado em stance_control_loop()
+		if(key_pressed(KEY_Q) && moveable && !jumping && !ausente) {
+			centar();  // Função original do BGT para sentar/levantar
 		}
 		// ===== FIM DO SISTEMA DE STANCE =====
 
@@ -799,6 +828,57 @@ void game(){
 			weaponcheckloop();
 			secundario();
 			if(gmt()!=""&&jumping==false&&pulou==1&&falling==false) pulou=0;
+			
+			// ===== FÍSICA DE QUEDA =====
+			// Se não há tile e não está pulando/caindo, começa a cair
+			if(get_tile_at(me.x, me.y) == "" && !falling && !dmoving && !jumping && connected && moveable && !floating && !floating2) {
+				falling = true;
+			}
+			if(falling && connected) {
+				fallloop();
+			}
+			
+			// ===== FÍSICA DE SALTO =====
+			if(jumping) {
+				string step;
+				
+				// Ápice do salto
+				if(atapex && jumptimer.elapsed >= apextime) {
+					jumptimer.restart();
+					atapex = false;
+				}
+				
+				// Descendo
+				if(!ascending && jumptimer.elapsed >= jumptime2 && !atapex) {
+					jumptimer.restart();
+					me.y -= 1;
+					if(me.y <= ty1) {
+						me.y = ty1;
+						step = get_tile_at(me.x, me.y) + "land.ogg";
+						p.play_stationary(step, false);
+						send_unreliable(peer_id, "move " + step + " " + me.x + " " + me.y, 0);
+						send_unreliable(peer_id, "land", 0);
+						jumping = false;
+						canijumptimer.restart();
+					}
+					if(jumping) {
+						checkforplatforms();
+					}
+				}
+				
+				// Subindo
+				if(ascending && jumptimer.elapsed >= jumptime) {
+					jumptimer.restart();
+					me.y += 1;
+					send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
+					checkforwalls();
+					if(me.y >= ty2) {
+						ascending = false;
+						jumptimer.restart();
+						atapex = true;
+					}
+				}
+			}
 		}
 		// Processar eventos de rede do jogo
 		if(connected) {
@@ -860,6 +940,17 @@ void game(){
 			reset();
 			menuprincipal();
 			return; // Sai da função game()
+		}
+		
+		// Verificar se precisa reconectar (relogin_flag)
+		if(relogin_flag) {
+			debug_log("🔄 Relogin flag ativo - tentando reconectar...");
+			relogin_flag = false;
+			reset();
+			speak(pu.get_value("Reconectando ao servidor..."));
+			wait(1000);
+			net_logar();
+			return; // Sai do loop para reconectar
 		}
 		
 		if(key_pressed(KEY_F9) && desenvolvedordm==1){

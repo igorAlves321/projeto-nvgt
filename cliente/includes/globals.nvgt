@@ -119,6 +119,7 @@ int dmoto = 0;
 int darmas = 0;
 int dbaculo = 0;
 int dbazuca = 0;
+int camion = 0;
 int camionativo = 1;
 string somchuva = "rain4.ogg";
 bool centado = false;
@@ -289,6 +290,29 @@ sound_pool doors_sound; // Sons de portas
 sound_pool npcs;       // Sons de NPCs
 sound_pool pl;         // Sons de players
 
+// Função para configurar todos os sound_pools com o pack (igual Batalha Constante)
+// Deve ser chamada após sound_default_pack ser configurado
+void configure_sound_pools() {
+	// Os sound_pools usam sound_default_pack automaticamente quando pack_file é null
+	// Mas para garantir, podemos configurar explicitamente:
+	@p.pack_file = @sound_default_pack;
+	@p2.pack_file = @sound_default_pack;
+	@pobjs.pack_file = @sound_default_pack;
+	@pcomputador.pack_file = @sound_default_pack;
+	@spool.pack_file = @sound_default_pack;
+	@steps.pack_file = @sound_default_pack;
+	@shoot.pack_file = @sound_default_pack;
+	@bodys.pack_file = @sound_default_pack;
+	@walls.pack_file = @sound_default_pack;
+	@doors_sound.pack_file = @sound_default_pack;
+	@npcs.pack_file = @sound_default_pack;
+	@pl.pack_file = @sound_default_pack;
+	@game_p.pack_file = @sound_default_pack;
+	@audio.pack_file = @sound_default_pack;        // Voice chat (sistema legado)
+	// Nota: ambientepool é declarado em ambiente.nvgt, mas configuramos aqui também
+	@ambientepool.pack_file = @sound_default_pack; // Ambiente (clima, etc)
+}
+
 // Arrays de elementos desabilitados
 string[] disableds;
 
@@ -454,7 +478,7 @@ class me_class {
 };
 me_class game_me;
 
-// Outras variÃ¡veis essenciais
+// Outras variáveis essenciais
 string currentloc = "";
 int zonestatus = 1;
 string godir = "", godir2 = "";
@@ -464,8 +488,22 @@ int pulou = 0;
 bool falling = false;
 bool connect = false;
 bool floating = false;
+bool floating2 = false;
+bool ascending = false;
 bool cloaked = false;
 int jumpheight = 5;
+int abletojump2 = 0;
+bool dmoving = false;
+int ty1 = 0, ty2 = 0;
+timer jumptimer;
+timer canijumptimer;
+
+// Variáveis de física do salto (do BGT original)
+bool atapex = false;        // Está no ápice do salto
+int apextime = 100;         // Tempo no ápice (ms)
+int jumptime = 50;          // Tempo entre incrementos subindo (ms)
+int jumptime2 = 50;         // Tempo entre incrementos descendo (ms)
+
 bool star = false;
 bool moveable = true;
 string inv = "";
@@ -593,11 +631,23 @@ v_helper v;
 // Sistema de menus usando classe menu nativa NVGT
 menu client_menu;
 
+// Função para configurar client_menu com pack de sons
+void setup_client_menu() {
+	client_menu.reset(true);
+	@client_menu.pack_file = @sound_default_pack;
+	client_menu.click_sound = "menumove.ogg";
+	client_menu.select_sound = "menuenter.ogg";
+	client_menu.close_sound = "menuvolta.ogg";
+	client_menu.wrap = true;
+}
+
 class m_helper {
 	void add_item_tts(string text, string value) {
 		client_menu.add_item(text, value);
 	}
 	int run(string title, bool flag) {
+		// Configurar pack antes de rodar
+		@client_menu.pack_file = @sound_default_pack;
 		client_menu.intro_text = title;
 		return client_menu.run();
 	}
@@ -665,8 +715,14 @@ string global_sound_key = "";
 // (abrir pack diretamente no client.nvgt)
 
 // Função helper para obter caminho completo do som
-// Com sound_default_pack configurado, não precisa de prefixo
+// Com pack: retorna apenas filename (sound_default_pack cuida do resto)
+// Com pasta: retorna "sounds/filename"
 string get_sound_path(string filename) {
+	// Se SOUND_STORAGE é uma pasta (não termina em .dat), adiciona prefixo
+	if(SOUND_STORAGE.find(".dat") < 0 && directory_exists(SOUND_STORAGE)) {
+		return SOUND_STORAGE + "/" + filename;
+	}
+	// Se é pack, retorna apenas o filename (sound_default_pack já está configurado)
 	return filename;
 }
 

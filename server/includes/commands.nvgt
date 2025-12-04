@@ -226,7 +226,17 @@ bool can_use_command(player@ player, string command_name) {
 bool process_command(player@ player, string full_command) {
     if(player is null || full_command == "") return false;
     
-    string[] parts = full_command.split(" ");
+    // CORREÇÃO: Só processar comandos que começam com /
+    // Comandos de gameplay (move, land, draw, etc.) não começam com /
+    // e devem ser processados pelo fallback em server.nvgt
+    if(full_command.length() < 1 || full_command[0] != '/') {
+        return false;  // Deixar fallback processar
+    }
+    
+    // Remover a barra inicial para processar
+    string command_without_slash = full_command.substr(1);
+    
+    string[] parts = command_without_slash.split(" ");
     if(parts.length() == 0) return false;
     
     string command_name = parts[0].lower();
@@ -240,7 +250,8 @@ bool process_command(player@ player, string full_command) {
     // Resolver comando (verificar aliases)
     string resolved = resolve_command(command_name);
     if(resolved == "") {
-        player.send_message("say Comando não reconhecido: " + command_name);
+        // Não reconhecido - retorna false silenciosamente para permitir fallback
+        // Não envia mensagem de erro aqui - deixa para o handler específico
         return false;
     }
     

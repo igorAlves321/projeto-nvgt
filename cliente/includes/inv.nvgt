@@ -20,11 +20,8 @@
 // ============================================================================
 
 // =========== VARIÁVEIS GLOBAIS ===========
-
-string[] items_selected;           // Itens selecionados
-string item_to_move = "";          // Item sendo movido
-int item_to_move_index = -1;       // Índice do item sendo movido
-int cindex = 0;                    // Índice da categoria atual
+// Nota: items_selected, item_to_move, item_to_move_index já estão em globals.nvgt
+// Usamos as variáveis globais existentes
 
 // =========== CLASSE inv_category ===========
 
@@ -253,50 +250,8 @@ void load_categories_and_items() {
 }
 
 // =========== FUNÇÕES DE AÇÃO ===========
-
-void give(string item) {
-	string char_name = daritem();  // Função que retorna nome do jogador próximo
-	if(char_name == "") {
-		speak(pu.get_value("Ninguém perto de você."));
-	} else {
-		string amount = v.input(pu.get_value("Quantos você quer dar para") + " " + char_name + "?");
-		if(char_name != "" && amount != "") {
-			send_reliable(peer_id, "give " + char_name + " " + item + " " + amount, 0);
-		}
-	}
-}
-
-void drop(string item, double amount = 1) {
-	if(amount < 1 || amount > 100000000000) return;
-	send_reliable(peer_id, "drop " + amount + " " + item, 0);
-}
-
-void auction(string item) {
-	double amount = string_to_number(v.input(pu.get_value("Quantidade de") + " " + pu.get_value(item) + " " + pu.get_value("que deseja colocar em leilão:")));
-	string minbid2 = v.input(pu.get_value("Preço inicial do leilão:"));
-	double minbid = string_to_number(minbid2);
-	
-	if(amount > 0 && amount < 1000000000000 && minbid > 0 && minbid < 100000000000000) {
-		send_unreliable(peer_id, "/auction " + amount + " " + item + " " + minbid, 1);
-	} else {
-		speak(pu.get_value("Por favor, certifique-se de que todos os valores estão corretos e tente novamente."));
-	}
-}
-
-void interact(string item) {
-	// Envia comando de interação com o item para o servidor
-	send_reliable(peer_id, "interact " + item, 0);
-}
-
-void retirar(string item) {
-	// Envia comando de retirar item
-	send_reliable(peer_id, "retirar " + item, 0);
-}
-
-void descitem(string item) {
-	// Descrição detalhada do item
-	send_reliable(peer_id, "descitem " + item, 0);
-}
+// Nota: give(), drop(), auction() estão em client.nvgt
+// Nota: interact(), retirar(), descitem() estão em comandos.nvgt com lógica completa
 
 // =========== TRADUÇÃO DE ITENS ===========
 
@@ -310,22 +265,21 @@ string get_item_translation(string itemname) {
 }
 
 // =========== MENU DE CATEGORIAS ===========
+// Nota: actions_menu() está em menu.nvgt
 
-void actions_menu(string type, string text) {
-	dynamic_menu m;
+void inv_category_actions_menu(string text) {
+	game_menu.reset(true);
+	game_menu.intro_text = pu.get_value(text);
+	game_menu.add_item(pu.get_value("Criar categoria"), "create");
+	game_menu.add_item(pu.get_value("Excluir categoria"), "delete");
+	game_menu.add_item(pu.get_value("Renomear categoria"), "rename");
 	
-	if(type == "inv") {
-		m.add_item(pu.get_value("Criar categoria"), "create_category");
-		m.add_item(pu.get_value("Excluir categoria"), "delete_category");
-		m.add_item(pu.get_value("Renomear categoria"), "rename_category");
-	}
-	
-	int mres = m.run(pu.get_value(text), true);
+	int mres = game_menu.run();
 	if(mres < 0) return;
 	
-	string selected = m.get_item_name(mres);
+	string selected_id = game_menu.get_item_id(mres);
 	
-	if(selected == "create_category") {
+	if(selected_id == "create") {
 		string name = v.input(pu.get_value("Nome da categoria:"));
 		if(name != "" && name.length() < 1025 && name != "all") {
 			int index = get_category_index(name);
@@ -336,7 +290,7 @@ void actions_menu(string type, string text) {
 		}
 	}
 	
-	if(selected == "delete_category") {
+	if(selected_id == "delete") {
 		string name = v.input(pu.get_value("Nome da categoria para excluir:"));
 		if(name != "" && name != "all") {
 			int index = get_category_index(name);
@@ -349,7 +303,7 @@ void actions_menu(string type, string text) {
 		}
 	}
 	
-	if(selected == "rename_category") {
+	if(selected_id == "rename") {
 		string name = v.input(pu.get_value("Nome da categoria para renomear:"));
 		if(name != "" && name != "all") {
 			int index = get_category_index(name);
@@ -484,7 +438,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 				if(invitem == "") invitem = pu.get_value(peramitors[i]);
 				if(invitem.length() > 0 && invitem.substr(0, 1).lower() == cl) {
 					counter = int(i);
-					p.play("invmove6.ogg", false);
+					p.play_stationary("invmove6.ogg", false);
 					speak_inv_item(peramitors, counter);
 					found = true;
 					break;
@@ -498,7 +452,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 					if(invitem == "") invitem = pu.get_value(peramitors[i]);
 					if(invitem.length() > 0 && invitem.substr(0, 1).lower() == cl) {
 						counter = int(i);
-						p.play("invmove6.ogg", false);
+						p.play_stationary("invmove6.ogg", false);
 						speak_inv_item(peramitors, counter);
 						break;
 					}
@@ -555,11 +509,11 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 			if(item_to_move_index > counter) {
 				new_position = item_to_move_index - counter;
 				sort_inv(item_to_move, -new_position);
-				p.play("invmove5.ogg", false);
+				p.play_stationary("invmove5.ogg", false);
 			} else if(item_to_move_index < counter) {
 				new_position = item_to_move_index - counter;
 				sort_inv(item_to_move, -new_position);
-				p.play("invmove5.ogg", false);
+				p.play_stationary("invmove5.ogg", false);
 			}
 			item_to_move_index = -1;
 			item_to_move = "";
@@ -650,7 +604,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 void speak_inv_item(string[]@ items, int index) {
 	string invitem = get_item_translation(items[index]);
 	if(invitem == "") invitem = pu.get_value(items[index]);
-	p.play("invmove6.ogg", false);
+	p.play_stationary("invmove6.ogg", false);
 	speak(invitem + ", " + inv_item_number(items[index]));
 }
 

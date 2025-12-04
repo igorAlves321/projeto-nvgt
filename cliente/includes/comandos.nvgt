@@ -11,6 +11,7 @@ timer olharx;
 timer tempoconectado;
 timer temponaoevoce;
 int fbau=0;
+bool onwall = false;  // Flag para colisão com parede
 
 bool shift_pressionado(){
 	if(key_down(KEY_RSHIFT)||key_down(KEY_LSHIFT))return true;
@@ -19,6 +20,130 @@ bool shift_pressionado(){
 
 bool alt_pressionado(){
 	if(key_down(KEY_LMENU)||key_down(KEY_RMENU))return true;
+	return false;
+}
+
+// Função de verificação de movimento por direção (do BGT original)
+bool abletomove_direction(int direction){
+	string locate = get_zone_at(me.x, me.y);
+	if(locate == "Elevador." || dmoving || !moveable || paraquedas == 1) {
+		debug_log("🚫 [abletomove_direction] Bloqueado: zone=" + locate + " dmoving=" + dmoving + " moveable=" + moveable + " paraquedas=" + paraquedas);
+		return false;
+	}
+	
+	if(direction == Left){
+		if(string_contains(get_tile_at((me.x-1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x-1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	else if(direction == Right){
+		if(string_contains(get_tile_at((me.x+1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x+1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	return onwall ? false : true;
+}
+
+// Função abletomove() - verifica se pode se mover (do BGT original)
+bool abletomove(){
+	string locate = get_zone_at(me.x, me.y);
+	if(locate == "Elevador." || dmoving || !moveable || paraquedas == 1) return false;
+	
+	if(facing == Left){
+		if(string_contains(get_tile_at((me.x-1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x-1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	else if(facing == Right){
+		if(string_contains(get_tile_at((me.x+1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x+1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	return onwall ? false : true;
+}
+
+// Função is_disabled() - verifica se posição está em área desabilitada
+// Nota: Na versão atual, disableds é array de strings (IDs de elementos)
+// TODO: Implementar lógica completa quando necessário
+bool is_disabled(int x, int y){
+	// Por agora, retorna false já que a estrutura mudou de objetos para strings
+	// A verificação real depende de como os elementos são marcados como disabled
 	return false;
 }
 
@@ -448,8 +573,9 @@ f0="+f0+"
 }
 */ // writeprefs removida - já implementada em globals.nvgt
 
-void descitem (string itemname){
-	send_reliable(peer_id,"desc "+itemname,2); // Convertido para NVGT
+// Descrição de item
+void descitem(string itemname) {
+	send_reliable(peer_id, "desc " + itemname, 2);
 }
 
 void copiar(){
@@ -984,20 +1110,27 @@ void verificando(){
 	}
 }
 
+// Função centar - Sentar/Levantar (baseado no BGT original)
+// Tecla Q no loop principal
 void centar(){
-	string l=get_zone_at(me.x, me.y);
-	bool achou=false;
-	if(l.find("Vaso sanitário.")>-1||l.lower().find("computador")>-1){ // Convertido para NVGT
-		if(!centado){
-			centado=true;
-			send_reliable(peer_id, "draw centar.ogg", 0); // Convertido para NVGT
-			p.play_stationary("centar.ogg", false);
-		}
-		else if(centado){
-			centado=false;
-			send_reliable(peer_id, "draw levantar.ogg", 0); // Convertido para NVGT
-			p.play_stationary("levantar.ogg", false);
-		}
+	// Verificar se está em área desabilitada
+	if(is_disabled(me.x, me.y)){
+		return;
+	}
+	
+	if(!centado){
+		// Sentar
+		centado = true;
+		send_unreliable(peer_id, "draw centar.ogg", 0);
+		p.play_stationary("centar.ogg", false);
+		add_add_item("avisos", pu.get_value("Você se senta para descansar."));
+	}
+	else {
+		// Levantar
+		centado = false;
+		send_unreliable(peer_id, "draw levantar.ogg", 0);
+		p.play_stationary("levantar.ogg", false);
+		add_add_item("avisos", pu.get_value("Você se levanta."));
 	}
 }
 
@@ -1269,3 +1402,55 @@ void elevadorcheck(){
 		}
 	}
 }
+
+// ===== FÍSICA DE SALTO E QUEDA (do BGT original) =====
+// NOTA: Variáveis fallheight, fallvelocidade, deffallvelocidade, falltimer
+// estão declaradas em globals.nvgt
+
+// Verifica se aterrissou em uma plataforma durante salto/queda
+void checkforplatforms() {
+	if(have_tile_at(me.x, me.y) > -1) {
+		string step;
+		if(fallheight < 20) {
+			step = get_tile_at(me.x, me.y) + "land.ogg";
+			p.play_stationary(step, false);
+		}
+		if(fallheight >= 20) {
+			step = get_tile_at(me.x, me.y) + "hardland.ogg";
+			p.play_stationary(step, false);
+		}
+		jumping = false;
+		falling = false;
+		fallvelocidade = deffallvelocidade;
+		send_unreliable(peer_id, "move " + step + " " + me.x + " " + me.y, 0);
+		send_unreliable(peer_id, "land " + fallheight, 0);
+		fallheight = 0;
+		canijumptimer.restart();
+	}
+	send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
+}
+
+// Verifica se bateu em parede/teto durante salto
+void checkforwalls() {
+	int tileindex = have_tile_at(me.x, me.y);
+	if(tileindex > -1 && string_contains(platforms[tileindex].tiles, "wall", 1) > -1) {
+		p.play_stationary(platforms[tileindex].tiles + ".ogg", false);
+		ascending = false;
+		jumptimer.restart();
+		atapex = true;
+	}
+}
+
+// Loop de queda - executado enquanto falling == true
+void fallloop() {
+	if(falltimer.elapsed >= fallvelocidade) {
+		falltimer.restart();
+		me.y -= 1;
+		if(fallvelocidade > 12) {
+			fallvelocidade -= 1;
+		}
+		fallheight += 1;
+		checkforplatforms();
+	}
+}
+

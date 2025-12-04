@@ -41,7 +41,9 @@ class translation_context {
 	string source_lang;
 	timer request_time;
 	bool completed;
+	bool http_started;
 	string result;
+	async<string>@ http_task;
 	
 	translation_context() {
 		peer_id = 0;
@@ -50,7 +52,9 @@ class translation_context {
 		target_lang = "pt";
 		source_lang = "auto";
 		completed = false;
+		http_started = false;
 		result = "";
+		@http_task = null;
 	}
 }
 
@@ -88,7 +92,7 @@ void init_qol_system() {
 	lang_codes.set("italian", "it");
 	lang_codes.set("it", "it");
 	
-	debug_log("✅ Sistema QoL inicializado com " + QUICK_PHRASES.length() + " frases rápidas");
+	debug_log("✅ Sistema QoL inicializado (frases de voz + tradução)");
 }
 
 // Obter código de idioma normalizado
@@ -157,28 +161,78 @@ void req_translate_message(int index, string[] parsed) {
 	start_async_translation(pending_translations.length() - 1);
 }
 
-// Iniciar tradução assíncrona usando HTTP
+// Iniciar tradução assíncrona usando HTTP (MyMemory API)
 void start_async_translation(uint ctx_index) {
 	if(ctx_index >= pending_translations.length()) return;
 	
 	translation_context@ ctx = pending_translations[ctx_index];
 	
-	// URL da API (Google Translate público - limitado mas funcional)
-	// Alternativa: MyMemory API (gratuita)
+	// URL da API MyMemory (gratuita, sem chave necessária)
+	// Formato: https://api.mymemory.translated.net/get?q=TEXTO&langpair=ORIGEM|DESTINO
 	string api_url = "https://api.mymemory.translated.net/get?q=" + 
 					 url_encode(ctx.original_text) + 
-					 "&langpair=auto|" + ctx.target_lang;
+					 "&langpair=" + ctx.source_lang + "|" + ctx.target_lang;
 	
-	// Fazer requisição HTTP
-	// NOTA: Em NVGT, usamos internet_request ou http
-	// Por simplicidade, vamos usar uma abordagem síncrona com timeout
+	debug_log("🌐 Iniciando tradução HTTP: " + ctx.original_text + " -> " + ctx.target_lang);
+	debug_log("🔗 URL: " + api_url);
 	
-	// Marcar como processando
-	debug_log("🌐 Iniciando tradução: " + ctx.original_text + " -> " + ctx.target_lang);
+	// Iniciar requisição HTTP assíncrona usando async<string>
+	@ctx.http_task = async<string>(url_get, api_url);
+	ctx.http_started = true;
+}
+
+// Processar resposta da API de tradução
+// Resposta MyMemory: {"responseData":{"translatedText":"texto traduzido",...},...}
+string parse_translation_response(string json_response) {
+	// Parser JSON simplificado para extrair translatedText
+	int start = json_response.find("\"translatedText\":\"");
+	if(start < 0) return "";
 	
-	// Fallback: tradução local básica para casos simples
-	ctx.result = do_local_translation(ctx.original_text, ctx.target_lang);
-	ctx.completed = true;
+	start += 18; // Comprimento de "translatedText":"
+	int end = json_response.find("\"", start);
+	if(end < 0) return "";
+	
+	string result = json_response.substr(start, end - start);
+	
+	// Decodificar escapes Unicode básicos (\uXXXX)
+	result = decode_unicode_escapes(result);
+	
+	return result;
+}
+
+// Decodificar escapes Unicode (\uXXXX) para caracteres reais
+string decode_unicode_escapes(string text) {
+	string result = text;
+	
+	// Substituir escapes comuns
+	result = result.replace("\\u00e1", "á");
+	result = result.replace("\\u00e9", "é");
+	result = result.replace("\\u00ed", "í");
+	result = result.replace("\\u00f3", "ó");
+	result = result.replace("\\u00fa", "ú");
+	result = result.replace("\\u00e0", "à");
+	result = result.replace("\\u00e2", "â");
+	result = result.replace("\\u00ea", "ê");
+	result = result.replace("\\u00f4", "ô");
+	result = result.replace("\\u00e3", "ã");
+	result = result.replace("\\u00f5", "õ");
+	result = result.replace("\\u00e7", "ç");
+	result = result.replace("\\u00fc", "ü");
+	result = result.replace("\\u00f1", "ñ");
+	result = result.replace("\\u00c1", "Á");
+	result = result.replace("\\u00c9", "É");
+	result = result.replace("\\u00cd", "Í");
+	result = result.replace("\\u00d3", "Ó");
+	result = result.replace("\\u00da", "Ú");
+	result = result.replace("\\u00c7", "Ç");
+	result = result.replace("\\u00d1", "Ñ");
+	result = result.replace("\\n", "\n");
+	result = result.replace("\\r", "\r");
+	result = result.replace("\\t", "\t");
+	result = result.replace("\\\"", "\"");
+	result = result.replace("\\/", "/");
+	
+	return result;
 }
 
 // Tradução local básica (fallback)
@@ -276,6 +330,35 @@ void check_translation_results() {
 	for(uint i = 0; i < pending_translations.length(); i++) {
 		translation_context@ ctx = pending_translations[i];
 		
+		// Verificar se a task HTTP está completa
+		if(ctx.http_started && @ctx.http_task !is null && !ctx.completed) {
+			if(ctx.http_task.complete) {
+				// Requisição HTTP completou
+				if(!ctx.http_task.failed) {
+					string response = ctx.http_task.value;
+					debug_log("🌐 Resposta HTTP recebida (" + response.length() + " bytes)");
+					
+					// Parsear resposta JSON
+					string translated = parse_translation_response(response);
+					
+					if(translated.length() > 0) {
+						ctx.result = translated;
+						debug_log("✅ Tradução extraída: " + translated);
+					} else {
+						// Fallback para tradução local se API falhou
+						ctx.result = do_local_translation(ctx.original_text, ctx.target_lang);
+						debug_log("⚠️ API falhou, usando tradução local: " + ctx.result);
+					}
+				} else {
+					// Requisição falhou - usar fallback local
+					ctx.result = do_local_translation(ctx.original_text, ctx.target_lang);
+					debug_log("❌ HTTP falhou, usando fallback: " + ctx.result);
+				}
+				ctx.completed = true;
+			}
+		}
+		
+		// Enviar resultado se completado
 		if(ctx.completed) {
 			// Enviar resultado ao cliente
 			string response = "translated " + ctx.message_id + "|" + ctx.original_text + "|" + ctx.result;
@@ -284,18 +367,24 @@ void check_translation_results() {
 			int player_index = get_player_index_from_peer(ctx.peer_id);
 			if(player_index >= 0) {
 				send_reliable(ctx.peer_id, response, 0);
-				debug_log("✅ Tradução enviada: " + ctx.result);
+				debug_log("📤 Tradução enviada ao cliente: " + ctx.result);
 			}
 			
 			// Remover da lista
 			pending_translations.remove_at(i);
 			i--;
+			continue;
 		}
+		
 		// Timeout de 30 segundos
-		else if(ctx.request_time.elapsed >= 30000) {
+		if(ctx.request_time.elapsed >= 30000) {
 			int player_index = get_player_index_from_peer(ctx.peer_id);
 			if(player_index >= 0) {
-				send_reliable(ctx.peer_id, "msg2 ;Tradução expirou. Tente novamente.;", 0);
+				// Usar tradução local como fallback no timeout
+				string fallback = do_local_translation(ctx.original_text, ctx.target_lang);
+				string response = "translated " + ctx.message_id + "|" + ctx.original_text + "|" + fallback;
+				send_reliable(ctx.peer_id, response, 0);
+				debug_log("⏱️ Timeout - enviando fallback: " + fallback);
 			}
 			pending_translations.remove_at(i);
 			i--;
@@ -324,16 +413,19 @@ string random_string(int length) {
 // URL encode para requisições HTTP
 string url_encode(string text) {
 	string result = "";
+	string safe_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~";
 	for(uint i = 0; i < text.length(); i++) {
-		uint8 c = text[i];
-		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
-			result += string_from_char(c);
+		string ch = text.substr(i, 1);
+		if(safe_chars.find(ch) >= 0) {
+			result += ch;
 		}
-		else if(c == ' ') {
+		else if(ch == " ") {
 			result += "+";
 		}
 		else {
-			result += "%" + format_hex(c);
+			// Encode byte como %XX
+			int char_code = character_to_ascii(ch);
+			result += "%" + format_hex(uint8(char_code));
 		}
 	}
 	return result;
@@ -385,7 +477,7 @@ void cmd_enable_translate(int index, string[] parsed) {
 		f.close();
 		
 		send_reliable(players[target_index].peer_id, "enabletranslate", 0);
-		tell(players[index].charname + " adicionou " + players[target_index].charname + " ao time de tradutores.", "notify7.ogg", 150);
+		send_reliable(players[index].peer_id, "msg2 ;" + players[target_index].charname + " agora é tradutor.;", 0);
 	} else {
 		send_reliable(players[index].peer_id, "msg2 ;Jogador já é tradutor.;", 0);
 	}
@@ -414,7 +506,7 @@ void cmd_remove_translate(int index, string[] parsed) {
 		file_delete(translator_file);
 		
 		send_reliable(players[target_index].peer_id, "disabletranslate", 0);
-		tell(players[index].charname + " removeu " + players[target_index].charname + " do time de tradutores.", "notify7.ogg", 150);
+		send_reliable(players[index].peer_id, "msg2 ;" + players[target_index].charname + " não é mais tradutor.;", 0);
 	} else {
 		send_reliable(players[index].peer_id, "msg2 ;Jogador não é tradutor.;", 0);
 	}
