@@ -355,24 +355,17 @@ void handle_use_item(player@ p, string data) {
 
     debug_log("💊 " + p.name + " usando: " + item_name);
 
-    // Verificar se tem o item
-    if(!p.inv.exists(item_name)) {
-        send_reliable(p.peer_id, "say Você não tem este item", 0);
+    // Obter índice do jogador
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) {
+        send_reliable(p.peer_id, "say Erro: Jogador não encontrado.", 0);
         return;
     }
 
-    int quantidade = 0;
-    p.inv.get(item_name, quantidade);
-    if(quantidade <= 0) {
-        send_reliable(p.peer_id, "say Item esgotado", 0);
-        return;
-    }
-
-    // TODO: Aplicar efeito do item (chamar sistema de consumables)
-
-    // Consumir item
-    p.inv.set(item_name, quantidade - 1);
-    send_reliable(p.peer_id, "say Você usou " + item_name, 0);
+    // Delegar ao sistema de consumíveis (que já faz verificações e remove item)
+    // O sistema de consumables.nvgt verifica inventário, aplica efeitos e remove item
+    use_item(player_index, item_name);
+    // Mensagens de erro/sucesso já são enviadas pelo sistema de consumables
 }
 
 void handle_equip_item(player@ p, string data) {
@@ -560,15 +553,15 @@ void handle_door(player@ p, string data) {
     string door_id = parts[0];
     string action = parts[1];
 
-    debug_log("🚪 " + p.name + " - porta " + door_id + ": " + action);
+    debug_log("🚪 " + p.name + " - porta " + door_id + " → " + action);
 
     // TODO: Implementar sistema de portas
-    broadcast_to_map(p.map_name, "door " + door_id + " " + action, 0);
+    send_reliable(p.peer_id, "say Porta " + door_id + " " + action, 0);
 }
 
 void handle_elevator(player@ p, string data) {
     // Formato: elevator_id|floor
-    // Exemplo: ELEVATOR:123|2
+    // Exemplo: ELEVATOR:lobby|3
 
     string[] parts = data.split("|");
     if(parts.length() < 2) return;
@@ -582,26 +575,9 @@ void handle_elevator(player@ p, string data) {
     send_reliable(p.peer_id, "say Elevador subindo...", 0);
 }
 
-// ============================================================
-// 6. HANDLERS SOCIAIS
-// ============================================================
-
-void handle_chat(player@ p, string data) {
-    // Formato: mensagem
-    // Exemplo: CHAT:Olá a todos!
-
-    string message = data;
-
-    debug_log("💬 " + p.name + ": " + message);
-
-    // Broadcast para todos no mesmo mapa
-    string chat_msg = "chat " + p.name + " " + message;
-    broadcast_to_map(p.map_name, chat_msg, 0);
-}
-
 void handle_whisper(player@ p, string data) {
-    // Formato: target_name|mensagem
-    // Exemplo: WHISPER:João|Oi, como vai?
+    // Formato: target_name|message
+    // Exemplo: WHISPER:João|Olá, tudo bem?
 
     string[] parts = data.split("|");
     if(parts.length() < 2) return;
@@ -621,6 +597,28 @@ void handle_whisper(player@ p, string data) {
     // Enviar mensagem privada
     send_reliable(target.peer_id, "whisper " + p.name + " " + message, 0);
     send_reliable(p.peer_id, "whisper_sent " + target_name + " " + message, 0);
+}
+
+// ============================================================
+// 6. HANDLERS SOCIAIS
+// ============================================================
+
+void handle_chat(player@ p, string data) {
+    // Formato: mensagem
+    // Exemplo: CHAT:Olá a todos!
+    
+    string message = data;
+    if(message.length() == 0) return;
+
+    debug_log("💬 " + p.name + ": " + message);
+
+    // Enviar mensagem para todos os jogadores do mesmo mapa
+    // TODO: Implementar chat por área/mapa
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].online) {
+            send_reliable(players[i].peer_id, "chat " + p.name + "|" + message, 0);
+        }
+    }
 }
 
 void handle_party(player@ p, string data) {

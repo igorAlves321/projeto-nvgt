@@ -148,6 +148,13 @@ bool load_player_data_complete(player@ p) {
         // Carregar inventário e equipamentos
         if(inventory_json != "" && inventory_json != "{}") {
             load_player_inventory(p, inventory_json);
+        } else {
+            // Se inventário vazio (conta antiga), dar inventário padrão
+            debug_log("⚠️ Inventário vazio para " + p.charname + ", aplicando inventário padrão...");
+            string default_inv = get_default_inventory_json();
+            load_player_inventory(p, default_inv);
+            // Salvar no banco para não precisar fazer isso novamente
+            save_player_inventory_to_db(p);
         }
 
         if(equipment_json != "" && equipment_json != "{}") {
@@ -174,6 +181,65 @@ bool load_player_data_complete(player@ p) {
 // 2. RESTAURAR INVENTÁRIO E EQUIPAMENTOS
 // ============================================================
 
+
+bool load_player_inventory_from_database(player@ p, bool allow_legacy_file_fallback = false) {
+    if(@p == null || !database_initialized) return false;
+
+    string query = "SELECT inventory FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, p.charname);
+    if(stmt.step() == SQLITE_ROW) {
+        string inventory_json = stmt.column_text(0);
+
+        p.inv.delete_all();
+        if(inventory_json != "" && inventory_json != "{}") {
+            load_player_inventory(p, inventory_json);
+            return true;
+        }
+
+        if(!allow_legacy_file_fallback) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    string legacy_path = "players/" + p.charname + "/inv.md";
+    if(!file_exists(legacy_path)) {
+        return false;
+    }
+
+    file f;
+    if(!f.open(legacy_path, "r")) {
+        return false;
+    }
+
+    string[] lines = delinear(f.read());
+    f.close();
+
+    int loaded = 0;
+    for(uint i = 0; i < lines.length(); i++) {
+        if(lines[i] == "") continue;
+        string[] data = string_split(lines[i], "=", true);
+        if(data.length() != 2) continue;
+
+        int qty = string_to_number(data[1]);
+        if(qty <= 0) continue;
+
+        p.inv.set(data[0], qty);
+        loaded++;
+    }
+
+    if(loaded > 0) {
+        save_player_inventory_to_db(p);
+        debug_log("MIGRATION: inventario legado migrado para DB: " + p.charname + " (" + loaded + " itens)");
+        return true;
+    }
+
+    return false;
+}
 void load_player_inventory(player@ p, string inventory_json) {
     debug_log("Carregando inventário de " + p.charname);
 
@@ -214,6 +280,32 @@ void load_player_inventory(player@ p, string inventory_json) {
     }
 
     debug_log("✓ Inventário carregado: " + p.inv.get_keys().length() + " tipos de itens");
+}
+
+// Salvar inventário do jogador no banco de dados
+void save_player_inventory_to_db(player@ p) {
+    if(@p == null) return;
+    
+    // Gerar JSON do inventário
+    string json = "{";
+    string[] keys = p.inv.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        int qty = 0;
+        p.inv.get(keys[i], qty);
+        if(i > 0) json += ",";
+        json += "\"" + keys[i] + "\":" + qty;
+    }
+    json += "}";
+    
+    // Atualizar no banco
+    string query = "UPDATE players SET inventory = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt != null) {
+        stmt.bind_text(1, json);
+        stmt.bind_text(2, p.charname);
+        stmt.step();
+        debug_log("✓ Inventário salvo no banco para " + p.charname);
+    }
 }
 
 void load_player_equipment(player@ p, string equipment_json) {
@@ -500,19 +592,36 @@ void send_players(player@ p, bool to_others = true) {
 }
 
 void send_inventory_to_client(player@ p) {
-    // Enviar cada item do inventário para o cliente
+    // Construir pacote de inventário no formato que o cliente espera:
+    // "setinv item1=qtd\r\nitem2=qtd\r\n..."
     string[] keys = p.inv.get_keys();
-
+    
+    if(keys.length() == 0) {
+        debug_log("  ⚠️ Inventário vazio para " + p.charname);
+        return;
+    }
+    
+    string inv_packet = "setinv ";
     for(uint i = 0; i < keys.length(); i++) {
         string item_name = keys[i];
         int quantidade = 0;
         p.inv.get(item_name, quantidade);
-
-        // Pacote: "inv|item_name|quantidade"
-        send_reliable(p.peer_id, "inv|" + item_name + "|" + quantidade, 0);
+        
+        if(quantidade > 0) {
+            inv_packet += item_name + "=" + quantidade + "\r\n";
+        }
     }
 
+    send_reliable(p.peer_id, inv_packet, 0);
     debug_log("  ✓ Inventário enviado (" + keys.length() + " itens)");
+}
+
+// Envia atualização incremental de um item para o cliente
+// Formato: "inv item=quantidade\r\n"
+void send_item_update_to_client(player@ p, string item_name, int quantidade) {
+    if(@p == null) return;
+    string packet = "inv " + item_name + "=" + quantidade + "\r\n";
+    send_reliable(p.peer_id, packet, 0);
 }
 
 void send_equipment_to_client(player@ p) {

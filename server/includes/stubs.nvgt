@@ -1,48 +1,325 @@
 // stubs.nvgt - Funções temporárias/stub para compilação
-// Estas funções devem ser implementadas completamente mais tarde
+// NOTA: Este arquivo foi limpo em 24/01/2026
+// Funções duplicadas foram removidas pois já existem implementações reais
+// Mantidas apenas funções que AINDA NÃO foram implementadas em outros arquivos
 
-// ✅ IMPLEMENTADO: Sistema de Log de Ações
-// NOTA: A implementação completa com banco de dados está em history.nvgt
-// Esta é uma versão simplificada para quando history.nvgt não está incluído
-void log_action(string player_name, string action_type, string action_details,
-                string map_name = "", int x = 0, int y = 0, int z = 0,
-                string additional_data = "", string affected_player = "", string item_name = "") {
+// ==================== FUNÇÕES DE UPTIME (Únicas aqui) ====================
+// Funções de sistema temporal (uptime do servidor)
+// Baseado no timer global server_uptime (server.nvgt:99)
+int ups() { return int(server_uptime.elapsed / 1000); }  // Segundos
+int upm() { return ups() / 60; }                         // Minutos
+int uph() { return upm() / 60; }                         // Horas
+int upd() { return uph() / 24; }                         // Dias
+int upw() { return upd() / 7; }                          // Semanas
 
-    // Criar mensagem de log formatada
-    string log_msg = "ACTION: [" + player_name + "] " + action_type + " - " + action_details;
+// ==================== FUNÇÕES DE OBJETOS (Únicas aqui) ====================
+// Classe para objetos placeholder
+class obj_placeholder {
+    string map;
+    bool obtainable = true;
+    bool delete = false;
+}
+obj_placeholder@[] objs_placeholder;
 
-    // Adicionar informações de localização se fornecidas
-    if(map_name != "") {
-        log_msg += " @ " + map_name + " (" + x + "," + y + "," + z + ")";
-    }
-
-    // Adicionar jogador afetado se houver
-    if(affected_player != "") {
-        log_msg += " [Target: " + affected_player + "]";
-    }
-
-    // Adicionar item se houver
-    if(item_name != "") {
-        log_msg += " [Item: " + item_name + "]";
-    }
-
-    // Adicionar dados adicionais se houver
-    if(additional_data != "") {
-        log_msg += " [Extra: " + additional_data + "]";
-    }
-
-    // Registrar no debug log
-    debug_log(log_msg);
-
-    // TODO: Quando history.nvgt for reativado, este stub deve ser removido
-    // pois a versão completa salva no banco de dados
+// Função de evento de mensagem
+string get_event_message() {
+    return "";
 }
 
-// ✅ IMPLEMENTADO: Sistema de Estatísticas
-// NOTA: A implementação completa com banco de dados está em history.nvgt
-// Esta é uma versão simplificada em memória para quando history.nvgt não está incluído
+// Timer para objetos
+timer tmina2;
 
-// Variáveis globais de estatísticas (em memória)
+// Funções de update para objetos magnéticos
+void update() {
+    omloop();
+}
+
+void update(string map) {
+    omloop();
+}
+
+void update2() {
+    omloop();
+}
+
+void update2(string map) {
+    omloop();
+}
+
+// ==================== FUNÇÕES DE REDE (Únicas aqui) ====================
+// Função de loop de rede para objetos
+void netloop() {
+    // TODO: Implementar lógica de rede para objetos
+}
+
+// send_unreliable wrapper (NVGT pode usar apenas reliable)
+void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
+    send_reliable(peer_id, packet, channel);
+}
+
+// ==================== FUNÇÕES ADMINISTRATIVAS (Únicas aqui) ====================
+// Array para mensagens administrativas
+string[] msgadm_array;
+
+// Função de mensagem administrativa
+void msgadm(string message) {
+    msgadm_array.push_back(message);
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].admin_status) {
+            send_reliable(players[i].peer_id, "msg [ADM] " + message);
+        }
+    }
+}
+
+// Função de administração
+void eadm(string admin_name, string message, int level) {
+    debug_log("EADM: [" + admin_name + "] " + message);
+}
+
+// Função de log geral (sobrecarga)
+void log(string category, string message) {
+    debug_log(category + ": " + message);
+}
+
+// ==================== FUNÇÕES DE XP (Wrappers para string -> int) ====================
+// NOTA: A implementação principal está em systems_advanced.nvgt (ganhaxp com int)
+// Estas são apenas wrappers para chamadas com nome de jogador (string)
+void ganhaxp(string player_name, int exp_amount, int gold_amount) {
+    int index = get_player_index_from(player_name);
+    if(index >= 0) ganhaxp(index, exp_amount, gold_amount);
+}
+
+void ganhaxp(string player_name, int exp_amount) {
+    ganhaxp(player_name, exp_amount, 0);
+}
+
+// XP dobrado
+void apply_doublexp(string player_name, int amount) {
+    int index = get_player_index_from(player_name);
+    if(index < 0) return;
+    players[index].exp += amount * 2;
+    players[index].xp += amount * 2;
+    check_level_up(index);
+    send_reliable(players[index].peer_id,
+        "msg2 Você ganhou +" + (amount * 2) + " XP (Dobrado)!", 0);
+    debug_log("DOUBLEXP: " + player_name + " ganhou " + (amount * 2) + " XP");
+}
+
+// ==================== FUNÇÕES DE CRÉDITOS/MOEDAS (Únicas aqui) ====================
+// ge() - "give emeralds/credits" - dar créditos ao jogador
+void ge(string playername, double amount) {
+    int index = get_player_index_from(playername);
+    if (index > -1) {
+        players[index].creditos += amount;
+        send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " créditos!", 0);
+        debug_log("GE: " + playername + " recebeu " + amount + " créditos");
+    }
+}
+
+// gc() - "give coins/gold" - dar moedas/gold ao jogador
+void gc(string playername, double amount) {
+    int index = get_player_index_from(playername);
+    if (index > -1) {
+        players[index].inv_add_item("coins", int(amount));
+        send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " moedas!", 0);
+        debug_log("GC: " + playername + " recebeu " + amount + " moedas");
+    }
+}
+
+// save_transfer() - salvar transferência de itens/moeda
+void save_transfer(string origin, string destination, string itemname, string info, double amount) {
+    debug_log("Transfer: " + origin + " -> " + destination + " | " + itemname + " | " + info + " | Amount: " + amount);
+}
+
+// ==================== FUNÇÕES DE NPC (Únicas aqui) ====================
+void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
+void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
+void move(int npc_index, int direction) {}
+bool exists_player_in_my_map(int npc_index) { return false; }
+int select_player_to_attack(int npc_index) { return -1; }
+void change_player(int npc_index) {}
+
+bool exists_player_in_my_map(string map_name) {
+    return false;
+}
+
+// ==================== FUNÇÕES MATEMÁTICAS (Únicas aqui) ====================
+// Função de arredondamento
+double round(double value) {
+    return double(int(value + 0.5));
+}
+
+// Função de split customizada
+string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
+    return str.split(delimiter);
+}
+
+// ==================== FUNÇÕES DE STRING (Únicas aqui) ====================
+// Função trim - remover espaços em branco do início e fim
+string trim(string str) {
+    if(str.length() == 0) return "";
+
+    uint start = 0;
+    while(start < str.length() && (str[start] == ' ' || str[start] == '\t' || str[start] == '\r' || str[start] == '\n')) {
+        start++;
+    }
+
+    if(start == str.length()) return "";
+
+    uint end = str.length() - 1;
+    while(end > start && (str[end] == ' ' || str[end] == '\t' || str[end] == '\r' || str[end] == '\n')) {
+        end--;
+    }
+
+    return str.substr(start, (end - start) + 1);
+}
+
+// ==================== FUNÇÕES DE BOMBA (Únicas aqui) ====================
+// Calcular distância de uma bomba até um jogador
+int get_bomba_distance(maxbomba@ bomb, player@ p) {
+    if(bomb.map != p.map) return -1;
+    int dx = abs(bomb.x - p.x);
+    int dy = abs(bomb.y - p.y);
+    return int(sqrt(double(dx*dx + dy*dy)));
+}
+
+// ==================== FUNÇÕES DE INVENTÁRIO (Únicas aqui) ====================
+// Remover item do inventário do jogador
+bool item_take(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    int current_quantity = players[player_index].inv_item_number(item_name);
+    if(current_quantity < quantity) {
+        debug_log("ITEM_TAKE FALHOU: " + players[player_index].charname + " não tem " + quantity + "x " + item_name + " (tem apenas " + current_quantity + ")");
+        return false;
+    }
+
+    players[player_index].inv_remove_item(item_name, quantity);
+    debug_log("ITEM_TAKE: " + players[player_index].charname + " removeu " + quantity + "x " + item_name);
+    return true;
+}
+
+// Dar item ao jogador
+bool item_give(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    players[player_index].inv_add_item(item_name, quantity);
+    debug_log("ITEM_GIVE: " + players[player_index].charname + " recebeu " + quantity + "x " + item_name);
+    return true;
+}
+
+// ==================== FUNÇÕES DE DESCRIÇÕES (Únicas aqui) ====================
+dictionary location_descriptions;
+dictionary item_descriptions;
+
+void init_descriptions() {
+    item_descriptions.set("soco", "Seus punhos. Dano básico corpo a corpo.");
+    item_descriptions.set("pistola", "Arma de fogo leve. Alcance médio, dano moderado.");
+    item_descriptions.set("m4a1", "Rifle de assalto militar. Alta cadência de tiro.");
+    item_descriptions.set("galil", "Rifle de assalto. Boa precisão e alcance.");
+    item_descriptions.set("mp7", "Submetralhadora compacta. Alta taxa de disparo.");
+    item_descriptions.set("bazuca", "Lançador de mísseis. Dano em área devastador.");
+    item_descriptions.set("espada", "Arma branca corpo a corpo. Dano elevado.");
+    item_descriptions.set("escudo", "Escudo de proteção. Reduz dano recebido.");
+    item_descriptions.set("coins", "Moeda do servidor. Use para comprar itens.");
+    item_descriptions.set("reais", "Moeda alternativa. Valor comercial.");
+    item_descriptions.set("colete_aprova_de_balas", "Colete balístico militar. Proteção: 40%");
+    item_descriptions.set("colete_militar", "Colete tático. Proteção: 35%");
+    item_descriptions.set("capacete_policia", "Capacete policial. Proteção de cabeça: 15%");
+    item_descriptions.set("coturno_militar", "Botas militares reforçadas. Proteção: 20%");
+    item_descriptions.set("kit_medico", "Kit de primeiros socorros. Restaura saúde.");
+    item_descriptions.set("comida", "Alimento básico. Restaura fome.");
+    item_descriptions.set("agua", "Água potável. Restaura sede.");
+    item_descriptions.set("ferro", "Barra de ferro. Material de construção.");
+    item_descriptions.set("madeira", "Tábua de madeira. Material básico.");
+    item_descriptions.set("ouro", "Lingote de ouro. Material valioso.");
+    debug_log("Sistema de descrições inicializado com " + item_descriptions.get_size() + " itens");
+}
+
+string getdesc(string map, int x, int y) {
+    string key = map + "_" + x + "_" + y;
+    string desc = "";
+    if(location_descriptions.get(key, desc)) {
+        return desc;
+    }
+    return "Localização: " + map + " (" + x + ", " + y + ")";
+}
+
+string getdesc(string item_name) {
+    string desc = "";
+    if(item_descriptions.get(item_name, desc)) {
+        return desc;
+    }
+    return "Item: " + item_name;
+}
+
+// ==================== FUNÇÕES DE MODERADOR (Únicas aqui) ====================
+bool is_mod(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) {
+        return false;
+    }
+    return players[player_index].moderador;
+}
+
+// ==================== CLASSES AUXILIARES (Únicas aqui) ====================
+// Classe para zonas de jogo desabilitado
+class game_disabled {
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+
+    game_disabled(int minx, int maxx, int miny, int maxy) {
+        this.min_x = minx;
+        this.max_x = maxx;
+        this.min_y = miny;
+        this.max_y = maxy;
+    }
+}
+
+class game_disabled_data {
+    bool disabled = false;
+    string reason = "";
+}
+game_disabled_data global_game_disabled;
+
+// Funções de configuração do servidor
+class sconfigs_placeholder {
+    int max_players = 100;
+    string server_name = "EVM Server";
+}
+sconfigs_placeholder sconfigs;
+
+// ==================== VARIÁVEIS GLOBAIS (Únicas aqui) ====================
+timer savetimer;
+int enable_double_emeralds = 0;
+int MAX_PLAYERS = 100;
+
+// Função de mudança de nome (placeholder)
+void changename(int player_index, string new_name) {}
+
+// Função de informações do servidor
+bool cmd_server_info(player@ player, string[] args) {
+    string info = "=== SERVIDOR EVM ===\\r\\n";
+    info += "Versão: NVGT Alpha\\r\\n";
+    info += "Jogadores Online: " + connected_count + "/" + MAX_PLAYERS + "\\r\\n";
+    info += "Uptime: " + (server_uptime.elapsed / 1000) + " segundos\\r\\n";
+    send_reliable(player.peer_id, "say " + info);
+    return true;
+}
+
+// Função de helper para propriedade status
+void player_add_status_property() {}
+
+// Função de spawn de fogo do jogador (versão alternativa)
+void spawn_playerfire(int x, int y, string map_name, string owner = "") {
+    // TODO: Implementar spawn_playerfire
+}
+
+// ==================== FUNÇÕES DE HISTORY (Log e Estatísticas) ====================
+// Estas funções complementam ou substituem history.nvgt quando não incluído
+
+// Estatísticas em memória
 int stats_total_logins = 0;
 int stats_total_registrations = 0;
 int stats_total_combats = 0;
@@ -52,8 +329,27 @@ int stats_messages_sent = 0;
 int stats_database_queries = 0;
 int stats_backup_count = 0;
 
+void log_action(string player_name, string action_type, string action_details,
+                string map_name = "", int x = 0, int y = 0, int z = 0,
+                string additional_data = "", string affected_player = "", string item_name = "") {
+    // Criar mensagem de log formatada
+    string log_msg = "ACTION: [" + player_name + "] " + action_type + " - " + action_details;
+    if(map_name != "") {
+        log_msg += " @ " + map_name + " (" + x + "," + y + "," + z + ")";
+    }
+    if(affected_player != "") {
+        log_msg += " [Target: " + affected_player + "]";
+    }
+    if(item_name != "") {
+        log_msg += " [Item: " + item_name + "]";
+    }
+    if(additional_data != "") {
+        log_msg += " [Extra: " + additional_data + "]";
+    }
+    debug_log(log_msg);
+}
+
 void update_statistics(string stat_type, int increment = 1) {
-    // Atualizar contador específico
     if(stat_type == "login") {
         stats_total_logins += increment;
     }
@@ -78,322 +374,65 @@ void update_statistics(string stat_type, int increment = 1) {
     else if(stat_type == "backup") {
         stats_backup_count += increment;
     }
-
-    debug_log("STATS: " + stat_type + " +" + increment + " (Total: " + get_stat_value(stat_type) + ")");
+    debug_log("STATS: " + stat_type + " +" + increment);
 }
 
-// Função auxiliar para obter valor de estatística
-int get_stat_value(string stat_type) {
-    if(stat_type == "login") return stats_total_logins;
-    if(stat_type == "registration") return stats_total_registrations;
-    if(stat_type == "combat") return stats_total_combats;
-    if(stat_type == "item_spawn") return stats_items_spawned;
-    if(stat_type == "item_collect") return stats_items_collected;
-    if(stat_type == "message") return stats_messages_sent;
-    if(stat_type == "database_query") return stats_database_queries;
-    if(stat_type == "backup") return stats_backup_count;
-    return 0;
-}
-
-// Função de relatório de estatísticas (TODO: implementar statistics.nvgt)
 string get_current_statistics_report() {
-    // Stub - apenas para compilação
-    return "Estatísticas ainda não implementadas";
+    string report = "=== ESTATÍSTICAS DO SERVIDOR ===\n";
+    report += "Logins: " + stats_total_logins + "\n";
+    report += "Registros: " + stats_total_registrations + "\n";
+    report += "Combates: " + stats_total_combats + "\n";
+    report += "Itens spawnados: " + stats_items_spawned + "\n";
+    report += "Itens coletados: " + stats_items_collected + "\n";
+    report += "Mensagens: " + stats_messages_sent + "\n";
+    report += "Queries DB: " + stats_database_queries + "\n";
+    report += "Backups: " + stats_backup_count + "\n";
+    return report;
 }
 
-// Função de histórico de ações (TODO: implementar history.nvgt)
-string get_recent_actions(string player, int limit = 10) {
-    // Stub - apenas para compilação
-    return "Histórico ainda não implementado";
+string[] get_recent_actions(int limit = 50, string action_type = "", string player_name = "") {
+    // Retorna array vazio - implementação completa em history.nvgt
+    string[] results;
+    results.push_back("Histórico disponível quando history.nvgt estiver ativo");
+    return results;
 }
 
-// Sobrecarga para diferentes parâmetros
-string[] get_recent_actions(int limit, string category, string player) {
-    // Stub - apenas para compilação
-    string[] result;
-    result.push_back("Histórico ainda não implementado");
-    return result;
-}
+// ==================== FUNÇÕES DE EQUIPE E SELEÇÃO ====================
+// Estas funções são usadas por NPCs e sistemas de combate
 
-// Função de informações do servidor (TODO: implementar)
-bool cmd_server_info(player@ player, string[] args) {
-    string info = "=== SERVIDOR EVM ===\\r\\n";
-    info += "Versão: NVGT Alpha\\r\\n";
-    info += "Jogadores Online: " + connected_count + "/" + MAX_PLAYERS + "\\r\\n";
-    info += "Uptime: " + (server_uptime.elapsed / 1000) + " segundos\\r\\n";
-    send_reliable(player.peer_id, "say " + info);
-    return true;
-}
-
-// ✅ IMPLEMENTADO: Sistema de Mudança de Mapa
-// Baseado nos padrões encontrados em globals.nvgt:310 e admin_commands.nvgt:177
-void changemap(string player_name, string new_map) {
-    // Buscar índice do jogador pelo nome
-    int player_index = get_player_index_from(player_name);
-    if(player_index < 0) {
-        debug_log("CHANGEMAP: Jogador não encontrado: " + player_name);
-        return;
-    }
-
-    // Salvar mapa anterior
-    string old_map = players[player_index].map;
-
-    // Atualizar mapa do jogador
-    players[player_index].map = new_map;
-    players[player_index].map_name = new_map;
-    players[player_index].mapaatual = new_map;
-
-    // Notificar jogador da mudança de mapa
-    send_reliable(players[player_index].peer_id, "msg2 Você foi transportado para: " + new_map, 0);
-
-    // Log de mudança de mapa
-    debug_log("CHANGEMAP: " + player_name + " mudou de " + old_map + " -> " + new_map);
-
-    // Resetar timer de viagem de mapa
-    players[player_index].maptraveltimer.restart();
-}
-
-// ✅ IMPLEMENTADO: Funções de sistema temporal (uptime do servidor)
-// Baseado no timer global server_uptime (server.nvgt:99)
-int ups() { return int(server_uptime.elapsed / 1000); }  // Segundos
-int upm() { return ups() / 60; }                         // Minutos
-int uph() { return upm() / 60; }                         // Horas
-int upd() { return uph() / 24; }                         // Dias
-int upw() { return upd() / 7; }                          // Semanas
-
-// Array para mensagens administrativas (TODO: implementar sistema completo)
-string[] msgadm_array;
-
-// Função de mensagem administrativa (TODO: implementar)
-void msgadm(string message) {
-    // Adicionar à lista de mensagens
-    msgadm_array.push_back(message);
-
-    // Broadcast para administradores
+string selecionar_jogador(string mapa) {
+    string[] nomes;
     for(uint i = 0; i < players.length(); i++) {
-        if(players[i].admin_status) {
-            send_reliable(players[i].peer_id, "msg [ADM] " + message);
+        if(players[i].map == mapa && !players[i].afk && players[i].pacifico != 1) {
+            nomes.insert_last(players[i].charname);
         }
     }
+    if(nomes.length() == 0) return "";
+    return nomes[random(0, nomes.length() - 1)];
 }
 
-// ✅ IMPLEMENTADO: Sistema de Experiência
-void apply_doublexp(string player_name, int amount) {
-    int index = get_player_index_from(player_name);
-    if(index < 0) return;
-
-    // Aplicar XP dobrado
-    players[index].exp += amount * 2;
-    players[index].xp += amount * 2;
-
-    // Verificar level up
-    check_level_up(index);
-
-    // Notificar
-    send_reliable(players[index].peer_id,
-        "msg2 Você ganhou +" + (amount * 2) + " XP (Dobrado)!", 0);
-
-    debug_log("DOUBLEXP: " + player_name + " ganhou " + (amount * 2) + " XP");
-}
-
-// ✅ IMPLEMENTADO: Wrappers de Sistema de Experiência (compatibilidade string → int)
-// NOTA: As implementações completas estão em systems_advanced.nvgt
-// Estas são apenas wrappers para chamadas com nome de jogador (string)
-
-void ganhaxp(string player_name, int exp_amount, int gold_amount) {
-    int index = get_player_index_from(player_name);
-    if(index >= 0) ganhaxp(index, exp_amount, gold_amount);
-}
-
-void ganhaxp(string player_name, int exp_amount) {
-    ganhaxp(player_name, exp_amount, 0);
-}
-
-// ✅ Sistema de Guardacofres
-// NOTA: A implementação completa está em comandos/guardacofre.nvgt
-// Esta classe é necessária aqui para que outros arquivos possam referenciar guardacofres
-
-class guardacofre {
-	int x;
-	int y;
-	uint tiros = 30;
-	int vida = 5000;
-	string golpeado;
-	string map;
-	timer guardacofretimer;
-	timer tempoatirar;
-	int guardacofretime = 500;
-
-	guardacofre(int cx, int cy, string cmap) {
-		x = cx;
-		y = cy;
-		map = cmap;
-	}
-}
-
-// Array global de guardacofres (preenchido em comandos/guardacofre.nvgt)
-guardacofre@[] guardacofres;
-
-// ✅ IMPLEMENTADO: Funções de objetos/itens magnéticos
-// NOTA: A implementação completa está em mine/objmagnet.nvgt
-// Estas são funções wrapper que chamam omloop() (object magnet loop)
-void update() {
-    omloop(); // Loop principal de objetos magnéticos
-}
-
-void update(string map) {
-    // TODO: Implementar filtro por mapa se necessário
-    omloop();
-}
-
-void update2() {
-    omloop();
-}
-
-void update2(string map) {
-    // TODO: Implementar filtro por mapa se necessário
-    omloop();
-}
-
-timer tmina2; // Timer para objetos
-
-// ✅ IMPLEMENTADO: Função de seleção de jogador
-// Seleciona um jogador válido para NPCs atacarem
-// Critério pode ser: nome do mapa, "closest", "weakest", etc.
-string selecionar_jogador(string criteria) {
-    // Se criteria é um mapa, procurar jogador nesse mapa
-    string target_map = criteria;
-
-    // Lista de jogadores válidos
-    string[] valid_players;
-
-    for(uint i = 0; i < players.length(); i++) {
-        // Verificar se jogador é válido para ataque
-        bool is_valid = true;
-
-        // Verificar mapa se critério for um mapa
-        if(target_map != "" && players[i].map != target_map) {
-            is_valid = false;
-        }
-
-        // Jogador em modo pacífico não é alvo
-        if(players[i].pacifico == 1) {
-            is_valid = false;
-        }
-
-        // Jogador em safezone não é alvo
-        if(players[i].insz == true) {
-            is_valid = false;
-        }
-
-        // Jogador AFK não é alvo
-        if(players[i].afk == true) {
-            is_valid = false;
-        }
-
-        // Jogador newbie não é alvo
-        if(players[i].newbie == true) {
-            is_valid = false;
-        }
-
-        if(is_valid) {
-            valid_players.insert_last(players[i].charname);
-        }
-    }
-
-    // Se não há jogadores válidos, retornar vazio
-    if(valid_players.length() == 0) {
-        return "";
-    }
-
-    // Selecionar aleatoriamente entre os jogadores válidos
-    int random_index = random(0, int(valid_players.length()) - 1);
-    return valid_players[random_index];
-}
-
-// ✅ IMPLEMENTADO: Sistema de Verificação de Equipe
-// Verifica se dois jogadores estão na mesma equipe
-bool emequipe(string player1, string player2) {
-    // Buscar índices dos jogadores
-    int idx1 = get_player_index_from(player1);
-    int idx2 = get_player_index_from(player2);
-
-    // Se algum jogador não existe, não estão na mesma equipe
-    if(idx1 < 0 || idx2 < 0) return false;
-
-    // Se nenhum está em equipe, retorna false
-    if(players[idx1].emequipe == 0 || players[idx2].emequipe == 0) {
-        return false;
-    }
-
-    // Verificar se player2 está na lista de equipe do player1
-    if(players[idx1].is_team_member(player2)) {
+bool emequipe(string nome, string alvo) {
+    int n = get_player_index_from(nome);
+    int nb = get_player_index_from(alvo);
+    if(n < 0 || nb < 0) return true;
+    
+    if(players[n].nomesequipe.find(alvo) > -1 || 
+       players[nb].afk == true || 
+       players[nb].pacifico == 1 || 
+       get_safezone_at(players[nb].x, players[nb].y, players[nb].map) == true) {
         return true;
     }
-
-    // Verificar se player1 está na lista de equipe do player2 (double-check)
-    if(players[idx2].is_team_member(player1)) {
-        return true;
-    }
-
     return false;
 }
 
-// Função de arredondamento (NVGT pode não ter round)
-double round(double value) {
-    return double(int(value + 0.5));
-}
-
-// Função de split customizada (corrigir parâmetros)
-string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
-    // Ignorar max_parts por enquanto e usar split padrão
-    return str.split(delimiter);
-}
-
-// Função de loop de rede para objetos (TODO: implementar)
-void netloop() {
-    // Stub - loop de rede para objetos
-    // TODO: Implementar lógica de rede para objetos
-}
-
-// Adicionar propriedade status ao player (temporário)
-void player_add_status_property() {
-    // Esta é uma função helper para lembrar de adicionar a propriedade 'status' à classe player
-    // TODO: Adicionar 'string status' à classe player
-}
-
-// NOTE: Funções de som móvel definidas em moving_sound/msound.nvgt
-
-// NOTE: Funções get_safezone_at, get_zone_at, get_tile_at definidas em outros arquivos
-
-// Função de objetos (TODO: implementar sistema completo)
-class obj_placeholder {
-    string map;
-    bool obtainable = true;
-    bool delete = false;
-}
-obj_placeholder@[] objs_placeholder;
-
-// NOTE: objloop removido - definido em outro lugar
-
-// Função de evento de mensagem (TODO: implementar)
-string get_event_message() {
-    // Stub - retorna string vazia
-    return "";
-}
-// ✅ IMPLEMENTADO: Sistema de Arena
-// NOTA: A implementação completa está em arena.nvgt
-// Classe arena completa com matchmaking, ranking e recompensas
-// Este é apenas um placeholder para compatibilidade com código legado
+// ==================== SISTEMA DE ARENA (Placeholder) ====================
 class arena_placeholder {
     int counter_deaths = 0;
-
+    
     void remove_player_from(int player_index) {
-        // Usar a função global remove_player_from_arena() de arena.nvgt
-        // Esta função precisa do índice da arena também
-        debug_log("ARENA: Chamada legada remove_player_from - use remove_player_from_arena()");
+        debug_log("ARENA: Chamada legada remove_player_from");
     }
-
+    
     void reset() {
         counter_deaths = 0;
         debug_log("ARENA: Arena resetada (placeholder)");
@@ -401,12 +440,7 @@ class arena_placeholder {
 }
 arena_placeholder arena_global;
 
-// ==================== FUNÇÕES ADICIONADAS PARA COMPILAÇÃO ====================
-
-// ✅ Sistema de Roupas: Implementado completamente em clothing.nvgt
-// A função has_clothe() agora está em clothing.nvgt
-
-// Classe temporária para compatibilidade com código legado
+// ==================== SISTEMA DE ROUPAS (Placeholder) ====================
 class clothes_data {
     string name = "";
     int protection = 0;
@@ -415,301 +449,4 @@ class clothes_data {
 }
 clothes_data@[] clothes;
 
-// ✅ IMPLEMENTADO: Sistema de Fogo Contínuo (Player Fire)
-// Cria fogo que causa dano contínuo ao jogador
-void spawn_playerfire(int x, int y, string map, int owner_index, int damage, int duration) {
-	// Verificar se há jogadores na posição
-	for(uint i = 0; i < players.length(); i++) {
-		// Verificar se jogador está na posição do fogo
-		if(players[i].x == x && players[i].y == y && players[i].map == map) {
-			// Verificar se jogador já não está pegando fogo
-			bool already_burning = false;
-			for(uint j = 0; j < players[i].playerfires.length(); j++) {
-				if(players[i].playerfires[j].x == x && players[i].playerfires[j].y == y) {
-					already_burning = true;
-					break;
-				}
-			}
-			
-			if(!already_burning) {
-				// Criar novo playerfire
-				playerfire pf;
-				pf.x = x;
-				pf.y = y;
-				pf.map = map;
-				pf.owner = owner_index;
-				pf.damage = damage;
-				pf.duration = duration;
-				pf.t.restart();
-				pf.tt.restart();
-				
-				// Adicionar ao array do jogador
-				players[i].playerfires.insert_last(pf);
-				
-				// Notificar jogador
-				send_reliable(players[i].peer_id, "msg2 Você está pegando fogo! Use antídoto!", 0);
-				
-				// Som de fogo
-				int mapindex = get_map_index_from(map);
-				if(mapindex >= 0) {
-					server_maps[mapindex].send_packet(0, "play fire_start.ogg " + x + " " + y, x, y);
-				}
-				
-				debug_log("PLAYERFIRE: Jogador " + players[i].charname + " pegou fogo em " + x + "," + y);
-			}
-			break;
-		}
-	}
-}
-
-// Funções globais de NPC
-void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
-void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
-void move(int npc_index, int direction) {}
-bool exists_player_in_my_map(int npc_index) { return false; }
-int select_player_to_attack(int npc_index) { return -1; }
-void change_player(int npc_index) {}
-
-// Timers globais faltantes
-timer savetimer;
-
-// Variável global para créditos dobrados
-int enable_double_emeralds = 0;
-
-// Funções de sistema de jogadores
-void changename(int player_index, string new_name) {}
-
-// ✅ IMPLEMENTADO: Função ge() - "give emeralds/credits" - dar créditos ao jogador
-void ge(string playername, double amount) {
-	int index = get_player_index_from(playername);
-	if (index > -1) {
-		players[index].creditos += amount;
-		send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " créditos!", 0);
-		debug_log("GE: " + playername + " recebeu " + amount + " créditos");
-	}
-}
-
-// ✅ IMPLEMENTADO: Função gc() - "give coins/gold" - dar moedas/gold ao jogador
-void gc(string playername, double amount) {
-	int index = get_player_index_from(playername);
-	if (index > -1) {
-		// Assumindo que 'coins' é o nome do item de moeda
-		players[index].inv_add_item("coins", int(amount));
-		send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " moedas!", 0);
-		debug_log("GC: " + playername + " recebeu " + amount + " moedas");
-	}
-}
-
-// Função save_transfer() - salvar transferência de itens/moeda
-void save_transfer(string origin, string destination, string itemname, string info, double amount) {
-	// TODO: Implementar log de transferências
-	debug_log("Transfer: " + origin + " -> " + destination + " | " + itemname + " | " + info + " | Amount: " + amount);
-}
-
-// ✅ IMPLEMENTADO: Sistema de Descrições de Localizações e Itens
-dictionary location_descriptions;  // Descrições de lugares no mapa
-dictionary item_descriptions;      // Descrições de itens
-
-// Inicializar descrições padrão
-void init_descriptions() {
-    // Descrições de itens comuns
-    item_descriptions.set("soco", "Seus punhos. Dano básico corpo a corpo.");
-    item_descriptions.set("pistola", "Arma de fogo leve. Alcance médio, dano moderado.");
-    item_descriptions.set("m4a1", "Rifle de assalto militar. Alta cadência de tiro.");
-    item_descriptions.set("galil", "Rifle de assalto. Boa precisão e alcance.");
-    item_descriptions.set("mp7", "Submetralhadora compacta. Alta taxa de disparo.");
-    item_descriptions.set("bazuca", "Lançador de mísseis. Dano em área devastador.");
-    item_descriptions.set("espada", "Arma branca corpo a corpo. Dano elevado.");
-    item_descriptions.set("escudo", "Escudo de proteção. Reduz dano recebido.");
-    item_descriptions.set("coins", "Moeda do servidor. Use para comprar itens.");
-    item_descriptions.set("reais", "Moeda alternativa. Valor comercial.");
-
-    // Armaduras e roupas
-    item_descriptions.set("colete_aprova_de_balas", "Colete balístico militar. Proteção: 40%");
-    item_descriptions.set("colete_militar", "Colete tático. Proteção: 35%");
-    item_descriptions.set("capacete_policia", "Capacete policial. Proteção de cabeça: 15%");
-    item_descriptions.set("coturno_militar", "Botas militares reforçadas. Proteção: 20%");
-
-    // Consumíveis
-    item_descriptions.set("kit_medico", "Kit de primeiros socorros. Restaura saúde.");
-    item_descriptions.set("comida", "Alimento básico. Restaura fome.");
-    item_descriptions.set("agua", "Água potável. Restaura sede.");
-
-    // Materiais de crafting
-    item_descriptions.set("ferro", "Barra de ferro. Material de construção.");
-    item_descriptions.set("madeira", "Tábua de madeira. Material básico.");
-    item_descriptions.set("ouro", "Lingote de ouro. Material valioso.");
-
-    debug_log("Sistema de descrições inicializado com " + item_descriptions.get_size() + " itens");
-}
-
-// Obter descrição de uma localização no mapa
-string getdesc(string map, int x, int y) {
-    string key = map + "_" + x + "_" + y;
-    string desc = "";
-
-    if(location_descriptions.get(key, desc)) {
-        return desc;
-    }
-
-    // Descrição padrão se não houver específica
-    return "Localização: " + map + " (" + x + ", " + y + ")";
-}
-
-// Função de administração
-void eadm(string admin_name, string message, int level) {
-    debug_log("EADM: [" + admin_name + "] " + message);
-}
-
-// Função de log geral (sobrecarga)
-void log(string category, string message) {
-    debug_log(category + ": " + message);
-}
-
-// ✅ IMPLEMENTADO: Função is_mod - Verifica se jogador é moderador
-bool is_mod(int player_index) {
-    if(player_index < 0 || player_index >= int(players.length())) {
-        return false;
-    }
-    return players[player_index].moderador;
-}
-
-// Classe para zonas de jogo desabilitado (similar a safezone)
-class game_disabled {
-    int min_x;
-    int max_x;
-    int min_y;
-    int max_y;
-
-    game_disabled(int minx, int maxx, int miny, int maxy) {
-        this.min_x = minx;
-        this.max_x = maxx;
-        this.min_y = miny;
-        this.max_y = maxy;
-    }
-}
-
-// Variável de jogo desabilitado (global)
-class game_disabled_data {
-    bool disabled = false;
-    string reason = "";
-}
-game_disabled_data global_game_disabled;
-
-// Funções de configuração do servidor
-class sconfigs_placeholder {
-    int max_players = 100;
-    string server_name = "EVM Server";
-}
-sconfigs_placeholder sconfigs;
-
-// NOTA: Funções ge() e gc() de "give emeralds/coins" estão implementadas acima (linhas 437-456)
-// As versões que retornam string foram removidas pois não são usadas
-
-// NOTA: Classes mina e bullet já existem em minaouro.nvgt e bullet.nvgt
-
-// send_unreliable wrapper (se NVGT não tiver nativo)
-void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
-    send_reliable(peer_id, packet, channel);
-}
-
-// Funções faltando - stubs temporários
-void spawn_playerfire(int x, int y, string map_name, string owner = "") {
-    // TODO: Implementar spawn_playerfire
-}
-
-bool exists_player_in_my_map(string map_name) {
-    // TODO: Implementar verificação de jogadores no mapa
-    return false;
-}
-
-// Obter descrição de um item
-string getdesc(string item_name) {
-    string desc = "";
-
-    if(item_descriptions.get(item_name, desc)) {
-        return desc;
-    }
-
-    // Descrição padrão se item não tiver descrição cadastrada
-    return "Item: " + item_name;
-}
-
-// NOTA: Removido - gc() agora só tem versão void gc(string playername, double amount)
-
-// ==================== FUNÇÕES DE STRING ====================
-
-// Função trim - remover espaços em branco do início e fim
-string trim(string str) {
-    if(str.length() == 0) return "";
-
-    // Encontrar primeiro caractere não-espaço
-    uint start = 0;
-    while(start < str.length() && (str[start] == ' ' || str[start] == '\t' || str[start] == '\r' || str[start] == '\n')) {
-        start++;
-    }
-
-    // Se só tem espaços
-    if(start == str.length()) return "";
-
-    // Encontrar último caractere não-espaço
-    uint end = str.length() - 1;
-    while(end > start && (str[end] == ' ' || str[end] == '\t' || str[end] == '\r' || str[end] == '\n')) {
-        end--;
-    }
-
-    return str.substr(start, (end - start) + 1);
-}
-
-// ==================== VARIÁVEIS GLOBAIS MODIFICÁVEIS ====================
-
-// Variáveis configuráveis do servidor (não-const para permitir reload)
-int MAX_PLAYERS = 100;
-// AUTOSAVE_INTERVAL já está definido em globals.nvgt
-
-// NOTE: disabled_zones e init_disabled_zones já definidos em systems_advanced.nvgt
-
-// ==================== FUNÇÕES DE BOMBA ====================
-
-// Calcular distância de uma bomba até um jogador
-int get_bomba_distance(maxbomba@ bomb, player@ p) {
-    if(bomb.map != p.map) return -1;
-
-    int dx = abs(bomb.x - p.x);
-    int dy = abs(bomb.y - p.y);
-
-    return int(sqrt(double(dx*dx + dy*dy)));
-}
-
-// ==================== ✅ FUNÇÕES DE INVENTÁRIO IMPLEMENTADAS ====================
-
-// ✅ IMPLEMENTADO: Remover item do inventário do jogador
-bool item_take(int player_index, string item_name, int quantity) {
-    if(player_index < 0 || player_index >= int(players.length())) return false;
-
-    // Verificar se o jogador tem a quantidade necessária
-    int current_quantity = players[player_index].inv_item_number(item_name);
-    if(current_quantity < quantity) {
-        debug_log("ITEM_TAKE FALHOU: " + players[player_index].charname + " não tem " + quantity + "x " + item_name + " (tem apenas " + current_quantity + ")");
-        return false;
-    }
-
-    // Remover item usando o sistema de inventário do player
-    players[player_index].inv_remove_item(item_name, quantity);
-
-    debug_log("ITEM_TAKE: " + players[player_index].charname + " removeu " + quantity + "x " + item_name);
-    return true;
-}
-
-// ✅ IMPLEMENTADO: Dar item ao jogador
-bool item_give(int player_index, string item_name, int quantity) {
-    if(player_index < 0 || player_index >= int(players.length())) return false;
-
-    // Adicionar item usando o sistema de inventário do player
-    players[player_index].inv_add_item(item_name, quantity);
-
-    debug_log("ITEM_GIVE: " + players[player_index].charname + " recebeu " + quantity + "x " + item_name);
-    return true;
-}
-
-
+// ==================== FIM DO ARQUIVO ====================

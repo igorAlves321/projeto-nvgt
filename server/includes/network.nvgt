@@ -1,6 +1,24 @@
 // Sistema de rede do servidor NVGT - CORRIGIDO
 // Usando APIs nativas NVGT para networking
 
+#include "client_tracker.nvgt"  // ✅ Sistema de Rate Limiting (Anti-Flood)
+
+// ============================================================================
+// CANAIS DE REDE (ENet Channels) - Deve ser igual ao cliente
+// ============================================================================
+enum NetChannel {
+    CH_DEFAULT = 0,     // Canal padrão para mensagens gerais
+    CH_CHAT = 1,        // Canal de chat (confiável)
+    CH_MOVE = 2,        // Canal de movimento (pode perder pacotes)
+    CH_SYSTEM = 3,      // Canal de sistema (login, logout, etc)
+    CH_ACTION = 4,      // Canal de ações (ataques, uso de itens)
+    CH_AUDIO = 5,       // Canal de áudio (sincronização de sons)
+    CH_ADMIN = 6,       // Canal administrativo
+    CH_SYNC = 7         // Canal de sincronização de estado
+}
+
+const int NET_CHANNEL_COUNT = 8;
+
 // Instância global do servidor de rede
 network server_net;
 uint64[] connected_peers;
@@ -46,9 +64,9 @@ net_handler net;
 bool server_init(int port) {
     debug_log("Inicializando servidor na porta " + port);
     debug_log("MAX_PLAYERS: " + MAX_PLAYERS);
-    debug_log("MAX_CHANNELS: 1");
+    debug_log("MAX_CHANNELS: 20");
 
-    if(!server_net.setup_server(port, MAX_PLAYERS, 1)) { // port, max_peers, max_channels
+    if(!server_net.setup_server(port, MAX_PLAYERS, 20)) { // port, max_peers, max_channels (0-16+ como no BGT)
         debug_log("ERRO: Não foi possível inicializar servidor na porta " + port);
         debug_log("POSSÍVEIS CAUSAS:");
         debug_log("1. Outra instância do servidor já está rodando");
@@ -174,4 +192,122 @@ string get_peer_name(uint64 peer_id) {
         return string(peer_names[peer_key]);
     }
     return "";
+}
+
+// ===== SISTEMA DE DETECÇÃO DE JOGADORES FANTASMA =====
+// Detecta jogadores que perderam conexão mas não desconectaram corretamente
+const int GHOST_TIMEOUT = 30000;  // 30 segundos sem atividade = fantasma
+timer ghost_check_timer;
+
+// Função para verificar e remover jogadores fantasma
+// Deve ser chamada periodicamente no loop principal do servidor
+void check_ghost_players() {
+    // Verificar a cada 5 segundos (não precisa ser mais frequente)
+    if(ghost_check_timer.elapsed < 5000) return;
+    ghost_check_timer.restart();
+    
+    // Iterar players de trás pra frente (para permitir remoção segura)
+    for(int i = int(players.length()) - 1; i >= 0; i--) {
+        if(players[i].last_activity.elapsed > GHOST_TIMEOUT) {
+            debug_log("👻 Jogador fantasma detectado: " + players[i].charname + 
+                      " (inativo há " + (players[i].last_activity.elapsed / 1000) + "s)");
+            
+            // Enviar mensagem de kick (se ainda tiver conexão)
+            send_reliable(players[i].peer_id, "say Você foi desconectado por inatividade.", 0);
+            
+            // Desconectar forçadamente
+            server_net.disconnect_peer_forcefully(players[i].peer_id);
+            
+            // Remover da lista de peers conectados
+            remove_connected_peer(players[i].peer_id);
+            
+            debug_log("✅ Jogador " + players[i].charname + " removido (fantasma)");
+        }
+    }
+}
+
+// ===== ANTI-CHEAT: VALIDAÇÃO DE MOVIMENTO =====
+
+/**
+ * Valida movimento do jogador contra speed hack e teleporte
+ * @param p Referência ao jogador
+ * @param new_x Nova posição X
+ * @param new_y Nova posição Y
+ * @return true se movimento é válido, false se é suspeito
+ */
+bool validate_movement(player@ p, int new_x, int new_y) {
+    if(p is null) return false;
+    
+    // Primeira movimentação ou reset - aceitar e inicializar
+    if(p.last_move_time.elapsed == 0 || (p.last_valid_x == 0 && p.last_valid_y == 0)) {
+        p.last_valid_x = new_x;
+        p.last_valid_y = new_y;
+        p.last_move_time.restart();
+        return true;
+    }
+    
+    // Calcular distância (Manhattan para simplificar, ou Euclidiana)
+    int dx = absolute(new_x - p.last_valid_x);
+    int dy = absolute(new_y - p.last_valid_y);
+    double distance = sqrt(double(dx * dx + dy * dy));
+    
+    // HARD CAP: Teleporte instantâneo proibido
+    if(distance > p.HARD_CAP_DISTANCE) {
+        p.violation_count += 3;  // Violação grave
+        debug_log("🚨 TELEPORTE detectado! " + p.charname + ": " + 
+                  p.last_valid_x + "," + p.last_valid_y + " → " + new_x + "," + new_y + 
+                  " (dist=" + distance + ")");
+        
+        // Forçar correção imediata
+        return false;
+    }
+    
+    // Calcular velocidade: tiles por segundo
+    double time_diff = p.last_move_time.elapsed / 1000.0;  // Converter para segundos
+    if(time_diff <= 0.001) time_diff = 0.001;  // Evitar divisão por zero
+    
+    double speed = distance / time_diff;
+    double allowed_speed = p.MAX_WALK_SPEED * p.SPEED_TOLERANCE;
+    
+    // Verificar se velocidade excede o permitido (ignorar micro-movimentos)
+    if(speed > allowed_speed && distance > 2.0) {
+        p.violation_count++;
+        debug_log("⚠️ Speedhack? " + p.charname + ": vel=" + speed + 
+                  " tiles/s (max=" + allowed_speed + "), violações=" + p.violation_count);
+        
+        // Se atingiu max violações, rejeitar movimento
+        if(p.violation_count >= p.MAX_VIOLATIONS) {
+            debug_log("🚫 CHEAT confirmado! Corrigindo posição de " + p.charname);
+            return false;
+        }
+        
+        // Ainda abaixo do limite, aceitar mas monitorar
+    } else {
+        // Movimento válido - reduzir violações lentamente
+        if(p.violation_count > 0) {
+            p.violation_count--;
+        }
+    }
+    
+    // Atualizar última posição válida
+    p.last_valid_x = new_x;
+    p.last_valid_y = new_y;
+    p.last_move_time.restart();
+    
+    return true;
+}
+
+/**
+ * Envia correção de posição para o cliente
+ * Usado quando movimento inválido é detectado
+ */
+void send_position_correction(player@ p) {
+    if(p is null) return;
+    
+    // Forçar cliente a voltar para posição válida
+    send_reliable(p.peer_id, "teleport " + p.last_valid_x + " " + p.last_valid_y, 0);
+    debug_log("📍 Correção enviada para " + p.charname + ": " + p.last_valid_x + "," + p.last_valid_y);
+    
+    // Resetar contador após correção
+    p.violation_count = 0;
 }

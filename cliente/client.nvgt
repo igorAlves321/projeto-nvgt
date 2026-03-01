@@ -4,17 +4,17 @@
 // Includes principais do NVGT
 // Cliente NVGT 100% nativo - sem dependências BGT
 #include "../config.nvgt"
-#include "../include/instance.nvgt"
+#include "../docks/include/instance.nvgt"
 
 // Includes do cliente - globals DEVE vir antes do sound_pool para get_sound_path()
 #include"includes/globals.nvgt"
 #include"includes/localization.nvgt"    // ✅ Task 3.4: Sistema de Localização I18N
 
 // Agora podemos incluir sound_pool que usará get_sound_path()
-#include "../include/sound_pool.nvgt"
-#include "../include/speech.nvgt"
-#include "../include/form.nvgt"
-#include "../include/input_forms.nvgt"
+#include "../docks/include/sound_pool.nvgt"
+#include "../docks/include/speech.nvgt"
+#include "../docks/include/form.nvgt"
+#include "../docks/include/input_forms.nvgt"
 
 // Resto dos includes do cliente (na ordem correta para resolver dependências)
 #include"includes/add.nvgt"
@@ -29,6 +29,7 @@
 #include"includes/inv.nvgt"             // Sistema de inventário
 #include"includes/qol.nvgt"             // ✅ Task 3.3: Sistema QoL (Frases Rápidas + Tradução)
 #include"includes/voice_chat.nvgt"      // ✅ Task 1.6.1: Sistema de Voice Chat com HRTF
+#include"includes/moving_sounds.nvgt"   // Sistema de sons móveis 3D
 #include"includes/clima.nvgt"
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
@@ -47,8 +48,8 @@
 #include"includes/wine.nvgt"
 #include"includes/stubs.nvgt"           // Stubs vêm antes de comandos
 #include"includes/comandos.nvgt"        // Comandos usam funções dos stubs
-#include "../include/menu.nvgt"         // Biblioteca de menu
-#include"includes/menu.nvgt"            // Menu do cliente (deve vir por último - usa tudo)
+#include"includes/adminmenu.nvgt"       // Menu administrativo (F9)
+#include"includes/menu.nvgt"            // Menu do cliente (já inclui ../include/menu.nvgt)
 
 // Variáveis de versão movidas para evitar conflitos
 // gversion, ver e serverport serão declaradas em globals.nvgt
@@ -223,34 +224,28 @@ void main(){
 	instance fd(EXECUTABLE_NAME);
 	debug_log("✓ Verificação de instância concluída");
 	
+	// Inicializar sistema de localização I18N (Necessário para mensagens de erro abaixo)
+	init_localization_system();
+	debug_log("✅ Sistema de localização I18N inicializado (Early Init)");
+
 	// Verificar se SOUND_STORAGE existe (pode ser pasta ou arquivo)
 	bool tem_pasta_sounds = directory_exists(SOUND_STORAGE);
 	bool tem_arquivo_dat = file_exists(SOUND_STORAGE);
 	
 	if(!tem_pasta_sounds && !tem_arquivo_dat) {
-		// Mensagem amigável informando como resolver
-		string mensagem = "📢 SONS NÃO ENCONTRADOS!\n\n";
-		mensagem += "O jogo precisa dos arquivos de som para funcionar.\n\n";
-		mensagem += "❌ Faltando: " + SOUND_STORAGE + "\n";
-		mensagem += "   Localização: pasta do jogo\\" + SOUND_STORAGE + "\n\n";
-		mensagem += "✅ Como resolver:\n\n";
+		// Mensagem amigável informando como resolver (LOCALIZADO)
+		string mensagem = LF("STARTUP_NO_SOUNDS_HEADER", SOUND_STORAGE);
 		
 		if(SOUND_STORAGE == "sounds") {
-			mensagem += "OPÇÃO 1 (Recomendada):\n";
-			mensagem += "  • Crie uma pasta chamada 'sounds'\n";
-			mensagem += "  • Adicione os arquivos .ogg dentro dela\n\n";
-			mensagem += "OPÇÃO 2:\n";
-			mensagem += "  • Use o arquivo sounds.dat do jogo original BGT\n";
-			mensagem += "  • Altere config.nvgt: SOUND_STORAGE=\"sounds.dat\"\n";
+			mensagem += L("STARTUP_NO_SOUNDS_OPT1");
 		} else {
-			mensagem += "  • Obtenha o arquivo " + SOUND_STORAGE + "\n";
-			mensagem += "  • Coloque na pasta do jogo\n";
+			mensagem += LF("STARTUP_NO_SOUNDS_OPT2", SOUND_STORAGE);
 		}
 		
-		mensagem += "\n⚠️ Após adicionar os sons, execute o jogo novamente.";
+		mensagem += L("STARTUP_NO_SOUNDS_FOOTER");
 		
-		alert("Sem Sons - Não é Possível Iniciar", mensagem);
-		speak("Sons não encontrados. Verifique a mensagem na tela.");
+		alert(L("STARTUP_NO_SOUNDS_TITLE"), mensagem);
+		speak(L("STARTUP_SPEAK_NO_SOUNDS"));
 		exit();
 	}
 	
@@ -266,7 +261,7 @@ void main(){
 		debug_log("🔧 Tentando abrir pack: " + SOUND_STORAGE);
 		if(!global_sound_pack.open(SOUND_STORAGE, PACK_OPEN_MODE_READ)) {
 			debug_log("❌ ERRO: Falha ao abrir " + SOUND_STORAGE);
-			alert("Erro Fatal", "Não foi possível abrir o arquivo de sons: " + SOUND_STORAGE + "\n\nO jogo será encerrado.");
+			alert(L("STARTUP_SOUND_ERROR_TITLE"), LF("STARTUP_SOUND_ERROR_MSG", SOUND_STORAGE));
 			exit();
 		}
 		debug_log("✅ Pack aberto com sucesso!");
@@ -289,7 +284,7 @@ void main(){
 		set_sound_decryption_key(SOUND_ENCRYPTION_KEY, false);
 	}
 	
-	init_bass();
+	// Áudio inicializado automaticamente pelo NVGT
 	
 	// Configurar todos os sound_pools com o pack (igual Batalha Constante)
 	configure_sound_pools();
@@ -309,13 +304,16 @@ void main(){
 	init_weapon_favorites();
 	debug_log("✅ Sistema de favoritos de armas inicializado");
 	
-	// Inicializar sistema de localização I18N
-	init_localization_system();
-	debug_log("✅ Sistema de localização I18N inicializado");
+	// Inicializar sistema de localização I18N (Já inicializado no início de main)
+	// init_localization_system();
 
 	// Inicializar sistema de voice chat
 	init_voice_chat();
 	debug_log("✅ Sistema de voice chat inicializado (HRTF ativo)");
+
+	// Inicializar sistema de moving sounds V2
+	init_moving_sounds();
+	debug_log("✅ Sistema de moving sounds V2 inicializado");
 
 	p.max_distance=30;
 	bool achou=false;
@@ -507,14 +505,14 @@ void main(){
 			pu.set_arquivo(cmfinal);
 		}
 	}
-	updatemus.stream("upmus.ogg");
-	updatefound.stream("up_found.ogg");
+	updatemus.load(get_sound_path("upmus.ogg"));
+	updatefound.load(get_sound_path("up_found.ogg"));
 	updatefound.volume=-15;
-	updatedone.stream("updated.ogg");
-	carregandotaser.stream("eletricidade.ogg");
-	chuvalivre.stream("telhado.ogg");
+	updatedone.load(get_sound_path("updated.ogg"));
+	carregandotaser.load(get_sound_path("eletricidade.ogg"));
+	chuvalivre.load(get_sound_path("telhado.ogg"));
 	chuvalivre.volume=-100;
-	chuvalivre.stream("rain4.ogg");
+	chuvalivre.load(get_sound_path("rain4.ogg"));
 	chuvalivre.volume=-100;
 	mapname="";
 	wine_ask(wineask);
@@ -560,10 +558,6 @@ void game(){
 	moveable = true;
 	debug_log("✅ Estados de física resetados");
 	
-	// ===== INICIALIZAÇÃO DO SISTEMA DE CHAT =====
-	chat_initialize();
-	debug_log("✅ Sistema de chat inicializado");
-	
 	// ===== COMANDOS DE CONFIGURAÇÃO (AGORA IMPLEMENTADOS NO SERVIDOR) =====
 	send_reliable(peer_id, "setvoice "+voice, 0);
 	if(ouvirhits==0) send_reliable(peer_id, "hits", 0);
@@ -602,25 +596,39 @@ void game(){
 		// ===== CRITICAL: Update ALL sound pools =====
 		// Sem isso, áudio posicional NÃO funciona!
 		// Cada pool precisa saber onde o jogador (listener) está
-		p.update_listener_2d(me.x, me.y, facing);
-		p2.update_listener_2d(me.x, me.y, facing);
-		game_p.update_listener_2d(me.x, me.y, facing);
-		pobjs.update_listener_2d(me.x, me.y, facing);
-		ambientepool.update_listener_2d(me.x, me.y, facing);
-		sourcepool.update_listener_2d(me.x, me.y, facing);  // Sons ss: do mapa
-		audio.update_listener_2d(me.x, me.y, facing);
-		steps.update_listener_2d(me.x, me.y, facing);
-		shoot.update_listener_2d(me.x, me.y, facing);
-		bodys.update_listener_2d(me.x, me.y, facing);
-		walls.update_listener_2d(me.x, me.y, facing);
-		doors_sound.update_listener_2d(me.x, me.y, facing);
-		npcs.update_listener_2d(me.x, me.y, facing);
-		pl.update_listener_2d(me.x, me.y, facing);
+		// ✅ CORREÇÃO: Usar me.yaw (graus 0-360) em vez de facing (índice 0-3)
+		// O parâmetro rotation de update_listener_2d espera graus, não índice de direção
+		p.update_listener_2d(me.x, me.y, me.yaw);
+		p2.update_listener_2d(me.x, me.y, me.yaw);
+		game_p.update_listener_2d(me.x, me.y, me.yaw);
+		pobjs.update_listener_2d(me.x, me.y, me.yaw);
+		ambientepool.update_listener_2d(me.x, me.y, me.yaw);
+		sourcepool.update_listener_2d(me.x, me.y, me.yaw);  // Sons ss: do mapa
+		audio.update_listener_2d(me.x, me.y, me.yaw);
+		steps.update_listener_2d(me.x, me.y, me.yaw);
+		shoot.update_listener_2d(me.x, me.y, me.yaw);
+		bodys.update_listener_2d(me.x, me.y, me.yaw);
+		walls.update_listener_2d(me.x, me.y, me.yaw);
+		doors_sound.update_listener_2d(me.x, me.y, me.yaw);
+		npcs.update_listener_2d(me.x, me.y, me.yaw);
+		pl.update_listener_2d(me.x, me.y, me.yaw);
 		// ===== END sound pool update =====
 
 		// ===== VOICE CHAT UPDATE =====
 		// Atualiza gravador (PTT) e player (cleanup de sons finalizados)
 		update_voice_chat();
+
+		// ===== MOVING SOUNDS UPDATE =====
+		// Atualiza áudio posicional de sons móveis (helicópteros, veículos, etc)
+		moving_sounds_loop();
+
+		// ===== HEARTBEAT AUTOMÁTICO =====
+		// Envia pacote silencioso a cada 5 segundos para manter conexão ativa
+		// Permite ao servidor detectar jogadores fantasma (inativos > 30s)
+		if(heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
+			heartbeat_timer.restart();
+			send_unreliable(peer_id, "heartbeat", 0);
+		}
 
 		loop_count++;
 		if(loop_count % 100 == 0) {
@@ -677,6 +685,25 @@ void game(){
 			debug_log("🎮 [MOVE DEBUG] moveable=" + moveable + " walktimer.elapsed=" + walktimer.elapsed + " walktime=" + walktime);
 			debug_log("🎮 [MOVE DEBUG] centado=" + centado + " mapname=" + mapname + " jumping=" + jumping);
 			debug_log("🎮 [MOVE DEBUG] platforms.length=" + platforms.length());
+		}
+		
+		// ===== SISTEMA DE VELOCIDADE - CORRER COM ALT =====
+		// ALT (KEY_LMENU ou KEY_RMENU) = correr (velocidade maior)
+		// Baseado no código original do BGT (Projeto Ig.bgt linha 969)
+		if(key_down(KEY_LMENU) && !jumping && crouched == 0 && bicicleta == 0 && camion == 0) {
+			walktime = runvelocidade;  // 140ms entre passos (mais rápido)
+		}
+		else if(jumping) {
+			walktime = jumpvelocidade;  // 100ms durante salto
+		}
+		else if(bicicleta == 1 && bicicletaativa == 1) {
+			walktime = bicicletaveloc;  // Velocidade da bicicleta
+		}
+		else if(camion == 1 && camionativo == 1) {
+			walktime = camionveloc;  // Velocidade do caminhão
+		}
+		else {
+			walktime = walkvelocidade;  // 200ms normal
 		}
 		
 		if(key_up(KEY_G) && key_up(KEY_RSHIFT) && key_up(KEY_LSHIFT) && !key_down(KEY_F)) {
@@ -897,6 +924,18 @@ void game(){
 			netloop(); // Processa todos os eventos de rede (movimentos, itens, jogadores, etc)
 		}
 		
+		// ===== 🆕 TECLAS QUE FUNCIONAM MESMO EM MODO AUSENTE =====
+		// Shift+F1 (AFK) e Shift+F2 (Pacífico) precisam funcionar SEMPRE
+		// para permitir sair do modo ausente
+		if(shift_pressionado()) {
+			if(key_pressed(KEY_F1)) {
+				send_reliable(peer_id, "/afk", 0);
+			}
+			if(key_pressed(KEY_F2)) {
+				send_reliable(peer_id, "/pacifista", 0);
+			}
+		}
+		
 		// ===== TECLAS PRINCIPAIS DO JOGO (F1-F8, ATALHOS, ETC) =====
 		// Esta é a "ponte" que ativa todos os comandos de gameplay
 		// CORREÇÃO: Chamar tprincipais() sempre que não estiver ausente,
@@ -954,20 +993,46 @@ void game(){
 			return; // Sai da função game()
 		}
 		
-		// Verificar se precisa reconectar (relogin_flag)
-		if(relogin_flag) {
-			debug_log("🔄 Relogin flag ativo - tentando reconectar...");
+		// ===== SISTEMA DE RECONEXÃO COM BACKOFF EXPONENCIAL =====
+		// Quando relogin_flag é ativado, inicia espera com timer
+		if(relogin_flag && !waiting_to_reconnect) {
+			waiting_to_reconnect = true;
+			reconnect_timer.restart();
+			reconnect_attempts++;
+			
+			// Calcular delay com backoff exponencial: 1s, 2s, 4s, 8s, 16s, 30s (máximo)
+			reconnect_delay = MIN_RECONNECT_DELAY;
+			for(int i = 1; i < reconnect_attempts && reconnect_delay < MAX_RECONNECT_DELAY; i++) {
+				reconnect_delay = reconnect_delay * 2;
+			}
+			if(reconnect_delay > MAX_RECONNECT_DELAY) {
+				reconnect_delay = MAX_RECONNECT_DELAY;
+			}
+			
+			speak("Reconectando em " + (reconnect_delay / 1000) + " segundos... (tentativa " + reconnect_attempts + ")");
+			debug_log("🔄 Backoff: tentativa " + reconnect_attempts + ", delay " + reconnect_delay + "ms");
+		}
+		
+		// Quando o timer expira, tenta reconectar
+		if(waiting_to_reconnect && reconnect_timer.elapsed >= reconnect_delay) {
+			waiting_to_reconnect = false;
 			relogin_flag = false;
+			debug_log("🔄 Tentando reconectar agora...");
 			reset();
-			speak(pu.get_value("Reconectando ao servidor..."));
-			wait(1000);
 			net_logar();
 			return; // Sai do loop para reconectar
 		}
 		
-		if(key_pressed(KEY_F9) && desenvolvedordm==1){
-			// Resto do código de construção de mapas...
-			// [Será convertido conforme necessário]
+		if(key_pressed(KEY_F9) && (desenvolvedordm==1 || is_dev || is_admin || is_moderator || is_builder)){
+			adminmenu();
+		}
+		
+		// ✅ Chat Administrativo - Tecla D (como no BGT)
+		// Só para desenvolvedores, admins e moderadores
+		if(key_pressed(KEY_D) && !ausente && !key_down(KEY_G) && !key_down(KEY_F) && !key_down(KEY_LALT) && !key_down(KEY_RALT)) {
+			if(desenvolvedordm == 1 || is_dev || is_admin || is_moderator) {
+				chat_administrativo();
+			}
 		}
 		if(key_pressed(KEY_ESCAPE)){
 			debug_log("⚠️ ESC pressionado! Chamando exitmenu()");
@@ -977,9 +1042,9 @@ void game(){
 		// ===== TECLAS DE INFORMAÇÃO =====
 		// Tecla C: Coordenadas
 		if(key_pressed(KEY_C) && !ausente) {
-			string coord_msg = "Coordenadas: X=" + me.x + ", Y=" + me.y;
+			string coord_msg = me.x + ", " + me.y;
 			speak(coord_msg);
-			debug_log("📍 " + coord_msg);
+			debug_log("📍 Coordenadas: " + coord_msg);
 		}
 		
 		// Tecla B: Localização/Zona
@@ -1017,16 +1082,13 @@ void game(){
 			debug_log("⌨️ P pressionado - enviando '/vestindo'");
 		}
 		
-		// Tecla I: Abrir inventário
-		if(key_pressed(KEY_I) && !ausente && moveable && dinventario == 0) {
-			if(player_inv.get_keys().length() == 0) {
-				speak("Inventário vazio", true);
-				debug_log("🎒 I pressionado - inventário vazio");
-			} else {
-				invmenu(inv_categories[cindex].name);
-				debug_log("🎒 Inventário aberto com " + player_inv.get_keys().length() + " itens");
-			}
+		// Tecla F10: Menu de opções do jogo
+		if(key_pressed(KEY_F10) && !ausente) {
+			optionsmenu2();
+			debug_log("⌨️ F10 pressionado - abrindo menu de opções");
 		}
+		
+		// Tecla I é processada em tprincipais() (comandos.nvgt) para evitar dupla execução
 		
 		// ✅ Task 3.3: Verificar teclas de atalho para frases rápidas e tradução
 		check_quick_phrase_keys();

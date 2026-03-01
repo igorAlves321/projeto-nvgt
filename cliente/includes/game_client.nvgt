@@ -1,0 +1,154 @@
+// game_client.nvgt - Classe Gerenciadora de Rede Encapsulada
+// Refatoração para melhor escalabilidade e preparação para multi-threading
+// Baseado nas melhores práticas de NVGT/AngelScript
+//
+// NOTA: Esta classe usa referência ao objeto network global 'con' (definido em globals.nvgt)
+// para manter compatibilidade com net.nvgt que já gerencia conexão/reconexão.
+// NOTA: O enum NetChannel é definido em net.nvgt (incluído antes deste arquivo)
+
+/**
+ * GameClient - Classe gerenciadora de envio de mensagens
+ * 
+ * Abordagem Híbrida:
+ * - JSON para chat/sistema/ações (CH_CHAT, CH_SYSTEM, CH_ACTION)
+ * - Strings simples para movimento (CH_MOVE) - alta performance
+ */
+class GameClient {
+	// ===== PROPRIEDADES PRIVADAS =====
+	private string encryption_key;    // Chave de criptografia AES
+	private string _last_error;       // Último erro ocorrido
+	
+	// ===== CONSTRUTOR =====
+	GameClient(string key = "evm_server_key_2024") {
+		encryption_key = key;
+		_last_error = "";
+	}
+	
+	// ===== GETTERS =====
+	string get_last_error() {
+		return _last_error;
+	}
+	
+	// Verifica estado de conexão usando variáveis globais
+	bool check_connected() {
+		return is_connected && net_peer_id != 0;
+	}
+	
+	// ===== MÉTODOS DE ENVIO BÁSICOS =====
+	
+	/**
+	 * Envia mensagem confiável (reliable/TCP-like)
+	 */
+	bool send_reliable(string message, int channel = 0) {
+		if(@con == null) {
+			_last_error = "Objeto network não inicializado";
+			return false;
+		}
+		
+		if(!is_connected || net_peer_id == 0) {
+			_last_error = "Não conectado ao servidor";
+			return false;
+		}
+		
+		string encrypted = string_aes_encrypt(message, encryption_key);
+		return con.send(net_peer_id, encrypted, channel, true);
+	}
+	
+	/**
+	 * Envia mensagem não-confiável (unreliable/UDP-like)
+	 */
+	bool send_unreliable(string message, int channel = 0) {
+		if(@con == null || !is_connected || net_peer_id == 0) {
+			return false;
+		}
+		
+		string encrypted = string_aes_encrypt(message, encryption_key);
+		return con.send(net_peer_id, encrypted, channel, false);
+	}
+	
+	// ===== MÉTODOS CONVENIENTES (ABORDAGEM HÍBRIDA) =====
+	
+	/**
+	 * Envia mensagem de chat usando JSON (garante textos com espaços)
+	 * Canal: CH_CHAT, Reliable
+	 */
+	bool send_chat(string message, string chat_type = "local") {
+		// Formato JSON: {"t":"chat","type":"local","text":"mensagem aqui"}
+		string json = "{\"t\":\"chat\",\"type\":\"" + chat_type + "\",\"text\":\"" + escape_json(message) + "\"}";
+		return send_reliable(json, CH_CHAT);
+	}
+	
+	/**
+	 * Envia ação do jogo usando JSON
+	 * Canal: CH_ACTION, Reliable
+	 */
+	bool send_action(string action_id, string args = "") {
+		// Formato JSON: {"t":"act","id":"attack","args":"target_id"}
+		string json = "{\"t\":\"act\",\"id\":\"" + action_id + "\",\"args\":\"" + escape_json(args) + "\"}";
+		return send_reliable(json, CH_ACTION);
+	}
+	
+	/**
+	 * Envia comando do sistema usando JSON
+	 * Canal: CH_SYSTEM, Reliable
+	 */
+	bool send_system(string cmd, string data = "") {
+		// Formato JSON: {"t":"sys","cmd":"ping","data":""}
+		string json = "{\"t\":\"sys\",\"cmd\":\"" + cmd + "\",\"data\":\"" + escape_json(data) + "\"}";
+		return send_reliable(json, CH_SYSTEM);
+	}
+	
+	/**
+	 * Envia dados JSON genéricos
+	 * @param json_str String JSON já formatada
+	 * @param channel Canal a usar
+	 * @param reliable Se deve usar reliable ou unreliable
+	 */
+	bool send_json(string json_str, int channel, bool reliable = true) {
+		if(reliable) {
+			return send_reliable(json_str, channel);
+		} else {
+			return send_unreliable(json_str, channel);
+		}
+	}
+	
+	// ===== UTILITÁRIOS =====
+	
+	/**
+	 * Escapa caracteres especiais para JSON
+	 */
+	private string escape_json(string input) {
+		string result = input;
+		result = string_replace(result, "\\", "\\\\", true);
+		result = string_replace(result, "\"", "\\\"", true);
+		result = string_replace(result, "\n", "\\n", true);
+		result = string_replace(result, "\r", "\\r", true);
+		result = string_replace(result, "\t", "\\t", true);
+		return result;
+	}
+	
+	/**
+	 * Descriptografa mensagem recebida
+	 */
+	string decrypt_message(string encrypted_message) {
+		return string_aes_decrypt(encrypted_message, encryption_key);
+	}
+	
+	/**
+	 * Retorna estatísticas da conexão
+	 */
+	string get_stats() {
+		return "Conectado: " + (is_connected ? "Sim" : "Não") + 
+		       ", Peer ID: " + net_peer_id;
+	}
+	
+	/**
+	 * Define nova chave de criptografia
+	 */
+	void set_encryption_key(string new_key) {
+		encryption_key = new_key;
+	}
+}
+
+// ===== INSTÂNCIA GLOBAL =====
+GameClient game_client("evm_server_key_2024");

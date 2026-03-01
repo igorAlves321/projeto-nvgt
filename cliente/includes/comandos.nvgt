@@ -23,6 +23,14 @@ bool alt_pressionado(){
 	return false;
 }
 
+// ✅ Chat Administrativo - Abre input e envia para o servidor
+void chat_administrativo() {
+	string msg = v.input(pu.get_value("Digite sua mensagem para o chat admin."));
+	if(msg != "") {
+		send_reliable(peer_id, "adm " + msg, 0);
+	}
+}
+
 // Função de verificação de movimento por direção (do BGT original)
 bool abletomove_direction(int direction){
 	string locate = get_zone_at(me.x, me.y);
@@ -151,292 +159,201 @@ bool is_disabled(int x, int y){
 // MENU DE JOGADORES ONLINE (F5) - Lista global de todos jogadores conectados
 // ============================================================================
 // Recebe dados do servidor no formato: nome|titulo|status||nome2|titulo2|status2||...
+// MIGRADO PARA SISTEMA NATIVO: Redução de 166 → 70 linhas (-58%)
 void playersmenu(string data) {
-	debug_log("📋 playersmenu chamado com data='" + data + "'");
+	debug_log("📋 playersmenu chamado (versão nativa)");
 	
 	if(ausente) return;
 	
-	// Se dados vazios, mostrar mensagem
+	// Validar dados
 	if(data == "" || data.length() < 3) {
 		speak(pu.get_value("Nenhum jogador online."));
 		return;
 	}
 	
-	reset_all_forced_keys();
-	key_hold iup(KEY_UP, 500, 50);
-	key_hold idown(KEY_DOWN, 500, 50);
-	get_characters();
-	string cl;
-	int counter = -1;
+	// Parse data (mantém lógica original)
+	string[] lines = data.split("||");
+	dictionary player_info;  // nome -> "titulo|status"
 	
-	// Separadores BGT: | (bell) para campos, || (bell2) para registros
-	string bell = "|";
-	string bell2 = "||";
-	
-	string[] lines = data.split(bell2);
-	string[] names;
-	string[] titles;
-	string[] status_list;
-	
-	debug_log("📋 Split por || resultou em " + lines.length() + " linhas");
-	
-	if(lines.length() > 0) {
-		for(uint i = 0; i < lines.length(); i++) {
-			if(lines[i] == "" || lines[i].length() < 1) continue;
+	for(uint i = 0; i < lines.length(); i++) {
+		if(lines[i] == "" || lines[i].length() < 1) continue;
+		
+		string[] parsed = lines[i].split("|");
+		if(parsed.length() >= 1 && parsed[0] != "") {
+			string name = parsed[0];
+			string title = parsed.length() >= 2 ? parsed[1] : "";
+			string status = parsed.length() >= 3 ? parsed[2] : "";
 			
-			string[] parsed = lines[i].split(bell);
-			debug_log("📋 Linha " + i + ": '" + lines[i] + "' -> " + parsed.length() + " campos");
-			
-			// Aceitar 1 a 3 campos (nome obrigatório, título e status opcionais)
-			if(parsed.length() >= 1 && parsed[0] != "") {
-				names.insert_last(parsed[0]);
-				titles.insert_last(parsed.length() >= 2 ? parsed[1] : "");
-				status_list.insert_last(parsed.length() >= 3 ? parsed[2] : "");
-			}
+			// Armazenar info
+			player_info.set(name, title + "|" + status);
 		}
 	}
 	
-	debug_log("📋 Total de jogadores parseados: " + names.length());
-	
-	if(names.length() == 0) {
+	if(player_info.size() == 0) {
 		speak(pu.get_value("Nenhum jogador online."));
 		return;
 	}
 	
-	p.play_stationary("notify37.ogg", false);
-	speak(pu.get_value("Mostrando lista de jogadores.") + " " + names.length() + " " + pu.get_value("online."));
+	// Configurar menu nativo
+	menu pm;
+	@pm.pack_file = @sound_default_pack;
+	pm.click_sound = "invmove6.ogg";
+	pm.select_sound = "-old-menuchecked.ogg";
+	pm.open_sound = "notify37.ogg";
+	pm.wrap = true;
+	pm.focus_first_item = false;
+	
+	// Adicionar jogadores ao menu
+	string[] player_names = player_info.get_keys();
+	player_names.sort_ascending();
+	
+	for(uint i = 0; i < player_names.length(); i++) {
+		string name = player_names[i];
+		string info = "";
+		player_info.get(name, info);
+		string[] parts = info.split("|");
+		string title = parts.length() > 0 ? parts[0] : "";
+		string status = parts.length() > 1 ? parts[1] : "";
+		
+		// Display: "Nome (Título): Status"
+		string display = name;
+		if(title != "") display += " (" + pu.get_value(title) + ")";
+		if(status != "") display += ": " + status;
+		
+		pm.add_item(display, name);
+	}
+	
+	pm.intro_text = pu.get_value("Mostrando lista de jogadores.") + " " + player_names.length() + " " + pu.get_value("online.");
+	
+	// Callback para atalhos (ALT+I, F1-F4, etc)
+	@pm.background_callback = menu::menu_callback(playersmenu_shortcuts);
+	pm.background_callback_data = "";
+	
 	emchat = true;
 	
-	while(true) {
-		wait(5);
-		if(ausente) break;
-		if(counter > int(names.length()) - 1) counter = int(names.length()) - 1;
-		
-		cl = get_characters();
-		// Busca por primeira letra
-		if(cl != "" && cl != " " && cl.length() == 1 && names.length() > 0) {
-			int f = 0;
-			for(uint i = counter + 1; i < names.length(); i++) {
-				string first_char = names[i].substr(0, 1).lower();
-				if(first_char == cl.lower()) {
-					counter = i;
-					string statusMsg = status_list[counter];
-					speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + statusMsg);
-					p.play_stationary("invmove6.ogg", false);
-					f = 1;
-					break;
-				}
-			}
-			if(f == 0) {
-				for(uint i = 0; i < uint(counter); i++) {
-					string first_char = names[i].substr(0, 1).lower();
-					if(first_char == cl.lower()) {
-						counter = i;
-						speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
-						p.play_stationary("invmove6.ogg", false);
-						break;
-					}
-				}
-			}
-		}
-		
-		if(key_pressed(KEY_HOME) && names.length() > 0) {
-			counter = 0;
-			speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
-			p.play_stationary("invmove6.ogg", false);
-		}
-		if(key_pressed(KEY_END) && names.length() > 0) {
-			counter = int(names.length()) - 1;
-			speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
-			p.play_stationary("invmove6.ogg", false);
-		}
-		if(iup.pressing()) {
-			if(names.length() == 1) {
-				speak(names[0] + " (" + pu.get_value(titles[0]) + "): " + status_list[0]);
-				counter = 0;
-			} else if(counter > 0) {
-				counter--;
-				speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
-				p.play_stationary("invmove6.ogg", false);
-			}
-		}
-		if(idown.pressing()) {
-			if(names.length() == 1) {
-				speak(names[0] + " (" + pu.get_value(titles[0]) + "): " + status_list[0]);
-				counter = 0;
-			} else if(counter < int(names.length()) - 1) {
-				counter++;
-				speak(names[counter] + " (" + pu.get_value(titles[counter]) + "): " + status_list[counter]);
-				p.play_stationary("invmove6.ogg", false);
-			}
-		}
-		
-		// Enter: Enviar PM
-		if((key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) && counter > -1 && counter < int(names.length())) {
-			p.play_stationary("-old-menuchecked.ogg", false);
-			string msg = v.input(pu.get_value("Digite sua mensagem para") + " " + names[counter]);
-			if(msg != "") send_reliable(peer_id, "/pm " + names[counter] + " " + msg, 1);
-			emchat = true;
-		}
-		
-		// Atalhos ALT+tecla
-		if(key_down(KEY_LMENU) && counter > -1) {
-			if(key_pressed(KEY_I)) send_reliable(peer_id, "/ign " + names[counter], 1);
-			if(key_pressed(KEY_U)) send_reliable(peer_id, "/deign " + names[counter], 1);
-			if(key_pressed(KEY_E)) send_reliable(peer_id, "/eqr " + names[counter], 1);
-			if(key_pressed(KEY_D)) send_reliable(peer_id, "/dqr " + names[counter], 1);
-			if(key_pressed(KEY_S)) send_reliable(peer_id, "/eqs " + names[counter], 1);
-		}
-		
-		// F1-F4: Informações do jogador (enviar e processar resposta)
-		if(key_pressed(KEY_F1) && counter > -1) {
-			send_reliable(peer_id, "j1 " + names[counter], 0);
-		}
-		if(key_pressed(KEY_F2) && counter > -1) {
-			send_reliable(peer_id, "j2 " + names[counter], 0);
-		}
-		if(key_pressed(KEY_F3) && counter > -1) {
-			send_reliable(peer_id, "j3 " + names[counter], 0);
-		}
-		if(key_pressed(KEY_F4) && counter > -1) {
-			send_reliable(peer_id, "j4 " + names[counter], 0);
-		}
-		
-		// Processar mensagens de rede para receber respostas imediatamente
-		netloop();
-		
-		// Escape: Sair
-		if(key_pressed(KEY_ESCAPE)) {
-			emchat = false;
-			break;
-		}
-	}
+	// Run menu
+	int selected_index = pm.run();
 	emchat = false;
+	
+	if(selected_index < 0) return;  // ESC pressionado
+	
+	// Obter jogador selecionado
+	string selected_name = pm.get_item_id(selected_index);
+	
+	// Pedir mensagem PM
+	string msg = v.input(pu.get_value("Digite sua mensagem para") + " " + selected_name);
+	if(msg != "") {
+		send_reliable(peer_id, "/pm " + selected_name + " " + msg, 1);
+		emchat = true;
+	}
+}
+
+// Callback para atalhos do playersmenu
+void playersmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_name = m.get_item_id(m.focused_item);
+	
+	// ALT + teclas
+	if(key_down(KEY_LMENU)) {
+		if(key_pressed(KEY_I)) send_reliable(peer_id, "/ign " + selected_name, 1);
+		if(key_pressed(KEY_U)) send_reliable(peer_id, "/deign " + selected_name, 1);
+		if(key_pressed(KEY_E)) send_reliable(peer_id, "/eqr " + selected_name, 1);
+		if(key_pressed(KEY_D)) send_reliable(peer_id, "/dqr " + selected_name, 1);
+		if(key_pressed(KEY_S)) send_reliable(peer_id, "/eqs " + selected_name, 1);
+	}
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 " + selected_name, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 " + selected_name, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 " + selected_name, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 " + selected_name, 0);
+	
+	// Processar rede
+	netloop();
 }
 
 // ============================================================================
 // MENU DE JOGADORES NO MAPA (usado internamente)
 // ============================================================================
+// ============================================================================
+// MENU DE JOGADORES NO MAPA - Lista jogadores no mesmo mapa que você
+// ============================================================================
+// MIGRADO PARA SISTEMA NATIVO: Redução de 120 → 45 linhas (-62%)
 void jogadoresmenu(){
 	if(players.length()==0||ausente)return;
-	reset_all_forced_keys();
-	key_hold iup(KEY_UP,500,50);
-	key_hold idown(KEY_DOWN,500,50);
-	get_characters();
-	string cl;
-	int counter=0;
-	string[] peramitors;
-	string[] peramitors2;
+	
+	// Configurar menu nativo
+	menu jm;
+	@jm.pack_file = @sound_default_pack;
+	jm.click_sound = "";
+	jm.select_sound = "";
+	jm.wrap = true;
+	jm.focus_first_item = true;
+	
+	// Adiciona jogadores (filtra por beeping ou DM)
 	for(uint i=0; i<players.length(); i++){
-		peramitors2.insert_last(players[i].charname);
+		if(players[i].beeping==1||desenvolvedordm==1){
+			jm.add_item(players[i].charname, players[i].charname);
+		}
 	}
-	speak(peramitors2[0]);
+	
+	if(jm.item_count == 0) return;
+	
+	jm.intro_text = "";
+	
+	// Callback para atalhos
+	@jm.background_callback = menu::menu_callback(jogadoresmenu_shortcuts);
+	
 	emchat=true;
-	while(true){
-		wait(5);
-		// mainloop() removido - não existe em NVGT
-		if(ausente)break;
-		peramitors.resize(0);
-		peramitors2.resize(0);
-		for(uint i=0; i<players.length(); i++){
-			if(players[i].beeping==1||desenvolvedordm==1)peramitors.insert_last(players[i].charname);
+	int selected_index = jm.run();
+	emchat=false;
+	
+	if(selected_index < 0) return;  // ESC
+	
+	string selected_player = jm.get_item_id(selected_index);
+	
+	// Enviar PM
+	string msg=v.input(pu.get_value("Digite sua mensagem para")+" "+selected_player);
+	if(msg!="") send_reliable(peer_id, "/pm "+selected_player+" "+msg, 1);
+}
+
+// Callback para atalhos do jogadoresmenu
+void jogadoresmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_player = m.get_item_id(m.focused_item);
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 "+selected_player, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 "+selected_player, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 "+selected_player, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 "+selected_player, 0);
+	
+	// CTRL + teclas
+	if(key_down(KEY_LCTRL)||key_down(KEY_RCTRL)){
+		if(key_pressed(KEY_C)){
+			clipboard_copy_text(selected_player);
+			speak(selected_player+" "+pu.get_value("copiado."));
 		}
-		if(counter > peramitors.length()-1)counter=peramitors.length()-1;
-		if(counter<0)counter=0;
-		cl=get_characters();
-		if(cl!=""&&cl!=" "&&cl.length()==1&&peramitors.length()>0){
-			int f=0;
-			int oc=counter;
-			for(uint i=counter; i<peramitors.length(); i++){
-				if(i==counter){
-					continue;
-				}
-				if(peramitors[i][0]==cl){
-					counter=i;
-					speak(peramitors[counter]);
-					cl="";
-					f=1;
-					break;
-				}
-			}
-			if(f==0){
-				counter=0;
-				for(uint i=counter; i<peramitors.length(); i++){
-					if(peramitors[i][0]==cl){
-						counter=i;
-						speak(peramitors[counter]);
-						cl="";
-						f=1;
-						break;
-					}
-				}
-			}
-		}
-		if(key_pressed(KEY_HOME)&&peramitors.length()>0){
-			counter=0;
-			speak(peramitors[counter]);
-		}
-		if(key_pressed(KEY_END) and peramitors.length()>0){
-			counter=peramitors.length()-1;
-			speak(peramitors[counter]);
-		}
-		if(iup.pressing()){
-			if(peramitors.length()==1){
-				speak(peramitors[0]);
-				counter=0;
-			}
-			else if(counter > 0){
-				counter--;
-				speak(peramitors[counter]);
-			}
-		}
-		if(idown.pressing()){
-			if(peramitors.length()==1){
-				speak(peramitors[0]);
-				counter=0;
-			}
-			else if(counter < peramitors.length()-1){
-				counter++;
-				speak(peramitors[counter]);
-			}
-		}
-		if(key_pressed(KEY_RETURN)){
-			string msg=v.input(pu.get_value("Digite sua mensagem para")+" "+peramitors[counter]);
-			if(msg!="") send_reliable(peer_id, "/pm "+peramitors[counter]+" "+msg, 1); // Convertido para NVGT
-		}
-		if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 "+peramitors[counter], 0); // Convertido para NVGT
-		if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 "+peramitors[counter], 0); // Convertido para NVGT
-		if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 "+peramitors[counter], 0); // Convertido para NVGT
-		if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 "+peramitors[counter], 0); // Convertido para NVGT
-		if(key_down(KEY_LCTRL)||key_down(KEY_RCTRL)){
-			if(key_pressed(KEY_C)){
-				clipboard_copy_text(peramitors[counter]);
-				speak(peramitors[counter]+" "+pu.get_value("copiado."));
-			}
-			if(desenvolvedordm==1){
-				if(key_pressed(KEY_M)) send_reliable(peer_id, "/killplayer "+peramitors[counter], 1); // Convertido para NVGT
-				if(key_pressed(KEY_E)) send_reliable(peer_id, "/expulsar "+peramitors[counter], 1); // Convertido para NVGT
-				if(key_pressed(KEY_B)) send_reliable(peer_id, "/ban "+peramitors[counter], 1); // Convertido para NVGT
-				if(key_pressed(KEY_Z)){
-					nolhar=peramitors[counter];
-					int n=get_player(nolhar);
-					if(nolhar>-1){
-						speak(pu.get_value("Pronto."));
-						olhar_x=players[n].x;
-						olhar_y=players[n].y;
-						send_reliable(peer_id, "olhar "+nolhar, 0); // Convertido para NVGT
-						moveable=false;
-						inansz=true;
-					}
+		if(desenvolvedordm==1){
+			if(key_pressed(KEY_M)) send_reliable(peer_id, "/killplayer "+selected_player, 1);
+			if(key_pressed(KEY_E)) send_reliable(peer_id, "/expulsar "+selected_player, 1);
+			if(key_pressed(KEY_B)) send_reliable(peer_id, "/ban "+selected_player, 1);
+			if(key_pressed(KEY_Z)){
+				nolhar=selected_player;
+				int n=get_player(nolhar);
+				if(n>-1){
+					speak(pu.get_value("Pronto."));
+					olhar_x=players[n].x;
+					olhar_y=players[n].y;
+					send_reliable(peer_id, "olhar "+nolhar, 0);
+					moveable=false;
+					inansz=true;
 				}
 			}
-		}
-		if(key_pressed(KEY_ESCAPE)){
-			emchat=false;
-			return;
 		}
 	}
 }
+
 
 void computadormenu(){
 	if(ausente)return;
@@ -629,19 +546,19 @@ void readprefs(){
 
 	string svalue;
 	if(values.get("mlang", svalue)) mainlang = svalue;
-	if(values.get("ouvirhits", svalue)) ouvirhits = string_to_number(svalue);
-	if(values.get("ouvirpassos", svalue)) ouvirpassos = string_to_number(svalue);
-	if(values.get("ouviremoutrasjanelas", svalue)) ouviremoutrasjanelas = string_to_number(svalue);
+	if(values.get("ouvirhits", svalue)) ouvirhits = parse_int(svalue);
+	if(values.get("ouvirpassos", svalue)) ouvirpassos = parse_int(svalue);
+	if(values.get("ouviremoutrasjanelas", svalue)) ouviremoutrasjanelas = parse_int(svalue);
 	if(values.get("musicamenu", svalue)) musicamenu = parse_float(svalue);
 	if(values.get("idiomaorigem", svalue)) idiomaorigem = svalue;
-	if(values.get("tradutorativo", svalue)) tradutorativo = string_to_number(svalue);
-	if(values.get("primeiravez", svalue)) primeiravez = string_to_number(svalue);
+	if(values.get("tradutorativo", svalue)) tradutorativo = parse_int(svalue);
+	if(values.get("primeiravez", svalue)) primeiravez = parse_int(svalue);
 	if(values.get("cmfinal", svalue)) cmfinal = svalue;
 	if(values.get("idiomachat", svalue)) idiomachat = svalue;
-	if(values.get("atu", svalue)) atu = string_to_number(svalue);
-	if(values.get("rcontrol", svalue)) rcontrol = string_to_number(svalue);
-	if(values.get("ouvirmortes", svalue)) ouvirmortes = string_to_number(svalue);
-	if(values.get("nalancha", svalue)) game_lan.nalancha = string_to_number(svalue);
+	if(values.get("atu", svalue)) atu = parse_int(svalue);
+	if(values.get("rcontrol", svalue)) rcontrol = parse_int(svalue);
+	if(values.get("ouvirmortes", svalue)) ouvirmortes = parse_int(svalue);
+	if(values.get("nalancha", svalue)) game_lan.nalancha = parse_int(svalue);
 	if(values.get("un", svalue)) {
 		un = svalue;
 		net_un = svalue;
@@ -651,40 +568,40 @@ void readprefs(){
 		net_pw = svalue;
 	}
 	if(values.get("ttsrate", svalue)) {
-		ttsrate = string_to_number(svalue);
+		ttsrate = parse_int(svalue);
 		if(game_tts.rate != ttsrate) game_tts.set_rate(ttsrate);
 		if(tts.rate != ttsrate) tts.set_rate(ttsrate);
 	}
 	if(values.get("voice", svalue)) {
-		voice = string_to_number(svalue);
+		voice = parse_int(svalue);
 		if(voice >= 0) {
 			if(game_tts.voice != voice) game_tts.set_voice(voice);
 			if(tts.voice != voice) tts.set_voice(voice);
 		}
 	}
-	if(values.get("wineask", svalue)) wineask = string_to_number(svalue);
-	if(values.get("beaconing", svalue)) beaconing = string_to_number(svalue);
-	if(values.get("interrupt", svalue)) interrupt = string_to_number(svalue);
-	if(values.get("avisadesconectou", svalue)) avisadesconectou = string_to_number(svalue);
-	if(values.get("usalogo", svalue)) usalogo = string_to_number(svalue);
-	if(values.get("numero_dispositivo", svalue)) numero_dispositivo = string_to_number(svalue);
-	if(values.get("atualizar", svalue)) atualizar = string_to_number(svalue);
+	if(values.get("wineask", svalue)) wineask = parse_int(svalue);
+	if(values.get("beaconing", svalue)) beaconing = parse_int(svalue);
+	if(values.get("interrupt", svalue)) interrupt = parse_int(svalue);
+	if(values.get("avisadesconectou", svalue)) avisadesconectou = parse_int(svalue);
+	if(values.get("usalogo", svalue)) usalogo = parse_int(svalue);
+	if(values.get("numero_dispositivo", svalue)) numero_dispositivo = parse_int(svalue);
+	if(values.get("atualizar", svalue)) atualizar = parse_int(svalue);
 	if(values.get("volumejogo", svalue)) volumejogo = parse_float(svalue);
-	if(values.get("asktoexit", svalue)) asktoexit = string_to_number(svalue);
-	if(values.get("avisanivel", svalue)) avisanivel = string_to_number(svalue);
-	if(values.get("f1", svalue)) f1 = string_to_number(svalue);
-	if(values.get("f2", svalue)) f2 = string_to_number(svalue);
-	if(values.get("f3", svalue)) f3 = string_to_number(svalue);
-	if(values.get("f4", svalue)) f4 = string_to_number(svalue);
-	if(values.get("f5", svalue)) f5 = string_to_number(svalue);
-	if(values.get("f6", svalue)) f6 = string_to_number(svalue);
-	if(values.get("f7", svalue)) f7 = string_to_number(svalue);
-	if(values.get("f8", svalue)) f8 = string_to_number(svalue);
-	if(values.get("f9", svalue)) f9 = string_to_number(svalue);
-	if(values.get("f0", svalue)) f0 = string_to_number(svalue);
-	if(values.get("sidescrolling", svalue)) sidescrolling = string_to_number(svalue);
-	if(values.get("autosave", svalue)) autosave = string_to_number(svalue);
-	if(values.get("fps", svalue)) fps = string_to_number(svalue);
+	if(values.get("asktoexit", svalue)) asktoexit = parse_int(svalue);
+	if(values.get("avisanivel", svalue)) avisanivel = parse_int(svalue);
+	if(values.get("f1", svalue)) f1 = parse_int(svalue);
+	if(values.get("f2", svalue)) f2 = parse_int(svalue);
+	if(values.get("f3", svalue)) f3 = parse_int(svalue);
+	if(values.get("f4", svalue)) f4 = parse_int(svalue);
+	if(values.get("f5", svalue)) f5 = parse_int(svalue);
+	if(values.get("f6", svalue)) f6 = parse_int(svalue);
+	if(values.get("f7", svalue)) f7 = parse_int(svalue);
+	if(values.get("f8", svalue)) f8 = parse_int(svalue);
+	if(values.get("f9", svalue)) f9 = parse_int(svalue);
+	if(values.get("f0", svalue)) f0 = parse_int(svalue);
+	if(values.get("sidescrolling", svalue)) sidescrolling = parse_int(svalue);
+	if(values.get("autosave", svalue)) autosave = parse_int(svalue);
+	if(values.get("fps", svalue)) fps = parse_int(svalue);
 
 	if(cmfinal != "") {
 		pu.set_arquivo(cmfinal);
@@ -780,7 +697,7 @@ void localloop(){
 		if(salvavida==0&&mapname!="pesqueiro"||mapname=="pesqueiro"&&lan.nalancha==0){
 			if(afogando==0&&!bolhadear&&lan.nalancha==0){
 				afogando=1;
-				somafogando.load("afogando.ogg");
+				somafogando.load(get_sound_path("afogando.ogg"));
 				somafogando.play_wait();
 				send_reliable(peer_id, "terminouafogando", 0); // Convertido para NVGT
 			}
@@ -859,7 +776,7 @@ void checarenter(){
 			if(telefonar=="95941354"){
 				moveable=false;
 				sound s;
-				s.load("telefone.ogg");
+				s.load(get_sound_path("telefone.ogg"));
 				int a=random(2, 9);
 				for(int i=0;i<a;i++){
 					s.play();
@@ -868,7 +785,7 @@ void checarenter(){
 						wait(5);
 					}
 				}
-				s.load("v"+voice+"questcapacete.ogg");
+				s.load(get_sound_path("v" + voice + "questcapacete.ogg"));
 				s.play();
 				while(s.playing){
 					wait(5);
@@ -1040,13 +957,11 @@ void tprincipais(){
 	
 	// 🔧 CORREÇÃO: Usar IFs independentes também no bloco COM Shift
 	if(shift_pressionado()){
-		if(key_pressed(KEY_F1) || key_pressed(KEY_F2) || key_pressed(KEY_F3)) {
-			debug_log("⌨️ [V6-FIXED]: COM SHIFT detectou F1/F2/F3");
-		}
+		// Debug foi removido - estava consumindo os eventos key_pressed()!
 
-		if(key_pressed(KEY_F1)) send_reliable(peer_id, "/afk", 0);
-		// Modo pacifista removido - linha comentada
-		// if(key_pressed(KEY_F2)) send_reliable(peer_id, "/pacifista", 0);
+		// NOTA: Shift+F1 (AFK) e Shift+F2 (Pacífico) são tratados no loop principal
+		// do client.nvgt para funcionar mesmo em modo ausente
+		
 		if(key_pressed(KEY_F3)){
 			if(ouviremoutrasjanelas==1){
 				speak(pu.get_value("Não anunciando mensagens quando estiver em outras janelas."));
@@ -1155,8 +1070,8 @@ void tprincipais(){
 			send_reliable(peer_id, "getplayers", 0);
 		}
 		if(key_pressed(KEY_F6)) {
-			debug_log("✅ [V6-FIXED] F6 SEM SHIFT - abrindo chatmenu()");
-			chatmenu();
+			debug_log("⌨️ F6 pressionado - funcionalidade desativada");
+			speak(pu.get_value("Funcionalidade desativada no momento."));
 		}
 		// ===== ✅ TASK 2.6: Tecla O - Ver posição do jogador rastreado =====
 		if(key_pressed(KEY_O) && !ausente) {
@@ -1182,12 +1097,12 @@ void tprincipais(){
 			}
 		}
 		if(key_pressed(KEY_H)&&!ausente) {
-			debug_log("⌨️ H pressionado - pedindo hora (checktime)");
-			send_unreliable(peer_id, "checktime", 0);
+			debug_log("⌨️ H pressionado - verificando relógio/hora");
+			send_unreliable(peer_id, "uitem r2", 0);  // Igual ao BGT - verifica relógio
 		}
 		if(key_pressed(KEY_I)&&!ausente){
 			debug_log("📦 Tecla I pressionada - abrindo inventário");
-			if(player_inv.get_size() == 0) {
+			if(get_inventory_real_count() == 0) {
 				speak(pu.get_value("Inventário vazio."));
 			} else {
 				invmenu(inv_categories[cindex].name);
@@ -1250,7 +1165,7 @@ void tprincipais(){
 }
 
 void chutad(){
-	s1.load("chutad.ogg");
+	s1.load(get_sound_path("chutad.ogg"));
 	s1.play();
 	send_reliable(peer_id, "chutad2", 0); // Convertido para NVGT
 	while(s1.playing){
@@ -1468,15 +1383,33 @@ void secundario(){
 		if(itenssecundarios.find("dardo")>-1)itenssecundarios.remove_at(itenssecundarios.find("dardo"));
 		if(itenssecundarios.find("fita_explosiva")>-1)itenssecundarios.remove_at(itenssecundarios.find("fita_explosiva"));
 	}
+	
+	// Adicionar celular à lista de secundários (Task do usuário)
+	// Se tiver celular no inventário ou se for um item padrão
+	// Assumindo que sempre deve aparecer se tiver o item ou sempre (como no BGT)
+	if(itenssecundarios.find("celular") < 0) {
+		// Se quiser restringir a ter o item: if(inv_item_exists("celular"))
+		itenssecundarios.insert_last("celular");
+	}
+
 	if(itenssecundarios.length()>0){
 		if(invsecundario>itenssecundarios.length()-1)invsecundario=itenssecundarios.length()-1;
-		if(key_pressed(KEY_BACK)&&inv_item_number(itenssecundarios[invsecundario])>0)interact(itenssecundarios[invsecundario]);
-		if(key_pressed(KEY_A)&&inv_item_number(itenssecundarios[invsecundario])>0)speak(inv_item_number(itenssecundarios[invsecundario]));
+		
+		// Tecla Backspace para usar o item
+		if(key_pressed(KEY_BACK)&&(inv_item_number(itenssecundarios[invsecundario])>0 || itenssecundarios[invsecundario] == "celular")) {
+			interact(itenssecundarios[invsecundario]);
+		}
+		
+		// Tecla A para falar a quantidade
+		if(key_pressed(KEY_A)&&inv_item_number(itenssecundarios[invsecundario])>0) {
+			speak(inv_item_number(itenssecundarios[invsecundario]));
+		}
+		
 		if(!key_down(KEY_LALT)&&!key_down(KEY_RALT)){
 			if(key_down(KEY_RSHIFT)&&key_pressed(KEY_TAB)||key_down(KEY_LSHIFT)&&key_pressed(KEY_TAB)){
 				invsecundario--;
 				if(invsecundario<0)invsecundario=itenssecundarios.length()-1;
-				if(invsecundario>itenssecundarios.length())invsecundario=itenssecundarios.length()-1;
+				if(invsecundario>itenssecundarios.length()-1)invsecundario=itenssecundarios.length()-1;
 				speak(pu.get_value(itenssecundarios[invsecundario]));
 			}
 			if(key_pressed(KEY_TAB)){
@@ -1504,6 +1437,10 @@ void interact(string itemname){
 	else if(itemname=="sugador"){
 		string djog=daritem();
 		if(djog!="") send_reliable(peer_id, "sugador vida "+djog, 0); // Convertido para NVGT
+	}
+	else if(itemname == "celular") {
+		// Abrir menu do celular
+		celularmenu();
 	}
 	else if(itemname=="paraquedas"&&paraquedas==0&&mapname.find("avião")>-1)paraquedas=1; // Convertido para NVGT
 	else if (itemname=="bicicleta"){
@@ -1533,7 +1470,7 @@ void interact(string itemname){
 				speak(pu.get_value("Mas você está enterrando um corpo")+"!");
 			}
 			else{
-				cavar.load("cavar.ogg");
+				cavar.load(get_sound_path("cavar.ogg"));
 				cavar.play();
 				send_reliable(peer_id, "draw cavar.ogg", 0); // Convertido para NVGT
 				cavando=1;
@@ -1651,4 +1588,5 @@ void fallloop() {
 		checkforplatforms();
 	}
 }
+
 

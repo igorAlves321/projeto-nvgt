@@ -264,6 +264,72 @@ void load_items_from_database() {
     debug_log("Carregados " + count + " itens do banco de dados");
 }
 
+bool item_exists_in_database(string name) {
+    if(!database_initialized) return false;
+
+    string query = "SELECT id FROM items WHERE name = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, name);
+    return stmt.step() == SQLITE_ROW;
+}
+
+void import_legacy_weapons_catalog() {
+    if(!database_initialized) return;
+    if(!file_exists("weapons_list.db")) return;
+
+    file f;
+    if(!f.open("weapons_list.db", "r")) {
+        debug_log("AVISO: Nao foi possivel abrir weapons_list.db para migracao de catalogo.");
+        return;
+    }
+
+    string content = f.read();
+    f.close();
+
+    string[] lines = content.split("\r\n");
+    int imported = 0;
+
+    for(uint i = 0; i < lines.length(); i++) {
+        string line = lines[i].trim_whitespace();
+        if(line == "" || line[0] == '/' || line.find("=") < 0) continue;
+
+        string[] parts = line.split("=");
+        if(parts.length() < 8) continue;
+
+        string weapon_name = parts[0].trim_whitespace();
+        if(weapon_name == "") continue;
+        if(item_exists_in_database(weapon_name)) continue;
+
+        string ammo_name = parts[1].trim_whitespace();
+        string shoot_sound = parts[2].trim_whitespace();
+        int damage = string_to_number(parts[6]);
+        int distance = string_to_number(parts[7]);
+        if(damage < 1) damage = 1;
+        if(distance < 1) distance = 1;
+
+        string display_name = string_replace(weapon_name, "_", " ", true);
+        string description = "Arma de fogo importada do legado. Municao: " + ammo_name + ". Alcance: " + distance + ".";
+        int value = damage * 8;
+        if(value < 20) value = 20;
+
+        if(create_item(
+            weapon_name, display_name, description, "weapon", "firearm",
+            damage, 0, 0, 0,
+            false, 1, 2.0, value,
+            "common", 0.0, false, true, true,
+            shoot_sound, shoot_sound
+        )) {
+            imported++;
+        }
+    }
+
+    if(imported > 0) {
+        debug_log("Catalogo legado de armas importado para SQLite: " + imported + " novas armas.");
+    }
+}
+
 // Inserir itens padrão no banco
 void seed_default_items() {
     if(!database_initialized) return;
@@ -455,8 +521,20 @@ bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
             GameItem@ item = get_item_by_id(world_item.item_id);
             if(item is null) continue;
             
-            // TODO: Adicionar item ao inventário do jogador
-            // Por agora, apenas remover do mundo
+            // ✅ IMPLEMENTADO: Adicionar item ao inventário do jogador
+            int player_index = get_player_index_from(player_name);
+            if (player_index >= 0 && player_index < int(players.length())) {
+                // Adicionar ao inventário usando o nome do item
+                players[player_index].inv_add_item(item.name, world_item.quantity);
+                
+                // Tocar som de pickup (se configurado)
+                if (item.sound_file != "") {
+                    server_broadcast("play " + item.sound_file + " " + x + " " + y, map_name);
+                }
+                
+                // Notificar jogador
+                send_reliable(players[player_index].peer_id, "msg Você pegou " + world_item.quantity + "x " + item.display_name + "!", 0);
+            }
             
             // Remover do banco
             string delete_query = "DELETE FROM world_items WHERE id = ?;";
@@ -544,7 +622,9 @@ void init_items_system() {
     
     // Inserir itens padrão se necessário
     seed_default_items();
-    
+
+    import_legacy_weapons_catalog();
+
     // Carregar itens do banco
     load_items_from_database();
     

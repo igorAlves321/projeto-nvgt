@@ -1,0 +1,166 @@
+// afk_pacifico.nvgt - Sistema de Modos Ausente (AFK) e Pacífico
+// Baseado em voids.bgt e player.bgt do BGT
+
+// ============================================================
+// MODO AUSENTE (AFK) - Shift+F1
+// ============================================================
+
+void toggle_afk(int index) {
+    if(index < 0 || index >= int(players.length())) return;
+    
+    int mapindex = players[index].mapindex;
+    
+    // Se já está ausente - tentar voltar
+    if(players[index].afk) {
+        // Verificar cooldown (2 minutos para não-admin/não-dev)
+        bool is_staff = check_is_admin(players[index].charname) || has_role(players[index].charname, "dev");
+        
+        if(players[index].afkreturntimer.elapsed < 120000 && !is_staff) {
+            int remaining_time = (120000 - int(players[index].afkreturntimer.elapsed)) / 1000;
+            int minutes = remaining_time / 60;
+            int seconds = remaining_time % 60;
+            
+            string time_msg = "";
+            if(minutes > 0) {
+                time_msg = "" + minutes + " minuto";
+                if(minutes > 1) time_msg += "s";
+                if(seconds > 0) time_msg += " e " + seconds + " segundo";
+            } else {
+                time_msg = "" + seconds + " segundo";
+            }
+            if(seconds > 1) time_msg += "s";
+            
+            send_reliable(players[index].peer_id, "msg2 ;Você não pode voltar agora, poderá voltar em; " + time_msg + ".;", 0);
+            return;
+        }
+        
+        // Desativar AFK
+        players[index].afk = false;
+        players[index].afkseconds = 0;
+        
+        // Restaurar beeping
+        if(players[index].invs == 1) {
+            send_reliable(0, "playerbeep " + players[index].charname + " 0", 0);
+        } else {
+            send_reliable(0, "playerbeep " + players[index].charname + " 1", 0);
+        }
+        
+        // Enviar comandos para cliente
+        send_reliable(players[index].peer_id, "startmoving", 0);
+        send_reliable(players[index].peer_id, "ausente0", 0);
+        
+        // Se não está em modo pacífico, remover proteção de novato
+        if(players[index].pacifico == 0) {
+            send_reliable(players[index].peer_id, "fimnovato", 0);
+        }
+        
+        // Mensagem clara para o jogador
+        send_reliable(players[index].peer_id, "msg Você saiu do modo ausente!", 0);
+        
+        // Avisar todos
+        send_reliable(0, "ps offline.ogg", 0);
+        send_reliable(0, "msg2 " + players[index].charname + " ;voltou.;", 0);
+        
+        players[index].bipar = 1;
+        settitle(index);
+        
+        debug_log("🔄 " + players[index].charname + " saiu do modo ausente");
+    }
+    // Tentar ativar AFK
+    else {
+        // Verificar restrições
+        if(players[index].paralisado || players[index].paralisado2 || gamestopped) {
+            return;
+        }
+        
+        // Verificar se tem recompensa na cabeça
+        if(players[index].bounty_on_head == 1) {
+            send_reliable(players[index].peer_id, "msg2 ;Você não pode ficar ausente enquanto tem uma recompensa na cabeça.;", 0);
+            return;
+        }
+        
+        // Ativar AFK
+        players[index].afkreturntimer.restart();
+        players[index].afk = true;
+        
+        // Parar movimento
+        send_reliable(players[index].peer_id, "stopmoving", 0);
+        send_reliable(players[index].peer_id, "ausente1", 0);
+        
+        // Mensagem clara para o jogador
+        send_reliable(players[index].peer_id, "msg Você entrou em modo ausente!", 0);
+        
+        // Avisar todos
+        send_reliable(0, "ps offline.ogg", 0);
+        send_reliable(0, "msg2 " + players[index].charname + " ;está ausente.;", 0);
+        
+        // Parar beeping
+        players[index].bipar = 0;
+        send_reliable(0, "playerbeep " + players[index].charname + " 0", 0);
+        
+        settitle(index);
+        
+        debug_log("💤 " + players[index].charname + " entrou em modo ausente");
+    }
+}
+
+// ============================================================
+// MODO PACÍFICO - Shift+F2
+// ============================================================
+
+void toggle_pacifico(int index) {
+    if(index < 0 || index >= int(players.length())) return;
+    
+    // Se não está em modo pacífico - tentar ativar
+    if(players[index].pacifico == 0) {
+        // Verificar se tem recompensa na cabeça
+        if(players[index].bounty_on_head == 1) {
+            send_reliable(players[index].peer_id, "msg2 ;Você não pode usar modo pacífico com recompensa na cabeça.;", 0);
+            return;
+        }
+        
+        // Ativar modo pacífico
+        players[index].pacifico = 1;
+        
+        // Feedback sonoro
+        send_reliable(players[index].peer_id, "ps afkon.ogg", 0);
+        
+        // Ativar proteção de novato no cliente
+        send_reliable(players[index].peer_id, "ininovato", 0);
+        
+        // Mensagem clara para o jogador
+        send_reliable(players[index].peer_id, "msg Modo pacífico ATIVADO. Você não pode atacar nem ser atacado.", 0);
+        
+        // Avisar todos os jogadores
+        send_reliable(0, "msg2 " + players[index].charname + " ;ativou o modo pacífico.;", 0);
+        
+        // Broadcast para todos no servidor
+        send_reliable(0, "pp " + players[index].charname + " " + players[index].pacifico, 0);
+        
+        debug_log("☮️ " + players[index].charname + " entrou em modo pacífico");
+    }
+    // Tentar desativar modo pacífico
+    else {
+        // Desativar modo pacífico
+        players[index].pacifico = 0;
+        
+        // Feedback sonoro
+        send_reliable(players[index].peer_id, "ps afkoff.ogg", 0);
+        
+        // Só enviar fimnovato se não estiver AFK
+        if(!players[index].afk) {
+            send_reliable(players[index].peer_id, "fimnovato", 0);
+        }
+        
+        // Mensagem clara para o jogador
+        send_reliable(players[index].peer_id, "msg Modo pacífico DESATIVADO. Você pode atacar e ser atacado.", 0);
+        
+        // Avisar todos os jogadores
+        send_reliable(0, "msg2 " + players[index].charname + " ;desativou o modo pacífico.;", 0);
+        
+        // Broadcast para todos no servidor
+        send_reliable(0, "pp " + players[index].charname + " " + players[index].pacifico, 0);
+        
+        debug_log("⚔️ " + players[index].charname + " saiu do modo pacífico");
+    }
+}

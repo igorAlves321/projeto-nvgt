@@ -356,11 +356,12 @@ void cmd_takeattachments(int player_index, int mail_id) {
 		int qty = int(msg.items_attached[item_keys[i]]);
 		
 		// Adicionar ao inventário do jogador
-		if(players[player_index].inventory.exists(item_keys[i])) {
-			int current = int(players[player_index].inventory[item_keys[i]]);
-			players[player_index].inventory.set(item_keys[i], "" + (current + qty));
+		if(players[player_index].inv.exists(item_keys[i])) {
+			double current = 0;
+			players[player_index].inv.get(item_keys[i], current);
+			players[player_index].inv.set(item_keys[i], current + qty);
 		} else {
-			players[player_index].inventory.set(item_keys[i], "" + qty);
+			players[player_index].inv.set(item_keys[i], qty);
 		}
 		
 		send_reliable(players[player_index].peer_id, "msg2 Você recebeu " + item_keys[i] + " x" + qty, 0);
@@ -369,6 +370,7 @@ void cmd_takeattachments(int player_index, int mail_id) {
 	// Limpar anexos
 	msg.items_attached.delete_all();
 	msg.has_attachments = false;
+	save_player_inventory_to_db(players[player_index]);
 	
 	mb.save();
 	
@@ -474,12 +476,14 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	}
 	
 	// Verificar se tem o item
-	if(!players[player_index].inventory.exists(item_name)) {
+	if(!players[player_index].inv.exists(item_name)) {
 		send_reliable(players[player_index].peer_id, "msg2 Você não tem esse item!", 0);
 		return;
 	}
 	
-	int current_qty = int(players[player_index].inventory[item_name]);
+	double current_qty_d = 0;
+	players[player_index].inv.get(item_name, current_qty_d);
+	int current_qty = int(current_qty_d);
 	if(current_qty < quantity) {
 		send_reliable(players[player_index].peer_id, "msg2 Você só tem " + current_qty + " desse item!", 0);
 		return;
@@ -514,10 +518,11 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	players[player_index].gold -= cost;
 	
 	// Remover item do inventário
-	players[player_index].inventory.set(item_name, "" + (current_qty - quantity));
+	players[player_index].inv.set(item_name, current_qty - quantity);
 	if((current_qty - quantity) <= 0) {
-		players[player_index].inventory.delete(item_name);
+		players[player_index].inv.delete(item_name);
 	}
+	save_player_inventory_to_db(players[player_index]);
 	
 	// Criar mensagem com item anexado
 	mail_message msg(mb.next_message_id, players[player_index].charname, recipient, subject, message);

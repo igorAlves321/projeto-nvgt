@@ -8,6 +8,7 @@
 #include "crafting.nvgt"
 
 player@[] players(0);
+const bool INVENTORY_ENABLE_LEGACY_FILE_FALLBACK = true;
 
 class player {
 	// --- Sistema de Recompensa (Bounty) ---
@@ -183,6 +184,7 @@ class player {
 	int ncongelar = 0, nalancha = 0;
 	int inq = 0, ppeixe = 0;
 	int lado = Right, conectou = 0;
+	int facing = 0;  // Direção que o jogador está olhando (0=Forward, 1=Back, 2=Left, 3=Right)
 	uint npescar = 0, npescando, plinha = 0;
 	bool jpescar = false, curando = false;
 	double tempopacifico, nfome = 0, nsede = 0, ncoco = 0, nurina = 0;
@@ -197,6 +199,19 @@ class player {
 	int ouvirpassos = 1, namaquina = 0, vtempo = 0, subirvida = 0;
 	int relogio = 0;
 	int mdor = 1;
+	
+	// --- Propriedades para Comandos Admin e Compatibilidade ---
+	bool online = false;           // Estado de conexão (para voids.nvgt)
+	bool dead = false;             // Estado de morte (para cmd_kill/revive)
+	bool godmode = false;          // Modo deus
+	bool is_muted = false;         // Se está mutado (renomeado para evitar conflito com 'muted' string)
+	bool arrested = false;         // Se está preso
+	double mute_end_time = 0;      // Tempo de término do mute
+	double arrest_end_time = 0;    // Tempo de término da prisão
+	string arrest_reason = "";     // Motivo da prisão
+	double money = 0;              // Dinheiro (alias ou separado de creditos/saldo)
+	int max_health = 100;          // Vida máxima (para cmd_heal/revive)
+
 	int ngripe = 0;
 	int nvarinha = 0;
 	double doente = 0, sujo = 0;
@@ -367,6 +382,16 @@ class player {
 	bool active = true;          // Se o jogador está ativo/online
 	int rank = 0;                // Rank/permissão do jogador (0=normal, 5=admin)
 	dictionary inventory;        // Inventário como dicionário (compatibilidade)
+	timer last_activity;         // Última atividade de rede (heartbeat/packets)
+	timer last_move_time;        // Último movimento validado
+	int last_valid_x = 0;        // Última coordenada X validada
+	int last_valid_y = 0;        // Última coordenada Y validada
+	int violation_count = 0;     // Contador de violações de movimento
+	uint16 last_seq = 0;         // Último sequence number recebido
+	double HARD_CAP_DISTANCE = 25.0; // Distância máxima instantânea permitida
+	double MAX_WALK_SPEED = 14.0;    // Velocidade base máxima (tiles/s)
+	double SPEED_TOLERANCE = 1.8;    // Tolerância para jitter/latência
+	int MAX_VIOLATIONS = 5;      // Violações seguidas antes de correção
 	
 	timer bolhatimer, calortimer;
 	uint bolhaseconds = 0, calorseconds = 0;
@@ -448,6 +473,13 @@ class player {
 		active = true;
 		rank = 0;  // 0=normal, 5=admin
 		// inventory já é inicializado automaticamente como dictionary vazio
+		last_activity.restart();
+		last_move_time.force(0);
+		last_move_time.pause();
+		last_valid_x = x;
+		last_valid_y = y;
+		violation_count = 0;
+		last_seq = 0;
 	}
 	
 	// NVGT: Método renomeado para evitar conflito com campo is_admin
@@ -1487,41 +1519,52 @@ class player {
 	
 	// Sistema de Inventário - Persistência
 	void load_inv() {
-		string content;
-		file f;
-		f.open("players/" + this.charname + "/inv.md", "r");
-		string[] playerinv = delinear(f.read());
-		f.close();
+		if(load_player_inventory_from_database(this, INVENTORY_ENABLE_LEGACY_FILE_FALLBACK)) {
+			return;
+		}
+		load_initial_inventory_from_db();
+	}
+	
+	// Carregar inventário inicial do banco de dados
+	void load_initial_inventory_from_db() {
+		debug_log("Carregando inventário inicial do banco de dados para " + this.charname);
 		
-		if(!inv.is_empty()) {
-			inv.delete_all();
+		string query = "SELECT item_name, quantity FROM initial_inventory;";
+		sqlite3statement@ stmt = bancoJogo.prepare(query);
+		
+		if(@stmt == null) {
+			debug_log("ERRO: Tabela initial_inventory não encontrada. Usando fallback básico.");
+			// Fallback mínimo
+			inv.set("reais", 1000.0);
+			inv.set("faca", 1.0);
+			return;
 		}
 		
-		for(uint i = 0; i < playerinv.length(); i++) {
-			if(playerinv.length() > 0) {
-				string[] data = string_split(playerinv[i], "=", true);
-				if(data.length() == 2) {
-					inv.set(data[0], string_to_number(data[1]));
-					continue;
-				}
-				else {
-					if(inv.is_empty()) {
-						file_copy("inv.inv", "players/" + this.charname + "/inv.md", true);
-						this.load_inv();
-					}
-				}
-			}
+		while(stmt.step() == SQLITE_ROW) {
+			string name = stmt.column_text(0);
+			int qty = stmt.column_int(1);
+			inv.set(name, double(qty));
 		}
+		
+		// Salvar o inventário carregado no arquivo do jogador
+		string inv_content = this.getinv();
+		this.setinv(inv_content);
+		debug_log("✅ Inventário inicial carregado do banco para " + this.charname);
 	}
 	
 	void setinv(string content) {
-		if(content.length() > 0) {
-			file f;
-			f.open("players/" + this.charname + "/inv.md", "w");
-			f.write(content);
-			f.close();
+		if(content == "") return;
+		
+		inv.delete_all();
+		string[] lines = delinear(content);
+		for(uint i = 0; i < lines.length(); i++) {
+			if(lines[i] == "") continue;
+			string[] data = string_split(lines[i], "=", true);
+			if(data.length() != 2) continue;
+			inv.set(data[0], string_to_number(data[1]));
 		}
-		else return;
+		
+		save_player_inventory_to_db(this);
 	}
 	
 	string getinv() {

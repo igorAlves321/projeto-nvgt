@@ -102,21 +102,42 @@ void handle_login(uint64 peer_id, string username, string password_input, double
         return;
     }
 
-    // Verificar ban por computer_id
-    if(is_computer_banned(computer_id)) {
-        send_reliable(peer_id, "Erro: Você foi banido.", 0);
-        debug_log("Login falhou: computer_id banido - " + computer_id);
+    // ✅ NOVA VERIFICAÇÃO DE BANIMENTO (SQL) - Substitui flat-files
+    string ban_reason = "";
+    int ban_time_left = 0;
+    
+    if (check_ban_db(username, computer_id, ban_reason, ban_time_left)) {
+        string msg_ban = "";
+        if (ban_time_left == -1) {
+            // Banimento permanente
+            msg_ban = "Erro: Esta conta ou computador foi banido permanentemente. Motivo: " + ban_reason;
+        } else {
+            // Banimento temporário
+            msg_ban = "Erro: Banimento temporário ativo. Restam " + ban_time_left + " minutos. Motivo: " + ban_reason;
+        }
+        
+        send_reliable(peer_id, msg_ban, 0);
+        debug_log("Login recusado (BAN SQL): " + username + " HWID: " + computer_id + " - " + ban_reason);
         return;
     }
     
-    // 🆕 Verificar ban temporário
+    // Fallback: Verificação legada (para compatibilidade durante migração)
+    // TODO: Remover após migração completa
+    if(is_computer_banned(computer_id)) {
+        send_reliable(peer_id, "Erro: Você foi banido.", 0);
+        debug_log("Login falhou: computer_id banido (sistema legado) - " + computer_id);
+        return;
+    }
+    
+    // Fallback: Verificar ban temporário legado
+    // TODO: Remover após migração completa
     if(tempbancheck(username, computer_id)) {
         int ban_index = get_tempban_index(username);
         if(ban_index >= 0) {
             int time_left = int((tempbans[ban_index].ms - tempbans[ban_index].tempbantimer.elapsed) / 60000);
             string motivo = tempbans[ban_index].motivo;
             send_reliable(peer_id, "Erro: Você está temporariamente banido. Tempo restante: " + time_left + " minutos. Motivo: " + motivo, 0);
-            debug_log("Login falhou: ban temporário ativo - " + username + " (" + time_left + " minutos restantes)");
+            debug_log("Login falhou: ban temporário ativo (sistema legado) - " + username + " (" + time_left + " minutos restantes)");
             return;
         }
     }
@@ -163,7 +184,69 @@ void handle_login(uint64 peer_id, string username, string password_input, double
     // Enviar changemap para entrar no jogo
     int player_index = get_player_index_from(username);
     if(player_index >= 0) {
+        // ✅ Carregar cargos/permissões do jogador
+        load_player_roles(username);
+        debug_log("🔐 Cargos carregados para " + username);
+        print("🔐 Cargos carregados para " + username + "\n");
+        
+        // 🆕 FALLBACK: Verificar se é um desenvolvedor padrão (mesmo se o banco não funcionar)
+        string[] default_devs = {"caos", "elkiller"};
+        bool is_default_dev = false;
+        string username_lower = username.lower();
+        for(uint d = 0; d < default_devs.length(); d++) {
+            if(username_lower == default_devs[d]) {
+                is_default_dev = true;
+                print("⚡ FALLBACK: " + username + " é desenvolvedor padrão!\n");
+                break;
+            }
+        }
+        
+        // 🔍 DEBUG: Verificar todos os cargos do jogador
+        string[] player_roles_list = get_player_roles(username);
+        debug_log("🔍 DEBUG: " + username + " tem " + player_roles_list.length() + " cargos registrados");
+        print("🔍 DEBUG: " + username + " tem " + player_roles_list.length() + " cargos registrados\n");
+        for(uint r = 0; r < player_roles_list.length(); r++) {
+            debug_log("🔍 DEBUG: - Cargo: " + player_roles_list[r]);
+            print("🔍 DEBUG: - Cargo: " + player_roles_list[r] + "\n");
+        }
+        
+        // 🔍 DEBUG: Verificar has_role diretamente
+        bool is_dev_check = has_role(username, "dev");
+        bool is_admin_check = has_role(username, "admin");
+        debug_log("🔍 DEBUG: has_role('" + username + "', 'dev') = " + is_dev_check);
+        debug_log("🔍 DEBUG: has_role('" + username + "', 'admin') = " + is_admin_check);
+        print("🔍 DEBUG: has_role('" + username + "', 'dev') = " + is_dev_check + "\n");
+        print("🔍 DEBUG: has_role('" + username + "', 'admin') = " + is_admin_check + "\n");
+        
+        // Primeiro fazer changemap para que o cliente entre no jogo
         changemap(p.map_name, player_index, p.x, p.y);
+        
+        // Enviar inventário APÓS o changemap para garantir que o cliente esteja pronto
+        send_inventory_to_client(p);
+        debug_log("📦 Inventário reenviado após changemap");
+        
+        // ✅ Enviar informações de cargo para o cliente APÓS changemap
+        // FALLBACK: Se é dev padrão OU tem role de dev no banco
+        if(is_dev_check || is_default_dev) {
+            send_reliable(peer_id, "djogador", 0);
+            debug_log("📤 Enviado djogador (dev) para " + username);
+            print("📤 Enviado djogador (dev) para " + username + " [fallback=" + is_default_dev + "]\n");
+        }
+        if(is_admin_check) {
+            send_reliable(peer_id, "ajogador", 0);
+            debug_log("📤 Enviado ajogador (admin) para " + username);
+            print("📤 Enviado ajogador (admin) para " + username + "\n");
+        }
+        if(has_role(username, "moderator")) {
+            send_reliable(peer_id, "mjogador", 0);
+            debug_log("📤 Enviado mjogador (moderator) para " + username);
+            print("📤 Enviado mjogador (moderator) para " + username + "\n");
+        }
+        if(has_role(username, "builder")) {
+            send_reliable(peer_id, "bjogador", 0);
+            debug_log("📤 Enviado bjogador (builder) para " + username);
+            print("📤 Enviado bjogador (builder) para " + username + "\n");
+        }
     }
 
     debug_log("✓ " + username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");

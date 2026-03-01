@@ -107,11 +107,43 @@ void bottomadditem(){
 	}
 }
 
-void add_add_item(string addname, string item,bool speakitem=true){
+void add_add_item(string addname, string item, bool speakitem=true){
+	debug_log("📨 add_add_item chamada: canal='" + addname + "', msg='" + item + "'");
+	
+	// Verificar se o canal existe, se não existir, criar automaticamente
+	bool canal_existe = false;
+	for (uint i=0; i<adds.length(); i++) {
+		if (adds[i].name==addname) {
+			canal_existe = true;
+			break;
+		}
+	}
+	
+	if(!canal_existe) {
+		debug_log("📨 Criando canal: " + addname);
+		create_add(addname);
+	}
+	
+	// Adicionar mensagem ao canal específico e ao canal "tudo" (histórico)
 	for (uint i=0; i<adds.length(); i++) {
 		if (adds[i].name==addname||adds[i].name=="tudo"){
-			if (speakitem&&adds[i].name!="tudo")speak(item);
+			if (speakitem && adds[i].name!="tudo") {
+				// Tocar som de notificação apropriado
+				if(addname == "global" || addname == "canal_principal") {
+					p.play_stationary("chat.ogg", false);
+				} else if(addname == "local" || addname == "canal_local") {
+					p.play_stationary("chatmap.ogg", false);
+				} else if(addname == "privado" || addname == "pm") {
+					p.play_stationary("notify_startrek_transmit.ogg", false);
+				} else if(addname == "equipe" || addname == "team") {
+					p.play_stationary("teamchat.ogg", false);
+				} else {
+					p.play_stationary("notify37.ogg", false);
+				}
+				speak(item);
+			}
 			adds[i].items.insert_last(item);
+			debug_log("📨 Mensagem adicionada ao canal '" + adds[i].name + "', total: " + adds[i].items.length());
 		}
 	}
 }
@@ -134,4 +166,166 @@ int add_active(string addname){
 		if (adds[i].name==addname)return adds[i].active;
 	}
 	return 0;
+}
+
+// Menu de gestão de buffers (reordenar canais de mensagens)
+void buffersmenu() {
+	if(ausente) return;
+	int counter = 0;
+	p.play_stationary("notify37.ogg", false);
+	speak(pu.get_value("Menu de gestão de buffers. Para mover os apartados, pulse alt+j ou alt+k. Para salvar, pulse enter."));
+	
+	// Falar o primeiro canal
+	if(adds.length() > 0) {
+		speak(pu.get_value(adds[counter].name));
+	}
+	
+	while(true) {
+		wait(5);
+		
+		if(key_pressed(KEY_ESCAPE)){
+			break;
+		}
+		if(key_pressed(KEY_LEFT) && counter > 0) {
+			counter--;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_RIGHT) && counter < int(adds.length()) - 1) {
+			counter++;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_HOME) && counter > 0){
+			counter = 0;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_pressed(KEY_END) && counter < int(adds.length()) - 1){
+			counter = int(adds.length()) - 1;
+			p.play_stationary("invmove6.ogg", false);
+			speak(pu.get_value(adds[counter].name));
+		}
+		if(key_down(KEY_LMENU) && key_pressed(KEY_J)) {
+			if(counter > 0) {
+				p.play_stationary("menubounds.ogg", false);
+				speak(pu.get_value(adds[counter].name) + " " + pu.get_value("movido à esquerda."));
+				sort_buffer(adds[counter].name, -1);
+				counter--;
+			}
+		}
+		if(key_down(KEY_LMENU) && key_pressed(KEY_K)) {
+			if(counter >= 0 && counter < int(adds.length()) - 1) {
+				p.play_stationary("menubounds.ogg", false);
+				speak(pu.get_value(adds[counter].name) + " " + pu.get_value("movido à direita."));
+				sort_buffer(adds[counter].name, 1);
+				counter++;
+			}
+		}
+		if(key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) {
+			if(counter >= 0) {
+				p.play_stationary("menuchecked.ogg", false);
+				save_buffers();
+				break;
+			}
+		}
+	}
+}
+
+// Ordenar buffer (mover canal para esquerda ou direita)
+void sort_buffer(string buffername, int direction) {
+	for(uint i = 0; i < adds.length(); i++) {
+		if(adds[i].name == buffername) {
+			int new_pos = int(i) + direction;
+			if(new_pos >= 0 && new_pos < int(adds.length())) {
+				// Trocar posições
+				add@ temp = adds[i];
+				@adds[i] = adds[new_pos];
+				@adds[new_pos] = temp;
+			}
+			return;
+		}
+	}
+}
+
+// Salvar ordem dos buffers
+void save_buffers() {
+	if(adds.length() > 0) {
+		string final_data = "";
+		for(uint i = 0; i < adds.length(); i++) {
+			if(i > 0) final_data += "\r\n";
+			final_data += adds[i].name;
+		}
+		file f;
+		if(f.open("buffers.txt", "w")) {
+			f.write(final_data);
+			f.close();
+		}
+	}
+}
+
+// Carregar ordem dos buffers
+void load_buffers() {
+	file f;
+	if(f.open("buffers.txt", "r")) {
+		string content = f.read();
+		f.close();
+		
+		if(content.length() > 0) {
+			string[] order = content.split("\r\n");
+			// Reordenar adds baseado na ordem salva
+			add@[] new_order;
+			for(uint i = 0; i < order.length(); i++) {
+				for(uint j = 0; j < adds.length(); j++) {
+					if(adds[j].name == order[i]) {
+						new_order.insert_last(adds[j]);
+						break;
+					}
+				}
+			}
+			// Adicionar os que não estavam na lista
+			for(uint i = 0; i < adds.length(); i++) {
+				bool found = false;
+				for(uint j = 0; j < new_order.length(); j++) {
+					if(new_order[j].name == adds[i].name) {
+						found = true;
+						break;
+					}
+				}
+				if(!found) {
+					new_order.insert_last(adds[i]);
+				}
+			}
+			adds = new_order;
+		}
+	}
+}
+
+// Menu de seleção de idioma
+void select_language(bool use_return = true) {
+	string[] langfiles = find_files("lang/*.lang");
+	if(langfiles.length() == 0) {
+		dlg(pu.get_value("Não há arquivos de idioma na pasta lang."));
+		return;
+	}
+	
+	setupmenu();
+	for(uint i = 0; i < langfiles.length(); i++) {
+		string lang_name = langfiles[i].replace(".lang", "");
+		game_menu.add_item(lang_name, langfiles[i]);
+	}
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Escolha um arquivo de idioma e pressione enter.");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(mres <= 0 || selected_id == "back") {
+		return;
+	}
+	
+	cmfinal = "lang/" + selected_id;
+	pu.set_arquivo(cmfinal);
+	idiomachat = selected_id.replace(".lang", "");
+	writeprefs();
 }

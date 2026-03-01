@@ -1,0 +1,411 @@
+﻿// ============================================================================
+// CONSTRUTOR DE ITENS - NVGT
+// Interface visual para criaÃ§Ã£o de itens sem escrever cÃ³digo/SQL
+// Integra-se ao menu de administraÃ§Ã£o (F9)
+// ============================================================================
+
+// ============================================================================
+// MENU PRINCIPAL DO CONSTRUTOR DE ITENS
+// ============================================================================
+void item_builder_menu() {
+    while(true) {
+        setupmenu();
+        
+        // Categorias de itens
+        game_menu.add_item(pu.get_value("Arma de Fogo"), "weapon_gun");
+        game_menu.add_item(pu.get_value("Arma Corpo a Corpo"), "weapon_melee");
+        game_menu.add_item(pu.get_value("Armadura"), "armor");
+        game_menu.add_item(pu.get_value("ConsumÃ­vel (PoÃ§Ã£o/Comida)"), "consumable");
+        game_menu.add_item(pu.get_value("Material/Loot"), "misc");
+        game_menu.add_item(pu.get_value("Listar Itens Existentes"), "list");
+        game_menu.add_item(pu.get_value("Editar Item Existente"), "edit");
+        game_menu.add_item(pu.get_value("Excluir Item Existente"), "delete");
+        game_menu.add_item(pu.get_value("Voltar"), "back");
+        
+        game_menu.intro_text = pu.get_value("Construtor de Itens. Selecione o tipo de item que deseja criar.");
+        
+        int res = game_menu.run();
+        if(res < 0) return;
+        
+        string type = game_menu.get_item_id(res);
+        if(type == "back") return;
+        
+        if(type == "list") {
+            item_builder_list_items();
+        }
+        else if(type == "edit") {
+            item_builder_edit_item();
+        }
+        else if(type == "delete") {
+            item_builder_delete_item();
+        }
+        else if(type == "weapon_gun") {
+            item_builder_weapon_gun();
+        }
+        else if(type == "weapon_melee") {
+            item_builder_weapon_melee();
+        }
+        else if(type == "armor") {
+            item_builder_armor();
+        }
+        else if(type == "consumable") {
+            item_builder_consumable();
+        }
+        else if(type == "misc") {
+            item_builder_misc();
+        }
+    }
+}
+
+// ============================================================================
+// CRIADOR DE ARMA DE FOGO (formato weapons.db)
+// Campos baseados no weapons.bgt original
+// ============================================================================
+void item_builder_weapon_gun() {
+    // PARTE 1: Dados BÃ¡sicos
+    input_form form1(pu.get_value("Criar Arma de Fogo - Parte 1: BÃ¡sico"));
+    
+    // ID interno (ex: ak47, glock17)
+    form1.add_text_field("name", pu.get_value("ID interno (sem espaÃ§os, ex: ak47)"), "", true);
+    
+    // Tipo de muniÃ§Ã£o (ex: 9mm, 7.62mm, .50ae)
+    form1.add_text_field("ammo", pu.get_value("Tipo de muniÃ§Ã£o (ex: 9mm, 7.62mm, none para melee)"), "9mm", true);
+    
+    // Dano e distÃ¢ncia
+    form1.add_number_field("damage", pu.get_value("Dano base"), 50, true);
+    form1.add_number_field("distance", pu.get_value("Alcance (distÃ¢ncia)"), 500, true);
+    
+    // MuniÃ§Ã£o
+    form1.add_number_field("ammo_total", pu.get_value("MuniÃ§Ã£o total reserva"), 150, true);
+    form1.add_number_field("ammo_cantity", pu.get_value("MuniÃ§Ã£o no pente"), 30, true);
+    
+    dictionary@ r1 = form1.run();
+    if(form1.user_canceled) return;
+    
+    string name, ammo;
+    double damage, distance, ammo_total, ammo_cantity;
+    r1.get("name", name);
+    r1.get("ammo", ammo);
+    r1.get("damage", damage);
+    r1.get("distance", distance);
+    r1.get("ammo_total", ammo_total);
+    r1.get("ammo_cantity", ammo_cantity);
+    
+    // PARTE 2: Velocidades e Modos
+    input_form form2(pu.get_value("Criar Arma de Fogo - Parte 2: Velocidades"));
+    
+    form2.add_number_field("speed", pu.get_value("Velocidade de tiro (ms entre tiros)"), 500, true);
+    form2.add_number_field("speed_burst", pu.get_value("Velocidade rajada (0 se nÃ£o tem)"), 0, true);
+    form2.add_number_field("speed_loading", pu.get_value("Tempo de recarga (ms)"), 2000, true);
+    form2.add_number_field("require_ammo", pu.get_value("Requer muniÃ§Ã£o? (1=sim, 0=nÃ£o)"), 1, true);
+    form2.add_number_field("enable_burst", pu.get_value("Tem modo rajada? (1=sim, 0=nÃ£o)"), 0, true);
+    form2.add_number_field("is_dropable", pu.get_value("DropÃ¡vel? (1=sim, 0=nÃ£o)"), 0, true);
+    form2.add_number_field("ammo_cantity_descount", pu.get_value("MuniÃ§Ã£o gasta por tiro"), 1, true);
+    form2.add_number_field("degradation", pu.get_value("DegradaÃ§Ã£o (desgaste por tiro)"), 1, true);
+    
+    dictionary@ r2 = form2.run();
+    if(form2.user_canceled) return;
+    
+    double speed, speed_burst, speed_loading, require_ammo, enable_burst, is_dropable, ammo_descount, degradation;
+    r2.get("speed", speed);
+    r2.get("speed_burst", speed_burst);
+    r2.get("speed_loading", speed_loading);
+    r2.get("require_ammo", require_ammo);
+    r2.get("enable_burst", enable_burst);
+    r2.get("is_dropable", is_dropable);
+    r2.get("ammo_cantity_descount", ammo_descount);
+    r2.get("degradation", degradation);
+    
+    // PARTE 3: Sons
+    input_form form3(pu.get_value("Criar Arma de Fogo - Parte 3: Sons"));
+    
+    form3.add_text_field("sound_shoot", pu.get_value("Som de tiro (ex: ak47)"), name, true);
+    form3.add_text_field("sound_shoot_dist", pu.get_value("Som de tiro distante"), name + "dist", true);
+    form3.add_text_field("sound_impact", pu.get_value("Sons de impacto (separados por vÃ­rgula)"), "rico1,rico2,rico3,rico4", true);
+    form3.add_text_field("sound_impact_corpse", pu.get_value("Sons de impacto em corpo"), "body1,body2,body3,body4", true);
+    form3.add_text_field("sound_draw", pu.get_value("Som de sacar arma"), name + "draw", true);
+    form3.add_text_field("sound_reload", pu.get_value("Som de recarregar"), name + "reload", true);
+    form3.add_text_field("sound_empty", pu.get_value("Som sem muniÃ§Ã£o"), name + "empty", true);
+    form3.add_text_field("sound_unload", pu.get_value("Som descarregar"), "0", false);
+    form3.add_text_field("sound_mode1", pu.get_value("Som modo automÃ¡tico"), "0", false);
+    form3.add_text_field("sound_mode2", pu.get_value("Som modo semi"), "0", false);
+    
+    dictionary@ r3 = form3.run();
+    if(form3.user_canceled) return;
+    
+    string sound_shoot, sound_shoot_dist, sound_impact, sound_impact_corpse;
+    string sound_draw, sound_reload, sound_empty, sound_unload, sound_mode1, sound_mode2;
+    r3.get("sound_shoot", sound_shoot);
+    r3.get("sound_shoot_dist", sound_shoot_dist);
+    r3.get("sound_impact", sound_impact);
+    r3.get("sound_impact_corpse", sound_impact_corpse);
+    r3.get("sound_draw", sound_draw);
+    r3.get("sound_reload", sound_reload);
+    r3.get("sound_empty", sound_empty);
+    r3.get("sound_unload", sound_unload);
+    r3.get("sound_mode1", sound_mode1);
+    r3.get("sound_mode2", sound_mode2);
+    
+    // Montar pacote no formato weapons.db
+    // Formato: name=ammo=sound_shoot=sound_impact=sound_draw=sound_reload=damage=distance=ammo_total=ammo_cantity=speed=speed_burst=speed_loading=require_ammo=enable_burst=is_dropable=sound_impact_on_corpse=sound_unload=sound_mode1=sound_mode2=ammo_cantity_descount=sound_shoot_dist=degradation_point
+    string weapon_data = name + "=" + ammo + "=" + sound_shoot + "=" + sound_impact + "=" + 
+                         sound_draw + "=" + sound_reload + "=" + int(damage) + "=" + int(distance) + "=" + 
+                         int(ammo_total) + "=" + int(ammo_cantity) + "=" + int(speed) + "=" + int(speed_burst) + "=" + 
+                         int(speed_loading) + "=" + int(require_ammo) + "=" + int(enable_burst) + "=" + int(is_dropable) + "=" + 
+                         sound_impact_corpse + "=" + sound_unload + "=" + sound_mode1 + "=" + sound_mode2 + "=" + 
+                         int(ammo_descount) + "=" + sound_shoot_dist + "=" + degradation;
+    
+    // Enviar ao servidor
+    string packet = "/create_weapon_tool " + weapon_data;
+    send_to_server(packet, 0, true);
+    
+    speak(pu.get_value("SolicitaÃ§Ã£o de criaÃ§Ã£o de arma enviada: ") + name);
+}
+
+// ============================================================================
+// CRIADOR DE ARMA CORPO A CORPO
+// ============================================================================
+void item_builder_weapon_melee() {
+    input_form form(pu.get_value("Criar Arma Corpo a Corpo"));
+    
+    form.add_text_field("name", pu.get_value("ID interno (ex: faca, espada)"), "", true);
+    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: Espada de Ferro)"), "", true);
+    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Uma arma corpo a corpo.", true);
+    form.add_text_field("category", pu.get_value("Categoria (sword, dagger, axe, hammer)"), "sword", true);
+    form.add_number_field("damage", pu.get_value("Dano"), 30, true);
+    form.add_number_field("distance", pu.get_value("Alcance (50=curto, 100=mÃ©dio)"), 50, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), 2, true);
+    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 100, true);
+    form.add_text_field("rarity", pu.get_value("Raridade (common, uncommon, rare, epic, legendary)"), "common", true);
+    form.add_text_field("sound_file", pu.get_value("Som de ataque (ex: sword_swing)"), "sword_swing.wav", true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name, display, desc, category, rarity, sound_file;
+    double damage, distance, weight, value;
+    result.get("name", name);
+    result.get("display", display);
+    result.get("desc", desc);
+    result.get("category", category);
+    result.get("damage", damage);
+    result.get("distance", distance);
+    result.get("weight", weight);
+    result.get("value", value);
+    result.get("rarity", rarity);
+    result.get("sound_file", sound_file);
+    
+    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound
+    string packet = "/create_item_tool weapon|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                    int(damage) + "|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(distance);
+    
+    send_to_server(packet, 0, true);
+    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+}
+
+// ============================================================================
+// CRIADOR DE ARMADURA
+// ============================================================================
+void item_builder_armor() {
+    input_form form(pu.get_value("Criar Armadura"));
+    
+    form.add_text_field("name", pu.get_value("ID interno (ex: iron_armor)"), "", true);
+    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: Armadura de Ferro)"), "", true);
+    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Uma armadura protetora.", true);
+    form.add_text_field("category", pu.get_value("Parte do corpo (head, chest, legs, boots, gloves)"), "chest", true);
+    form.add_number_field("defense", pu.get_value("Defesa"), 20, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), 5, true);
+    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 200, true);
+    form.add_text_field("rarity", pu.get_value("Raridade (common, uncommon, rare, epic, legendary)"), "common", true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name, display, desc, category, rarity;
+    double defense, weight, value;
+    result.get("name", name);
+    result.get("display", display);
+    result.get("desc", desc);
+    result.get("category", category);
+    result.get("defense", defense);
+    result.get("weight", weight);
+    result.get("value", value);
+    result.get("rarity", rarity);
+    
+    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound
+    string packet = "/create_item_tool armor|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                    "0|" + int(defense) + "|0|0|" + weight + "|" + int(value) + "|" + rarity + "|";
+    
+    send_to_server(packet, 0, true);
+    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+}
+
+// ============================================================================
+// CRIADOR DE CONSUMÃVEL (PoÃ§Ãµes, Comida)
+// ============================================================================
+void item_builder_consumable() {
+    input_form form(pu.get_value("Criar ConsumÃ­vel"));
+    
+    form.add_text_field("name", pu.get_value("ID interno (ex: potion_hp, bread)"), "", true);
+    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: PoÃ§Ã£o de Vida)"), "", true);
+    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Um item consumÃ­vel.", true);
+    form.add_text_field("category", pu.get_value("Tipo (potion, food, drink)"), "potion", true);
+    form.add_number_field("heal", pu.get_value("Cura HP"), 50, true);
+    form.add_number_field("mana", pu.get_value("Restaura Mana"), 0, true);
+    form.add_number_field("max_stack", pu.get_value("MÃ¡ximo empilhÃ¡vel"), 20, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), 0.5, true);
+    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 10, true);
+    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
+    form.add_text_field("sound_file", pu.get_value("Som de uso (ex: potion_use.wav)"), "potion_use.wav", true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name, display, desc, category, rarity, sound_file;
+    double heal, mana, max_stack, weight, value;
+    result.get("name", name);
+    result.get("display", display);
+    result.get("desc", desc);
+    result.get("category", category);
+    result.get("heal", heal);
+    result.get("mana", mana);
+    result.get("max_stack", max_stack);
+    result.get("weight", weight);
+    result.get("value", value);
+    result.get("rarity", rarity);
+    result.get("sound_file", sound_file);
+    
+    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack
+    string packet = "/create_item_tool consumable|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                    "0|0|" + int(heal) + "|" + int(mana) + "|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(max_stack);
+    
+    send_to_server(packet, 0, true);
+    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+}
+
+// ============================================================================
+// CRIADOR DE MATERIAL/LOOT GENÃ‰RICO
+// ============================================================================
+void item_builder_misc() {
+    input_form form(pu.get_value("Criar Material/Loot"));
+    
+    form.add_text_field("name", pu.get_value("ID interno (ex: iron_ore, wood)"), "", true);
+    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: MinÃ©rio de Ferro)"), "", true);
+    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Um material.", true);
+    form.add_text_field("category", pu.get_value("Categoria (material, quest, currency, junk)"), "material", true);
+    form.add_number_field("max_stack", pu.get_value("MÃ¡ximo empilhÃ¡vel"), 64, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), 1, true);
+    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 5, true);
+    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
+    form.add_number_field("drop_rate", pu.get_value("Taxa de drop (0.0 a 1.0)"), 1.0, true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name, display, desc, category, rarity;
+    double max_stack, weight, value, drop_rate;
+    result.get("name", name);
+    result.get("display", display);
+    result.get("desc", desc);
+    result.get("category", category);
+    result.get("max_stack", max_stack);
+    result.get("weight", weight);
+    result.get("value", value);
+    result.get("rarity", rarity);
+    result.get("drop_rate", drop_rate);
+    
+    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
+    string packet = "/create_item_tool misc|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                    "0|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "||" + int(max_stack) + "|" + drop_rate;
+    
+    send_to_server(packet, 0, true);
+    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+}
+
+// ============================================================================
+// LISTAR ITENS EXISTENTES (solicita ao servidor)
+// ============================================================================
+void item_builder_list_items() {
+    send_to_server("/list_items", 0, true);
+    speak(pu.get_value("Solicitando lista de itens ao servidor..."));
+}
+
+
+// ============================================================================
+// EDITAR ITEM EXISTENTE
+// Formato: name|display|desc|type|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
+// ============================================================================
+void item_builder_edit_item() {
+    input_form form(pu.get_value("Editar Item Existente"));
+    
+    form.add_text_field("name", pu.get_value("ID interno do item"), "", true);
+    form.add_text_field("display", pu.get_value("Nome visivel"), "", true);
+    form.add_text_field("desc", pu.get_value("Descricao"), "", true);
+    form.add_text_field("type", pu.get_value("Tipo (weapon, armor, consumable, misc)"), "misc", true);
+    form.add_text_field("category", pu.get_value("Categoria"), "material", true);
+    form.add_number_field("damage", pu.get_value("Dano"), 0, true);
+    form.add_number_field("defense", pu.get_value("Defesa"), 0, true);
+    form.add_number_field("heal", pu.get_value("Cura HP"), 0, true);
+    form.add_number_field("mp", pu.get_value("Restaura MP"), 0, true);
+    form.add_number_field("weight", pu.get_value("Peso"), 1, true);
+    form.add_number_field("value", pu.get_value("Valor"), 0, true);
+    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
+    form.add_text_field("sound", pu.get_value("Som (arquivo ou vazio)"), "", false);
+    form.add_number_field("max_stack", pu.get_value("Maximo empilhavel"), 1, true);
+    form.add_number_field("drop_rate", pu.get_value("Taxa de drop (0.0 a 1.0)"), 1.0, true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name, display, desc, type, category, rarity, sound;
+    double damage, defense, heal, mp, weight, value, max_stack, drop_rate;
+    result.get("name", name);
+    result.get("display", display);
+    result.get("desc", desc);
+    result.get("type", type);
+    result.get("category", category);
+    result.get("damage", damage);
+    result.get("defense", defense);
+    result.get("heal", heal);
+    result.get("mp", mp);
+    result.get("weight", weight);
+    result.get("value", value);
+    result.get("rarity", rarity);
+    result.get("sound", sound);
+    result.get("max_stack", max_stack);
+    result.get("drop_rate", drop_rate);
+    
+    string data = name + "|" + display + "|" + desc + "|" + type + "|" + category + "|" +
+                  int(damage) + "|" + int(defense) + "|" + int(heal) + "|" + int(mp) + "|" +
+                  weight + "|" + int(value) + "|" + rarity + "|" + sound + "|" +
+                  int(max_stack) + "|" + drop_rate;
+    
+    send_to_server("/edit_item_tool " + data, 0, true);
+    speak(pu.get_value("Solicitacao de edicao enviada: ") + name);
+}
+
+// ============================================================================
+// EXCLUIR ITEM EXISTENTE
+// ============================================================================
+void item_builder_delete_item() {
+    input_form form(pu.get_value("Excluir Item Existente"));
+    form.add_text_field("name", pu.get_value("ID interno do item para excluir"), "", true);
+    
+    dictionary@ result = form.run();
+    if(form.user_canceled) return;
+    
+    string name;
+    result.get("name", name);
+    
+    if(name == "") {
+        speak(pu.get_value("ID do item invalido."));
+        return;
+    }
+    
+    send_to_server("/delete_item_tool " + name, 0, true);
+    speak(pu.get_value("Solicitacao de exclusao enviada: ") + name);
+}
+
+// NOTA: A funÃ§Ã£o send_to_server() Ã© definida em buildermenu.nvgt
+
+

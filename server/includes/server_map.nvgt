@@ -42,6 +42,23 @@ mutex map_global_mutex;
 // Array global de mapas do servidor
 map@[] server_maps;
 
+string get_map_filename(string map_input) {
+	string normalized = map_input.replace("\\", "/");
+	string[] parts = normalized.split("/");
+	string file_name = parts.length() > 0 ? parts[parts.length() - 1] : normalized;
+	if(file_name.find(".map") == -1) file_name += ".map";
+	return file_name;
+}
+
+string resolve_map_path(string map_input) {
+	string file_name = get_map_filename(map_input);
+	string path_local = "maps/" + file_name;
+	if(file_exists(path_local)) return path_local;
+	string path_server = "server/maps/" + file_name;
+	if(file_exists(path_server)) return path_server;
+	return path_local; // fallback para manter mensagem de erro consistente
+}
+
 // ============================================================================
 // 🗑️ SISTEMA DE LIMPEZA DE ITENS EXPIRADOS (Task 1.1.2)
 // ============================================================================
@@ -223,8 +240,9 @@ class map {
 	// CONSTRUTOR
 	// ============================================================================
 	map(string mapfile) {
-		this.name = mapfile.replace(".map", "");
-		init_map(mapfile);
+		string file_name = get_map_filename(mapfile);
+		this.name = file_name.replace(".map", "");
+		init_map(file_name);
 	}
 	
 	// ============================================================================
@@ -233,8 +251,9 @@ class map {
 	void init_map(string mapname) {
 		// Abrir e ler arquivo do mapa
 		file map_file;
-		if (!map_file.open("maps/" + mapname, "r")) {
-			alert("Erro", "Não foi possível abrir o arquivo de mapa: maps/" + mapname);
+		string map_path = resolve_map_path(mapname);
+		if (!map_file.open(map_path, "r")) {
+			alert("Erro", "Não foi possível abrir o arquivo de mapa: " + map_path);
 			return;
 		}
 		
@@ -893,7 +912,7 @@ class map {
 	void update_moving_sound(int id, int x, int y) {
 		for (uint i = 0; i < msounds.length(); i++) {
 			if (msounds[i].id == id) {
-				msounds[i].updateme(x, y);
+				msounds[i].update_position(x, y);
 			}
 			for (uint j = 0; j < mapplayers.length(); j++) {
 				send_reliable(players[mapplayers[j]].peer_id, "um " + id + " " + x + " " + y + " " + this.name, 0);
@@ -1394,7 +1413,7 @@ class map {
 		for (uint bu = 0; bu < npcs.length(); bu++) {
 			if (bullets[b].x == npcs[bu].x && bullets[b].y == npcs[bu].y) {
 				// Som de impacto no NPC
-				if (npcs[bu].impactosbala != "default") {
+				if (npcs[bu].impactosbala != "default" && npcs[bu].impactos.length() > 0) {
 					send_packet(5, "play_body " + npcs[bu].impactos[random(0, npcs[bu].impactos.length() - 1)] + ".ogg", 
 					           bullets[b].x, bullets[b].y);
 				}
@@ -2597,6 +2616,18 @@ class map {
 // Carrega todos os mapas do diretório maps/
 void spawn_maps() {
 	string[] filemaps = find_files("maps/*.map");
+	string[] server_filemaps = find_files("server/maps/*.map");
+	dictionary seen_names;
+	for(uint i = 0; i < filemaps.length(); i++) {
+		string map_name = get_map_filename(filemaps[i]).replace(".map", "");
+		seen_names.set(map_name, true);
+	}
+	for(uint i = 0; i < server_filemaps.length(); i++) {
+		string map_name = get_map_filename(server_filemaps[i]).replace(".map", "");
+		if(!seen_names.exists(map_name)) {
+			filemaps.insert_last(server_filemaps[i]);
+		}
+	}
 	if (filemaps.length() > 0) {
 		for (uint x = 0; x < filemaps.length(); x++) {
 			map map1(filemaps[x]);

@@ -1,9 +1,9 @@
-﻿// VariÃ¡veis globais e utilitÃ¡rios para NVGT
+﻿// Variáveis globais e utilitários para NVGT
 // Usando funcionalidades 100% nativas NVGT
 
 #include "audio.nvgt"
-#include "../../include/bgt_compat.nvgt"  // FunÃ§Ãµes de compatibilidade BGT (string_hash, etc)
-#include "chat.nvgt"                        // Sistema de chat multiplos canais
+#include "game_client.nvgt"               // ✅ Classe GameClient encapsulada (refatoração de rede)
+#include "../../docks/include/bgt_compat.nvgt"  // Funções de compatibilidade BGT (string_hash, etc)
 
 // ============================================================================
 // CLASSE DE CÂMERA DE EXPLORAÇÃO (Task 2.3)
@@ -121,6 +121,7 @@ int dbaculo = 0;
 int dbazuca = 0;
 int camion = 0;
 int camionativo = 1;
+double camionveloc = 400.0;  // Velocidade do caminhão (mesma da bicicleta)
 string somchuva = "rain4.ogg";
 bool centado = false;
 bool comurl = false;
@@ -144,7 +145,23 @@ int selected = 0;               // Arma/item selecionado atualmente
 int crouched = 0;               // Jogador agachado (0 = nÃ£o, 1 = sim)
 bool relogin_flag = false;      // Flag para indicar necessidade de relogin
 
-// VariÃ¡veis de estado admin/features
+// ===== SISTEMA DE RECONEXÃO COM BACKOFF EXPONENCIAL =====
+int reconnect_attempts = 0;           // Contador de tentativas de reconexão
+int reconnect_delay = 1000;           // Delay atual em ms (dobra a cada falha)
+const int MIN_RECONNECT_DELAY = 1000; // 1 segundo inicial
+const int MAX_RECONNECT_DELAY = 30000; // 30 segundos máximo
+timer reconnect_timer;                 // Timer para controlar intervalo
+bool waiting_to_reconnect = false;     // Flag de espera ativa
+
+// ===== HEARTBEAT AUTOMÁTICO =====
+timer heartbeat_timer;
+const int HEARTBEAT_INTERVAL = 5000;  // 5 segundos entre heartbeats
+
+// ===== SEQUENCE NUMBERS (ORDENAÇÃO DE PACOTES) =====
+// Evita glitches de áudio quando pacotes chegam fora de ordem
+uint16 movement_seq = 0;  // Sequência para pacotes de movimento/rotação
+
+// Variáveis de estado admin/features
 int construye = 0;              // Modo construtor ativado
 int enabletranslate = 0;        // TraduÃ§Ã£o ativada
 int enablechatadm = 0;          // Chat admin ativado
@@ -262,8 +279,8 @@ bool account_creating = false;
 bool connected = false;
 string username = "";
 double gversion = 1.0;
-int game_serverport = 9317;  // Deve coincidir com SERVER_PORT do servidor
-string game_serveraddress = "localhost";
+int game_serverport = port;  // Herdado de ../config.nvgt
+string game_serveraddress = serveraddress;
 
 // VariÃ¡veis adicionais necessÃ¡rias para compilaÃ§Ã£o
 file pf;
@@ -406,7 +423,7 @@ void exitgame() {
 void sair() {
 	exitgame();
 	sound door;
-	door.load("door1close.ogg");
+	door.load(get_sound_path("door1close.ogg"));
 	door.play_wait();
 	exit();
 }
@@ -526,6 +543,12 @@ int game_modera = 0;
 int game_dveloz = 0;
 int game_falarteclas = 1;
 
+// Flags de permissão admin/dev
+bool is_dev = false;        // Usuário é desenvolvedor
+bool is_admin = false;      // Usuário é admin
+bool is_moderator = false;  // Usuário é moderador
+bool is_builder = false;    // Usuário é construtor
+
 // Sistema TTS usando recursos nativos NVGT
 tts_voice game_tts;
 
@@ -544,7 +567,7 @@ void dlg(string text) {
 
 // Input usando recursos NVGT nativos
 string input_text(string prompt) {
-	return input_box("Input", prompt);
+	return input_box("", prompt);
 }
 
 void writeprefs() {
@@ -618,13 +641,12 @@ bool msginvalida(string msg) {
 	return (msg == "" || msg.find(" ") >= 0);
 }
 
-// Input helper usando recursos NVGT nativos
-class v_helper {
-	string input(string prompt) {
-		return input_box("Input", prompt);
-	}
-}
-v_helper v;
+// Input helper - classe virtualizer para entrada de texto acessível
+// NOTA: A virtualizer NÃO usa input_box nativo para evitar que leitores de tela
+// falem "painel/edição" durante a digitação. Isso melhora a experiência para
+// usuários de NVDA/JAWS. Migração para input_form requer testes de acessibilidade.
+// @see eplano.txt Task 2.2 para plano de migração futura
+virtualizer v;
 
 // Sistema de menus usando classe menu nativa NVGT
 menu client_menu;
@@ -683,9 +705,7 @@ void init_audio_system() {
 }
 
 // MantÃ©m assinatura original para compatibilidade
-void init_bass() {
-	init_audio_system();
-}
+// init_bass() removido - NVGT inicializa audio automaticamente
 
 // String to number conversion extension for compatibility
 int to_number(string str) {
@@ -750,33 +770,35 @@ string hash_password(string password) {
 // Forward declaration removida - causava conflito com funÃ§Ã£o global
 // encrypt_packet() definida em net.nvgt
 
-// FunÃ§Ã£o para enviar mensagem confiÃ¡vel (reliable) ao servidor
-// Usa a API nativa: network.send(peer_id, message, channel, reliable)
+// ===== WRAPPERS DE COMPATIBILIDADE (usam GameClient internamente) =====
+// Estas funções mantêm compatibilidade com código existente
+// Internamente delegam para game_client (classe encapsulada)
+
+// Função para enviar mensagem confiável (reliable) ao servidor
+// Wrapper de compatibilidade - usa game_client internamente
 void send_reliable(uint64 peer_id, string message, int channel = 0) {
-	if(@con == null) {
-		speak("ERRO: ConexÃ£o nÃ£o inicializada", false);
-		return;
-	}
-	
-	if(!is_connected) {
-		speak("ERRO: NÃ£o conectado ao servidor", false);
-		return;
-	}
-	
-	// Criptografar mensagem antes de enviar (funÃ§Ã£o definida em net.nvgt)
-	string encrypted = string_aes_encrypt(message, "evm_server_key_2024");
-	
-	// Enviar usando API nativa NVGT: network.send(peer_id, message, channel, reliable)
-	con.send(peer_id, encrypted, channel, true);
+	// Delega para game_client (classe encapsulada)
+	game_client.send_reliable(message, channel);
 }
 
-// FunÃ§Ã£o para enviar mensagem nÃ£o-confiÃ¡vel (unreliable/UDP) ao servidor
+// Função para enviar mensagem não-confiável (unreliable/UDP) ao servidor  
+// Wrapper de compatibilidade - usa game_client internamente
 void send_unreliable(uint64 peer_id, string message, int channel = 0) {
-	if(@con == null) return;
-	if(!is_connected) return;
+	// Delega para game_client (classe encapsulada)
+	game_client.send_unreliable(message, channel);
+}
+
+// ===== ENVIO COM SEQUENCE NUMBER =====
+// Usado para pacotes de movimento/rotação que precisam chegar em ordem
+// Formato: "seq:NNNN comando args..."
+void send_movement(uint64 peer_id, string message, int channel = 0) {
+	// Incrementar sequência (wrap around em 65535)
+	movement_seq++;
+	if(movement_seq > 65535) movement_seq = 1;
 	
-	string encrypted = string_aes_encrypt(message, "evm_server_key_2024");
-	con.send(peer_id, encrypted, channel, false); // reliable=false
+	// Prefixar mensagem com seq number
+	string seq_message = "seq:" + movement_seq + " " + message;
+	game_client.send_unreliable(seq_message, channel);
 }
 
 // Função helper para verificar senha contra hash

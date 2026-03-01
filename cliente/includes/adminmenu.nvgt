@@ -1,606 +1,1303 @@
-// Menu de administração convertido para NVGT
-// Sistema completo de comandos administrativos
+﻿// ============================================================================
+// MENU ADMINISTRATIVO - NVGT
+// Sistema de menus organizados por categorias para administradores
+// ============================================================================
 
-#include "menu.nvgt"  // Sistema base de menus
+// menu.nvgt jÃ¡ Ã© incluÃ­do pelo client.nvgt
+#include "buildermenu.nvgt"
+#include "item_builder.nvgt"
 
-// Menu principal de administração
+// Estado de observaÃ§Ã£o (para toggle no menu)
+bool admin_watching = false;
+string admin_watching_target = "";
+
+// Estados locais para rÃ³tulos dinÃ¢micos no menu "Diversos"
+bool admin_game_frozen = false;
+bool admin_xp_especial_enabled = false;
+bool admin_pvp_enabled = true;
+bool admin_minas_enabled = true;
+
+// Sons do menu administrativo
+const string ADMIN_SOUND_OPEN = "menuadmin.ogg";
+const string ADMIN_SOUND_CATEGORY = "menucategory.ogg";
+const string ADMIN_SOUND_SELECT = "menuselect.ogg";
+const string ADMIN_SOUND_BACK = "menuback.ogg";
+const string ADMIN_SOUND_ERROR = "menuerror.ogg";
+const string ADMIN_SOUND_SUCCESS = "menusuccess.ogg";
+const string ADMIN_SOUND_WARNING = "menuerror.ogg";
+
+// Tocar som do menu admin
+void play_admin_sound(string sound_name) {
+    sound s;
+    if(s.load(get_sound_path(sound_name))) {
+        s.play_wait();
+    }
+}
+
+// ============================================================================
+// MENU PRINCIPAL ADMINISTRATIVO (F9)
+// ============================================================================
 void adminmenu() {
-	setupmenu(false);
-	
-	game_menu.add_item(pu.get_value("ativar/desativar xp especial."), "xpespecial");
-	game_menu.add_item(pu.get_value("ativar ou desativar combate."), "pvp");
-	game_menu.add_item(pu.get_value("ativar ou desativar uso de minas."), "minas");
-	game_menu.add_item(pu.get_value("aviso em todos os canais."), "aviso");
-	game_menu.add_item(pu.get_value("banir um jogador temporariamente."), "ban");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat administrativo."), "admin");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat espanhol."), "spanish");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat inglês."), "english");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat francês."), "francais");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat português."), "portugues");
-	game_menu.add_item(pu.get_value("alterar a mensagem do dia no chat turco."), "turkish");
-	game_menu.add_item(pu.get_value("dar créditos para um jogador."), "creditos");
-	game_menu.add_item(pu.get_value("dar Stryx para um jogador."), "stryx");
-	game_menu.add_item(pu.get_value("dar um item para um jogador."), "item");
-	game_menu.add_item(pu.get_value("dar presentes."), "regalos");
-	game_menu.add_item(pu.get_value("mostrar e filtrar sons do jogo."), "sounds");
-	game_menu.add_item(pu.get_value("silenciar um jogador."), "silenciar");
-	game_menu.add_item(pu.get_value("enviar um áudio para o servidor."), "audio");
-	game_menu.add_item(pu.get_value("traduções."), "langs");
-	// ✅ Task 2.6.3: Ferramentas de Admin (Lanterna e Detector)
-	game_menu.add_item(pu.get_value("ligar/desligar lanterna."), "lanterna");
-	game_menu.add_item(pu.get_value("usar detector (revelar invisíveis)."), "detector");
-	
-	game_menu.intro_text = pu.get_value("menu do administrador. escolha com cuidado a opção que desejar.");
-	int mres = game_menu.run();
-	string selected_id = game_menu.get_item_id(mres);
-	
-	if(selected_id == "xpespecial") {
-		game_net.send(net_peer_id, encrypt_packet("/xps"), 1, false);
-	}
-	else if(selected_id == "pvp") {
-		game_net.send(net_peer_id, encrypt_packet("/pvp"), 1, false);
-	}
-	else if(selected_id == "minas") {
-		game_net.send(net_peer_id, encrypt_packet("/amina"), 1, false);
-	}
-	else if(selected_id == "aviso") {
-		input_form form(pu.get_value("Aviso Global"));
-		form.description = pu.get_value("escreva o que quer dizer pelo canal geral.");
-		form.add_text_field("message", pu.get_value("Mensagem"), "", true);
-		dictionary@ result = form.run();
-		if(!form.user_canceled) {
-			string aviso = "";
-			result.get("message", aviso);
-			if(aviso != "") {
-				game_net.send(net_peer_id, encrypt_packet("/n " + aviso), 1, false);
-			}
-		}
-	}
-	else if(selected_id == "ban") {
-		admin_ban_player();
-	}
-	else if(selected_id == "admin") {
-		admin_set_motd("admin", "/msga");
-	}
-	else if(selected_id == "spanish") {
-		admin_set_motd("espanhol", "/msges");
-	}
-	else if(selected_id == "english") {
-		admin_set_motd("inglês", "/msgen");
-	}
-	else if(selected_id == "francais") {
-		admin_set_motd("francês", "/msgfr");
-	}
-	else if(selected_id == "portugues") {
-		admin_set_motd("português", "/msgpt");
-	}
-	else if(selected_id == "turkish") {
-		admin_set_motd("turco", "/msgtr");
-	}
-	else if(selected_id == "creditos") {
-		admin_give_credits();
-	}
-	else if(selected_id == "stryx") {
-		admin_give_stryx();
-	}
-	else if(selected_id == "item") {
-		admin_give_item();
-	}
-	else if(selected_id == "regalos") {
-		admin_give_gifts();
-	}
-	else if(selected_id == "sounds") {
-		admin_filter_sounds();
-	}
-	else if(selected_id == "silenciar") {
-		admin_mute_player();
-	}
-	else if(selected_id == "audio") {
-		uploadfile();
-	}
-	else if(selected_id == "langs") {
-		langs_menu();
-	}
-	// ✅ Task 2.6.3: Ferramentas de Admin (Lanterna e Detector)
-	else if(selected_id == "lanterna") {
-		admin_toggle_lanterna();
-	}
-	else if(selected_id == "detector") {
-		admin_use_detector();
-	}
+    play_admin_sound(ADMIN_SOUND_OPEN);
+    
+    while(true) {
+        setupmenu();
+        
+        // Categorias principais
+        game_menu.add_item(pu.get_value("Construtor de Mapas"), "construtor");
+        game_menu.add_item(pu.get_value("Construtor de Itens"), "item_builder");
+        game_menu.add_item(pu.get_value("GestÃ£o de Jogadores"), "jogadores");
+        game_menu.add_item(pu.get_value("Diversos"), "diversos");
+        
+        // Categoria de desenvolvedor sÃ³ aparece para devs
+        if(desenvolvedordm == 1) {
+            game_menu.add_item(pu.get_value("Desenvolvedor"), "dev");
+        }
+        
+        game_menu.add_item(pu.get_value("Voltar"), "voltar");
+        
+        game_menu.intro_text = pu.get_value("Menu Administrativo. Escolha uma categoria.");
+        int mres = game_menu.run();
+        string selected = game_menu.get_item_id(mres);
+        
+        if(selected == "voltar" || mres == -1) {
+            play_admin_sound(ADMIN_SOUND_BACK);
+            return;
+        }
+        
+        play_admin_sound(ADMIN_SOUND_CATEGORY);
+        
+        if(selected == "construtor") {
+            admin_menu_construtor();
+        }
+        else if(selected == "item_builder") {
+            item_builder_menu();
+        }
+        else if(selected == "jogadores") {
+            admin_menu_jogadores();
+        }
+        else if(selected == "diversos") {
+            admin_menu_diversos();
+        }
+        else if(selected == "dev") {
+            admin_menu_dev();
+        }
+    }
 }
 
-// ✅ Task 2.6.3: Função para toggle da lanterna
-void admin_toggle_lanterna() {
-	game_net.send(net_peer_id, encrypt_packet("admin_lanterna"), 1, false);
+// ============================================================================
+// 1. MENU CONSTRUTOR DE MAPAS
+// ============================================================================
+void admin_menu_construtor() {
+    // Chama diretamente o buildermenu existente
+    buildermenu();
 }
 
-// ✅ Task 2.6.3: Função para usar detector
-void admin_use_detector() {
-	game_net.send(net_peer_id, encrypt_packet("admin_detector"), 1, false);
+// ============================================================================
+// 2. MENU GESTÃƒO DE JOGADORES
+// ============================================================================
+void admin_menu_jogadores() {
+    while(true) {
+        setupmenu();
+        
+        // SanÃ§Ãµes
+        game_menu.add_item(pu.get_value("Banir jogador temporariamente"), "ban_temp");
+        game_menu.add_item(pu.get_value("Banir jogador permanentemente"), "ban_perm");
+        game_menu.add_item(pu.get_value("Desbanir jogador"), "unban");
+        game_menu.add_item(pu.get_value("Kickar jogador"), "kick");
+        game_menu.add_item(pu.get_value("Silenciar jogador"), "silenciar");
+        game_menu.add_item(pu.get_value("Remover silÃªncio"), "unsilenciar");
+        
+        // PrisÃ£o
+        game_menu.add_item(pu.get_value("Prender jogador"), "prender");
+        game_menu.add_item(pu.get_value("Soltar jogador"), "soltar");
+        
+        // Teleporte
+        game_menu.add_item(pu.get_value("Ir atÃ© jogador"), "tp");
+        game_menu.add_item(pu.get_value("Trazer jogador atÃ© vocÃª"), "tphere");
+        game_menu.add_item(pu.get_value("Enviar jogador para mapa"), "sendmap");
+        
+        // InventÃ¡rio
+        game_menu.add_item(pu.get_value("Dar item para jogador"), "dar_item");
+        game_menu.add_item(pu.get_value("Remover item do jogador"), "remover_item");
+        game_menu.add_item(pu.get_value("Ver inventÃ¡rio do jogador"), "ver_inv");
+        game_menu.add_item(pu.get_value("Dar crÃ©ditos"), "dar_creditos");
+        game_menu.add_item(pu.get_value("Dar Stryx"), "dar_stryx");
+        
+        // Outros
+        game_menu.add_item(pu.get_value("Ver informaÃ§Ãµes do jogador"), "info");
+        
+        // Toggle observar - muda texto baseado no estado atual
+        if(admin_watching) {
+            game_menu.add_item(pu.get_value("Parar de observar (") + admin_watching_target + ")", "toggle_observar");
+        } else {
+            game_menu.add_item(pu.get_value("Observar jogador"), "toggle_observar");
+        }
+        
+        game_menu.add_item(pu.get_value("Voltar"), "voltar");
+        
+        game_menu.intro_text = pu.get_value("GestÃ£o de Jogadores. Escolha uma aÃ§Ã£o.");
+        int mres = game_menu.run();
+        string selected = game_menu.get_item_id(mres);
+        
+        if(selected == "voltar" || mres == -1) {
+            play_admin_sound(ADMIN_SOUND_BACK);
+            return;
+        }
+        
+        play_admin_sound(ADMIN_SOUND_SELECT);
+        
+        // Processar aÃ§Ãµes de jogadores
+        process_jogadores_action(selected);
+    }
 }
 
-// Sistema de banimento de jogador
-void admin_ban_player() {
-	input_form form(pu.get_value("Banir jogador"));
-	form.description = pu.get_value("Preencha os dados para banir um jogador.");
-	form.add_text_field("player", pu.get_value("escreva o nome do jogador que deseja banir."), "", true);
-	form.add_number_field("days", pu.get_value("por quantos dias?"), 1, true);
-	form.add_text_field("reason", pu.get_value("qual é o motivo do banimento?"), "", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string player = "";
-		double days_num = 0;
-		string motivo = "";
-		result.get("player", player);
-		result.get("days", days_num);
-		result.get("reason", motivo);
-		
-		int dias = int(days_num);
-		
-		if(player != "" && dias > 0 && motivo != "") {
-			game_net.send(net_peer_id, encrypt_packet("/tb " + player + " " + dias + " " + motivo), 1, false);
-		}
-		else {
-			speak(pu.get_value("cancelado."));
-		}
-	}
+void process_jogadores_action(string action) {
+    if(action == "ban_temp") {
+        admin_ban_temp();
+    }
+    else if(action == "ban_perm") {
+        admin_ban_perm();
+    }
+    else if(action == "unban") {
+        admin_unban();
+    }
+    else if(action == "kick") {
+        admin_kick();
+    }
+    else if(action == "silenciar") {
+        admin_silenciar();
+    }
+    else if(action == "unsilenciar") {
+        admin_unsilenciar();
+    }
+    else if(action == "prender") {
+        admin_prender();
+    }
+    else if(action == "soltar") {
+        admin_soltar();
+    }
+    else if(action == "tp") {
+        admin_tp();
+    }
+    else if(action == "tphere") {
+        admin_tphere();
+    }
+    else if(action == "sendmap") {
+        admin_sendmap();
+    }
+    else if(action == "dar_item") {
+        admin_dar_item();
+    }
+    else if(action == "remover_item") {
+        admin_remover_item();
+    }
+    else if(action == "ver_inv") {
+        admin_ver_inv();
+    }
+    else if(action == "dar_creditos") {
+        admin_dar_creditos();
+    }
+    else if(action == "dar_stryx") {
+        admin_dar_stryx();
+    }
+    else if(action == "info") {
+        admin_info_jogador();
+    }
+    else if(action == "toggle_observar") {
+        admin_toggle_observar();
+    }
 }
 
-// Definir mensagem do dia (MOTD)
-void admin_set_motd(string channel_name, string command) {
-	input_form form(pu.get_value("Mensagem do dia - ") + channel_name);
-	form.add_text_field("message", pu.get_value("escreva a mensagem que deseja para este canal."), "", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string msg = "";
-		result.get("message", msg);
-		if(msg != "") {
-			game_net.send(net_peer_id, encrypt_packet(command + " " + msg), 1, false);
-		}
-	}
+// ============================================================================
+// 3. MENU DIVERSOS
+// ============================================================================
+void admin_menu_diversos() {
+    while(true) {
+        setupmenu();
+        
+        // Servidor
+        game_menu.add_item(pu.get_value("Reiniciar servidor"), "reiniciar");
+        game_menu.add_item(pu.get_value(admin_game_frozen ? "Descongelar jogo" : "Congelar jogo"), "toggle_congelar");
+        
+        // Combate e XP
+        game_menu.add_item(pu.get_value(admin_xp_especial_enabled ? "Desativar XP especial" : "Ativar XP especial"), "xp_especial");
+        game_menu.add_item(pu.get_value(admin_pvp_enabled ? "Desativar PvP" : "Ativar PvP"), "pvp");
+        game_menu.add_item(pu.get_value(admin_minas_enabled ? "Desativar minas" : "Ativar minas"), "minas");
+        
+        // AÃ§Ãµes em jogadores
+        game_menu.add_item(pu.get_value("Matar jogador"), "matar");
+        game_menu.add_item(pu.get_value("Curar jogador"), "curar");
+        game_menu.add_item(pu.get_value("Reviver jogador"), "reviver");
+        
+        // ComunicaÃ§Ã£o
+        game_menu.add_item(pu.get_value("Aviso global"), "aviso");
+        game_menu.add_item(pu.get_value("Mensagem do dia - Admin"), "motd_admin");
+        game_menu.add_item(pu.get_value("Mensagem do dia - PortuguÃªs"), "motd_pt");
+        game_menu.add_item(pu.get_value("Mensagem do dia - InglÃªs"), "motd_en");
+        game_menu.add_item(pu.get_value("Mensagem do dia - Espanhol"), "motd_es");
+        game_menu.add_item(pu.get_value("Mensagem do dia - FrancÃªs"), "motd_fr");
+        
+        // Presentes
+        game_menu.add_item(pu.get_value("Dar presente para todos"), "presente");
+        
+        game_menu.add_item(pu.get_value("Voltar"), "voltar");
+        
+        game_menu.intro_text = pu.get_value("Diversos. Escolha uma aÃ§Ã£o.");
+        int mres = game_menu.run();
+        string selected = game_menu.get_item_id(mres);
+        
+        if(selected == "voltar" || mres == -1) {
+            play_admin_sound(ADMIN_SOUND_BACK);
+            return;
+        }
+        
+        play_admin_sound(ADMIN_SOUND_SELECT);
+        
+        // Processar aÃ§Ãµes diversas
+        process_diversos_action(selected);
+    }
 }
 
-// Dar créditos para jogador
-void admin_give_credits() {
-	input_form form(pu.get_value("Dar créditos"));
-	form.add_text_field("player", pu.get_value("para qual jogador deseja dar créditos?"), "", true);
-	form.add_number_field("credits", pu.get_value("quantos?"), 0, true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string player = "";
-		double credits = 0;
-		result.get("player", player);
-		result.get("credits", credits);
-		
-		if(player != "" && credits > 0) {
-			game_net.send(net_peer_id, encrypt_packet("/dare " + player + " " + int(credits)), 1, false);
-		}
-	}
+void process_diversos_action(string action) {
+    if(action == "reiniciar") {
+        admin_reiniciar_servidor();
+    }
+    else if(action == "toggle_congelar") {
+        if(admin_game_frozen) {
+            send_to_server("/unfreeze", 1, false);
+            speak(pu.get_value("Jogo descongelado."));
+            admin_game_frozen = false;
+        } else {
+            send_to_server("/freeze", 1, false);
+            speak(pu.get_value("Jogo congelado."));
+            admin_game_frozen = true;
+        }
+    }
+    else if(action == "xp_especial") {
+        send_to_server("/xps", 1, false);
+        admin_xp_especial_enabled = !admin_xp_especial_enabled;
+    }
+    else if(action == "pvp") {
+        send_to_server("/pvp", 1, false);
+        admin_pvp_enabled = !admin_pvp_enabled;
+    }
+    else if(action == "minas") {
+        send_to_server("/amina", 1, false);
+        admin_minas_enabled = !admin_minas_enabled;
+    }
+    else if(action == "matar") {
+        admin_matar_jogador();
+    }
+    else if(action == "curar") {
+        admin_curar_jogador();
+    }
+    else if(action == "reviver") {
+        admin_reviver_jogador();
+    }
+    else if(action == "aviso") {
+        admin_aviso_global();
+    }
+    else if(action == "motd_admin") {
+        admin_set_motd("/msga", "Admin");
+    }
+    else if(action == "motd_pt") {
+        admin_set_motd("/msgpt", "PortuguÃªs");
+    }
+    else if(action == "motd_en") {
+        admin_set_motd("/msgen", "InglÃªs");
+    }
+    else if(action == "motd_es") {
+        admin_set_motd("/msges", "Espanhol");
+    }
+    else if(action == "motd_fr") {
+        admin_set_motd("/msgfr", "FrancÃªs");
+    }
+    else if(action == "presente") {
+        admin_presente_todos();
+    }
 }
 
-// Dar Stryx para jogador
-void admin_give_stryx() {
-	input_form form(pu.get_value("Dar Stryx"));
-	form.add_text_field("player", pu.get_value("para qual jogador deseja dar Stryx?"), "", true);
-	form.add_number_field("stryx", pu.get_value("quantos?"), 0, true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string player = "";
-		double stryx = 0;
-		result.get("player", player);
-		result.get("stryx", stryx);
-		
-		if(player != "" && stryx > 0) {
-			game_net.send(net_peer_id, encrypt_packet("/darc " + player + " " + int(stryx)), 1, false);
-		}
-	}
+// ============================================================================
+// 4. MENU DESENVOLVEDOR (APENAS DEVS)
+// ============================================================================
+void admin_menu_dev() {
+    while(true) {
+        setupmenu();
+        
+        // Sistema
+        game_menu.add_item(pu.get_value("Reiniciar servidor imediatamente"), "rb");
+        game_menu.add_item(pu.get_value("Fazer backup do banco"), "backup");
+        game_menu.add_item(pu.get_value("Recarregar configuraÃ§Ãµes"), "reload");
+        
+        // Debug
+        game_menu.add_item(pu.get_value("Modo invisÃ­vel"), "invisivel");
+        game_menu.add_item(pu.get_value("Modo invencÃ­vel"), "invencivel");
+        game_menu.add_item(pu.get_value("Ver logs do servidor"), "logs");
+        game_menu.add_item(pu.get_value("Ver estatÃ­sticas do servidor"), "stats");
+        
+        // Gerenciamento de cargos
+        game_menu.add_item(pu.get_value("Adicionar cargo a jogador"), "add_cargo");
+        game_menu.add_item(pu.get_value("Remover cargo de jogador"), "remove_cargo");
+        game_menu.add_item(pu.get_value("Ver cargos de jogador"), "ver_cargos");
+        game_menu.add_item(pu.get_value("Listar equipe"), "listar_equipe");
+        
+        // Sons e Arquivos
+        game_menu.add_item(pu.get_value("Filtrar sons do jogo"), "filtrar_sons");
+        game_menu.add_item(pu.get_value("Enviar Ã¡udio para servidor"), "upload_audio");
+        
+        // TraduÃ§Ãµes
+        game_menu.add_item(pu.get_value("Gerenciar traduÃ§Ãµes"), "traducoes");
+        
+        // ForÃ§ar aÃ§Ãµes
+        game_menu.add_item(pu.get_value("ForÃ§ar salvar todos"), "force_save");
+        game_menu.add_item(pu.get_value("ForÃ§ar desconectar todos"), "force_dc");
+        
+        game_menu.add_item(pu.get_value("Voltar"), "voltar");
+        
+        game_menu.intro_text = pu.get_value("Menu de Desenvolvedor. Cuidado com as aÃ§Ãµes.");
+        int mres = game_menu.run();
+        string selected = game_menu.get_item_id(mres);
+        
+        if(selected == "voltar" || mres == -1) {
+            play_admin_sound(ADMIN_SOUND_BACK);
+            return;
+        }
+        
+        play_admin_sound(ADMIN_SOUND_SELECT);
+        
+        // Processar aÃ§Ãµes de dev
+        process_dev_action(selected);
+    }
 }
 
-// Dar item para jogador
-void admin_give_item() {
-	input_form form(pu.get_value("Dar item"));
-	form.add_text_field("player", pu.get_value("para qual jogador deseja dar um objeto?"), "", true);
-	form.add_text_field("item", pu.get_value("qual?"), "", true);
-	form.add_number_field("amount", pu.get_value("quantos?"), 1, true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string player = "";
-		string item = "";
-		double amount = 0;
-		result.get("player", player);
-		result.get("item", item);
-		result.get("amount", amount);
-		
-		if(player != "" && item != "" && amount > 0) {
-			game_net.send(net_peer_id, encrypt_packet("/dar " + player + " " + item + " " + int(amount)), 1, false);
-		}
-	}
+void process_dev_action(string action) {
+    if(action == "rb") {
+        bool confirm = simple_yes_no(pu.get_value("Tem certeza que deseja reiniciar o servidor AGORA?"));
+        if(confirm) {
+            play_admin_sound(ADMIN_SOUND_WARNING);
+            send_to_server("/rb", 1, false);
+            speak(pu.get_value("Reiniciando servidor..."));
+        }
+    }
+    else if(action == "backup") {
+        send_to_server("/backup", 1, false);
+        play_admin_sound(ADMIN_SOUND_SUCCESS);
+        speak(pu.get_value("Backup iniciado."));
+    }
+    else if(action == "reload") {
+        send_to_server("/reload", 1, false);
+        speak(pu.get_value("ConfiguraÃ§Ãµes recarregadas."));
+    }
+    else if(action == "invisivel") {
+        send_to_server("/invis", 1, false);
+    }
+    else if(action == "invencivel") {
+        send_to_server("/god", 1, false);
+    }
+    else if(action == "logs") {
+        send_to_server("/logs", 1, false);
+    }
+    else if(action == "stats") {
+        send_to_server("/serverstats", 1, false);
+    }
+    else if(action == "add_cargo") {
+        admin_add_cargo();
+    }
+    else if(action == "remove_cargo") {
+        admin_remove_cargo();
+    }
+    else if(action == "ver_cargos") {
+        admin_ver_cargos();
+    }
+    else if(action == "listar_equipe") {
+        send_to_server("/listadmins", 1, false);
+    }
+    else if(action == "filtrar_sons") {
+        admin_filtrar_sons();
+    }
+    else if(action == "upload_audio") {
+        uploadfile();
+    }
+    else if(action == "traducoes") {
+        langs_menu();
+    }
+    else if(action == "force_save") {
+        send_to_server("/forcesave", 1, false);
+        speak(pu.get_value("Salvando dados de todos os jogadores."));
+    }
+    else if(action == "force_dc") {
+        bool confirm = simple_yes_no(pu.get_value("Isso vai desconectar TODOS os jogadores. Continuar?"));
+        if(confirm) {
+            send_to_server("/forcedc", 1, false);
+        }
+    }
 }
 
-// Dar presentes para todos
-void admin_give_gifts() {
-	input_form form(pu.get_value("Presentes para todos"));
-	form.add_text_field("item", pu.get_value("que item deseja presentear?"), "", true);
-	form.add_number_field("amount", pu.get_value("quantos?"), 1, true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string item = "";
-		double amount = 0;
-		result.get("item", item);
-		result.get("amount", amount);
-		
-		if(item != "" && amount > 0) {
-			game_net.send(net_peer_id, encrypt_packet("/regalos " + item + " " + int(amount)), 1, false);
-		}
-	}
+// ============================================================================
+// FUNÃ‡Ã•ES DE AÃ‡ÃƒO - GESTÃƒO DE JOGADORES
+// ============================================================================
+
+// Banir temporariamente
+void admin_ban_temp() {
+    input_form form(pu.get_value("Banir Jogador Temporariamente"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_number_field("days", pu.get_value("Dias de banimento"), 1, true);
+    form.add_text_field("reason", pu.get_value("Motivo do banimento"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", reason = "";
+        double days = 0;
+        result.get("player", player);
+        result.get("days", days);
+        result.get("reason", reason);
+        
+        if(player != "" && days > 0 && reason != "") {
+            send_to_server("/tb " + player + " " + int(days) + " " + reason, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador banido por ") + int(days) + pu.get_value(" dias."));
+        }
+    }
 }
 
-// Filtrar e mostrar sons do jogo
-void admin_filter_sounds() {
-	input_form form(pu.get_value("Filtrar sons"));
-	form.description = pu.get_value("escreva o termo com o qual queira filtrar os sons, seja uma palavra ou uma só letra se desejar que se filtre por letra inicial.");
-	form.add_text_field("filter", pu.get_value("Filtro"), "", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string filter = "";
-		result.get("filter", filter);
-		
-		if(filter != "") {
-			bool enable_first_letter = (filter.length() == 1);
-			string sound_name = get_sound(pu.get_value("se mostram os sons especificados."), filter, enable_first_letter);
-			
-			if(sound_name != "") {
-				clipboard_copy_text(sound_name);
-				speak(pu.get_value("copiado."));
-			}
-		}
-	}
+// Banir permanentemente
+void admin_ban_perm() {
+    input_form form(pu.get_value("Banir Jogador Permanentemente"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_text_field("reason", pu.get_value("Motivo do banimento"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", reason = "";
+        result.get("player", player);
+        result.get("reason", reason);
+        
+        if(player != "" && reason != "") {
+            bool confirm = simple_yes_no(pu.get_value("Confirma banimento PERMANENTE de ") + player + "?");
+            if(confirm) {
+                send_to_server("/ban " + player + " " + reason, 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Jogador banido permanentemente."));
+            }
+        }
+    }
 }
 
-// Silenciar jogador (mute)
-void admin_mute_player() {
-	input_form form(pu.get_value("Silenciar jogador"));
-	form.description = pu.get_value("Mute temporário de jogador.");
-	form.add_text_field("player", pu.get_value("qual jogador deseja silenciar?"), "", true);
-	form.add_number_field("minutes", pu.get_value("por quantos minutos?"), 1, true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string player = "";
-		double minutes = 0;
-		result.get("player", player);
-		result.get("minutes", minutes);
-		
-		int minutos = int(minutes);
-		
-		if(player != "" && minutos > 0) {
-			game_net.send(net_peer_id, encrypt_packet("/silenciar " + player + " " + minutos), 1, false);
-		}
-	}
+// Desbanir
+void admin_unban() {
+    input_form form(pu.get_value("Desbanir Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/unban " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador desbanido."));
+        }
+    }
 }
 
-// Upload de arquivo de áudio para o servidor
+// Kickar
+void admin_kick() {
+    input_form form(pu.get_value("Kickar Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_text_field("reason", pu.get_value("Motivo (opcional)"), "", false);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", reason = "";
+        result.get("player", player);
+        result.get("reason", reason);
+        
+        if(player != "") {
+            string cmd = "/kick " + player;
+            if(reason != "") cmd += " " + reason;
+            send_to_server(cmd, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador expulso."));
+        }
+    }
+}
+
+// Silenciar - Com menu incremental de tempos
+void admin_silenciar() {
+    // Passo 1: Selecionar jogador
+    input_form form_player(pu.get_value("Silenciar Jogador"));
+    form_player.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form_player.run();
+    if(form_player.user_canceled) return;
+    
+    string player = "";
+    result.get("player", player);
+    if(player == "") return;
+    
+    // Passo 2: Menu de tempos incrementais (mais acessÃ­vel)
+    setupmenu();
+    game_menu.add_item(pu.get_value("5 Minutos"), "5");
+    game_menu.add_item(pu.get_value("10 Minutos"), "10");
+    game_menu.add_item(pu.get_value("20 Minutos"), "20");
+    game_menu.add_item(pu.get_value("40 Minutos"), "40");
+    game_menu.add_item(pu.get_value("60 Minutos (1 hora)"), "60");
+    game_menu.add_item(pu.get_value("120 Minutos (2 horas)"), "120");
+    game_menu.add_item(pu.get_value("1440 Minutos (24 horas)"), "1440");
+    game_menu.add_item(pu.get_value("Cancelar"), "cancel");
+    
+    game_menu.intro_text = pu.get_value("Selecione o tempo de silÃªncio para ") + player + ":";
+    
+    int res = game_menu.run();
+    if(res < 0) return;
+    
+    string tempo = game_menu.get_item_id(res);
+    if(tempo == "cancel") return;
+    
+    // Enviar comando
+    send_to_server("/silenciar " + player + " " + tempo, 1, true);
+    play_admin_sound(ADMIN_SOUND_SUCCESS);
+    speak(pu.get_value("Jogador ") + player + pu.get_value(" silenciado por ") + tempo + pu.get_value(" minutos."));
+}
+
+// Remover silÃªncio
+void admin_unsilenciar() {
+    input_form form(pu.get_value("Remover SilÃªncio"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/unsilenciar " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("SilÃªncio removido."));
+        }
+    }
+}
+
+// Prender - Com menu incremental de tempos
+void admin_prender() {
+    // Passo 1: Selecionar jogador e motivo
+    input_form form_player(pu.get_value("Prender Jogador"));
+    form_player.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form_player.add_text_field("reason", pu.get_value("Motivo da prisÃ£o"), "", true);
+    
+    dictionary@ result = form_player.run();
+    if(form_player.user_canceled) return;
+    
+    string player = "", reason = "";
+    result.get("player", player);
+    result.get("reason", reason);
+    if(player == "" || reason == "") return;
+    
+    // Passo 2: Menu de tempos incrementais
+    setupmenu();
+    game_menu.add_item(pu.get_value("5 Minutos"), "5");
+    game_menu.add_item(pu.get_value("10 Minutos"), "10");
+    game_menu.add_item(pu.get_value("20 Minutos"), "20");
+    game_menu.add_item(pu.get_value("30 Minutos"), "30");
+    game_menu.add_item(pu.get_value("60 Minutos (1 hora)"), "60");
+    game_menu.add_item(pu.get_value("120 Minutos (2 horas)"), "120");
+    game_menu.add_item(pu.get_value("1440 Minutos (24 horas)"), "1440");
+    game_menu.add_item(pu.get_value("Cancelar"), "cancel");
+    
+    game_menu.intro_text = pu.get_value("Selecione o tempo de prisÃ£o para ") + player + ":";
+    
+    int res = game_menu.run();
+    if(res < 0) return;
+    
+    string tempo = game_menu.get_item_id(res);
+    if(tempo == "cancel") return;
+    
+    // Enviar comando
+    send_to_server("/prender " + player + " " + tempo + " " + reason, 1, true);
+    play_admin_sound(ADMIN_SOUND_SUCCESS);
+    speak(pu.get_value("Jogador ") + player + pu.get_value(" preso por ") + tempo + pu.get_value(" minutos."));
+}
+
+// Soltar
+void admin_soltar() {
+    input_form form(pu.get_value("Soltar Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/soltar " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador solto."));
+        }
+    }
+}
+
+// Teleportar para jogador
+void admin_tp() {
+    input_form form(pu.get_value("Ir atÃ© Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/tp " + player, 1, false);
+            speak(pu.get_value("Teleportando..."));
+        }
+    }
+}
+
+// Trazer jogador
+void admin_tphere() {
+    input_form form(pu.get_value("Trazer Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/tphere " + player, 1, false);
+            speak(pu.get_value("Trazendo jogador..."));
+        }
+    }
+}
+
+// Enviar para mapa
+void admin_sendmap() {
+    input_form form(pu.get_value("Enviar para Mapa"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_text_field("map", pu.get_value("Nome do mapa"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", map_name = "";
+        result.get("player", player);
+        result.get("map", map_name);
+        
+        if(player != "" && map_name != "") {
+            send_to_server("/sendmap " + player + " " + map_name, 1, false);
+            speak(pu.get_value("Enviando jogador para ") + map_name);
+        }
+    }
+}
+
+// Dar item
+void admin_dar_item() {
+    input_form form(pu.get_value("Dar Item"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_text_field("item", pu.get_value("Nome do item"), "", true);
+    form.add_number_field("amount", pu.get_value("Quantidade"), 0, true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", item = "";
+        double amount = 0;
+        result.get("player", player);
+        result.get("item", item);
+        result.get("amount", amount);
+        
+        if(player != "" && item != "" && amount > 0) {
+            bool confirm = simple_yes_no(pu.get_value("Confirmar envio de ") + int(amount) + "x " + item + " para " + player + "?");
+            if(confirm) {
+                send_to_server("/dar " + player + " " + item + " " + int(amount), 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Item dado."));
+            }
+        }
+    }
+}
+
+// Remover item
+void admin_remover_item() {
+    input_form form(pu.get_value("Remover Item"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_text_field("item", pu.get_value("Nome do item"), "", true);
+    form.add_number_field("amount", pu.get_value("Quantidade"), 0, true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "", item = "";
+        double amount = 0;
+        result.get("player", player);
+        result.get("item", item);
+        result.get("amount", amount);
+        
+        if(player != "" && item != "" && amount > 0) {
+            bool confirm = simple_yes_no(pu.get_value("Confirmar remoÃ§Ã£o de ") + int(amount) + "x " + item + " de " + player + "?");
+            if(confirm) {
+                send_to_server("/remover " + player + " " + item + " " + int(amount), 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Item removido."));
+            }
+        }
+    }
+}
+
+// Ver inventÃ¡rio
+void admin_ver_inv() {
+    input_form form(pu.get_value("Ver InventÃ¡rio"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/inventory " + player, 1, false);
+        }
+    }
+}
+
+// Dar crÃ©ditos
+void admin_dar_creditos() {
+    input_form form(pu.get_value("Dar CrÃ©ditos"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_number_field("amount", pu.get_value("Quantidade"), 0, true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        double amount = 0;
+        result.get("player", player);
+        result.get("amount", amount);
+        
+        if(player != "" && amount > 0) {
+            bool confirm = simple_yes_no(pu.get_value("Confirmar envio de ") + int(amount) + " " + pu.get_value("crÃ©ditos para ") + player + "?");
+            if(confirm) {
+                send_to_server("/dare " + player + " " + int(amount), 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("CrÃ©ditos dados."));
+            }
+        }
+    }
+}
+
+// Dar Stryx
+void admin_dar_stryx() {
+    input_form form(pu.get_value("Dar Stryx"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    form.add_number_field("amount", pu.get_value("Quantidade"), 0, true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        double amount = 0;
+        result.get("player", player);
+        result.get("amount", amount);
+        
+        if(player != "" && amount > 0) {
+            bool confirm = simple_yes_no(pu.get_value("Confirmar envio de ") + int(amount) + " Stryx para " + player + "?");
+            if(confirm) {
+                send_to_server("/darc " + player + " " + int(amount), 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Stryx dados."));
+            }
+        }
+    }
+}
+
+// InformaÃ§Ãµes do jogador
+void admin_info_jogador() {
+    input_form form(pu.get_value("InformaÃ§Ãµes do Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/pinfo " + player, 1, false);
+        }
+    }
+}
+
+// Toggle Observar jogador
+void admin_toggle_observar() {
+    if(admin_watching) {
+        // Parar de observar
+        send_to_server("volhar", 0, false);
+        speak(pu.get_value("Parando de observar ") + admin_watching_target);
+        admin_watching = false;
+        admin_watching_target = "";
+    } else {
+        // ComeÃ§ar a observar - pedir nome
+        input_form form(pu.get_value("Observar Jogador"));
+        form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+        
+        dictionary@ result = form.run();
+        if(!form.user_canceled) {
+            string player = "";
+            result.get("player", player);
+            
+            if(player != "") {
+                send_to_server("olhar " + player, 0, false);
+                admin_watching = true;
+                admin_watching_target = player;
+                speak(pu.get_value("Observando ") + player);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// FUNÃ‡Ã•ES DE AÃ‡ÃƒO - DIVERSOS
+// ============================================================================
+
+// Reiniciar servidor
+void admin_reiniciar_servidor() {
+    setupmenu();
+    
+    game_menu.add_item(pu.get_value("Reiniciar em 5 segundos"), "5");
+    game_menu.add_item(pu.get_value("Reiniciar em 30 segundos"), "30");
+    game_menu.add_item(pu.get_value("Reiniciar em 1 minuto"), "60");
+    game_menu.add_item(pu.get_value("Reiniciar em 5 minutos"), "300");
+    game_menu.add_item(pu.get_value("Cancelar"), "cancel");
+    
+    game_menu.intro_text = pu.get_value("Escolha o tempo para reiniciar:");
+    int mres = game_menu.run();
+    string selected = game_menu.get_item_id(mres);
+    
+    if(selected != "cancel" && mres != -1) {
+        send_to_server("/reboot " + selected, 1, false);
+        speak(pu.get_value("Servidor serÃ¡ reiniciado em ") + selected + pu.get_value(" segundos."));
+    }
+}
+
+// Matar jogador
+void admin_matar_jogador() {
+    input_form form(pu.get_value("Matar Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/kill " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador morto."));
+        }
+    }
+}
+
+// Curar jogador
+void admin_curar_jogador() {
+    input_form form(pu.get_value("Curar Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/heal " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador curado."));
+        }
+    }
+}
+
+// Reviver jogador
+void admin_reviver_jogador() {
+    input_form form(pu.get_value("Reviver Jogador"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/revive " + player, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Jogador revivido."));
+        }
+    }
+}
+
+// Aviso global
+void admin_aviso_global() {
+    input_form form(pu.get_value("Aviso Global"));
+    form.add_text_field("message", pu.get_value("Mensagem para todos"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string message = "";
+        result.get("message", message);
+        
+        if(message != "") {
+            send_to_server("/n " + message, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Aviso enviado."));
+        }
+    }
+}
+
+// Definir mensagem do dia
+void admin_set_motd(string command, string channel) {
+    input_form form(pu.get_value("Mensagem do Dia - ") + channel);
+    form.add_text_field("message", pu.get_value("Nova mensagem"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string message = "";
+        result.get("message", message);
+        
+        if(message != "") {
+            send_to_server(command + " " + message, 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Mensagem do dia atualizada."));
+        }
+    }
+}
+
+// Presente para todos
+void admin_presente_todos() {
+    input_form form(pu.get_value("Presente para Todos"));
+    form.add_text_field("item", pu.get_value("Nome do item"), "", true);
+    form.add_number_field("amount", pu.get_value("Quantidade"), 1, true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string item = "";
+        double amount = 0;
+        result.get("item", item);
+        result.get("amount", amount);
+        
+        if(item != "" && amount > 0) {
+            send_to_server("/regalos " + item + " " + int(amount), 1, false);
+            play_admin_sound(ADMIN_SOUND_SUCCESS);
+            speak(pu.get_value("Presente enviado para todos!"));
+        }
+    }
+}
+
+// ============================================================================
+// FUNÃ‡Ã•ES DE AÃ‡ÃƒO - DESENVOLVEDOR
+// ============================================================================
+
+// Adicionar cargo
+void admin_add_cargo() {
+    input_form form(pu.get_value("Adicionar Cargo"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            // Menu de cargos
+            setupmenu();
+            game_menu.add_item("Desenvolvedor", "dev");
+            game_menu.add_item("Administrador", "admin");
+            game_menu.add_item("Moderador", "moderator");
+            game_menu.add_item("Construtor", "builder");
+            game_menu.add_item("Gerente de Eventos", "event_manager");
+            game_menu.add_item("Tradutor", "translator");
+            game_menu.add_item("VIP", "vip");
+            
+            game_menu.intro_text = pu.get_value("Escolha o cargo:");
+            int mres = game_menu.run();
+            string cargo = game_menu.get_item_id(mres);
+            
+            if(mres != -1) {
+                send_to_server("/addcargo " + player + " " + cargo, 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Cargo adicionado."));
+            }
+        }
+    }
+}
+
+// Remover cargo
+void admin_remove_cargo() {
+    input_form form(pu.get_value("Remover Cargo"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            // Menu de cargos
+            setupmenu();
+            game_menu.add_item("Desenvolvedor", "dev");
+            game_menu.add_item("Administrador", "admin");
+            game_menu.add_item("Moderador", "moderator");
+            game_menu.add_item("Construtor", "builder");
+            game_menu.add_item("Gerente de Eventos", "event_manager");
+            game_menu.add_item("Tradutor", "translator");
+            game_menu.add_item("VIP", "vip");
+            
+            game_menu.intro_text = pu.get_value("Escolha o cargo a remover:");
+            int mres = game_menu.run();
+            string cargo = game_menu.get_item_id(mres);
+            
+            if(mres != -1) {
+                send_to_server("/removecargo " + player + " " + cargo, 1, false);
+                play_admin_sound(ADMIN_SOUND_SUCCESS);
+                speak(pu.get_value("Cargo removido."));
+            }
+        }
+    }
+}
+
+// Ver cargos
+void admin_ver_cargos() {
+    input_form form(pu.get_value("Ver Cargos"));
+    form.add_text_field("player", pu.get_value("Nome do jogador"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string player = "";
+        result.get("player", player);
+        
+        if(player != "") {
+            send_to_server("/cargos " + player, 1, false);
+        }
+    }
+}
+
+// Filtrar sons
+void admin_filtrar_sons() {
+    input_form form(pu.get_value("Filtrar Sons"));
+    form.add_text_field("filter", pu.get_value("Filtro (palavra ou letra inicial)"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string filter = "";
+        result.get("filter", filter);
+        
+        if(filter != "") {
+            bool first_letter = (filter.length() == 1);
+            string sound_file = get_sound(pu.get_value("Sons encontrados"), filter, first_letter);
+            
+            if(sound_file != "") {
+                clipboard_copy_text(sound_file);
+                speak(pu.get_value("Copiado: ") + sound_file);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// FUNÃ‡Ã•ES AUXILIARES
+// ============================================================================
+
+// Upload de arquivo de Ã¡udio
 void uploadfile() {
-	// Listar arquivos .ogg disponíveis para upload
-	string file = soundsmenu();
-	
-	if(file == "") {
-		speak(pu.get_value("Upload cancelado."));
-		return;
-	}
-	
-	// Verificar se o arquivo existe
-	if(!file_exists(file)) {
-		speak(pu.get_value("Arquivo não encontrado: ") + file);
-		return;
-	}
-	
-	// Ler o conteúdo do arquivo
-	file f;
-	if(!f.open(file, "rb")) {
-		speak(pu.get_value("Erro ao abrir arquivo para leitura."));
-		return;
-	}
-	
-	// Obter tamanho do arquivo
-	f.seek(0, file_seek_end);
-	int file_size = f.tell();
-	f.seek(0, file_seek_set);
-	
-	// Verificar tamanho máximo (5 MB)
-	if(file_size > 5 * 1024 * 1024) {
-		speak(pu.get_value("Arquivo muito grande. Máximo: 5 MB"));
-		f.close();
-		return;
-	}
-	
-	// Ler dados do arquivo
-	string file_data = f.read(file_size);
-	f.close();
-	
-	// Codificar em base64 para transmissão segura
-	string encoded_data = string_base64_encode(file_data);
-	
-	// Extrair nome do arquivo
-	string filename = string_split(file, "/")[-1];
-	
-	// Confirmar upload
-	bool confirm = simple_yes_no(pu.get_value("Confirma upload de ") + filename + " (" + 
-	                             (file_size / 1024) + " KB)?");
-	
-	if(!confirm) {
-		speak(pu.get_value("Upload cancelado."));
-		return;
-	}
-	
-	speak(pu.get_value("Enviando arquivo... Aguarde."));
-	
-	// Enviar ao servidor (dividir em chunks se necessário)
-	int chunk_size = 8192; // 8 KB por chunk
-	int total_chunks = (encoded_data.length() + chunk_size - 1) / chunk_size;
-	
-	// Iniciar upload
-	game_net.send(net_peer_id, encrypt_packet("/upload_start " + filename + " " + total_chunks), 1, true);
-	wait(100);
-	
-	// Enviar chunks
-	for(int i = 0; i < total_chunks; i++) {
-		int start = i * chunk_size;
-		int end = start + chunk_size;
-		if(end > int(encoded_data.length())) end = encoded_data.length();
-		
-		string chunk = encoded_data.substr(start, end - start);
-		game_net.send(net_peer_id, encrypt_packet("/upload_chunk " + i + " " + chunk), 1, true);
-		
-		wait(50); // Pequeno delay entre chunks
-		
-		if(i % 10 == 0) {
-			speak(pu.get_value("Enviando... ") + ((i * 100) / total_chunks) + "%");
-		}
-	}
-	
-	// Finalizar upload
-	game_net.send(net_peer_id, encrypt_packet("/upload_finish"), 1, true);
-	speak(pu.get_value("Upload concluído com sucesso!"));
+    string selected_file = soundsmenu();
+    
+    if(selected_file == "") {
+        speak(pu.get_value("Cancelado."));
+        return;
+    }
+    
+    if(!file_exists(selected_file)) {
+        speak(pu.get_value("Arquivo nÃ£o encontrado: ") + selected_file);
+        return;
+    }
+    
+    file f;
+    if(!f.open(selected_file, "rb")) {
+        speak(pu.get_value("Erro ao abrir arquivo."));
+        return;
+    }
+    
+    // Obter tamanho do arquivo
+    int file_size = f.size;
+    
+    if(file_size > 5 * 1024 * 1024) {
+        speak(pu.get_value("Arquivo muito grande. MÃ¡ximo: 5 MB"));
+        f.close();
+        return;
+    }
+    
+    string file_data = f.read(file_size);
+    f.close();
+    
+    string encoded_data = string_base64_encode(file_data);
+    string filename = string_split(selected_file, "/")[-1];
+    
+    bool confirm = simple_yes_no(pu.get_value("Enviar ") + filename + " (" + (file_size / 1024) + " KB)?");
+    
+    if(!confirm) {
+        speak(pu.get_value("Cancelado."));
+        return;
+    }
+    
+    speak(pu.get_value("Enviando..."));
+    
+    int chunk_size = 8192;
+    int total_chunks = (encoded_data.length() + chunk_size - 1) / chunk_size;
+    
+    send_to_server("/upload_start " + filename + " " + total_chunks, 1, true);
+    wait(100);
+    
+    for(int i = 0; i < total_chunks; i++) {
+        int start = i * chunk_size;
+        int end = start + chunk_size;
+        if(end > int(encoded_data.length())) end = encoded_data.length();
+        
+        string chunk = encoded_data.substr(start, end - start);
+        send_to_server("/upload_chunk " + i + " " + chunk, 1, true);
+        wait(50);
+        
+        if(i % 10 == 0) {
+            speak(pu.get_value("Enviando... ") + ((i * 100) / total_chunks) + "%");
+        }
+    }
+    
+    send_to_server("/upload_finish", 1, true);
+    speak(pu.get_value("Arquivo enviado!"));
 }
 
-// Menu de gerenciamento de traduções e idiomas
+// Menu de traduÃ§Ãµes
 void langs_menu() {
-	setupmenu();
-	
-	game_menu.add_item(pu.get_value("Adicionar nova tradução"), "add");
-	game_menu.add_item(pu.get_value("Editar tradução existente"), "edit");
-	game_menu.add_item(pu.get_value("Listar todas as traduções"), "list");
-	game_menu.add_item(pu.get_value("Exportar traduções"), "export");
-	game_menu.add_item(pu.get_value("Importar traduções"), "import");
-	game_menu.add_item(pu.get_value("Testar tradução"), "test");
-	game_menu.add_item(pu.get_value("Estatísticas de tradução"), "stats");
-	game_menu.add_item(pu.get_value("Voltar"), "back");
-	
-	game_menu.intro_text = pu.get_value("Gerenciamento de traduções. O que deseja fazer?");
-	int mres = game_menu.run();
-	string selected_id = game_menu.get_item_id(mres);
-	
-	if(selected_id == "add") {
-		langs_add_translation();
-	}
-	else if(selected_id == "edit") {
-		langs_edit_translation();
-	}
-	else if(selected_id == "list") {
-		langs_list_translations();
-	}
-	else if(selected_id == "export") {
-		langs_export();
-	}
-	else if(selected_id == "import") {
-		langs_import();
-	}
-	else if(selected_id == "test") {
-		langs_test();
-	}
-	else if(selected_id == "stats") {
-		langs_stats();
-	}
-	else if(selected_id != "back") {
-		langs_menu(); // Retornar ao menu
-	}
+    while(true) {
+        setupmenu();
+        
+        game_menu.add_item(pu.get_value("Adicionar traduÃ§Ã£o"), "add");
+        game_menu.add_item(pu.get_value("Editar traduÃ§Ã£o"), "edit");
+        game_menu.add_item(pu.get_value("Listar traduÃ§Ãµes"), "list");
+        game_menu.add_item(pu.get_value("EstatÃ­sticas"), "stats");
+        game_menu.add_item(pu.get_value("Voltar"), "voltar");
+        
+        game_menu.intro_text = pu.get_value("Gerenciamento de TraduÃ§Ãµes");
+        int mres = game_menu.run();
+        string selected = game_menu.get_item_id(mres);
+        
+        if(selected == "voltar" || mres == -1) {
+            return;
+        }
+        
+        if(selected == "add") {
+            langs_add_translation();
+        }
+        else if(selected == "edit") {
+            langs_edit_translation();
+        }
+        else if(selected == "list") {
+            send_to_server("list_translations:", 1, false);
+        }
+        else if(selected == "stats") {
+            send_to_server("translation_stats", 1, false);
+        }
+    }
 }
 
-// Adicionar nova tradução
 void langs_add_translation() {
-	input_form form(pu.get_value("Nova tradução"));
-	form.description = pu.get_value("Adicione uma nova string de tradução ao sistema.");
-	form.add_text_field("key", pu.get_value("Chave (identificador único)"), "", true);
-	form.add_text_field("pt", pu.get_value("Português"), "", true);
-	form.add_text_field("en", pu.get_value("Inglês"), "", false);
-	form.add_text_field("es", pu.get_value("Espanhol"), "", false);
-	form.add_text_field("fr", pu.get_value("Francês"), "", false);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string key, pt, en, es, fr;
-		result.get("key", key);
-		result.get("pt", pt);
-		result.get("en", en);
-		result.get("es", es);
-		result.get("fr", fr);
-		
-		if(key != "" && pt != "") {
-			string data = "add_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr;
-			game_net.send(net_peer_id, encrypt_packet(data), 1, true);
-			speak(pu.get_value("Tradução adicionada com sucesso!"));
-		}
-		else {
-			speak(pu.get_value("Chave e português são obrigatórios."));
-		}
-	}
-	langs_menu();
+    input_form form(pu.get_value("Adicionar TraduÃ§Ã£o"));
+    form.add_text_field("key", pu.get_value("Chave"), "", true);
+    form.add_text_field("pt", pu.get_value("PortuguÃªs"), "", true);
+    form.add_text_field("en", pu.get_value("InglÃªs"), "", false);
+    form.add_text_field("es", pu.get_value("Espanhol"), "", false);
+    form.add_text_field("fr", pu.get_value("FrancÃªs"), "", false);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string key, pt, en, es, fr;
+        result.get("key", key);
+        result.get("pt", pt);
+        result.get("en", en);
+        result.get("es", es);
+        result.get("fr", fr);
+        
+        if(key != "" && pt != "") {
+            send_to_server("add_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr, 1, true);
+            speak(pu.get_value("TraduÃ§Ã£o adicionada!"));
+        }
+    }
 }
 
-// Editar tradução existente
 void langs_edit_translation() {
-	input_form form(pu.get_value("Editar tradução"));
-	form.add_text_field("key", pu.get_value("Chave da tradução a editar"), "", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string key;
-		result.get("key", key);
-		
-		if(key != "") {
-			// Solicitar ao servidor os dados atuais
-			game_net.send(net_peer_id, encrypt_packet("get_translation:" + key), 1, true);
-			speak(pu.get_value("Solicitando dados da tradução..."));
-			
-			// O servidor enviará os dados e o cliente abrirá outro form
-			// Por enquanto, permitir edição direta
-			input_form form2(pu.get_value("Editar: ") + key);
-			form2.add_text_field("pt", pu.get_value("Português"), "", false);
-			form2.add_text_field("en", pu.get_value("Inglês"), "", false);
-			form2.add_text_field("es", pu.get_value("Espanhol"), "", false);
-			form2.add_text_field("fr", pu.get_value("Francês"), "", false);
-			
-			dictionary@ result2 = form2.run();
-			if(!form2.user_canceled) {
-				string pt, en, es, fr;
-				result2.get("pt", pt);
-				result2.get("en", en);
-				result2.get("es", es);
-				result2.get("fr", fr);
-				
-				string data = "edit_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr;
-				game_net.send(net_peer_id, encrypt_packet(data), 1, true);
-				speak(pu.get_value("Tradução atualizada!"));
-			}
-		}
-	}
-	langs_menu();
+    input_form form(pu.get_value("Editar TraduÃ§Ã£o"));
+    form.add_text_field("key", pu.get_value("Chave da traduÃ§Ã£o"), "", true);
+    
+    dictionary@ result = form.run();
+    if(!form.user_canceled) {
+        string key;
+        result.get("key", key);
+        
+        if(key != "") {
+            input_form form2(pu.get_value("Editar: ") + key);
+            form2.add_text_field("pt", pu.get_value("PortuguÃªs"), "", false);
+            form2.add_text_field("en", pu.get_value("InglÃªs"), "", false);
+            form2.add_text_field("es", pu.get_value("Espanhol"), "", false);
+            form2.add_text_field("fr", pu.get_value("FrancÃªs"), "", false);
+            
+            dictionary@ result2 = form2.run();
+            if(!form2.user_canceled) {
+                string pt, en, es, fr;
+                result2.get("pt", pt);
+                result2.get("en", en);
+                result2.get("es", es);
+                result2.get("fr", fr);
+                
+                send_to_server("edit_translation:" + key + "|" + pt + "|" + en + "|" + es + "|" + fr, 1, true);
+                speak(pu.get_value("TraduÃ§Ã£o atualizada!"));
+            }
+        }
+    }
 }
 
-// Listar traduções
-void langs_list_translations() {
-	input_form form(pu.get_value("Filtrar traduções"));
-	form.add_text_field("filter", pu.get_value("Filtro (deixe vazio para listar todas)"), "", false);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string filter;
-		result.get("filter", filter);
-		
-		game_net.send(net_peer_id, encrypt_packet("list_translations:" + filter), 1, true);
-		speak(pu.get_value("Solicitando lista de traduções ao servidor..."));
-	}
-	langs_menu();
-}
-
-// Exportar traduções
-void langs_export() {
-	input_form form(pu.get_value("Exportar traduções"));
-	form.add_text_field("language", pu.get_value("Idioma (pt, en, es, fr, ou 'all')"), "all", true);
-	form.add_text_field("filename", pu.get_value("Nome do arquivo de saída"), "translations.txt", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string language, filename;
-		result.get("language", language);
-		result.get("filename", filename);
-		
-		if(language != "" && filename != "") {
-			game_net.send(net_peer_id, encrypt_packet("export_translations:" + language + "|" + filename), 1, true);
-			speak(pu.get_value("Exportação solicitada. Arquivo será salvo no servidor."));
-		}
-	}
-	langs_menu();
-}
-
-// Importar traduções
-void langs_import() {
-	input_form form(pu.get_value("Importar traduções"));
-	form.description = pu.get_value("Importe traduções de um arquivo .txt ou .csv");
-	form.add_text_field("filename", pu.get_value("Nome do arquivo no servidor"), "", true);
-	form.add_text_field("format", pu.get_value("Formato (csv ou txt)"), "csv", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string filename, format;
-		result.get("filename", filename);
-		result.get("format", format);
-		
-		if(filename != "") {
-			bool confirm = simple_yes_no(pu.get_value("Importar traduções pode sobrescrever dados existentes. Continuar?"));
-			if(confirm) {
-				game_net.send(net_peer_id, encrypt_packet("import_translations:" + filename + "|" + format), 1, true);
-				speak(pu.get_value("Importação iniciada..."));
-			}
-		}
-	}
-	langs_menu();
-}
-
-// Testar tradução
-void langs_test() {
-	input_form form(pu.get_value("Testar tradução"));
-	form.add_text_field("key", pu.get_value("Chave da tradução"), "", true);
-	form.add_text_field("language", pu.get_value("Idioma (pt, en, es, fr)"), "pt", true);
-	
-	dictionary@ result = form.run();
-	if(!form.user_canceled) {
-		string key, language;
-		result.get("key", key);
-		result.get("language", language);
-		
-		if(key != "") {
-			game_net.send(net_peer_id, encrypt_packet("test_translation:" + key + "|" + language), 1, true);
-			speak(pu.get_value("Solicitando teste de tradução..."));
-		}
-	}
-	langs_menu();
-}
-
-// Estatísticas de tradução
-void langs_stats() {
-	game_net.send(net_peer_id, encrypt_packet("translation_stats"), 1, true);
-	speak(pu.get_value("Solicitando estatísticas de tradução ao servidor..."));
-	wait(500);
-	langs_menu();
-}
-
+// FunÃ§Ã£o auxiliar para obter som
 string get_sound(string title, string filter, bool first_letter) {
-	// Buscar sons no diretório de sons
-	string pattern = first_letter ? ("sounds/" + filter + "*.ogg") : ("sounds/*" + filter + "*.ogg");
-	string[]@ sound_files = glob(pattern);
-	
-	if(sound_files.length() == 0) {
-		speak(pu.get_value("Nenhum som encontrado com o filtro: ") + filter);
-		return "";
-	}
-	
-	setupmenu();
-	
-	for(uint i = 0; i < sound_files.length(); i++) {
-		// Extrair nome do arquivo
-		string filename = string_split(sound_files[i], "/")[-1];
-		filename = filename.replace(".ogg", "");
-		game_menu.add_item(filename, sound_files[i]);
-	}
-	
-	game_menu.intro_text = title + " - " + sound_files.length() + " " + pu.get_value("sons encontrados.");
-	int mres = game_menu.run();
-	
-	if(mres > 0) {
-		string selected = game_menu.get_item_id(mres);
-		// Extrair apenas nome do arquivo sem path
-		return string_split(selected, "/")[-1].replace(".ogg", "");
-	}
-	
-	return "";
+    string pattern = first_letter ? ("sounds/" + filter + "*.ogg") : ("sounds/*" + filter + "*.ogg");
+    string[]@ sound_files = glob(pattern);
+    
+    if(sound_files.length() == 0) {
+        speak(pu.get_value("Nenhum som encontrado com: ") + filter);
+        return "";
+    }
+    
+    setupmenu();
+    
+    for(uint i = 0; i < sound_files.length(); i++) {
+        string filename = string_split(sound_files[i], "/")[-1];
+        filename = filename.replace(".ogg", "");
+        game_menu.add_item(filename, sound_files[i]);
+    }
+    
+    game_menu.intro_text = title + " - " + sound_files.length() + " encontrados";
+    int mres = game_menu.run();
+    
+    if(mres > 0) {
+        string selected = game_menu.get_item_id(mres);
+        return string_split(selected, "/")[-1].replace(".ogg", "");
+    }
+    
+    return "";
 }
+
+// soundsmenu() - jÃ¡ definida em menu.nvgt
+
+// FunÃ§Ã£o de confirmaÃ§Ã£o simples
+bool simple_yes_no(string question) {
+    setupmenu();
+    game_menu.add_item(pu.get_value("Sim"), "yes");
+    game_menu.add_item(pu.get_value("NÃ£o"), "no");
+    
+    game_menu.intro_text = question;
+    int mres = game_menu.run();
+    string selected = game_menu.get_item_id(mres);
+    
+    return (selected == "yes");
+}
+

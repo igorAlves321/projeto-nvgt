@@ -1,0 +1,327 @@
+// db_bans.nvgt - Sistema de Banimentos via SQLite
+// Substitui flat-files (banidos.dat, tempbans.usr) por tabela SQL robusta
+// Permite banimento por Conta OU Hardware ID de forma unificada
+
+// ============================================================================
+// INICIALIZAÇÃO DA TABELA
+// ============================================================================
+
+void init_bans_table() {
+    if (!database_initialized) {
+        debug_log("BANS: Erro - Banco de dados não inicializado");
+        return;
+    }
+
+    string query = """
+    CREATE TABLE IF NOT EXISTS server_bans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        banned_username TEXT,       -- Nome da conta banida
+        banned_ip TEXT,             -- IP registrado no momento do ban
+        computer_id TEXT,           -- Hardware ID (para evitar evasão)
+        admin_username TEXT,        -- Admin que aplicou o ban
+        reason TEXT,                -- Motivo do banimento
+        ban_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expire_date DATETIME,       -- NULL = Permanente, Data = Temporário
+        is_active BOOLEAN DEFAULT 1 -- 1 = Ativo, 0 = Revogado/Expirado
+    );
+    """;
+    
+    bancoJogo.execute(query);
+    
+    // Criar índices para performance em consultas de login
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_bans_user ON server_bans(banned_username);");
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_bans_hwid ON server_bans(computer_id);");
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_bans_active ON server_bans(is_active);");
+    
+    debug_log("✓ Tabela 'server_bans' inicializada");
+}
+
+// ============================================================================
+// FUNÇÕES DE BANIMENTO
+// ============================================================================
+
+// Aplica banimento (Temporário ou Permanente)
+// @param target: Nome do jogador alvo
+// @param comp_id: Hardware ID do computador
+// @param ip: IP do jogador
+// @param admin: Nome do admin que baniu
+// @param reason: Motivo do banimento
+// @param duration_minutes: 0 = Permanente, >0 = Temporário em minutos
+// @return: true se sucesso, false se erro
+bool add_ban_db(string target, string comp_id, string ip, string admin, string reason, int duration_minutes) {
+    if (!database_initialized) return false;
+
+    string query;
+    
+    if (duration_minutes > 0) {
+        // Banimento temporário
+        query = "INSERT INTO server_bans (banned_username, computer_id, banned_ip, admin_username, reason, expire_date, is_active) VALUES (?, ?, ?, ?, ?, datetime('now', '+" + duration_minutes + " minutes'), 1);";
+    } else {
+        // Banimento permanente (expire_date = NULL)
+        query = "INSERT INTO server_bans (banned_username, computer_id, banned_ip, admin_username, reason, expire_date, is_active) VALUES (?, ?, ?, ?, ?, NULL, 1);";
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if (@stmt == null) {
+        debug_log("BANS: Erro ao preparar statement de insert");
+        return false;
+    }
+
+    stmt.bind_text(1, target);
+    stmt.bind_text(2, comp_id);
+    stmt.bind_text(3, ip);
+    stmt.bind_text(4, admin);
+    stmt.bind_text(5, reason);
+
+    bool success = (stmt.step() == SQLITE_DONE);
+    
+    if (success) {
+        string tipo = duration_minutes > 0 ? "temporário (" + duration_minutes + " min)" : "permanente";
+        debug_log("BAN: " + target + " banido " + tipo + " por " + admin + ". Motivo: " + reason);
+    }
+    
+    return success;
+}
+
+// Verifica se jogador está banido
+// @param username: Nome da conta
+// @param comp_id: Hardware ID
+// @param out_reason: Retorna o motivo do ban
+// @param out_remaining: Retorna minutos restantes (-1 = permanente)
+// @return: true se BANIDO, false se limpo
+bool check_ban_db(string username, string comp_id, string &out out_reason, int &out out_remaining) {
+    if (!database_initialized) return false;
+
+    // Busca ban ativo para este Usuário OU Computer ID
+    // Que seja permanente (expire_date NULL) OU não expirado ainda
+    string query = """
+    SELECT reason, expire_date, 
+           CAST((julianday(expire_date) - julianday('now')) * 1440 AS INTEGER) as minutes_left 
+    FROM server_bans 
+    WHERE (banned_username = ? OR (computer_id = ? AND computer_id != '' AND computer_id IS NOT NULL))
+    AND is_active = 1
+    AND (expire_date IS NULL OR expire_date > datetime('now'))
+    ORDER BY id DESC LIMIT 1;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if (@stmt == null) return false;
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, comp_id);
+
+    if (stmt.step() == SQLITE_ROW) {
+        out_reason = stmt.column_text(0);
+        
+        // Verifica se é permanente (expire_date é NULL)
+        if (stmt.column_type(1) == SQLITE_NULL) {
+            out_remaining = -1; // Código para permanente
+        } else {
+            out_remaining = stmt.column_int(2);
+            if (out_remaining < 1) out_remaining = 1; // Mínimo 1 minuto para exibição
+        }
+        
+        return true; // BANIDO
+    }
+
+    return false; // LIMPO
+}
+
+// Verifica se jogador está banido (versão simplificada)
+// @return: true se banido, false se limpo
+bool is_banned_db(string username, string comp_id = "") {
+    string reason;
+    int remaining;
+    return check_ban_db(username, comp_id, reason, remaining);
+}
+
+// Revoga banimento de um jogador
+// @param target: Nome do jogador
+// @return: true se sucesso
+bool unban_player_db(string target) {
+    if (!database_initialized) return false;
+    
+    // Desativa todos os bans ativos para este usuário
+    string query = "UPDATE server_bans SET is_active = 0 WHERE banned_username = ? AND is_active = 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if (@stmt == null) return false;
+    
+    stmt.bind_text(1, target);
+    stmt.step();
+    
+    debug_log("UNBAN: " + target + " desbanido via SQL");
+    return true;
+}
+
+// Revoga banimento por Hardware ID
+// @param comp_id: Hardware ID
+// @return: true se sucesso
+bool unban_hardware_db(string comp_id) {
+    if (!database_initialized) return false;
+    
+    string query = "UPDATE server_bans SET is_active = 0 WHERE computer_id = ? AND is_active = 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if (@stmt == null) return false;
+    
+    stmt.bind_text(1, comp_id);
+    stmt.step();
+    
+    debug_log("UNBAN HWID: " + comp_id + " desbanido via SQL");
+    return true;
+}
+
+// ============================================================================
+// FUNÇÕES DE CONSULTA E HISTÓRICO
+// ============================================================================
+
+// Lista todos os banimentos ativos
+// @return: Array com strings formatadas "username|reason|expire"
+string[] list_active_bans_db() {
+    string[] result;
+    if (!database_initialized) return result;
+    
+    string query = """
+    SELECT banned_username, reason, 
+           CASE 
+               WHEN expire_date IS NULL THEN 'Permanente'
+               ELSE datetime(expire_date, 'localtime')
+           END as expira
+    FROM server_bans 
+    WHERE is_active = 1
+    AND (expire_date IS NULL OR expire_date > datetime('now'))
+    ORDER BY ban_date DESC;
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if (@stmt == null) return result;
+    
+    while (stmt.step() == SQLITE_ROW) {
+        string entry = stmt.column_text(0) + "|" + stmt.column_text(1) + "|" + stmt.column_text(2);
+        result.insert_last(entry);
+    }
+    
+    return result;
+}
+
+// Conta banimentos ativos
+int count_active_bans_db() {
+    if (!database_initialized) return 0;
+    
+    string query = "SELECT COUNT(*) FROM server_bans WHERE is_active = 1 AND (expire_date IS NULL OR expire_date > datetime('now'));";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if (@stmt != null && stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+    
+    return 0;
+}
+
+// Limpa bans expirados automaticamente (marca is_active = 0)
+void cleanup_expired_bans_db() {
+    if (!database_initialized) return;
+    
+    string query = "UPDATE server_bans SET is_active = 0 WHERE expire_date IS NOT NULL AND expire_date <= datetime('now') AND is_active = 1;";
+    bancoJogo.execute(query);
+}
+
+// ============================================================================
+// MIGRAÇÃO DE DADOS LEGADOS
+// ============================================================================
+
+// Migra dados do arquivo banidos.dat para o banco SQL
+void migrate_banidos_dat_to_db() {
+    if (!database_initialized) return;
+    
+    file f;
+    if (!f.open("banidos.dat", "rb")) {
+        debug_log("MIGRAÇÃO: Arquivo banidos.dat não encontrado (OK se já migrado)");
+        return;
+    }
+    
+    string content = f.read();
+    f.close();
+    
+    if (content == "") return;
+    
+    string[] banned = content.split("\r\n");
+    int migrated = 0;
+    
+    for (uint i = 0; i < banned.length(); i++) {
+        string name = banned[i].trim_whitespace();
+        if (name == "") continue;
+        
+        // Verifica se já existe no banco
+        if (!is_banned_db(name)) {
+            add_ban_db(name, "", "", "SISTEMA_MIGRAÇÃO", "Migrado de banidos.dat", 0);
+            migrated++;
+        }
+    }
+    
+    if (migrated > 0) {
+        debug_log("MIGRAÇÃO: " + migrated + " bans permanentes migrados de banidos.dat");
+        // Faz backup e remove arquivo antigo
+        if (file_exists("banidos.dat")) {
+            file_copy("banidos.dat", "banidos.dat.backup", true);
+            file_delete("banidos.dat");
+        }
+    }
+}
+
+// Migra dados do arquivo tempbans.usr para o banco SQL
+void migrate_tempbans_to_db() {
+    if (!database_initialized) return;
+    
+    file f;
+    if (!f.open("tempbans.usr", "r")) {
+        debug_log("MIGRAÇÃO: Arquivo tempbans.usr não encontrado (OK se já migrado)");
+        return;
+    }
+    
+    string content = f.read();
+    f.close();
+    
+    if (content == "") return;
+    
+    string[] bans = content.split("\r\n");
+    int migrated = 0;
+    
+    for (uint i = 0; i < bans.length(); i++) {
+        if (bans[i] == "") continue;
+        
+        // Formato: playername=mins=elapsed=motivo=id
+        string[] parsed = bans[i].split("=");
+        if (parsed.length() >= 5) {
+            string playername = parsed[0];
+            double total_mins = parse_float(parsed[1]) * 1440; // dias para minutos
+            double elapsed = parse_float(parsed[2]) / 60000; // ms para minutos
+            string motivo = parsed[3];
+            string hwid = parsed[4];
+            
+            int remaining = int(total_mins - elapsed);
+            if (remaining > 0 && !is_banned_db(playername, hwid)) {
+                add_ban_db(playername, hwid, "", "SISTEMA_MIGRAÇÃO", motivo, remaining);
+                migrated++;
+            }
+        }
+    }
+    
+    if (migrated > 0) {
+        debug_log("MIGRAÇÃO: " + migrated + " tempbans migrados de tempbans.usr");
+        // Faz backup e remove arquivo antigo
+        if (file_exists("tempbans.usr")) {
+            file_copy("tempbans.usr", "tempbans.usr.backup", true);
+            file_delete("tempbans.usr");
+        }
+    }
+}
+
+// Executa migração completa dos sistemas legados
+void migrate_legacy_bans() {
+    debug_log("MIGRAÇÃO: Iniciando migração de bans legados para SQLite...");
+    migrate_banidos_dat_to_db();
+    migrate_tempbans_to_db();
+    debug_log("MIGRAÇÃO: Concluída");
+}

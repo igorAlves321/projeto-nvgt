@@ -110,10 +110,13 @@ bool create_player_account(string username, string password_raw, string email, i
     
     debug_log("Salt gerado: " + new_salt.substr(0, 4) + "... (truncado por segurança)");
 
+    // Gerar inventário padrão
+    string default_inventory = get_default_inventory_json();
+
     string query = """
         INSERT INTO players (username, password_hash, password_salt, email, gender, level, experience, gold,
-                           hp, max_hp, mp, max_mp, race, map_name, x, y, z, is_admin)
-        VALUES (?, ?, ?, ?, ?, 1, 0, 100, 100, 100, 50, 50, 'humano', ?, 1, 0, 0, 0);
+                           hp, max_hp, mp, max_mp, race, map_name, x, y, z, is_admin, inventory, title)
+        VALUES (?, ?, ?, ?, ?, 1, 0, 100, 100, 100, 50, 50, 'humano', ?, 1, 0, 0, 0, ?, 'Iniciante');
     """;
 
     sqlite3statement@ stmt = bancoJogo.prepare(query);
@@ -129,6 +132,7 @@ bool create_player_account(string username, string password_raw, string email, i
     stmt.bind_text(4, email);
     stmt.bind_int(5, gender);
     stmt.bind_text(6, mapainicial);   // Mapa inicial do servidor
+    stmt.bind_text(7, default_inventory);  // Inventário padrão
     
     debug_log("Parâmetros bound, executando INSERT...");
 
@@ -137,8 +141,43 @@ bool create_player_account(string username, string password_raw, string email, i
         return false;
     }
 
-    debug_log("Conta criada no banco: " + username);
+    debug_log("Conta criada no banco com inventário padrão e título Iniciante: " + username);
     return true;
+}
+
+// Gera o JSON do inventário padrão baseado no inv.inv
+// Gera o JSON do inventário padrão baseado no banco de dados
+string get_default_inventory_json() {
+    if(!database_initialized) return "{}";
+    
+    // Tenta ler da tabela initial_inventory
+    string query = "SELECT item_name, quantity FROM initial_inventory;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if(@stmt == null) {
+        debug_log("AVISO: Tabela initial_inventory não encontrada ou erro. Usando fallback.");
+        // Fallback hardcoded caso a tabela ainda não exista ou falhe
+        string json = "{";
+        json += "\"reais\":1000,"; // Fallback básico
+        json += "\"euro\":500";
+        json += "}";
+        return json;
+    }
+    
+    string json = "{";
+    bool first = true;
+    
+    while(stmt.step() == SQLITE_ROW) {
+        string name = stmt.column_text(0);
+        int qty = stmt.column_int(1);
+        
+        if(!first) json += ",";
+        json += "\"" + name + "\":" + qty;
+        first = false;
+    }
+    
+    json += "}";
+    return json;
 }
 
 // Carregar dados do jogador do banco

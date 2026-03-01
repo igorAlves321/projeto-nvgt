@@ -92,7 +92,7 @@ void ctime(int index) {
 }
 
 // Função para enviar mensagem para administradores
-void eadm(string msg, string sound = "notify5.ogg") {
+void eadm(string msg, string sound = "notifybleeps.ogg") {
 	msgadm_array.insert_at(0, msg);
 	for (uint i = 0; i < players.length(); i++) {
 		if(!players[i].is_logged_in) continue;
@@ -149,4 +149,154 @@ bool dcomando(int index, string[] parsed) {
 		return r;
 	}
 	return false;
+}
+
+// ============================================================================
+// FUNÇÕES AUXILIARES PARA COMANDOS ADMIN
+// ============================================================================
+
+// Broadcast para todos os jogadores online
+void broadcast_all(string message) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].is_logged_in && players[i].online) {
+			send_reliable(players[i].peer_id, message, 0);
+		}
+	}
+}
+
+// Broadcast para todos em um mapa específico
+void broadcast_message_to_map(string map_name, string message) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].is_logged_in && players[i].online && players[i].map == map_name) {
+			send_reliable(players[i].peer_id, message, 0);
+		}
+	}
+}
+
+// Teleportar jogador para um mapa e posição
+void teleport_player(int player_index, string map_name, int x, int y, int z) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	// Atualizar dados do jogador
+	string old_map = players[player_index].map;
+	players[player_index].map = map_name;
+	players[player_index].x = x;
+	players[player_index].y = y;
+	players[player_index].z = z;
+	
+	// Enviar comando de teleporte para o cliente
+	send_reliable(players[player_index].peer_id, "changemap " + map_name + " " + x + " " + y + " " + z, 0);
+	
+	debug_log("TELEPORT: " + players[player_index].charname + " de " + old_map + " para " + map_name);
+}
+
+// Adicionar item ao inventário do jogador
+void add_item_to_player(int player_index, string item_name, int quantity) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	// O inventário é um dictionary: inv[item_name] = quantity
+	int current_qty = 0;
+	if(players[player_index].inv.exists(item_name)) {
+		players[player_index].inv.get(item_name, current_qty);
+	}
+	players[player_index].inv.set(item_name, current_qty + quantity);
+	
+	// Atualizar cliente
+	send_reliable(players[player_index].peer_id, "invupdate " + item_name + " " + (current_qty + quantity), 0);
+}
+
+// Remover item do inventário do jogador
+void remove_item_from_player(int player_index, string item_name, int quantity) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	
+	int current_qty = 0;
+	if(players[player_index].inv.exists(item_name)) {
+		players[player_index].inv.get(item_name, current_qty);
+		int new_qty = current_qty - quantity;
+		if(new_qty <= 0) {
+			players[player_index].inv.delete(item_name);
+			new_qty = 0;
+		} else {
+			players[player_index].inv.set(item_name, new_qty);
+		}
+		
+		// Atualizar cliente
+		send_reliable(players[player_index].peer_id, "invremove " + item_name + " " + new_qty, 0);
+	}
+}
+
+// Remover ban temporário
+bool remove_temp_ban(string player_name) {
+	// Verificar arquivo de bans temporários
+	if(!file_exists("tempbans.usr")) return false;
+	
+	file f;
+	if(!f.open("tempbans.usr", "r")) return false;
+	
+	string content = f.read();
+	f.close();
+	
+	string[] lines = content.split("\n");
+	string new_content = "";
+	bool found = false;
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		if(lines[i].find(player_name) < 0) {
+			new_content += lines[i] + "\n";
+		} else {
+			found = true;
+		}
+	}
+	
+	if(found) {
+		file f2;
+		if(f2.open("tempbans.usr", "w")) {
+			f2.write(new_content);
+			f2.close();
+		}
+	}
+	
+	return found;
+}
+
+// Salvar dados de um jogador
+void save_player(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(!players[player_index].is_logged_in) return;
+	
+	players[player_index].save_player_data();
+}
+
+// Carregar configurações do servidor
+void load_server_config() {
+	// Placeholder - implementar quando necessário
+	debug_log("Configurações do servidor recarregadas");
+}
+
+// NOTA: Funções de cargos (get_player_roles, add_role_to_player, remove_role_from_player)
+// estão definidas em roles.nvgt - usar aquelas funções
+
+// Obter lista de toda a equipe
+string[] get_all_staff() {
+	string[] staff;
+	
+	// Listar pasta de jogadores
+	string[]@ player_folders = find_directories("players/");
+	
+	for(uint i = 0; i < player_folders.length(); i++) {
+		string player_name = player_folders[i];
+		string base_path = "players/" + player_name + "/";
+		
+		string role_str = "";
+		if(file_exists(base_path + "dev.usr")) role_str = "[DEV]";
+		else if(file_exists(base_path + "admin.usr")) role_str = "[ADMIN]";
+		else if(file_exists(base_path + "moderator.usr")) role_str = "[MOD]";
+		else if(file_exists(base_path + "builder.usr")) role_str = "[BUILDER]";
+		
+		if(role_str != "") {
+			staff.insert_last(role_str + " " + player_name);
+		}
+	}
+	
+	return staff;
 }

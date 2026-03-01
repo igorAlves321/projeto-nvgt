@@ -80,6 +80,41 @@ map@ builder_get_player_map(player@ p) {
     return null;
 }
 
+string builder_trim(string value) {
+    string result = value;
+    while(result.length() > 0 && (result.substr(0, 1) == " " || result.substr(0, 1) == "\t")) {
+        result = result.substr(1);
+    }
+    while(result.length() > 0 && (result.substr(result.length() - 1, 1) == " " || result.substr(result.length() - 1, 1) == "\t")) {
+        result = result.substr(0, result.length() - 1);
+    }
+    return result;
+}
+
+bool builder_is_valid_map_name(string map_name) {
+    if(map_name == "" || map_name.length() > 80) return false;
+    if(map_name.find(" ") >= 0) return false;
+    if(map_name.find("/") >= 0 || map_name.find("\\") >= 0) return false;
+    if(map_name.find("..") >= 0 || map_name.find(":") >= 0) return false;
+    return true;
+}
+
+string builder_existing_map_path(string map_name) {
+    string path_local = "maps/" + map_name + ".map";
+    if(file_exists(path_local)) return path_local;
+    string path_server = "server/maps/" + map_name + ".map";
+    if(file_exists(path_server)) return path_server;
+    return "";
+}
+
+string builder_preferred_map_path(string map_name) {
+    string existing = builder_existing_map_path(map_name);
+    if(existing != "") return existing;
+    if(directory_exists("server/maps")) return "server/maps/" + map_name + ".map";
+    if(!directory_exists("maps")) directory_create("maps");
+    return "maps/" + map_name + ".map";
+}
+
 // ============================================================================
 // 📦 HANDLER PRINCIPAL: req_builder_create_element
 // ============================================================================
@@ -188,6 +223,182 @@ void req_builder_create_element(player@ p, string element_data) {
         log_to_database("INFO", "BUILDER", "Elemento criado: " + element_type, 
                        get_player_index_from(p.charname), p.charname);
     }
+}
+
+bool builder_remove_last_from_map_array(map@ current_map, string element_type) {
+    if(current_map is null) return false;
+
+    if(element_type == "p" || element_type == "platform" || element_type == "sc" || element_type == "staircase") {
+        if(current_map.platforms.length() == 0) return false;
+        current_map.platforms.remove_at(current_map.platforms.length() - 1);
+        return true;
+    }
+    if(element_type == "w" || element_type == "wall" || element_type == "pwall") {
+        if(current_map.walls.length() == 0) return false;
+        current_map.walls.remove_at(current_map.walls.length() - 1);
+        return true;
+    }
+    if(element_type == "z" || element_type == "zone") {
+        if(current_map.zones.length() == 0) return false;
+        current_map.zones.remove_at(current_map.zones.length() - 1);
+        return true;
+    }
+    if(element_type == "sz" || element_type == "safezone") {
+        if(current_map.safezones.length() == 0) return false;
+        current_map.safezones.remove_at(current_map.safezones.length() - 1);
+        return true;
+    }
+    if(element_type == "npc") {
+        if(current_map.npcs.length() == 0) return false;
+        current_map.npcs.remove_at(current_map.npcs.length() - 1);
+        return true;
+    }
+    if(element_type == "item") {
+        if(current_map.objs.length() == 0) return false;
+        current_map.objs.remove_at(current_map.objs.length() - 1);
+        return true;
+    }
+    if(element_type == "rt") {
+        if(current_map.banheiros.length() == 0) return false;
+        current_map.banheiros.remove_at(current_map.banheiros.length() - 1);
+        return true;
+    }
+    if(element_type == "lv") {
+        if(current_map.pias.length() == 0) return false;
+        current_map.pias.remove_at(current_map.pias.length() - 1);
+        return true;
+    }
+    if(element_type == "ex") {
+        if(current_map.extracts.length() == 0) return false;
+        current_map.extracts.remove_at(current_map.extracts.length() - 1);
+        return true;
+    }
+    if(element_type == "door" || element_type == "porta" || element_type == "dr") {
+        if(current_map.doors.length() == 0) return false;
+        current_map.doors.remove_at(current_map.doors.length() - 1);
+        return true;
+    }
+    if(element_type == "ss" || element_type == "sound_source" || element_type == "som") {
+        if(current_map.sound_sources.length() == 0) return false;
+        current_map.sound_sources.remove_at(current_map.sound_sources.length() - 1);
+        return true;
+    }
+    if(element_type == "texto" || element_type == "txt") {
+        if(current_map.textos.length() == 0) return false;
+        current_map.textos.remove_at(current_map.textos.length() - 1);
+        return true;
+    }
+    if(element_type == "tp" || element_type == "travelpoint") {
+        if(current_map.travel_points.length() == 0) return false;
+        current_map.travel_points.remove_at(current_map.travel_points.length() - 1);
+        return true;
+    }
+
+    return false;
+}
+
+void builder_rebuild_runtime_settings_from_mapdata(map@ current_map) {
+    if(current_map is null) return;
+
+    int rebuilt_max_x = current_map.max_x;
+    int rebuilt_max_y = current_map.max_y;
+    bool has_max_x = false;
+    bool has_max_y = false;
+    string rebuilt_ceiling = "";
+
+    current_map.desactivados.delete_all();
+
+    for(uint i = 0; i < current_map.mapdata.length(); i++) {
+        string[] parsed = current_map.mapdata[i].split(":");
+        if(parsed.length() == 0) continue;
+
+        string element_type = parsed[0].lower();
+        if(element_type == "maxx" && parsed.length() > 1) {
+            int value = string_to_number(parsed[1]);
+            if(value > 0 && value <= BUILDER_MAP_MAX_X) {
+                rebuilt_max_x = value;
+                has_max_x = true;
+            }
+        }
+        else if(element_type == "maxy" && parsed.length() > 1) {
+            int value = string_to_number(parsed[1]);
+            if(value > 0 && value <= BUILDER_MAP_MAX_Y) {
+                rebuilt_max_y = value;
+                has_max_y = true;
+            }
+        }
+        else if(element_type == "teto" && parsed.length() > 1) {
+            rebuilt_ceiling = parsed[1];
+        }
+        else if(element_type == "dv" && parsed.length() > 1) {
+            current_map.desactivados.set(parsed[1], parsed[1]);
+        }
+    }
+
+    if(has_max_x) current_map.max_x = rebuilt_max_x;
+    if(has_max_y) current_map.max_y = rebuilt_max_y;
+    current_map.ceiling_sound = rebuilt_ceiling;
+}
+
+bool builder_undo_last_element(player@ p, string line_hint) {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map@ current_map = builder_get_player_map(p);
+    if(current_map is null) {
+        builder_send_error(p, "Mapa não encontrado: " + p.map_name);
+        return false;
+    }
+
+    if(current_map.mapdata.length() == 0) {
+        builder_send_error(p, "Não há linhas para desfazer.");
+        return false;
+    }
+
+    string target_line = builder_trim(line_hint);
+    if(target_line == "") {
+        target_line = current_map.mapdata[current_map.mapdata.length() - 1];
+    }
+
+    int line_index = -1;
+    for(uint i = 0; i < current_map.mapdata.length(); i++) {
+        if(current_map.mapdata[i] == target_line) {
+            line_index = int(i); // Mantém a última ocorrência
+        }
+    }
+
+    if(line_index < 0) {
+        builder_send_error(p, "Linha para desfazer não encontrada no mapdata atual.");
+        return false;
+    }
+
+    string[] parsed = target_line.split(":");
+    if(parsed.length() == 0 || parsed[0] == "") {
+        builder_send_error(p, "Linha inválida para desfazer.");
+        return false;
+    }
+
+    string element_type = parsed[0].lower();
+    if(element_type == "maxx" || element_type == "maxy" || element_type == "teto" || element_type == "dv") {
+        current_map.mapdata.remove_at(line_index);
+        builder_rebuild_runtime_settings_from_mapdata(current_map);
+        builder_send_success(p, "Ultimo elemento desfeito: " + element_type);
+        log_to_database("INFO", "BUILDER", "Undo elemento: " + element_type,
+                        get_player_index_from(p.charname), p.charname);
+        return true;
+    }
+    if(!builder_remove_last_from_map_array(current_map, element_type)) {
+        builder_send_error(p, "Undo não suportado para o tipo '" + element_type + "' via builder dinâmico.");
+        return false;
+    }
+
+    current_map.mapdata.remove_at(line_index);
+    builder_send_success(p, "Ultimo elemento desfeito: " + element_type);
+    log_to_database("INFO", "BUILDER", "Undo elemento: " + element_type,
+                    get_player_index_from(p.charname), p.charname);
+    return true;
 }
 
 // ============================================================================
@@ -481,34 +692,38 @@ bool builder_create_npc(player@ p, map@ current_map, string[] parsed) {
         return false;
     }
     
-    // Criar NPC usando construtor completo
+    // Ordem compatível com BGT e com o parser de arquivo de mapa (server_map.nvgt):
+    // npc:x:y:vida:xp:attack_dist:damage_received:damage_dealt:mirror_damage:
+    //     attack_time:walk_time:calm_time:items_drop:attack_sounds:calm_sounds:
+    //     death_sound:npc_name:death_msg:respawn_time:multi_respawn:bomb_damage:
+    //     footsteps:x_min:x_max:hit_sounds:degradation
     npc@ new_npc = npc(
         string_to_number(parsed[1]),   // x
         string_to_number(parsed[2]),   // y
-        string_to_number(parsed[3]),   // left_range
-        string_to_number(parsed[4]),   // right_range
-        string_to_number(parsed[5]),   // vida
-        string_to_number(parsed[6]),   // xp_reward
-        string_to_number(parsed[7]),   // attack_dist
-        string_to_number(parsed[8]),   // damage_received
-        string_to_number(parsed[9]),   // damage_dealt
-        string_to_number(parsed[10]),  // mirror_damage
-        string_to_number(parsed[11]),  // tiempoataque
-        parsed[12],                     // sound_nervous
-        parsed[13],                     // sound_attack
-        parsed[14],                     // sound_death
-        parsed[15],                     // sound_impact_bullet
-        parsed[16],                     // sound_impact
-        parsed[17],                     // sound_step
+        string_to_number(parsed[3]),   // vida
+        string_to_number(parsed[4]),   // xp_reward
+        string_to_number(parsed[5]),   // attack_dist
+        string_to_number(parsed[6]),   // damage_received
+        string_to_number(parsed[7]),   // damage_dealt
+        string_to_number(parsed[8]),   // mirror_damage
+        string_to_number(parsed[9]),   // attack_time
+        string_to_number(parsed[10]),  // walk_time
+        string_to_number(parsed[11]),  // calm_time
+        parsed[12],                    // items_drop
+        parsed[13],                    // attack_sounds
+        parsed[14],                    // calm_sounds
+        parsed[15],                    // death_sound
+        parsed[16],                    // npc_name
+        parsed[17],                    // death_message
         string_to_number(parsed[18]),  // respawn_time
         (string_to_number(parsed[19]) != 0),  // enable_respawn
         (string_to_number(parsed[20]) != 0),  // enable_bombs
-        current_map.name,               // map
-        parsed[21],                     // items_drop
-        string_to_number(parsed[22]),  // gold_reward
-        string_to_number(parsed[23]),  // walk_interval
-        parsed[24],                     // death_message
-        string_to_number(parsed[25])   // sound_interval
+        current_map.name,              // map
+        parsed[21],                    // footsteps
+        string_to_number(parsed[22]),  // left_range
+        string_to_number(parsed[23]),  // right_range
+        parsed[24],                    // hit_sounds (impactosbala)
+        parsed[25]                     // degradation
     );
     
     current_map.npcs.insert_last(new_npc);
@@ -681,6 +896,7 @@ bool builder_set_ceiling(player@ p, map@ current_map, string[] parsed) {
     }
     
     // Apenas adicionar ao mapdata, o cliente processará
+    current_map.ceiling_sound = parsed[1];
     builder_send_success(p, "Teto configurado: " + parsed[1]);
     return true;
 }
@@ -726,8 +942,9 @@ bool builder_save_map(player@ p, map@ target_map) {
     }
     
     // Salvar arquivo
+    string map_path = builder_preferred_map_path(target_map.name);
     file f;
-    if(f.open("maps/" + target_map.name + ".map", "w")) {
+    if(f.open(map_path, "w")) {
         f.write(content);
         f.close();
         success = true;
@@ -758,14 +975,23 @@ bool builder_update_map(player@ p, string map_name = "") {
     // Buscar mapa
     for(uint i = 0; i < server_maps.length(); i++) {
         if(server_maps[i].name == target_name) {
-            // Reinicializar mapa
-            server_maps[i].init_map(target_name + ".map");
+            // Reinicializar mapa substituindo a instância para evitar duplicação de arrays
+            map refreshed_map(target_name + ".map");
+            if(refreshed_map.mapdata.length() == 0) {
+                builder_send_error(p, "Falha ao carregar arquivo do mapa '" + target_name + "'.");
+                return false;
+            }
+            refreshed_map.mapindex = int(i);
+            server_maps[i] = refreshed_map;
             builder_send_success(p, "Mapa '" + target_name + "' atualizado!");
             
-            // Notificar todos no mapa para recarregar
+            // Forçar recarga para todos os jogadores que estão nesse mapa
             for(uint j = 0; j < players.length(); j++) {
-                if(players[j].map_name == target_name && players[j].is_logged_in) {
-                    send_reliable(players[j].peer_id, "rawdata " + target_name, 0);
+                if((players[j].map_name == target_name || players[j].map == target_name) && players[j].is_logged_in) {
+                    int pindex = get_player_index_from(players[j].charname);
+                    if(pindex >= 0) {
+                        changemap(target_name, pindex, players[j].x, players[j].y);
+                    }
                 }
             }
             
@@ -775,4 +1001,115 @@ bool builder_update_map(player@ p, string map_name = "") {
     
     builder_send_error(p, "Mapa '" + target_name + "' não encontrado.");
     return false;
+}
+
+bool builder_create_new_map(player@ p, string map_name, int width, int height, string floor_sound = "1") {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map_name = builder_trim(map_name);
+    floor_sound = builder_trim(floor_sound);
+    if(floor_sound == "") floor_sound = "1";
+
+    if(!builder_is_valid_map_name(map_name)) {
+        builder_send_error(p, "Nome de mapa inválido. Use nome sem espaços e sem caracteres de caminho.");
+        return false;
+    }
+
+    if(!builder_validate_dimensions(width, height)) {
+        builder_send_error(p, "Dimensões inválidas.");
+        return false;
+    }
+
+    if(get_map_index_from(map_name) >= 0 || builder_existing_map_path(map_name) != "") {
+        builder_send_error(p, "Já existe um mapa com esse nome.");
+        return false;
+    }
+
+    string[] lines;
+    lines.insert_last("map:" + map_name);
+    lines.insert_last("maxx:" + width);
+    lines.insert_last("maxy:" + height);
+    lines.insert_last("platform:0:0:" + height + ":" + floor_sound);
+    lines.insert_last("wall:0:0:" + height + ":wallgeneric");
+    lines.insert_last("wall:" + width + ":0:" + height + ":wallgeneric");
+    lines.insert_last("safezone:0:" + width + ":0:" + height);
+    lines.insert_last("zone:0:" + width + ":0:" + height + ":" + map_name);
+
+    string content = linear(lines, "\r\n");
+    string new_map_path = builder_preferred_map_path(map_name);
+
+    file map_file;
+    if(!map_file.open(new_map_path, "w")) {
+        builder_send_error(p, "Erro ao criar arquivo do mapa.");
+        return false;
+    }
+    map_file.write(content);
+    map_file.close();
+
+    map new_map(map_name + ".map");
+    new_map.mapindex = int(server_maps.length());
+    server_maps.insert_last(new_map);
+
+    builder_send_success(p, "Mapa '" + map_name + "' criado com sucesso!");
+    debug_log("BUILDER CREATE MAP: " + p.charname + " criou " + map_name);
+    log_to_database("INFO", "BUILDER", "Novo mapa criado: " + map_name, get_player_index_from(p.charname), p.charname);
+    return true;
+}
+
+bool builder_delete_map(player@ p, string map_name) {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map_name = builder_trim(map_name);
+    if(!builder_is_valid_map_name(map_name)) {
+        builder_send_error(p, "Nome de mapa inválido.");
+        return false;
+    }
+
+    if(map_name == mapainicial) {
+        builder_send_error(p, "Não é permitido deletar o mapa inicial.");
+        return false;
+    }
+
+    int map_index = get_map_index_from(map_name);
+    if(map_index >= 0) {
+        for(uint i = 0; i < players.length(); i++) {
+            if((players[i].map_name == map_name || players[i].map == map_name) && players[i].is_logged_in) {
+                int pindex = get_player_index_from(players[i].charname);
+                if(pindex >= 0) changemap(mapainicial, pindex, 1, 0);
+            }
+        }
+
+        server_maps.remove_at(map_index);
+        for(uint i = map_index; i < server_maps.length(); i++) {
+            server_maps[i].mapindex = int(i);
+        }
+    }
+
+    bool removed_file = false;
+    string local_path = "maps/" + map_name + ".map";
+    if(file_exists(local_path)) {
+        file_delete(local_path);
+        removed_file = true;
+    }
+    string server_path = "server/maps/" + map_name + ".map";
+    if(file_exists(server_path)) {
+        file_delete(server_path);
+        removed_file = true;
+    }
+
+    if(map_index < 0 && !removed_file) {
+        builder_send_error(p, "Mapa '" + map_name + "' não encontrado.");
+        return false;
+    }
+
+    builder_send_success(p, "Mapa '" + map_name + "' deletado com sucesso.");
+    debug_log("BUILDER DELETE MAP: " + p.charname + " deletou " + map_name);
+    log_to_database("INFO", "BUILDER", "Mapa deletado: " + map_name, get_player_index_from(p.charname), p.charname);
+    return true;
 }

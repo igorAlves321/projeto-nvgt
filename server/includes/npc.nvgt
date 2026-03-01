@@ -10,6 +10,12 @@ void send_to_map(string message, string mapname) {
 	server_broadcast(message, mapname);
 }
 
+string npc_sound_file(string snd) {
+	if(snd == "") return "";
+	if(snd.find(".ogg") > -1) return snd;
+	return snd + ".ogg";
+}
+
 // Classe base de NPC (movida de placeholder_classes.nvgt)
 class npc {
 	// ============================================================================
@@ -53,10 +59,12 @@ class npc {
 	// SONS
 	// ============================================================================
 	string[] sonidosnervioso; // Sons nervosos do NPC
+	string[] sonidosataque; // Sons de ataque do NPC
+	string[] pasos; // Prefixos de piso para passos
+	string[] impactos; // Sons de impacto por bala
 	string sonidoataque = ""; // Som de ataque
 	string sonidomuerte = ""; // Som de morte
 	string impactosbala = ""; // Som de impacto de bala
-	string impactos = ""; // Som de impactos gerais
 	string pasosnpc = ""; // Som de passos
 	
 	// ============================================================================
@@ -143,18 +151,38 @@ class npc {
 		this.tiempodelossonidos = ntiempodelossonidos;
 		
 		// Items e drops
-		this.itemsadar = nitemsadar;
+		// Compatibilidade: aceita tanto ',' (BGT) quanto '|' (NVGT)
+		this.itemsadar = string_replace(nitemsadar, ",", "|", true);
 		
 		// Sons
 		this.sonidoataque = nsonidoataque;
 		this.sonidomuerte = nsonidomuerte;
 		this.impactosbala = nimpactosbala;
-		this.impactos = nimpactosbala;
 		this.pasosnpc = npasosnpc;
 		
-		// Parsing de sons nervosos (separados por |)
-		if(nsonidonervioso != "") {
-			sonidosnervioso = nsonidonervioso.split("|");
+		// Parsing de listas com compatibilidade ',' e '|'
+		string attack_sounds = string_replace(nsonidoataque, "|", ",", true);
+		if(attack_sounds != "") {
+			sonidosataque = attack_sounds.split(",");
+		}
+		
+		string nervous_sounds = string_replace(nsonidonervioso, "|", ",", true);
+		if(nervous_sounds != "") {
+			sonidosnervioso = nervous_sounds.split(",");
+		}
+		
+		string step_sounds = string_replace(npasosnpc, "|", ",", true);
+		if(step_sounds != "") {
+			pasos = step_sounds.split(",");
+		}
+		
+		string hit_sounds = string_replace(nimpactosbala, "|", ",", true);
+		if(hit_sounds != "") {
+			impactos = hit_sounds.split(",");
+		}
+		else {
+			// Sem sons customizados: força caminho padrão para evitar acesso inválido.
+			this.impactosbala = "default";
 		}
 		
 		// Identificação
@@ -288,13 +316,19 @@ class npc {
 	
 	// Tocar som de passos
 	void play_step_sound() {
-		if(pasosnpc != "") {
-			send_to_map("play " + pasosnpc + " " + this.x + " " + this.y, this.map);
+		string step_base = "";
+		if(pasos.length() > 0) {
+			if(pasos.length() == 1 && pasos[0] == "default") {
+				step_base = get_tile_at(this.x, this.y, this.map);
+			}
+			else {
+				step_base = pasos[random(0, pasos.length() - 1)];
+			}
 		}
 		else {
-			string tile = get_tile_at(this.x, this.y, this.map);
-			send_to_map("play " + tile + "step" + random(1, 5) + ".ogg " + this.x + " " + this.y, this.map);
+			step_base = get_tile_at(this.x, this.y, this.map);
 		}
+		send_to_map("play " + step_base + "step" + random(1, 5) + ".ogg " + this.x + " " + this.y, this.map);
 	}
 	
 	// ============================================================================
@@ -316,8 +350,12 @@ class npc {
 			ttiempoparaatacar.restart();
 			
 			// Tocar som de ataque
-			if(sonidoataque != "") {
-				send_to_map("play " + sonidoataque + " " + this.x + " " + this.y, this.map);
+			if(sonidosataque.length() > 0) {
+				string snd_attack = sonidosataque[random(0, sonidosataque.length() - 1)];
+				send_to_map("play " + npc_sound_file(snd_attack) + " " + this.x + " " + this.y, this.map);
+			}
+			else if(sonidoataque != "") {
+				send_to_map("play " + npc_sound_file(sonidoataque) + " " + this.x + " " + this.y, this.map);
 			}
 			
 			// Verificar reflexo
@@ -350,7 +388,7 @@ class npc {
 		
 		// Escolher som aleatório
 		string snd = sonidosnervioso[random(0, sonidosnervioso.length() - 1)];
-		send_to_map("play " + snd + " " + this.x + " " + this.y, this.map);
+		send_to_map("play " + npc_sound_file(snd) + " " + this.x + " " + this.y, this.map);
 	}
 	
 	// ============================================================================
@@ -363,7 +401,7 @@ class npc {
 		
 		// Tocar som de morte
 		if(sonidomuerte != "") {
-			send_to_map("play " + sonidomuerte + " " + this.x + " " + this.y, this.map);
+			send_to_map("play " + npc_sound_file(sonidomuerte) + " " + this.x + " " + this.y, this.map);
 		}
 		
 		// Mensagem de morte
@@ -407,12 +445,16 @@ class npc {
 	void drop_items(int killer_index) {
 		if(itemsadar == "") return;
 		
-		string[] items = itemsadar.split("|");
+		string normalized_items = string_replace(itemsadar, ",", "|", true);
+		string[] items = normalized_items.split("|");
 		for(uint i = 0; i < items.length(); i++) {
 			if(items[i] == "") continue;
 			
-			// Formato: "item:quantidade" ou só "item"
+			// Formato: "item:quantidade" (NVGT) ou "item.quantidade" (BGT)
 			string[] parts = items[i].split(":");
+			if(parts.length() <= 1 && items[i].find(".") > -1) {
+				parts = items[i].split(".");
+			}
 			string item_name = parts[0];
 			int quantity = (parts.length() > 1) ? parse_int(parts[1]) : 1;
 			
