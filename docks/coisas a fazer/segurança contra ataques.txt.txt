@@ -1,0 +1,156 @@
+Para proteger seu servidor e identificar atacantes ou jogadores mal-intencionados, o NVGT oferece ótimas ferramentas. No entanto, é importante dividir o que o servidor consegue obter sozinho e o que o cliente (jogo) precisa enviar para ele.
+
+Aqui está o que eu recomendo e o que você pode coletar:
+
+### 1. O que o Servidor pega automaticamente (IP)
+O servidor pode obter o **Endereço IP** de qualquer pessoa conectada nativamente, sem depender do cliente. Isso é excelente porque um atacante não pode forjar essa informação facilmente.
+*   Você usa a função `network.get_peer_address(peer_id)` no servidor. Se você detectar um ataque (como um flood de pacotes), você pode salvar esse IP e usar `disconnect_peer_forcefully(peer_id)` para derrubar a conexão imediatamente.
+
+### 2. Dados da Máquina (Enviados pelo Cliente)
+Para rastrear a máquina física do usuário (muito útil para banimentos que impedem a criação de contas falsas), você deve fazer o cliente enviar um pacote de "Apresentação" (Handshake) logo após conectar. O NVGT possui funções nativas para pegar esses dados:
+*   **Hardware ID (HWID):** A função `generate_computer_id(application_id, hardware_only)` ou `generate_system_fingerprint(application_id)` cria uma assinatura única do hardware do usuário. Isso é ideal para salvar no seu banco de dados na coluna `computer_id` para banimentos persistentes.
+*   **Endereço MAC:** A propriedade global `system_node_id` retorna o endereço MAC principal da máquina.
+*   **Nome do PC:** A propriedade `system_node_name` retorna o nome do computador (hostname).
+*   **Sistema Operacional:** As propriedades `PLATFORM_DISPLAY_NAME` e `PLATFORM_ARCHITECTURE` retornam a versão do Windows/Linux e a arquitetura do jogador.
+
+### 3. Detecção de Trapaças Internas
+Para se defender contra trapaceiros modificando o jogo localmente, o NVGT possui flags que o seu cliente pode monitorar e relatar ao servidor:
+*   **`memory_scan_detected`:** Fica `true` se um programa externo (como o Cheat Engine) tentar ler ou modificar a memória do seu jogo.
+*   **`speed_hack_detected`:** Fica `true` se for detectado que o relógio do sistema foi alterado para acelerar o jogo (Speedhack).
+
+### A Recomendação de Arquitetura (Fluxo Seguro)
+1.  O cliente se conecta.
+2.  O servidor anota o IP usando `get_peer_address(peer_id)`.
+3.  O cliente envia um pacote contendo seu HWID (`generate_computer_id`), MAC (`system_node_id`) e usuário.
+4.  O servidor cruza essas informações com a tabela de banimentos (`server_bans`).
+5.  Se o IP ou o HWID constarem na lista de banidos (ou se o cliente estiver enviando lixo para derrubar o servidor), o servidor chama `disconnect_peer_forcefully` imediatamente.
+exemplo:
+Aqui está como você pode estruturar esse fluxo de Handshake (Apresentação) de forma segura usando pacotes JSON.
+O cliente coleta as informações da máquina12 e as envia logo após a conexão. O servidor cruza esses dados com a tabela de banimentos3 e com o IP real da conexão4.
+1. O Código do Cliente (Enviando o Handshake)
+Assim que o cliente se conecta ao servidor, ele deve chamar esta função para enviar suas credenciais e os dados da máquina:
+void enviar_handshake(string usuario, string senha) {
+    json_object dados;
+    
+    // Identificação básica
+    dados["t"] = "handshake";
+    dados["user"] = usuario;
+    dados["pass"] = senha;
+    
+    // Coleta de Dados de Hardware (Anti-Fake/Anti-Ban Evasion)
+    // "meu_jogo" é um ID ("salt") para gerar uma hash única para o seu jogo
+    dados["hwid"] = generate_computer_id("meu_jogo", true); [2]
+    dados["mac"] = system_node_id; [1]
+    dados["os"] = PLATFORM_DISPLAY_NAME; [5]
+    
+    // Criptografe este JSON antes de enviar para evitar interceptação!
+    string payload = dados.stringify();
+    
+    // Envia de forma confiável (Canal 0)
+    net.send_reliable(server_peer_id, payload, 0); [6]
+}
+2. O Código do Servidor (Processando e Validando)
+No loop de rede do servidor, quando você recebe uma mensagem do tipo handshake, você extrai essas informações e valida antes de deixar o jogador entrar no mundo.
+void processar_handshake(uint peer_id, json_object@ dados) {
+    string usuario = dados["user"];
+    string hwid = dados["hwid"];
+    
+    // O Servidor pega o IP real (O cliente não pode forjar isso facilmente)
+    string ip_real = net.get_peer_address(peer_id); [4]
+    
+    print("Tentativa de Login: " + usuario + " | IP: " + ip_real + " | HWID: " + hwid);
+
+    // 1. Verificação de Banimento no Banco de Dados SQLite
+    string motivo_ban;
+    int tempo_restante;
+    
+    // Usando a função check_ban_db que definimos na nossa estrutura SQL
+    if (check_ban_db(usuario, hwid, motivo_ban, tempo_restante)) { [7]
+        
+        // Monta a mensagem de erro para o usuário
+        json_object erro;
+        erro["t"] = "login_error";
+        if (tempo_restante == -1) {
+            erro["msg"] = "Banido permanentemente. Motivo: " + motivo_ban; [3]
+        } else {
+            erro["msg"] = "Banimento ativo por mais " + tempo_restante + " min. Motivo: " + motivo_ban; [3]
+        }
+        
+        // Envia a mensagem de erro (soft kick)
+        net.send_reliable(peer_id, erro.stringify(), 0); [6]
+        
+        // Desconecta o jogador para proteger o servidor
+        net.disconnect_peer_forcefully(peer_id); [8]
+        return;
+    }
+    
+    // 2. Se chegou aqui, o jogador não está banido. 
+    // Pode verificar a senha e carregar o personagem!
+    print("Jogador " + usuario + " autenticado com sucesso!");
+    // carregar_jogador(peer_id, usuario);
+}
+Por que essa estrutura é poderosa?
+• Se um jogador for banido e tentar criar uma conta nova com outro nome de usuário, a função check_ban_db ainda vai detectá-lo porque o hwid (Hardware ID) enviado no Handshake será igual ao que está bloqueado no banco de dados5.
+• O uso de JSON permite que você adicione mais verificações no futuro (como a versão do cliente para evitar que jogadores usem versões desatualizadas do seu jogo) sem quebrar o código existente.
+
+Agora, algo que acho que já foi feito, mas, confira porfa.
+A criptografia é a camada mais importante para evitar que hackers "escutem" a rede (usando programas como o Wireshark) para roubar as senhas dos jogadores ou forjar pacotes falsos.
+O NVGT possui as funções nativas string_aes_encrypt e string_aes_decrypt que utilizam AES-256-CBC, um dos padrões de criptografia mais seguros do mundo1.
+Para que isso funcione, tanto o Cliente quanto o Servidor precisam compartilhar uma mesma "Chave Secreta" (uma senha) no código.
+Aqui está a implementação:
+1. Definindo a Chave (Em um arquivo compartilhado)
+Crie uma constante global que os dois scripts (cliente e servidor) possam ler.
+const string SECRET_KEY = "Minha_Ch4v3_Sup3r_S3gura_123!";
+2. O Código do Cliente (Criptografando antes de enviar)
+void enviar_handshake(string usuario, string senha) {
+    json_object dados;
+    dados["t"] = "handshake";
+    dados["user"] = usuario;
+    dados["pass"] = senha;
+    dados["hwid"] = generate_computer_id("meu_jogo", true); [2]
+    dados["mac"] = system_node_id; [3]
+
+    // 1. Transforma o JSON em texto legível
+    string payload_original = dados.stringify(); [4]
+
+    // 2. Criptografa o texto usando a chave secreta
+    string payload_seguro = string_aes_encrypt(payload_original, SECRET_KEY); [2]
+
+    // 3. Envia o lixo criptografado para o servidor (ninguém na rede consegue ler)
+    net.send_reliable(server_peer_id, payload_seguro, 0); [5]
+}
+3. O Código do Servidor (Descriptografando ao receber)
+No seu servidor, você deve tentar abrir o pacote antes de tentar ler o JSON. Se um hacker tentar enviar lixo para o servidor, a descriptografia vai falhar e retornar uma string vazia2.
+void processar_pacote_rede(uint peer_id, string mensagem_recebida) {
+    
+    // 1. Tenta abrir o cadeado (descriptografar)
+    string mensagem_aberta = string_aes_decrypt(mensagem_recebida, SECRET_KEY); [1]
+
+    // 2. Proteção: Se a chave estiver errada ou os dados corrompidos, a string fica vazia
+    if (mensagem_aberta == "") { [6]
+        print("Aviso: Pacote forjado recebido do Peer " + peer_id);
+        net.disconnect_peer_forcefully(peer_id); // [7] Chuta o hacker imediatamente
+        return;
+    }
+
+    // 3. O pacote é seguro! Vamos tentar ler o JSON dentro do Try/Catch (como aprendemos antes)
+    try {
+        json_object@ dados = parse_json(mensagem_aberta); [8]
+        string tipo = dados["t"]; [9]
+
+        if (tipo == "handshake") {
+            string usuario = dados["user"];
+            string senha = dados["pass"];
+            
+            print("Pacote seguro recebido! Tentativa de login: " + usuario);
+            // Continuar com a verificação no Banco de Dados SQLite...
+        }
+    } 
+    catch {
+        print("Erro: O pacote descriptografou, mas o JSON era inválido.");
+        net.disconnect_peer_forcefully(peer_id); [7]
+    }
+}
+Por que fazer assim?
+1. Confidencialidade: As senhas (pass) nunca trafegam em texto puro pela internet.
+2. Autenticidade (Filtro): O servidor só gasta tempo de processamento tentando entender pacotes de quem possui a SECRET_KEY. Se um bot tentar fazer Flood no seu servidor (como vimos na proteção Anti-Flood), o string_aes_decrypt barra a entrada imediatamente.

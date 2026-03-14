@@ -162,13 +162,10 @@ bool load_player_data_complete(player@ p) {
         }
 
         // Carregar dados sociais
-        if(guild_id > 0) {
-            load_player_guild(p, guild_id);
-        }
-
-        if(party_id > 0) {
-            load_player_party(p, party_id);
-        }
+        // Referência BGT: o estado social vem do sistema social ativo.
+        // Em NVGT, executamos sempre e deixamos o resolver lidar com IDs 0/inválidos.
+        load_player_guild(p, guild_id);
+        load_player_party(p, party_id);
 
         return true;
     }
@@ -448,28 +445,54 @@ void recalculate_clothing_protection(player@ p) {
 bool validate_and_restore_location(player@ p) {
     debug_log("Validando localização de " + p.charname + " [" + p.map + " (" + p.x + "," + p.y + ")]");
 
-    // TODO: Implementar validação de mapa
-    // - Verificar se o mapa existe
-    // - Verificar se a posição é válida
-    // - Verificar se não está em zona bloqueada
-
-    // Por enquanto, implementação básica:
-    // Se o mapa estiver vazio ou inválido, teleportar para spawn padrão
-
     if(p.map == "" || p.map == "null") {
-        debug_log("⚠ Mapa inválido, teleportando para mapa inicial");
+        debug_log("⚠ Mapa vazio/inválido, restaurando para mapa inicial");
         p.map = mapainicial;
         p.map_name = mapainicial;
         p.mapaatual = mapainicial;
         p.x = 0;
         p.y = 0;
         p.z = 0;
-        return true;
     }
 
-    // TODO: Verificar se a posição é válida no mapa (dentro dos limites)
-    // TODO: Verificar se não está dentro de uma parede ou objeto sólido
-    // TODO: Verificar se não está em zona de morte/bloqueada
+    int map_idx = get_map_index_from(p.map);
+    if(map_idx < 0 || map_idx >= int(server_maps.length())) {
+        debug_log("⚠ Mapa '" + p.map + "' não existe, restaurando para mapa inicial");
+        p.map = mapainicial;
+        p.map_name = mapainicial;
+        p.mapaatual = mapainicial;
+        p.x = 0;
+        p.y = 0;
+        p.z = 0;
+        map_idx = get_map_index_from(p.map);
+    }
+
+    if(map_idx < 0 || map_idx >= int(server_maps.length())) {
+        debug_log("ERRO: mapa inicial inválido ao restaurar localização de " + p.charname);
+        return false;
+    }
+
+    bool out_of_bounds = (p.x < 0 || p.y < 0 || p.x > server_maps[map_idx].max_x || p.y > server_maps[map_idx].max_y);
+    bool blocked = !is_walkable(p.x, p.y, p.map);
+
+    if(out_of_bounds || blocked) {
+        debug_log("⚠ Posição inválida/bloqueada para " + p.charname + ", reposicionando em (0,0)");
+        p.x = 0;
+        p.y = 0;
+        p.z = 0;
+
+        // fallback de segurança caso (0,0) também esteja bloqueado
+        if(!is_walkable(p.x, p.y, p.map)) {
+            p.x = 1;
+            p.y = 1;
+            if(!is_walkable(p.x, p.y, p.map)) {
+                p.x = server_maps[map_idx].max_x / 2;
+                p.y = server_maps[map_idx].max_y / 2;
+            }
+        }
+    }
+
+    p.mapindex = map_idx;
 
     debug_log("✓ Localização válida");
     return true;
@@ -498,8 +521,34 @@ void populate_global_structures(player@ p) {
 void load_player_guild(player@ p, int guild_id) {
     debug_log("Carregando guild de " + p.charname + " (ID: " + guild_id + ")");
 
-    // TODO: Implementar carregamento de guild do banco de dados
-    // Por enquanto, stub
+    // 1) Caminho principal: dicionário já carregado pelo sistema de guilds.
+    guild@ g = get_player_guild(p.charname);
+    if(g !is null) {
+        debug_log("✓ Guild vinculada: " + g.name + " [" + g.tag + "]");
+        return;
+    }
+
+    // 2) Fallback: tenta localizar membro na lista ativa de guilds.
+    for(uint i = 0; i < active_guilds.length(); i++) {
+        guild@ candidate = active_guilds[i];
+        if(candidate !is null && candidate.is_member(p.charname)) {
+            player_guilds.set(p.charname, candidate.name);
+            debug_log("✓ Guild restaurada por varredura: " + candidate.name);
+            return;
+        }
+    }
+
+    // 3) Fallback opcional por id (quando DB usa índice 1-based da lista ativa).
+    if(guild_id > 0 && guild_id <= int(active_guilds.length())) {
+        guild@ by_id = active_guilds[guild_id - 1];
+        if(by_id !is null && by_id.is_member(p.charname)) {
+            player_guilds.set(p.charname, by_id.name);
+            debug_log("✓ Guild restaurada por ID: " + by_id.name);
+            return;
+        }
+    }
+
+    debug_log("INFO: Sem guild ativa para " + p.charname + " (guild_id=" + guild_id + ")");
 
     debug_log("✓ Guild carregada");
 }
@@ -507,8 +556,31 @@ void load_player_guild(player@ p, int guild_id) {
 void load_player_party(player@ p, int party_id) {
     debug_log("Carregando party de " + p.charname + " (ID: " + party_id + ")");
 
-    // TODO: Implementar carregamento de party
-    // Por enquanto, stub
+    // 1) Caminho principal: party já ativa em memória.
+    party@ pty = get_player_party(p.charname);
+    if(pty !is null) {
+        debug_log("✓ Party já ativa para " + p.charname + " (líder: " + pty.leader + ")");
+        return;
+    }
+
+    // 2) Fallback: varredura direta em todas as parties ativas.
+    for(uint i = 0; i < active_parties.length(); i++) {
+        if(active_parties[i] !is null && active_parties[i].is_member(p.charname)) {
+            debug_log("✓ Party restaurada por varredura (líder: " + active_parties[i].leader + ")");
+            return;
+        }
+    }
+
+    // 3) Fallback opcional por id (quando DB usa índice 1-based da lista ativa).
+    if(party_id > 0 && party_id <= int(active_parties.length())) {
+        party@ by_id = active_parties[party_id - 1];
+        if(by_id !is null && by_id.is_member(p.charname)) {
+            debug_log("✓ Party restaurada por ID (líder: " + by_id.leader + ")");
+            return;
+        }
+    }
+
+    debug_log("INFO: Sem party ativa para " + p.charname + " (party_id=" + party_id + ")");
 
     debug_log("✓ Party carregada");
 }
@@ -516,8 +588,13 @@ void load_player_party(player@ p, int party_id) {
 void load_player_friends(player@ p) {
     debug_log("Carregando amigos de " + p.charname);
 
-    // TODO: Implementar carregamento de lista de amigos do banco de dados
-    // Query: SELECT friend_username FROM friendships WHERE player_username = ?
+    // Sistema atual de amigos persiste em arquivo players/<user>/friends.dat
+    load_player_friends(p.charname);
+
+    int pindex = get_player_index_from(p.charname);
+    if(pindex >= 0) {
+        check_online_friends(pindex);
+    }
 
     debug_log("✓ Lista de amigos carregada");
 }
@@ -625,8 +702,28 @@ void send_item_update_to_client(player@ p, string item_name, int quantidade) {
 }
 
 void send_equipment_to_client(player@ p) {
-    // Enviar equipamentos para o cliente
-    // TODO: Implementar envio de equipamentos
+    // Protocolo estruturado para cliente: setequipment item1,item2,...
+    string[] equipped;
+
+    if(p.colete_aprova_de_balas == 1) equipped.insert_last("colete_aprova_de_balas");
+    else if(p.coletemilitar == 1) equipped.insert_last("coletemilitar");
+    else if(p.coletecamuflado == 1) equipped.insert_last("coletecamuflado");
+    else if(p.coletesalvavida == 1) equipped.insert_last("coletesalvavida");
+    else if(p.coletemizuno == 1) equipped.insert_last("coletemizuno");
+
+    if(p.capacetepolicia == 1) equipped.insert_last("capacete_policia");
+    if(p.escudo == 1) equipped.insert_last("escudo");
+    if(p.luvas == 1) equipped.insert_last("luvas");
+    if(p.coturnomilitar == 1) equipped.insert_last("coturno_militar");
+
+    recalculate_clothing_protection(p);
+
+    string equipment_csv = "";
+    for(uint i = 0; i < equipped.length(); i++) {
+        if(i > 0) equipment_csv += ",";
+        equipment_csv += equipped[i];
+    }
+    send_reliable(p.peer_id, "setequipment " + equipment_csv, 0);
 
     debug_log("  ✓ Equipamentos enviados");
 }
@@ -648,8 +745,21 @@ void send_stats_to_client(player@ p) {
 }
 
 void send_configs_to_client(player@ p) {
-    // Enviar configurações para o cliente
-    // TODO: Implementar envio de configurações
+    // Normalização de valores persistidos antes de sincronizar.
+    if(p.idiomachat == "" || p.idiomachat == "null") {
+        p.idiomachat = "pt";
+    }
+
+    if(p.voice < 0) {
+        p.voice = 1;
+    }
+
+    if(p.voice_id == "" || p.voice_id == "null") {
+        p.voice_id = "default";
+    }
+
+    // Protocolo estruturado para cliente: setconfig idioma|voice|voice_id
+    send_reliable(p.peer_id, "setconfig " + p.idiomachat + "|" + p.voice + "|" + p.voice_id, 0);
 
     debug_log("  ✓ Configurações enviadas");
 }

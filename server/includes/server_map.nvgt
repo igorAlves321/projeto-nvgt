@@ -351,14 +351,7 @@ class map {
 				continue;
 			}
 			
-			// Monstros - ⚠️ DESABILITADO (usando monstruo_global_loop())
-			// NOTA: Sistema antigo de monstros comentado
-			/*
-			if (parsed[0] == "monstruo" && parsed.length() == 3) {
-				monstruo mn(parse_int(parsed[1]), parse_int(parsed[2]), this.name);
-				monstruos.insert_last(mn);
-			}
-			*/
+			// Monstros desabilitados aqui: usando sistema global em monstruo.nvgt
 			
 			// Banheiros (rt = restroom/toilet)
 			if (parsed[0] == "rt" && parsed.length() > 2) {
@@ -862,14 +855,6 @@ class map {
 			npcDataLoop();
 		}
 		// monstruoloop() e monstruo_dataloop() desabilitados - usando sistema global
-		/*
-		if (monstruos.length() > 0 && pvp) {
-			monstruoloop();
-		}
-		if (monstruos_data.length() > 0) {
-			monstruo_dataloop();
-		}
-		*/
 		if (plasmabombs.length() > 0) {
 			plasmabomb_loop();
 		}
@@ -1781,130 +1766,8 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 11: LOOPS DE MONSTROS - ⚠️ DESABILITADO (usando monstruo_global_loop())
+	// FASE 11: LOOPS DE MONSTROS - DESABILITADO (usando monstruo_global_loop())
 	// ============================================================================
-	
-	// NOTA: Loop antigo de monstros comentado - agora usando sistema global em monstruo.nvgt
-	/*
-	void monstruoloop() {
-		for (uint i = 0; i < monstruos.length(); i++) {
-			// Morte do monstro
-			if (monstruos[i].vida <= 0) {
-				send_packet(5, "play_npc m_monstruo.ogg", monstruos[i].x, monstruos[i].y);
-				string golp = monstruos[i].golpeado;
-				send_reliable(0, "msgmuerte " + golp + "; ;ha derrotado al monstruo legendario!", 3);
-				
-				// Recompensas para quem matou
-				int xx = get_player_index_from(golp);
-				if (xx > -1) {
-					gc(players[xx].charname, random(20, 35));
-					players[xx].inv_add_item("hueso_del_monstruo", 1);
-					players[xx].inv_add_item("reais", 94525239);
-					players[xx].inv_add_item("dólares", 16592363);
-					ganhaxp(players[xx].charname, random(65000000, 75000000));
-				}
-				
-				// Criar dados para respawn
-				monstruo_data mnd(monstruos[i].x, monstruos[i].y);
-				@monstruos[i] = null;
-				monstruos.remove_at(i);
-				monstruos_data.insert_last(mnd);
-				break;
-			}
-			
-			// Sons nervosos periódicos
-			if (monstruos[i].tsom.elapsed >= monstruos[i].asom + random(1000, 3200)) {
-				monstruos[i].tsom.restart();
-				string ss = "monstruonervoso.ogg";
-				send_packet(5, "play_npc " + ss, monstruos[i].x, monstruos[i].y);
-			}
-			
-			// Movimento e ataque do monstro
-			if (monstruos[i].monstruotimer.elapsed >= monstruos[i].monstruotime) {
-				monstruos[i].monstruotimer.restart();
-				
-				for (uint j = 0; j < mapplayers.length(); j++) {
-					// Mover em direção ao jogador (eixo X)
-					if (monstruos[i].x > players[mapplayers[j]].x + 2 && 
-					    players[mapplayers[j]].watching == 0 && 
-					    players[mapplayers[j]].newbie == false && 
-					    players[mapplayers[j]].afk == false) {
-						monstruos[i].x -= 2;
-						string ss = get_tile_at(monstruos[i].x, monstruos[i].y);
-						send_packet(5, "play_step " + ss + "step" + random(1, 5) + ".ogg", 
-						           monstruos[i].x, monstruos[i].y);
-						monstruos[i].monstruotimer.restart();
-						break;
-					}
-					else if (monstruos[i].x < players[mapplayers[j]].x - 2 && 
-					         players[mapplayers[j]].watching == 0 && 
-					         players[mapplayers[j]].afk == false && 
-					         players[mapplayers[j]].newbie == false) {
-						monstruos[i].x += 2;
-						string ss = get_tile_at(monstruos[i].x, monstruos[i].y);
-						send_packet(5, "play_step " + ss + "step" + random(1, 5) + ".ogg", 
-						           monstruos[i].x, monstruos[i].y);
-						monstruos[i].monstruotimer.restart();
-						break;
-					}
-					
-					// Sistema de ataque do monstro
-					int distance = get_distance(monstruos[i].x, players[mapplayers[j]].x, 
-					                           monstruos[i].y, players[mapplayers[j]].y);
-					
-					if (distance > 2 && 
-					    players[mapplayers[j]].afk == false && 
-					    players[mapplayers[j]].watching == 0 && 
-					    players[mapplayers[j]].pacifico == 0 && 
-					    players[mapplayers[j]].newbie == false && 
-					    monstruos[i].tempoatirar.elapsed >= 1500 && 
-					    monstruos[i].tiros > 0) {
-						
-						monstruos[i].tempoatirar.restart();
-						string ss = "monstruobater" + random(1, 4) + ".ogg";
-						
-						// Ataque especial (monstruobater2.ogg) - derruba jogador
-						if (ss == "monstruobater2.ogg") {
-							send_packet(5, "play_npc " + ss, monstruos[i].x, monstruos[i].y);
-							send_reliable(players[mapplayers[j]].peer_id, "ataque", 0);
-							players[mapplayers[j]].centado = true;
-						}
-						else {
-							send_packet(5, "play_npc " + ss, monstruos[i].x, monstruos[i].y);
-						}
-						
-						// Aplicar dano
-						players[mapplayers[j]].health -= random(40000, 60000);
-						send_packet(0, "inithurt " + players[mapplayers[j]].voice, 
-						           players[mapplayers[j]].x, players[mapplayers[j]].y);
-						players[mapplayers[j]].lasthit = "monstruo";
-						monstruos[i].tiros--;
-						break;
-					}
-					
-					// Recarregar tiros
-					if (monstruos[i].tiros <= 0) {
-						monstruos[i].tiros = 1;
-						monstruos[i].tempoatirar.restart();
-					}
-				}
-			}
-		}
-	}
-	
-	void monstruo_dataloop() {
-		for (uint i = 0; i < monstruos_data.length(); i++) {
-			// Verificar tempo de respawn
-			if (monstruos_data[i].respawn_timer.elapsed >= monstruos_data[i].trespawn) {
-				monstruo mn(monstruos_data[i].x, monstruos_data[i].y, this.name);
-				@monstruos_data[i] = null;
-				monstruos_data.remove_at(i);
-				monstruos.insert_last(mn);
-				break;
-			}
-		}
-	}
-	*/  // Fim do comentário dos loops antigos de monstros
 	
 	// ============================================================================
 	// FASE 12: LOOP DE BOMBAS DE PLASMA - ✅ IMPLEMENTADO

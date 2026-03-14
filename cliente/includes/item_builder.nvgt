@@ -1,13 +1,14 @@
 ﻿// ============================================================================
 // CONSTRUTOR DE ITENS - NVGT
-// Interface visual para criaÃ§Ã£o de itens sem escrever cÃ³digo/SQL
-// Integra-se ao menu de administraÃ§Ã£o (F9)
+// Interface visual para criação de itens sem escrever código/SQL
+// Integra-se ao menu de administração (F9)
 // ============================================================================
 
 // ============================================================================
 // MENU PRINCIPAL DO CONSTRUTOR DE ITENS
 // ============================================================================
 void item_builder_menu() {
+    item_builder_request_meta();
     while(true) {
         setupmenu();
         
@@ -15,7 +16,7 @@ void item_builder_menu() {
         game_menu.add_item(pu.get_value("Arma de Fogo"), "weapon_gun");
         game_menu.add_item(pu.get_value("Arma Corpo a Corpo"), "weapon_melee");
         game_menu.add_item(pu.get_value("Armadura"), "armor");
-        game_menu.add_item(pu.get_value("ConsumÃ­vel (PoÃ§Ã£o/Comida)"), "consumable");
+        game_menu.add_item(pu.get_value("Consumível (Poção/Comida)"), "consumable");
         game_menu.add_item(pu.get_value("Material/Loot"), "misc");
         game_menu.add_item(pu.get_value("Listar Itens Existentes"), "list");
         game_menu.add_item(pu.get_value("Editar Item Existente"), "edit");
@@ -57,29 +58,250 @@ void item_builder_menu() {
     }
 }
 
+bool item_builder_is_blank(const string&in value) {
+    return value.trim_whitespace() == "";
+}
+
+bool item_builder_is_valid_identifier(const string&in value) {
+    string v = value.trim_whitespace();
+    if(v == "" || v.find(" ") >= 0) return false;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        bool is_letter = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
+        bool is_digit = (ch >= "0" && ch <= "9");
+        bool is_ok = is_letter || is_digit || ch == "_";
+        if(!is_ok) return false;
+    }
+    return true;
+}
+
+bool item_builder_is_valid_number_string(const string&in value, bool allow_decimal) {
+    string v = value.trim_whitespace();
+    if(v == "") return false;
+    bool has_digit = false;
+    int dot_count = 0;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        if(ch >= "0" && ch <= "9") {
+            has_digit = true;
+            continue;
+        }
+        if(ch == "-" && i == 0) continue;
+        if(allow_decimal && ch == ".") {
+            dot_count++;
+            if(dot_count > 1) return false;
+            continue;
+        }
+        return false;
+    }
+    return has_digit;
+}
+
+bool item_builder_validate_required_field(const string&in field_name, const string&in value) {
+    if(item_builder_is_blank(value)) {
+        speak(pu.get_value("Campo vazio: ") + field_name, true);
+        return false;
+    }
+    return true;
+}
+
+void item_builder_speak_invalid_field(const string&in field_name) {
+    speak(pu.get_value("Dados invalidos: ") + field_name, true);
+}
+
+bool item_builder_validate_max_length(const string&in field_name, const string&in value, int max_len) {
+    if(value.length() > uint(max_len)) {
+        item_builder_speak_invalid_field(field_name);
+        return false;
+    }
+    return true;
+}
+
+bool item_builder_confirm_send(const string&in label_text) {
+    setupmenu();
+    game_menu.add_item(pu.get_value("Sim"), "yes");
+    game_menu.add_item(pu.get_value("Nao"), "no");
+    game_menu.intro_text = pu.get_value("Confirmar envio: ") + label_text;
+    int res = game_menu.run();
+    if(res < 0) return false;
+    return game_menu.get_item_id(res) == "yes";
+}
+
+dictionary@ item_builder_run_form_with_network(input_form@ form) {
+    dictionary@ result = null;
+    while((@result = form.monitor()) == null) {
+        if(is_connected) {
+            netloop();
+            if(heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
+                heartbeat_timer.restart();
+                send_unreliable(peer_id, "heartbeat", 0);
+            }
+        }
+        wait(5);
+    }
+    return result;
+}
+
+bool item_builder_validate_optional_int_range(const string&in field_name, const string&in value, int min_value, int max_value) {
+    if(item_builder_is_blank(value)) return true;
+    if(!item_builder_is_valid_number_string(value, false)) {
+        item_builder_speak_invalid_field(field_name);
+        return false;
+    }
+    int parsed = parse_int(value.trim_whitespace());
+    if(parsed < min_value || parsed > max_value) {
+        item_builder_speak_invalid_field(field_name);
+        return false;
+    }
+    return true;
+}
+
+bool item_builder_validate_optional_float_range(const string&in field_name, const string&in value, double min_value, double max_value) {
+    if(item_builder_is_blank(value)) return true;
+    if(!item_builder_is_valid_number_string(value, true)) {
+        item_builder_speak_invalid_field(field_name);
+        return false;
+    }
+    double parsed = parse_float(value.trim_whitespace());
+    if(parsed < min_value || parsed > max_value) {
+        item_builder_speak_invalid_field(field_name);
+        return false;
+    }
+    return true;
+}
+
+string[] item_builder_get_type_choices(bool include_keep_current = false) {
+    string[] choices;
+    if(include_keep_current) choices.insert_last(pu.get_value("Manter atual"));
+    if(item_builder_meta_loaded && item_builder_types_csv != "") {
+        string[] from_db;
+        item_builder_fill_list_from_csv(item_builder_types_csv, from_db);
+        for(uint i = 0; i < from_db.length(); i++) choices.insert_last(from_db[i]);
+    } else {
+        choices.insert_last("weapon");
+        choices.insert_last("armor");
+        choices.insert_last("consumable");
+        choices.insert_last("misc");
+    }
+    if(choices.length() == uint(include_keep_current ? 1 : 0)) {
+        choices.insert_last("weapon");
+        choices.insert_last("armor");
+        choices.insert_last("consumable");
+        choices.insert_last("misc");
+    }
+    return choices;
+}
+
+string[] item_builder_get_rarity_choices(bool include_keep_current = false) {
+    string[] choices;
+    if(include_keep_current) choices.insert_last(pu.get_value("Manter atual"));
+    if(item_builder_meta_loaded && item_builder_rarities_csv != "") {
+        string[] from_db;
+        item_builder_fill_list_from_csv(item_builder_rarities_csv, from_db);
+        for(uint i = 0; i < from_db.length(); i++) choices.insert_last(from_db[i]);
+    } else {
+        choices.insert_last("common");
+        choices.insert_last("uncommon");
+        choices.insert_last("rare");
+        choices.insert_last("epic");
+        choices.insert_last("legendary");
+    }
+    if(choices.length() == uint(include_keep_current ? 1 : 0)) {
+        choices.insert_last("common");
+    }
+    return choices;
+}
+
+string[] item_builder_get_category_choices(const string&in item_type, bool include_keep_current = false) {
+    string[] choices;
+    if(include_keep_current) choices.insert_last(pu.get_value("Manter atual"));
+
+    string categories_csv = "";
+    if(item_builder_meta_loaded) {
+        if(item_type == "weapon") categories_csv = item_builder_categories_weapon_csv;
+        else if(item_type == "armor") categories_csv = item_builder_categories_armor_csv;
+        else if(item_type == "consumable") categories_csv = item_builder_categories_consumable_csv;
+        else if(item_type == "misc") categories_csv = item_builder_categories_misc_csv;
+    }
+
+    if(categories_csv != "") {
+        string[] from_db;
+        item_builder_fill_list_from_csv(categories_csv, from_db);
+        for(uint i = 0; i < from_db.length(); i++) choices.insert_last(from_db[i]);
+    } else if(item_type == "weapon") {
+        choices.insert_last("sword");
+        choices.insert_last("dagger");
+        choices.insert_last("axe");
+        choices.insert_last("hammer");
+        choices.insert_last("firearm");
+    } else if(item_type == "armor") {
+        choices.insert_last("head");
+        choices.insert_last("chest");
+        choices.insert_last("legs");
+        choices.insert_last("boots");
+        choices.insert_last("gloves");
+    } else if(item_type == "consumable") {
+        choices.insert_last("potion");
+        choices.insert_last("food");
+        choices.insert_last("drink");
+    } else if(item_type == "misc") {
+        choices.insert_last("material");
+        choices.insert_last("quest");
+        choices.insert_last("currency");
+        choices.insert_last("junk");
+    } else {
+        choices.insert_last("legacy");
+        choices.insert_last("material");
+        choices.insert_last("potion");
+        choices.insert_last("firearm");
+        choices.insert_last("chest");
+    }
+    if(choices.length() == uint(include_keep_current ? 1 : 0)) choices.insert_last("legacy");
+    return choices;
+}
+
+bool item_builder_parse_server_item_line(const string&in line, string&out item_id, string&out visual_label) {
+    item_id = "";
+    visual_label = "";
+    if(line == "" || line.find("[") != 0) return false;
+
+    int type_end = line.find("]");
+    int dash_pos = line.find(" - ");
+    if(type_end < 0 || dash_pos < 0 || dash_pos <= type_end + 2) return false;
+
+    string item_type = line.substr(1, type_end - 1).trim_whitespace();
+    item_id = line.substr(type_end + 2, dash_pos - (type_end + 2)).trim_whitespace();
+    if(item_id == "") return false;
+
+    string detail = line.substr(dash_pos + 3).trim_whitespace();
+    visual_label = "%0, %1".format(item_id, item_type);
+    if(detail != "") visual_label = "%0, %1".format(visual_label, detail);
+    return true;
+}
+
 // ============================================================================
 // CRIADOR DE ARMA DE FOGO (formato weapons.db)
 // Campos baseados no weapons.bgt original
 // ============================================================================
 void item_builder_weapon_gun() {
-    // PARTE 1: Dados BÃ¡sicos
-    input_form form1(pu.get_value("Criar Arma de Fogo - Parte 1: BÃ¡sico"));
+    // PARTE 1: Dados Básicos
+    input_form form1(pu.get_value("Criar Arma de Fogo - Parte 1: Básico"));
     
     // ID interno (ex: ak47, glock17)
-    form1.add_text_field("name", pu.get_value("ID interno (sem espaÃ§os, ex: ak47)"), "", true);
+    form1.add_text_field("name", pu.get_value("ID interno (sem espaços, ex: ak47)"), "", true);
     
-    // Tipo de muniÃ§Ã£o (ex: 9mm, 7.62mm, .50ae)
-    form1.add_text_field("ammo", pu.get_value("Tipo de muniÃ§Ã£o (ex: 9mm, 7.62mm, none para melee)"), "9mm", true);
+    // Tipo de munição (ex: 9mm, 7.62mm, .50ae)
+    form1.add_text_field("ammo", pu.get_value("Tipo de munição (ex: 9mm, 7.62mm, none para melee)"), "9mm", true);
     
-    // Dano e distÃ¢ncia
+    // Dano e distância
     form1.add_number_field("damage", pu.get_value("Dano base"), 50, true);
-    form1.add_number_field("distance", pu.get_value("Alcance (distÃ¢ncia)"), 500, true);
+    form1.add_number_field("distance", pu.get_value("Alcance (distância)"), 500, true);
     
-    // MuniÃ§Ã£o
-    form1.add_number_field("ammo_total", pu.get_value("MuniÃ§Ã£o total reserva"), 150, true);
-    form1.add_number_field("ammo_cantity", pu.get_value("MuniÃ§Ã£o no pente"), 30, true);
+    // Munição
+    form1.add_number_field("ammo_total", pu.get_value("Munição total reserva"), 150, true);
+    form1.add_number_field("ammo_cantity", pu.get_value("Munição no pente"), 30, true);
     
-    dictionary@ r1 = form1.run();
+    dictionary@ r1 = item_builder_run_form_with_network(@form1);
     if(form1.user_canceled) return;
     
     string name, ammo;
@@ -90,20 +312,27 @@ void item_builder_weapon_gun() {
     r1.get("distance", distance);
     r1.get("ammo_total", ammo_total);
     r1.get("ammo_cantity", ammo_cantity);
+
+    if(!item_builder_validate_required_field("id", name)) return;
+    if(!item_builder_validate_required_field("ammo", ammo)) return;
+    if(!item_builder_is_valid_identifier(name)) {
+        speak(pu.get_value("Dados invalidos: ID interno invalido."), true);
+        return;
+    }
     
     // PARTE 2: Velocidades e Modos
     input_form form2(pu.get_value("Criar Arma de Fogo - Parte 2: Velocidades"));
     
     form2.add_number_field("speed", pu.get_value("Velocidade de tiro (ms entre tiros)"), 500, true);
-    form2.add_number_field("speed_burst", pu.get_value("Velocidade rajada (0 se nÃ£o tem)"), 0, true);
+    form2.add_number_field("speed_burst", pu.get_value("Velocidade rajada (0 se não tem)"), 0, true);
     form2.add_number_field("speed_loading", pu.get_value("Tempo de recarga (ms)"), 2000, true);
-    form2.add_number_field("require_ammo", pu.get_value("Requer muniÃ§Ã£o? (1=sim, 0=nÃ£o)"), 1, true);
-    form2.add_number_field("enable_burst", pu.get_value("Tem modo rajada? (1=sim, 0=nÃ£o)"), 0, true);
-    form2.add_number_field("is_dropable", pu.get_value("DropÃ¡vel? (1=sim, 0=nÃ£o)"), 0, true);
-    form2.add_number_field("ammo_cantity_descount", pu.get_value("MuniÃ§Ã£o gasta por tiro"), 1, true);
-    form2.add_number_field("degradation", pu.get_value("DegradaÃ§Ã£o (desgaste por tiro)"), 1, true);
+    form2.add_number_field("require_ammo", pu.get_value("Requer munição? (1=sim, 0=não)"), 1, true);
+    form2.add_number_field("enable_burst", pu.get_value("Tem modo rajada? (1=sim, 0=não)"), 0, true);
+    form2.add_number_field("is_dropable", pu.get_value("Dropável? (1=sim, 0=não)"), 0, true);
+    form2.add_number_field("ammo_cantity_descount", pu.get_value("Munição gasta por tiro"), 1, true);
+    form2.add_number_field("degradation", pu.get_value("Degradação (desgaste por tiro)"), 1, true);
     
-    dictionary@ r2 = form2.run();
+    dictionary@ r2 = item_builder_run_form_with_network(@form2);
     if(form2.user_canceled) return;
     
     double speed, speed_burst, speed_loading, require_ammo, enable_burst, is_dropable, ammo_descount, degradation;
@@ -121,16 +350,16 @@ void item_builder_weapon_gun() {
     
     form3.add_text_field("sound_shoot", pu.get_value("Som de tiro (ex: ak47)"), name, true);
     form3.add_text_field("sound_shoot_dist", pu.get_value("Som de tiro distante"), name + "dist", true);
-    form3.add_text_field("sound_impact", pu.get_value("Sons de impacto (separados por vÃ­rgula)"), "rico1,rico2,rico3,rico4", true);
+    form3.add_text_field("sound_impact", pu.get_value("Sons de impacto (separados por vírgula)"), "rico1,rico2,rico3,rico4", true);
     form3.add_text_field("sound_impact_corpse", pu.get_value("Sons de impacto em corpo"), "body1,body2,body3,body4", true);
     form3.add_text_field("sound_draw", pu.get_value("Som de sacar arma"), name + "draw", true);
     form3.add_text_field("sound_reload", pu.get_value("Som de recarregar"), name + "reload", true);
-    form3.add_text_field("sound_empty", pu.get_value("Som sem muniÃ§Ã£o"), name + "empty", true);
+    form3.add_text_field("sound_empty", pu.get_value("Som sem munição"), name + "empty", true);
     form3.add_text_field("sound_unload", pu.get_value("Som descarregar"), "0", false);
-    form3.add_text_field("sound_mode1", pu.get_value("Som modo automÃ¡tico"), "0", false);
+    form3.add_text_field("sound_mode1", pu.get_value("Som modo automático"), "0", false);
     form3.add_text_field("sound_mode2", pu.get_value("Som modo semi"), "0", false);
     
-    dictionary@ r3 = form3.run();
+    dictionary@ r3 = item_builder_run_form_with_network(@form3);
     if(form3.user_canceled) return;
     
     string sound_shoot, sound_shoot_dist, sound_impact, sound_impact_corpse;
@@ -159,110 +388,228 @@ void item_builder_weapon_gun() {
     string packet = "/create_weapon_tool " + weapon_data;
     send_to_server(packet, 0, true);
     
-    speak(pu.get_value("SolicitaÃ§Ã£o de criaÃ§Ã£o de arma enviada: ") + name);
+    speak(pu.get_value("Solicitação de criação de arma enviada: ") + name);
 }
 
 // ============================================================================
 // CRIADOR DE ARMA CORPO A CORPO
 // ============================================================================
 void item_builder_weapon_melee() {
-    input_form form(pu.get_value("Criar Arma Corpo a Corpo"));
-    
-    form.add_text_field("name", pu.get_value("ID interno (ex: faca, espada)"), "", true);
-    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: Espada de Ferro)"), "", true);
-    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Uma arma corpo a corpo.", true);
-    form.add_text_field("category", pu.get_value("Categoria (sword, dagger, axe, hammer)"), "sword", true);
-    form.add_number_field("damage", pu.get_value("Dano"), 30, true);
-    form.add_number_field("distance", pu.get_value("Alcance (50=curto, 100=mÃ©dio)"), 50, true);
-    form.add_number_field("weight", pu.get_value("Peso (kg)"), 2, true);
-    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 100, true);
-    form.add_text_field("rarity", pu.get_value("Raridade (common, uncommon, rare, epic, legendary)"), "common", true);
-    form.add_text_field("sound_file", pu.get_value("Som de ataque (ex: sword_swing)"), "sword_swing.wav", true);
-    
-    dictionary@ result = form.run();
-    if(form.user_canceled) return;
-    
-    string name, display, desc, category, rarity, sound_file;
-    double damage, distance, weight, value;
-    result.get("name", name);
-    result.get("display", display);
-    result.get("desc", desc);
-    result.get("category", category);
-    result.get("damage", damage);
-    result.get("distance", distance);
-    result.get("weight", weight);
-    result.get("value", value);
-    result.get("rarity", rarity);
-    result.get("sound_file", sound_file);
-    
-    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound
-    string packet = "/create_item_tool weapon|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
-                    int(damage) + "|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(distance);
-    
-    send_to_server(packet, 0, true);
-    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+    string name = "";
+    string display = "";
+    string desc = "Uma arma corpo a corpo.";
+    string category = "sword";
+    string rarity = "common";
+    string sound_file = "sword_swing.wav";
+    double damage = 30;
+    double distance = 50;
+    double weight = 2;
+    double value = 100;
+
+    while(true) {
+        input_form form(pu.get_value("Criar Arma Corpo a Corpo"));
+        form.add_text_field("name", pu.get_value("ID interno (ex: faca, espada)"), name, true);
+        form.add_text_field("display", pu.get_value("Nome visível (ex: Espada de Ferro)"), display, true);
+        form.add_text_field("desc", pu.get_value("Descrição"), desc, true);
+        form.add_choice_field("category", pu.get_value("Categoria"), item_builder_get_category_choices("weapon"), true);
+        form.add_number_field("damage", pu.get_value("Dano"), damage, true);
+        form.add_number_field("distance", pu.get_value("Alcance (50=curto, 100=médio)"), distance, true);
+        form.add_number_field("weight", pu.get_value("Peso (kg)"), weight, true);
+        form.add_number_field("value", pu.get_value("Preço (gold)"), value, true);
+        form.add_choice_field("rarity", pu.get_value("Raridade"), item_builder_get_rarity_choices(), true);
+        form.add_text_field("sound_file", pu.get_value("Som de ataque (ex: sword_swing)"), sound_file, true);
+        
+        dictionary@ result = item_builder_run_form_with_network(@form);
+        if(form.user_canceled) return;
+        
+        result.get("name", name);
+        result.get("display", display);
+        result.get("desc", desc);
+        result.get("category", category);
+        result.get("damage", damage);
+        result.get("distance", distance);
+        result.get("weight", weight);
+        result.get("value", value);
+        result.get("rarity", rarity);
+        result.get("sound_file", sound_file);
+
+        name = name.trim_whitespace();
+        display = display.trim_whitespace();
+        desc = desc.trim_whitespace();
+        category = category.trim_whitespace();
+        rarity = rarity.trim_whitespace();
+        sound_file = sound_file.trim_whitespace();
+
+        if(!item_builder_validate_required_field("id", name)) continue;
+        if(!item_builder_validate_required_field("nome", display)) continue;
+        if(!item_builder_validate_required_field("descricao", desc)) continue;
+        if(!item_builder_validate_required_field("categoria", category)) continue;
+        if(!item_builder_validate_required_field("raridade", rarity)) continue;
+        if(!item_builder_is_valid_identifier(name)) { item_builder_speak_invalid_field("id"); continue; }
+        if(!item_builder_validate_max_length("id", name, 64)) continue;
+        if(!item_builder_validate_max_length("nome", display, 60)) continue;
+        if(!item_builder_validate_max_length("descricao", desc, 240)) continue;
+        if(!item_builder_validate_max_length("categoria", category, 32)) continue;
+        if(!item_builder_validate_max_length("raridade", rarity, 24)) continue;
+        if(!item_builder_validate_max_length("sound_file", sound_file, 120)) continue;
+        if(damage < 0 || damage > 100000) { item_builder_speak_invalid_field("damage"); continue; }
+        if(distance < 1 || distance > 100000) { item_builder_speak_invalid_field("distance"); continue; }
+        if(weight <= 0 || weight > 10000) { item_builder_speak_invalid_field("weight"); continue; }
+        if(value < 0 || value > 100000000) { item_builder_speak_invalid_field("value"); continue; }
+        if(!item_builder_confirm_send(display)) continue;
+        
+        string packet = "/create_item_tool weapon|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                        int(damage) + "|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(distance);
+        
+        send_to_server(packet, 0, true);
+        speak(pu.get_value("Solicitação enviada: ") + display);
+        return;
+    }
+}
+
+void item_builder_fill_list_from_csv(string csv, string[]&out target) {
+    target.resize(0);
+    string[] parts = csv.split(",");
+    for(uint i = 0; i < parts.length(); i++) {
+        string v = parts[i].trim_whitespace();
+        if(v != "") target.insert_last(v);
+    }
+}
+
+void item_builder_request_meta() {
+    item_builder_meta_request_pending = true;
+    item_builder_meta_response_ready = false;
+    item_builder_meta_response_payload = "";
+    send_to_server("/item_builder_meta", 0, true);
+
+    timer wait_meta_timer;
+    wait_meta_timer.restart();
+    while(item_builder_meta_request_pending && wait_meta_timer.elapsed < 7000) {
+        netloop();
+        wait(5);
+    }
+    if(item_builder_meta_request_pending || !item_builder_meta_response_ready) {
+        item_builder_meta_request_pending = false;
+        return;
+    }
+
+    string payload = item_builder_meta_response_payload;
+    item_builder_meta_response_ready = false;
+    if(payload.find("ITEM_BUILDER_META|") != 0) return;
+
+    string[] parts = payload.split("|");
+    if(parts.length() < 7) return;
+
+    item_builder_types_csv = parts[1].trim_whitespace();
+    item_builder_rarities_csv = parts[2].trim_whitespace();
+    item_builder_categories_weapon_csv = parts[3].trim_whitespace();
+    item_builder_categories_armor_csv = parts[4].trim_whitespace();
+    item_builder_categories_consumable_csv = parts[5].trim_whitespace();
+    item_builder_categories_misc_csv = parts[6].trim_whitespace();
+    item_builder_meta_loaded = true;
 }
 
 // ============================================================================
 // CRIADOR DE ARMADURA
 // ============================================================================
 void item_builder_armor() {
-    input_form form(pu.get_value("Criar Armadura"));
-    
-    form.add_text_field("name", pu.get_value("ID interno (ex: iron_armor)"), "", true);
-    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: Armadura de Ferro)"), "", true);
-    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Uma armadura protetora.", true);
-    form.add_text_field("category", pu.get_value("Parte do corpo (head, chest, legs, boots, gloves)"), "chest", true);
-    form.add_number_field("defense", pu.get_value("Defesa"), 20, true);
-    form.add_number_field("weight", pu.get_value("Peso (kg)"), 5, true);
-    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 200, true);
-    form.add_text_field("rarity", pu.get_value("Raridade (common, uncommon, rare, epic, legendary)"), "common", true);
-    
-    dictionary@ result = form.run();
-    if(form.user_canceled) return;
-    
-    string name, display, desc, category, rarity;
-    double defense, weight, value;
-    result.get("name", name);
-    result.get("display", display);
-    result.get("desc", desc);
-    result.get("category", category);
-    result.get("defense", defense);
-    result.get("weight", weight);
-    result.get("value", value);
-    result.get("rarity", rarity);
-    
-    // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound
-    string packet = "/create_item_tool armor|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
-                    "0|" + int(defense) + "|0|0|" + weight + "|" + int(value) + "|" + rarity + "|";
-    
-    send_to_server(packet, 0, true);
-    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+    string name = "";
+    string display = "";
+    string desc = "Uma armadura protetora.";
+    string category = "chest";
+    string rarity = "common";
+    double defense = 20;
+    double weight = 5;
+    double value = 200;
+
+    while(true) {
+        input_form form(pu.get_value("Criar Armadura"));
+        form.add_text_field("name", pu.get_value("ID interno (ex: iron_armor)"), name, true);
+        form.add_text_field("display", pu.get_value("Nome visível (ex: Armadura de Ferro)"), display, true);
+        form.add_text_field("desc", pu.get_value("Descrição"), desc, true);
+        form.add_choice_field("category", pu.get_value("Parte do corpo"), item_builder_get_category_choices("armor"), true);
+        form.add_number_field("defense", pu.get_value("Defesa"), defense, true);
+        form.add_number_field("weight", pu.get_value("Peso (kg)"), weight, true);
+        form.add_number_field("value", pu.get_value("Preço (gold)"), value, true);
+        form.add_choice_field("rarity", pu.get_value("Raridade"), item_builder_get_rarity_choices(), true);
+        
+        dictionary@ result = item_builder_run_form_with_network(@form);
+        if(form.user_canceled) return;
+        
+        result.get("name", name);
+        result.get("display", display);
+        result.get("desc", desc);
+        result.get("category", category);
+        result.get("defense", defense);
+        result.get("weight", weight);
+        result.get("value", value);
+        result.get("rarity", rarity);
+
+        name = name.trim_whitespace();
+        display = display.trim_whitespace();
+        desc = desc.trim_whitespace();
+        category = category.trim_whitespace();
+        rarity = rarity.trim_whitespace();
+
+        if(!item_builder_validate_required_field("id", name)) continue;
+        if(!item_builder_validate_required_field("nome", display)) continue;
+        if(!item_builder_validate_required_field("descricao", desc)) continue;
+        if(!item_builder_validate_required_field("categoria", category)) continue;
+        if(!item_builder_validate_required_field("raridade", rarity)) continue;
+        if(!item_builder_is_valid_identifier(name)) { item_builder_speak_invalid_field("id"); continue; }
+        if(!item_builder_validate_max_length("id", name, 64)) continue;
+        if(!item_builder_validate_max_length("nome", display, 60)) continue;
+        if(!item_builder_validate_max_length("descricao", desc, 240)) continue;
+        if(!item_builder_validate_max_length("categoria", category, 32)) continue;
+        if(!item_builder_validate_max_length("raridade", rarity, 24)) continue;
+        if(defense < 0 || defense > 100000) { item_builder_speak_invalid_field("defense"); continue; }
+        if(weight <= 0 || weight > 10000) { item_builder_speak_invalid_field("weight"); continue; }
+        if(value < 0 || value > 100000000) { item_builder_speak_invalid_field("value"); continue; }
+        if(!item_builder_confirm_send(display)) continue;
+        
+        string packet = "/create_item_tool armor|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
+                        "0|" + int(defense) + "|0|0|" + weight + "|" + int(value) + "|" + rarity + "|";
+        
+        send_to_server(packet, 0, true);
+        speak(pu.get_value("Solicitação enviada: ") + display);
+        return;
+    }
 }
 
 // ============================================================================
-// CRIADOR DE CONSUMÃVEL (PoÃ§Ãµes, Comida)
+// CRIADOR DE CONSUMÍVEL (Poções, Comida)
 // ============================================================================
 void item_builder_consumable() {
-    input_form form(pu.get_value("Criar ConsumÃ­vel"));
+    string name = "";
+    string display = "";
+    string desc = "Um item consumível.";
+    string category = "potion";
+    string rarity = "common";
+    string sound_file = "potion_use.wav";
+    double heal = 50;
+    double mana = 0;
+    double max_stack = 20;
+    double weight = 0.5;
+    double value = 10;
+
+    while(true) {
+    input_form form(pu.get_value("Criar Consumível"));
     
-    form.add_text_field("name", pu.get_value("ID interno (ex: potion_hp, bread)"), "", true);
-    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: PoÃ§Ã£o de Vida)"), "", true);
-    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Um item consumÃ­vel.", true);
-    form.add_text_field("category", pu.get_value("Tipo (potion, food, drink)"), "potion", true);
-    form.add_number_field("heal", pu.get_value("Cura HP"), 50, true);
-    form.add_number_field("mana", pu.get_value("Restaura Mana"), 0, true);
-    form.add_number_field("max_stack", pu.get_value("MÃ¡ximo empilhÃ¡vel"), 20, true);
-    form.add_number_field("weight", pu.get_value("Peso (kg)"), 0.5, true);
-    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 10, true);
-    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
-    form.add_text_field("sound_file", pu.get_value("Som de uso (ex: potion_use.wav)"), "potion_use.wav", true);
+    form.add_text_field("name", pu.get_value("ID interno (ex: potion_hp, bread)"), name, true);
+    form.add_text_field("display", pu.get_value("Nome visível (ex: Poção de Vida)"), display, true);
+    form.add_text_field("desc", pu.get_value("Descrição"), desc, true);
+    form.add_choice_field("category", pu.get_value("Tipo"), item_builder_get_category_choices("consumable"), true);
+    form.add_number_field("heal", pu.get_value("Cura HP"), heal, true);
+    form.add_number_field("mana", pu.get_value("Restaura Mana"), mana, true);
+    form.add_number_field("max_stack", pu.get_value("Máximo empilhável"), max_stack, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), weight, true);
+    form.add_number_field("value", pu.get_value("Preço (gold)"), value, true);
+    form.add_choice_field("rarity", pu.get_value("Raridade"), item_builder_get_rarity_choices(), true);
+    form.add_text_field("sound_file", pu.get_value("Som de uso (ex: potion_use.wav)"), sound_file, true);
     
-    dictionary@ result = form.run();
+    dictionary@ result = item_builder_run_form_with_network(@form);
     if(form.user_canceled) return;
     
-    string name, display, desc, category, rarity, sound_file;
-    double heal, mana, max_stack, weight, value;
     result.get("name", name);
     result.get("display", display);
     result.get("desc", desc);
@@ -274,36 +621,76 @@ void item_builder_consumable() {
     result.get("value", value);
     result.get("rarity", rarity);
     result.get("sound_file", sound_file);
+
+    name = name.trim_whitespace();
+    display = display.trim_whitespace();
+    desc = desc.trim_whitespace();
+    category = category.trim_whitespace();
+    rarity = rarity.trim_whitespace();
+    sound_file = sound_file.trim_whitespace();
+
+    if(!item_builder_validate_required_field("id", name)) continue;
+    if(!item_builder_validate_required_field("nome", display)) continue;
+    if(!item_builder_validate_required_field("descricao", desc)) continue;
+    if(!item_builder_validate_required_field("categoria", category)) continue;
+    if(!item_builder_validate_required_field("raridade", rarity)) continue;
+    if(!item_builder_is_valid_identifier(name)) {
+        item_builder_speak_invalid_field("id");
+        continue;
+    }
+    if(!item_builder_validate_max_length("id", name, 64)) continue;
+    if(!item_builder_validate_max_length("nome", display, 60)) continue;
+    if(!item_builder_validate_max_length("descricao", desc, 240)) continue;
+    if(!item_builder_validate_max_length("categoria", category, 32)) continue;
+    if(!item_builder_validate_max_length("raridade", rarity, 24)) continue;
+    if(!item_builder_validate_max_length("sound_file", sound_file, 120)) continue;
+    if(heal < 0 || heal > 100000) { item_builder_speak_invalid_field("heal"); continue; }
+    if(mana < 0 || mana > 100000) { item_builder_speak_invalid_field("mana"); continue; }
+    if(max_stack < 1 || max_stack > 10000) { item_builder_speak_invalid_field("max_stack"); continue; }
+    if(weight <= 0 || weight > 10000) { item_builder_speak_invalid_field("weight"); continue; }
+    if(value < 0 || value > 100000000) { item_builder_speak_invalid_field("value"); continue; }
+    if(!item_builder_confirm_send(display)) continue;
     
     // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack
     string packet = "/create_item_tool consumable|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
                     "0|0|" + int(heal) + "|" + int(mana) + "|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(max_stack);
     
     send_to_server(packet, 0, true);
-    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+    speak(pu.get_value("Solicitação enviada: ") + display);
+    return;
+    }
 }
 
 // ============================================================================
-// CRIADOR DE MATERIAL/LOOT GENÃ‰RICO
+// CRIADOR DE MATERIAL/LOOT GENÉRICO
 // ============================================================================
 void item_builder_misc() {
+    string name = "";
+    string display = "";
+    string desc = "Um material.";
+    string category = "material";
+    string rarity = "common";
+    double max_stack = 64;
+    double weight = 1;
+    double value = 5;
+    double drop_rate = 1.0;
+
+    while(true) {
     input_form form(pu.get_value("Criar Material/Loot"));
     
-    form.add_text_field("name", pu.get_value("ID interno (ex: iron_ore, wood)"), "", true);
-    form.add_text_field("display", pu.get_value("Nome visÃ­vel (ex: MinÃ©rio de Ferro)"), "", true);
-    form.add_text_field("desc", pu.get_value("DescriÃ§Ã£o"), "Um material.", true);
-    form.add_text_field("category", pu.get_value("Categoria (material, quest, currency, junk)"), "material", true);
-    form.add_number_field("max_stack", pu.get_value("MÃ¡ximo empilhÃ¡vel"), 64, true);
-    form.add_number_field("weight", pu.get_value("Peso (kg)"), 1, true);
-    form.add_number_field("value", pu.get_value("PreÃ§o (gold)"), 5, true);
-    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
-    form.add_number_field("drop_rate", pu.get_value("Taxa de drop (0.0 a 1.0)"), 1.0, true);
+    form.add_text_field("name", pu.get_value("ID interno (ex: iron_ore, wood)"), name, true);
+    form.add_text_field("display", pu.get_value("Nome visível (ex: Minério de Ferro)"), display, true);
+    form.add_text_field("desc", pu.get_value("Descrição"), desc, true);
+    form.add_choice_field("category", pu.get_value("Categoria"), item_builder_get_category_choices("misc"), true);
+    form.add_number_field("max_stack", pu.get_value("Máximo empilhável"), max_stack, true);
+    form.add_number_field("weight", pu.get_value("Peso (kg)"), weight, true);
+    form.add_number_field("value", pu.get_value("Preço (gold)"), value, true);
+    form.add_choice_field("rarity", pu.get_value("Raridade"), item_builder_get_rarity_choices(), true);
+    form.add_number_field("drop_rate", pu.get_value("Taxa de drop (0.0 a 1.0)"), drop_rate, true);
     
-    dictionary@ result = form.run();
+    dictionary@ result = item_builder_run_form_with_network(@form);
     if(form.user_canceled) return;
     
-    string name, display, desc, category, rarity;
-    double max_stack, weight, value, drop_rate;
     result.get("name", name);
     result.get("display", display);
     result.get("desc", desc);
@@ -313,21 +700,177 @@ void item_builder_misc() {
     result.get("value", value);
     result.get("rarity", rarity);
     result.get("drop_rate", drop_rate);
+
+    name = name.trim_whitespace();
+    display = display.trim_whitespace();
+    desc = desc.trim_whitespace();
+    category = category.trim_whitespace();
+    rarity = rarity.trim_whitespace();
+
+    if(!item_builder_validate_required_field("id", name)) continue;
+    if(!item_builder_validate_required_field("nome", display)) continue;
+    if(!item_builder_validate_required_field("descricao", desc)) continue;
+    if(!item_builder_validate_required_field("categoria", category)) continue;
+    if(!item_builder_validate_required_field("raridade", rarity)) continue;
+    if(!item_builder_is_valid_identifier(name)) {
+        item_builder_speak_invalid_field("id");
+        continue;
+    }
+    if(!item_builder_validate_max_length("id", name, 64)) continue;
+    if(!item_builder_validate_max_length("nome", display, 60)) continue;
+    if(!item_builder_validate_max_length("descricao", desc, 240)) continue;
+    if(!item_builder_validate_max_length("categoria", category, 32)) continue;
+    if(!item_builder_validate_max_length("raridade", rarity, 24)) continue;
+    if(max_stack < 1 || max_stack > 10000) { item_builder_speak_invalid_field("max_stack"); continue; }
+    if(weight <= 0 || weight > 10000) { item_builder_speak_invalid_field("weight"); continue; }
+    if(value < 0 || value > 100000000) { item_builder_speak_invalid_field("value"); continue; }
+    if(drop_rate < 0 || drop_rate > 1) { item_builder_speak_invalid_field("drop_rate"); continue; }
+    if(!item_builder_confirm_send(display)) continue;
     
     // Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
     string packet = "/create_item_tool misc|" + name + "|" + display + "|" + desc + "|" + category + "|" + 
                     "0|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "||" + int(max_stack) + "|" + drop_rate;
     
     send_to_server(packet, 0, true);
-    speak(pu.get_value("SolicitaÃ§Ã£o enviada: ") + display);
+    speak(pu.get_value("Solicitação enviada: ") + display);
+    return;
+    }
 }
 
 // ============================================================================
 // LISTAR ITENS EXISTENTES (solicita ao servidor)
 // ============================================================================
 void item_builder_list_items() {
+    debug_log("ITEM_BUILDER: solicitando /list_items ao servidor");
+    item_list_request_pending = true;
+    item_list_response_ready = false;
+    item_list_response_payload = "";
     send_to_server("/list_items", 0, true);
     speak(pu.get_value("Solicitando lista de itens ao servidor..."));
+
+    timer wait_list_timer;
+    wait_list_timer.restart();
+
+    while(item_list_request_pending && wait_list_timer.elapsed < 7000) {
+        netloop();
+        wait(5);
+    }
+
+    if(item_list_request_pending) {
+        item_list_request_pending = false;
+        speak(pu.get_value("Tempo de resposta esgotado ao listar itens."));
+        return;
+    }
+
+    if(item_list_response_ready) {
+        item_list_response_ready = false;
+
+        if(item_list_response_payload.find("=== Itens do Banco de Dados ===") >= 0) {
+            show_items_list_menu(item_list_response_payload);
+            return;
+        }
+
+        if(item_list_response_payload != "") {
+            speak(item_list_response_payload, true);
+            add_add_item("avisos", item_list_response_payload);
+            return;
+        }
+    }
+}
+
+bool item_builder_wait_list_response(string&out payload) {
+    item_list_request_pending = true;
+    item_list_response_ready = false;
+    item_list_response_payload = "";
+
+    send_to_server("/list_items", 0, true);
+    speak(pu.get_value("Solicitando lista de itens ao servidor..."));
+
+    timer wait_list_timer;
+    wait_list_timer.restart();
+
+    while(item_list_request_pending && wait_list_timer.elapsed < 7000) {
+        netloop();
+        wait(5);
+    }
+
+    if(item_list_request_pending) {
+        item_list_request_pending = false;
+        speak(pu.get_value("Tempo de resposta esgotado ao listar itens."));
+        return false;
+    }
+
+    if(!item_list_response_ready || item_list_response_payload == "") {
+        return false;
+    }
+
+    payload = item_list_response_payload;
+    item_list_response_ready = false;
+    return true;
+}
+
+bool item_builder_pick_item_id(string&out picked_id, string&out picked_label) {
+    string payload = "";
+    if(!item_builder_wait_list_response(payload)) {
+        return false;
+    }
+
+    if(payload.find("=== Itens do Banco de Dados ===") < 0) {
+        speak(payload, true);
+        add_add_item("avisos", payload);
+        return false;
+    }
+
+    string clean = payload.replace("\r", "");
+    string[] lines = clean.split("\n");
+
+    audio_form pick_form;
+    pick_form.create_window(pu.get_value("Selecionar Item"), true, false);
+    int list_id = pick_form.create_list(pu.get_value("Itens"), 0, false, false);
+    int ok_btn = pick_form.create_button("&ok", true);
+    int cancel_btn = pick_form.create_button("&cancelar", false, true);
+    pick_form.focus(list_id);
+
+    int count = 0;
+    for(uint i = 0; i < lines.length(); i++) {
+        string line = lines[i];
+        string item_id = "";
+        string visual_label = "";
+        if(!item_builder_parse_server_item_line(line, item_id, visual_label)) continue;
+        if(!pick_form.add_list_item(list_id, visual_label, item_id)) continue;
+        count++;
+    }
+
+    if(count <= 0) {
+        speak(pu.get_value("Nenhum item cadastrado."));
+        return false;
+    }
+
+    speak(pu.get_value("Selecione um item."), true);
+    while(true) {
+        pick_form.monitor();
+        if(is_connected) {
+            netloop();
+            if(heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
+                heartbeat_timer.restart();
+                send_unreliable(peer_id, "heartbeat", 0);
+            }
+        }
+        if(pick_form.is_pressed(cancel_btn)) return false;
+        if(pick_form.is_pressed(ok_btn)) {
+            int pos = pick_form.get_list_position(list_id);
+            if(pos < 0) {
+                speak(pu.get_value("Nenhum item selecionado."), true);
+                continue;
+            }
+            picked_id = pick_form.get_list_item_id(list_id, pos);
+            picked_label = pick_form.get_list_item(list_id, pos);
+            return picked_id != "";
+        }
+        wait(5);
+    }
+
+    return false;
 }
 
 
@@ -336,76 +879,130 @@ void item_builder_list_items() {
 // Formato: name|display|desc|type|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
 // ============================================================================
 void item_builder_edit_item() {
-    input_form form(pu.get_value("Editar Item Existente"));
-    
-    form.add_text_field("name", pu.get_value("ID interno do item"), "", true);
-    form.add_text_field("display", pu.get_value("Nome visivel"), "", true);
-    form.add_text_field("desc", pu.get_value("Descricao"), "", true);
-    form.add_text_field("type", pu.get_value("Tipo (weapon, armor, consumable, misc)"), "misc", true);
-    form.add_text_field("category", pu.get_value("Categoria"), "material", true);
-    form.add_number_field("damage", pu.get_value("Dano"), 0, true);
-    form.add_number_field("defense", pu.get_value("Defesa"), 0, true);
-    form.add_number_field("heal", pu.get_value("Cura HP"), 0, true);
-    form.add_number_field("mp", pu.get_value("Restaura MP"), 0, true);
-    form.add_number_field("weight", pu.get_value("Peso"), 1, true);
-    form.add_number_field("value", pu.get_value("Valor"), 0, true);
-    form.add_text_field("rarity", pu.get_value("Raridade"), "common", true);
-    form.add_text_field("sound", pu.get_value("Som (arquivo ou vazio)"), "", false);
-    form.add_number_field("max_stack", pu.get_value("Maximo empilhavel"), 1, true);
-    form.add_number_field("drop_rate", pu.get_value("Taxa de drop (0.0 a 1.0)"), 1.0, true);
-    
-    dictionary@ result = form.run();
-    if(form.user_canceled) return;
-    
-    string name, display, desc, type, category, rarity, sound;
-    double damage, defense, heal, mp, weight, value, max_stack, drop_rate;
-    result.get("name", name);
-    result.get("display", display);
-    result.get("desc", desc);
-    result.get("type", type);
-    result.get("category", category);
-    result.get("damage", damage);
-    result.get("defense", defense);
-    result.get("heal", heal);
-    result.get("mp", mp);
-    result.get("weight", weight);
-    result.get("value", value);
-    result.get("rarity", rarity);
-    result.get("sound", sound);
-    result.get("max_stack", max_stack);
-    result.get("drop_rate", drop_rate);
-    
-    string data = name + "|" + display + "|" + desc + "|" + type + "|" + category + "|" +
-                  int(damage) + "|" + int(defense) + "|" + int(heal) + "|" + int(mp) + "|" +
-                  weight + "|" + int(value) + "|" + rarity + "|" + sound + "|" +
-                  int(max_stack) + "|" + drop_rate;
-    
-    send_to_server("/edit_item_tool " + data, 0, true);
-    speak(pu.get_value("Solicitacao de edicao enviada: ") + name);
+    string selected_id = "";
+    string selected_label = "";
+    if(!item_builder_pick_item_id(selected_id, selected_label)) {
+        return;
+    }
+
+    string name = selected_id;
+    string display = "";
+    string desc = "";
+    string type = "";
+    string category = "";
+    string damage = "";
+    string defense = "";
+    string heal = "";
+    string mp = "";
+    string weight = "";
+    string value = "";
+    string rarity = "";
+    string sound_file = "";
+    string max_stack = "";
+    string drop_rate = "";
+
+    while(true) {
+        input_form form(pu.get_value("Editar Item Existente"));
+        form.description = pu.get_value("Editando item: ") + selected_id + ". " + pu.get_value("Deixe vazio para manter valor atual.");
+
+        form.add_text_field("display", pu.get_value("Nome visivel (opcional)"), display, false);
+        form.add_text_field("desc", pu.get_value("Descricao (opcional)"), desc, false);
+        form.add_choice_field("type", pu.get_value("Tipo"), item_builder_get_type_choices(true), false);
+        form.add_choice_field("category", pu.get_value("Categoria"), item_builder_get_category_choices("all", true), false);
+        form.add_text_field("damage", pu.get_value("Dano (opcional)"), damage, false);
+        form.add_text_field("defense", pu.get_value("Defesa (opcional)"), defense, false);
+        form.add_text_field("heal", pu.get_value("Cura HP (opcional)"), heal, false);
+        form.add_text_field("mp", pu.get_value("Restaura MP (opcional)"), mp, false);
+        form.add_text_field("weight", pu.get_value("Peso (opcional)"), weight, false);
+        form.add_text_field("value", pu.get_value("Valor (opcional)"), value, false);
+        form.add_choice_field("rarity", pu.get_value("Raridade"), item_builder_get_rarity_choices(true), false);
+        form.add_text_field("sound", pu.get_value("Som (opcional)"), sound_file, false);
+        form.add_text_field("max_stack", pu.get_value("Maximo empilhavel (opcional)"), max_stack, false);
+        form.add_text_field("drop_rate", pu.get_value("Taxa de drop (opcional: 0.0 a 1.0)"), drop_rate, false);
+        
+        dictionary@ result = item_builder_run_form_with_network(@form);
+        if(form.user_canceled) return;
+        
+        name = selected_id;
+        result.get("display", display);
+        result.get("desc", desc);
+        result.get("type", type);
+        result.get("category", category);
+        result.get("damage", damage);
+        result.get("defense", defense);
+        result.get("heal", heal);
+        result.get("mp", mp);
+        result.get("weight", weight);
+        result.get("value", value);
+        result.get("rarity", rarity);
+        result.get("sound", sound_file);
+        result.get("max_stack", max_stack);
+        result.get("drop_rate", drop_rate);
+
+        display = display.trim_whitespace();
+        desc = desc.trim_whitespace();
+        type = type.trim_whitespace();
+        category = category.trim_whitespace();
+        rarity = rarity.trim_whitespace();
+        sound_file = sound_file.trim_whitespace();
+
+        if(type == pu.get_value("Manter atual")) type = "";
+        if(category == pu.get_value("Manter atual")) category = "";
+        if(rarity == pu.get_value("Manter atual")) rarity = "";
+
+        if(!item_builder_is_blank(type) && type != "weapon" && type != "armor" && type != "consumable" && type != "misc") {
+            item_builder_speak_invalid_field("type");
+            continue;
+        }
+        if(!item_builder_validate_max_length("nome", display, 60)) continue;
+        if(!item_builder_validate_max_length("descricao", desc, 240)) continue;
+        if(!item_builder_validate_max_length("tipo", type, 16)) continue;
+        if(!item_builder_validate_max_length("categoria", category, 32)) continue;
+        if(!item_builder_validate_max_length("raridade", rarity, 24)) continue;
+        if(!item_builder_validate_max_length("sound", sound_file, 120)) continue;
+        if(!item_builder_validate_optional_int_range("damage", damage, 0, 100000)) continue;
+        if(!item_builder_validate_optional_int_range("defense", defense, 0, 100000)) continue;
+        if(!item_builder_validate_optional_int_range("heal", heal, 0, 100000)) continue;
+        if(!item_builder_validate_optional_int_range("mp", mp, 0, 100000)) continue;
+        if(!item_builder_validate_optional_int_range("value", value, 0, 100000000)) continue;
+        if(!item_builder_validate_optional_int_range("max_stack", max_stack, 1, 10000)) continue;
+        if(!item_builder_validate_optional_float_range("weight", weight, 0.01, 10000.0)) continue;
+        if(!item_builder_validate_optional_float_range("drop_rate", drop_rate, 0.0, 1.0)) continue;
+        if(!item_builder_confirm_send(item_builder_is_blank(display) ? selected_id : display)) continue;
+        
+        string data = name + "|" + display + "|" + desc + "|" + type + "|" + category + "|" +
+                      damage + "|" + defense + "|" + heal + "|" + mp + "|" +
+                      weight + "|" + value + "|" + rarity + "|" + sound_file + "|" +
+                      max_stack + "|" + drop_rate;
+        
+        send_to_server("/edit_item_tool " + data, 0, true);
+        speak(pu.get_value("Solicitacao de edicao enviada: ") + name);
+        return;
+    }
 }
 
 // ============================================================================
 // EXCLUIR ITEM EXISTENTE
 // ============================================================================
 void item_builder_delete_item() {
-    input_form form(pu.get_value("Excluir Item Existente"));
-    form.add_text_field("name", pu.get_value("ID interno do item para excluir"), "", true);
-    
-    dictionary@ result = form.run();
-    if(form.user_canceled) return;
-    
-    string name;
-    result.get("name", name);
-    
-    if(name == "") {
-        speak(pu.get_value("ID do item invalido."));
+    string selected_id = "";
+    string selected_label = "";
+    if(!item_builder_pick_item_id(selected_id, selected_label)) {
         return;
     }
-    
-    send_to_server("/delete_item_tool " + name, 0, true);
-    speak(pu.get_value("Solicitacao de exclusao enviada: ") + name);
+
+    setupmenu();
+    game_menu.add_item(pu.get_value("Não"), "no");
+    game_menu.add_item(pu.get_value("Sim"), "yes");
+    game_menu.intro_text = pu.get_value("Confirmar exclusão de: ") + selected_label;
+    int confirm = game_menu.run();
+    if(confirm < 0) return;
+    if(game_menu.get_item_id(confirm) != "yes") return;
+
+    send_to_server("/delete_item_tool " + selected_id, 0, true);
+    speak(pu.get_value("Solicitacao de exclusao enviada: ") + selected_id);
 }
 
-// NOTA: A funÃ§Ã£o send_to_server() Ã© definida em buildermenu.nvgt
+// NOTA: A função send_to_server() é definida em buildermenu.nvgt
 
 

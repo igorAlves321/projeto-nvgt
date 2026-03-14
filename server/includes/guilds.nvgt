@@ -186,6 +186,11 @@ guild@[] active_guilds;
 // Dictionary de membros para guild (player_name -> guild_name)
 dictionary player_guilds;
 
+void guild_save_social_state_if_online(string player_name) {
+	int idx = get_player_index_from(player_name);
+	if(idx >= 0) save_player_to_database(players[idx]);
+}
+
 // Obter guild de um jogador
 guild@ get_player_guild(string player_name) {
 	if(!player_guilds.exists(player_name)) return null;
@@ -258,6 +263,7 @@ void cmd_createguild(int player_index, string guild_name, string guild_tag = "")
 	guild g(guild_name, players[player_index].charname, guild_tag);
 	active_guilds.insert_last(g);
 	player_guilds.set(players[player_index].charname, guild_name);
+	guild_save_social_state_if_online(players[player_index].charname);
 	
 	send_reliable(players[player_index].peer_id, "msg2 Guild '" + guild_name + "' criada! Tag: [" + guild_tag + "]", 0);
 	send_reliable(players[player_index].peer_id, "msg2 Você é o líder. Use /inviteguild para convidar membros", 0);
@@ -336,6 +342,7 @@ void cmd_joinguild(int player_index) {
 	found_guild.add_member(players[player_index].charname);
 	found_guild.remove_invite(players[player_index].charname);
 	player_guilds.set(players[player_index].charname, found_guild.name);
+	guild_save_social_state_if_online(players[player_index].charname);
 	
 	// Notificar
 	send_reliable(players[player_index].peer_id, "msg2 Você entrou na guild '" + found_guild.name + "' [" + found_guild.tag + "]!", 0);
@@ -364,6 +371,7 @@ void cmd_leaveguild(int player_index) {
 	// Remover da guild
 	g.remove_member(pname);
 	player_guilds.delete(pname);
+	guild_save_social_state_if_online(pname);
 	
 	g.broadcast_message(pname + " saiu da guild");
 	send_reliable(players[player_index].peer_id, "msg2 Você saiu da guild", 0);
@@ -409,6 +417,7 @@ void cmd_kickguild(int player_index, string target_name) {
 	
 	g.remove_member(target_name);
 	player_guilds.delete(target_name);
+	guild_save_social_state_if_online(target_name);
 	
 	g.broadcast_message(target_name + " foi expulso da guild");
 	
@@ -431,6 +440,13 @@ void cmd_disbandguild(int player_index) {
 	
 	// Notificar todos os membros
 	g.broadcast_message("Guild '" + g.name + "' foi dissolvida pelo líder");
+	guild_save_social_state_if_online(g.leader);
+	for(uint i = 0; i < g.officers.length(); i++) {
+		guild_save_social_state_if_online(g.officers[i]);
+	}
+	for(uint i = 0; i < g.members.length(); i++) {
+		guild_save_social_state_if_online(g.members[i]);
+	}
 	
 	// Remover todos do dictionary
 	player_guilds.delete(g.leader);

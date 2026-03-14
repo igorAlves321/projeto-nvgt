@@ -49,7 +49,8 @@ void update2(string map) {
 // ==================== FUNÇÕES DE REDE (Únicas aqui) ====================
 // Função de loop de rede para objetos
 void netloop() {
-    // TODO: Implementar lógica de rede para objetos
+    // Wrapper legado: mantém compatibilidade com módulos antigos.
+    network_loop();
 }
 
 // send_unreliable wrapper (NVGT pode usar apenas reliable)
@@ -135,11 +136,36 @@ void save_transfer(string origin, string destination, string itemname, string in
 void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
 void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
 void move(int npc_index, int direction) {}
-bool exists_player_in_my_map(int npc_index) { return false; }
+bool exists_player_in_my_map(int npc_index) {
+    // Compatibilidade BGT->NVGT:
+    // em NVGT os NPCs ficam dentro de cada mapa (server_maps[i].npcs),
+    // não em um array global `npcs`.
+    if(npc_index < 0) return false;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            return exists_player_in_my_map(server_maps[m].name);
+        }
+        flat_index += npc_count;
+    }
+
+    return false;
+}
 int select_player_to_attack(int npc_index) { return -1; }
 void change_player(int npc_index) {}
 
 bool exists_player_in_my_map(string map_name) {
+    if(map_name == "") return false;
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map != map_name) continue;
+        if(players[i].afk) continue;
+        if(players[i].pacifico == 1) continue;
+        if(players[i].newbie) continue;
+        if(players[i].health <= 0) continue;
+        return true;
+    }
     return false;
 }
 
@@ -296,7 +322,228 @@ int enable_double_emeralds = 0;
 int MAX_PLAYERS = 100;
 
 // Função de mudança de nome (placeholder)
-void changename(int player_index, string new_name) {}
+void changename(int player_index, string new_name) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+
+    player@ p = players[player_index];
+    if(p is null) return;
+
+    string old_name = p.charname;
+    string target_name = new_name.trim_whitespace();
+
+    // Limpar flags para evitar loop infinito no playerloop
+    p.needs_to_change = false;
+    p.validated_name = "";
+
+    if(old_name == "" || target_name == "") {
+        send_reliable(p.peer_id, "msg2 Nao foi possivel alterar nome: dados invalidos.", 0);
+        return;
+    }
+
+    if(target_name == old_name) {
+        send_reliable(p.peer_id, "msg2 Seu nome ja estava atualizado.", 0);
+        return;
+    }
+
+    if(!is_valid_username(target_name)) {
+        send_reliable(p.peer_id, "msg2 Nome invalido. Use apenas letras/numeros (3 a 20).", 0);
+        return;
+    }
+
+    int conflict_online = get_player_index_from(target_name);
+    if(conflict_online >= 0 && conflict_online != player_index) {
+        send_reliable(p.peer_id, "msg2 Ja existe um jogador online com esse nome.", 0);
+        return;
+    }
+
+    if(player_exists_in_database(target_name)) {
+        send_reliable(p.peer_id, "msg2 Esse nome ja esta em uso.", 0);
+        return;
+    }
+
+    // Atualizar nome principal na tabela players
+    {
+        string q = "UPDATE players SET username = ? WHERE username = ?;";
+        sqlite3statement@ stmt = bancoJogo.prepare(q);
+        if(stmt is null) {
+            send_reliable(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+            debug_log("CHANGENAME: falha prepare players update: " + bancoJogo.get_last_error_text());
+            return;
+        }
+        stmt.bind_text(1, target_name);
+        stmt.bind_text(2, old_name);
+        if(!stmt.step()) {
+            send_reliable(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+            debug_log("CHANGENAME: falha step players update: " + bancoJogo.get_last_error_text());
+            return;
+        }
+    }
+
+    // Atualizacoes auxiliares em tabelas relacionadas
+    {
+        sqlite3statement@ stmt_roles = bancoJogo.prepare("UPDATE player_roles SET username = ? WHERE username = ?;");
+        if(stmt_roles !is null) {
+            stmt_roles.bind_text(1, target_name);
+            stmt_roles.bind_text(2, old_name);
+            stmt_roles.step();
+        }
+
+        sqlite3statement@ stmt_sessions = bancoJogo.prepare("UPDATE player_sessions SET username = ? WHERE username = ?;");
+        if(stmt_sessions !is null) {
+            stmt_sessions.bind_text(1, target_name);
+            stmt_sessions.bind_text(2, old_name);
+            stmt_sessions.step();
+        }
+
+        sqlite3statement@ stmt_bans1 = bancoJogo.prepare("UPDATE server_bans SET banned_username = ? WHERE banned_username = ?;");
+        if(stmt_bans1 !is null) {
+            stmt_bans1.bind_text(1, target_name);
+            stmt_bans1.bind_text(2, old_name);
+            stmt_bans1.step();
+        }
+
+        sqlite3statement@ stmt_bans2 = bancoJogo.prepare("UPDATE server_bans SET admin_username = ? WHERE admin_username = ?;");
+        if(stmt_bans2 !is null) {
+            stmt_bans2.bind_text(1, target_name);
+            stmt_bans2.bind_text(2, old_name);
+            stmt_bans2.step();
+        }
+    }
+
+    // Atualizar objeto do jogador em memoria
+    p.charname = target_name;
+    p.name = target_name;
+    set_peer_name(p.peer_id, target_name);
+
+    // Atualizar guilds ativas + indice player_guilds
+    for(uint gi = 0; gi < active_guilds.length(); gi++) {
+        if(active_guilds[gi] is null) continue;
+
+        if(active_guilds[gi].leader == old_name) {
+            active_guilds[gi].leader = target_name;
+        }
+
+        for(uint i = 0; i < active_guilds[gi].officers.length(); i++) {
+            if(active_guilds[gi].officers[i] == old_name) {
+                active_guilds[gi].officers[i] = target_name;
+            }
+        }
+        for(uint i = 0; i < active_guilds[gi].members.length(); i++) {
+            if(active_guilds[gi].members[i] == old_name) {
+                active_guilds[gi].members[i] = target_name;
+            }
+        }
+
+        if(active_guilds[gi].pending_invites.exists(old_name)) {
+            string invite_ts = "";
+            active_guilds[gi].pending_invites.get(old_name, invite_ts);
+            active_guilds[gi].pending_invites.set(target_name, invite_ts);
+            active_guilds[gi].pending_invites.delete(old_name);
+        }
+    }
+    if(player_guilds.exists(old_name)) {
+        string gname = string(player_guilds[old_name]);
+        player_guilds.set(target_name, gname);
+        player_guilds.delete(old_name);
+    }
+    save_guilds();
+
+    // Atualizar parties ativas
+    for(uint pi = 0; pi < active_parties.length(); pi++) {
+        if(active_parties[pi] is null) continue;
+
+        if(active_parties[pi].leader == old_name) {
+            active_parties[pi].leader = target_name;
+        }
+        for(uint i = 0; i < active_parties[pi].members.length(); i++) {
+            if(active_parties[pi].members[i] == old_name) {
+                active_parties[pi].members[i] = target_name;
+            }
+        }
+        if(active_parties[pi].pending_invites.exists(old_name)) {
+            string invite_ts = "";
+            active_parties[pi].pending_invites.get(old_name, invite_ts);
+            active_parties[pi].pending_invites.set(target_name, invite_ts);
+            active_parties[pi].pending_invites.delete(old_name);
+        }
+    }
+
+    // Atualizar listas de amigos carregadas em memoria
+    if(player_friends.exists(old_name)) {
+        friend_list@ own_fl = cast<friend_list@>(player_friends[old_name]);
+        if(own_fl !is null) {
+            own_fl.owner = target_name;
+            @player_friends[target_name] = @own_fl;
+            player_friends.delete(old_name);
+        }
+    }
+    string[] friend_keys = player_friends.get_keys();
+    for(uint i = 0; i < friend_keys.length(); i++) {
+        friend_list@ fl = cast<friend_list@>(player_friends[friend_keys[i]]);
+        if(fl is null) continue;
+        bool changed = false;
+        for(uint f = 0; f < fl.friends.length(); f++) {
+            if(fl.friends[f] == old_name) {
+                fl.friends[f] = target_name;
+                changed = true;
+            }
+        }
+        if(changed) fl.save();
+    }
+    if(player_friends.exists(target_name)) {
+        friend_list@ own_fl2 = cast<friend_list@>(player_friends[target_name]);
+        if(own_fl2 !is null) own_fl2.save();
+    }
+
+    // Atualizar mailboxes carregadas em memoria
+    if(player_mailboxes.exists(old_name)) {
+        mailbox@ own_mb = cast<mailbox@>(player_mailboxes[old_name]);
+        if(own_mb !is null) {
+            own_mb.owner = target_name;
+            @player_mailboxes[target_name] = @own_mb;
+            player_mailboxes.delete(old_name);
+        }
+    }
+    string[] mb_keys = player_mailboxes.get_keys();
+    for(uint i = 0; i < mb_keys.length(); i++) {
+        mailbox@ mb = cast<mailbox@>(player_mailboxes[mb_keys[i]]);
+        if(mb is null) continue;
+        bool changed = false;
+        for(uint m = 0; m < mb.messages.length(); m++) {
+            if(mb.messages[m].sender == old_name) {
+                mb.messages[m].sender = target_name;
+                changed = true;
+            }
+            if(mb.messages[m].recipient == old_name) {
+                mb.messages[m].recipient = target_name;
+                changed = true;
+            }
+        }
+        if(changed) mb.save();
+    }
+    if(player_mailboxes.exists(target_name)) {
+        mailbox@ own_mb2 = cast<mailbox@>(player_mailboxes[target_name]);
+        if(own_mb2 !is null) own_mb2.save();
+    }
+
+    // Migrar pasta de dados legados do jogador
+    string old_dir = "players/" + old_name;
+    string new_dir = "players/" + target_name;
+    if(directory_exists(old_dir) && !directory_exists(new_dir)) {
+        directory_copy(old_dir, new_dir, true);
+        if(directory_exists(new_dir)) {
+            directory_delete(old_dir);
+        } else {
+            debug_log("CHANGENAME: aviso - nao foi possivel copiar pasta legada de " + old_dir + " para " + new_dir);
+        }
+    }
+
+    // Persistir estado atual completo do jogador com o novo username
+    save_player_to_database(p);
+
+    send_reliable(p.peer_id, "msg2 Nome alterado com sucesso para " + target_name + ".", 0);
+    debug_log("CHANGENAME: " + old_name + " -> " + target_name);
+}
 
 // Função de informações do servidor
 bool cmd_server_info(player@ player, string[] args) {

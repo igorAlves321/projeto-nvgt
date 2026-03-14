@@ -120,6 +120,14 @@ bool is_super_admin(int player_index) {
 	return players[player_index].admin_status;
 }
 
+// Permissao para gerenciar catalogo de itens (admin/dev)
+bool can_access_item_builder(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    string username = players[player_index].charname;
+    return check_is_admin(username);
+}
+
+
 // Comando /playtime
 void cmd_playtime(int player_index, string target_name = "") {
 	if(!is_admin(player_index)) {
@@ -207,10 +215,7 @@ void cmd_kick(int player_index, string target_name, string reason = "Expulso por
 	wait(500);
 	
 	// 4. Desconectar fisicamente o jogador
-	server_net.disconnect_peer_forcefully(target_peer);
-	
-	// 5. Remover da lista de jogadores (limpeza imediata)
-	remove_player(target_peer);
+	force_disconnect_and_cleanup(target_peer, true);
 }
 
 // Comando /inventory
@@ -843,8 +848,9 @@ void cmd_tempban(int player_index, string target_name, double days, string reaso
 
 	debug_log("ADMIN: " + players[player_index].charname + " baniu " + target_name + " por " + days + " dias");
 
-	// Desconectar jogador (TODO: Implementar quando network estiver pronto)
-	// server_net.disconnect_peer(players[target].peer_id);
+	// Desconectar jogador banido e limpar rastros de conexão
+	uint64 target_peer = players[target].peer_id;
+	force_disconnect_and_cleanup(target_peer, true);
 }
 
 // ============================================================================
@@ -1704,81 +1710,442 @@ string format_uptime(uint64 milliseconds) {
 // 🔧 CONSTRUTOR DE ITENS - Item Builder Tool (Admin Only)
 // ============================================================================
 
-// Comando /create_item_tool - Criar item genérico (consumível, armadura, material, melee)
-// Formato: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|extra1|extra2
+// Comando /create_item_tool - Criar item generico (consumivel, armadura, material, melee)
+// Formato legado aceito: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|extra1|extra2
+// Campos efetivamente persistidos no schema BGT: name, msg(desc/display), health(heal), audio(sound)
+// Helpers de validacao para Item Builder
+bool item_builder_is_blank(const string&in value) {
+    return value.trim_whitespace() == "";
+}
+
+void item_builder_send_empty_field_error(int player_index, const string&in command_name, const string&in field_name) {
+    send_admin_error(player_index, command_name, "Campo vazio: " + field_name + ".");
+}
+
+void item_builder_send_invalid_field_error(int player_index, const string&in command_name, const string&in field_name, const string&in detail = "") {
+    string msg = "Dados invalidos: " + field_name;
+    if(detail != "") msg += " (" + detail + ")";
+    msg += ".";
+    send_admin_error(player_index, command_name, msg);
+}
+
+bool item_builder_is_valid_identifier(const string&in value) {
+    string v = value.trim_whitespace();
+    if(v == "" || v.find(" ") >= 0) return false;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        bool is_letter = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
+        bool is_digit = (ch >= "0" && ch <= "9");
+        bool is_ok = is_letter || is_digit || ch == "_";
+        if(!is_ok) return false;
+    }
+    return true;
+}
+
+bool item_builder_is_valid_number_string(const string&in value, bool allow_decimal) {
+    string v = value.trim_whitespace();
+    if(v == "") return false;
+    bool has_digit = false;
+    int dot_count = 0;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        if(ch >= "0" && ch <= "9") {
+            has_digit = true;
+            continue;
+        }
+        if(ch == "-" && i == 0) continue;
+        if(allow_decimal && ch == ".") {
+            dot_count++;
+            if(dot_count > 1) return false;
+            continue;
+        }
+        return false;
+    }
+    return has_digit;
+}
+
+bool item_builder_parse_int_field(int player_index, const string&in command_name, const string&in field_name, const string&in raw_value, int min_value, int max_value, int&out parsed_value) {
+    if(!item_builder_is_valid_number_string(raw_value, false)) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "deve ser numero inteiro");
+        return false;
+    }
+    parsed_value = parse_int(raw_value.trim_whitespace());
+    if(parsed_value < min_value || parsed_value > max_value) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "fora do intervalo");
+        return false;
+    }
+    return true;
+}
+
+bool item_builder_parse_float_field(int player_index, const string&in command_name, const string&in field_name, const string&in raw_value, double min_value, double max_value, double&out parsed_value) {
+    if(!item_builder_is_valid_number_string(raw_value, true)) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "deve ser numero");
+        return false;
+    }
+    parsed_value = parse_float(raw_value.trim_whitespace());
+    if(parsed_value < min_value || parsed_value > max_value) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "fora do intervalo");
+        return false;
+    }
+    return true;
+}
+
+void item_builder_ensure_metadata_tables() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    string q_types = """
+        CREATE TABLE IF NOT EXISTS item_builder_types (
+            type_name TEXT PRIMARY KEY
+        );
+    """;
+    string q_rarities = """
+        CREATE TABLE IF NOT EXISTS item_builder_rarities (
+            rarity_name TEXT PRIMARY KEY
+        );
+    """;
+    string q_categories = """
+        CREATE TABLE IF NOT EXISTS item_builder_categories (
+            item_type TEXT NOT NULL,
+            category_name TEXT NOT NULL,
+            PRIMARY KEY (item_type, category_name)
+        );
+    """;
+    bancoJogo.execute(q_types);
+    bancoJogo.execute(q_rarities);
+    bancoJogo.execute(q_categories);
+
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES ('weapon'),('armor'),('consumable'),('misc');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_rarities(rarity_name) VALUES ('common'),('uncommon'),('rare'),('epic'),('legendary');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('weapon','sword'),('weapon','dagger'),('weapon','axe'),('weapon','hammer'),('weapon','firearm');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('armor','head'),('armor','chest'),('armor','legs'),('armor','boots'),('armor','gloves');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('consumable','potion'),('consumable','food'),('consumable','drink');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('misc','material'),('misc','quest'),('misc','currency'),('misc','junk'),('misc','legacy');");
+}
+
+string item_builder_join_values(const string&in query, const string&in separator = ",") {
+    if(!database_initialized || bancoJogo is null) return "";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return "";
+
+    string joined_values = "";
+    while(stmt.step() == SQLITE_ROW) {
+        string value = stmt.column_text(0).trim_whitespace();
+        if(value == "") continue;
+        if(joined_values != "") joined_values += separator;
+        joined_values += value;
+    }
+    return joined_values;
+}
+
+bool item_builder_is_protected_type(const string&in type_name) {
+    return type_name == "weapon" || type_name == "armor" || type_name == "consumable" || type_name == "misc";
+}
+
+bool item_builder_is_protected_rarity(const string&in rarity_name) {
+    return rarity_name == "common" || rarity_name == "uncommon" || rarity_name == "rare" || rarity_name == "epic" || rarity_name == "legendary";
+}
+
+bool item_builder_is_protected_category(const string&in item_type, const string&in category_name) {
+    if(item_type == "weapon") {
+        return category_name == "sword" || category_name == "dagger" || category_name == "axe" || category_name == "hammer" || category_name == "firearm";
+    }
+    if(item_type == "armor") {
+        return category_name == "head" || category_name == "chest" || category_name == "legs" || category_name == "boots" || category_name == "gloves";
+    }
+    if(item_type == "consumable") {
+        return category_name == "potion" || category_name == "food" || category_name == "drink";
+    }
+    if(item_type == "misc") {
+        return category_name == "material" || category_name == "quest" || category_name == "currency" || category_name == "junk" || category_name == "legacy";
+    }
+    return false;
+}
+
+void cmd_item_builder_meta(int player_index) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "item_builder_meta", "Permissao negada.");
+        return;
+    }
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 [ERRO] /item_builder_meta: banco nao inicializado.", 0);
+        return;
+    }
+
+    create_items_tables();
+    item_builder_ensure_metadata_tables();
+
+    string types = item_builder_join_values("SELECT type_name FROM item_builder_types ORDER BY type_name ASC;");
+    string rarities = item_builder_join_values("SELECT rarity_name FROM item_builder_rarities ORDER BY rarity_name ASC;");
+    string cat_weapon = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='weapon' ORDER BY category_name ASC;");
+    string cat_armor = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='armor' ORDER BY category_name ASC;");
+    string cat_consumable = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='consumable' ORDER BY category_name ASC;");
+    string cat_misc = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='misc' ORDER BY category_name ASC;");
+
+    string payload = "ITEM_BUILDER_META|" + types + "|" + rarities + "|" + cat_weapon + "|" + cat_armor + "|" + cat_consumable + "|" + cat_misc;
+    send_reliable(players[player_index].peer_id, "msg2 " + payload, 0);
+}
+
+void cmd_item_builder_meta_list(int player_index) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_list_meta", "Permissao negada.");
+        return;
+    }
+    cmd_item_builder_meta(player_index);
+}
+
+void cmd_item_builder_add_type(int player_index, string type_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_type", "Permissao negada.");
+        return;
+    }
+    type_name = type_name.trim_whitespace();
+    if(type_name == "" || !item_builder_is_valid_identifier(type_name)) {
+        send_admin_error(player_index, "ib_add_type", "Tipo invalido.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES (?);");
+    if(@stmt is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, type_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao adicionar tipo: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Tipo adicionado no catalogo: " + type_name, 0);
+}
+
+void cmd_item_builder_del_type(int player_index, string type_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_type", "Permissao negada.");
+        return;
+    }
+    type_name = type_name.trim_whitespace();
+    if(type_name == "" || !item_builder_is_valid_identifier(type_name)) {
+        send_admin_error(player_index, "ib_del_type", "Tipo invalido.");
+        return;
+    }
+    if(item_builder_is_protected_type(type_name)) {
+        send_admin_error(player_index, "ib_del_type", "Tipo padrao protegido. Nao pode ser removido.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt1 = bancoJogo.prepare("DELETE FROM item_builder_categories WHERE item_type = ?;");
+    if(@stmt1 !is null) {
+        stmt1.bind_text(1, type_name);
+        stmt1.step();
+    }
+    sqlite3statement@ stmt2 = bancoJogo.prepare("DELETE FROM item_builder_types WHERE type_name = ?;");
+    if(@stmt2 is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt2.bind_text(1, type_name);
+    if(stmt2.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao remover tipo: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Tipo removido do catalogo: " + type_name, 0);
+}
+
+void cmd_item_builder_add_rarity(int player_index, string rarity_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_rarity", "Permissao negada.");
+        return;
+    }
+    rarity_name = rarity_name.trim_whitespace();
+    if(rarity_name == "" || !item_builder_is_valid_identifier(rarity_name)) {
+        send_admin_error(player_index, "ib_add_rarity", "Raridade invalida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_rarities(rarity_name) VALUES (?);");
+    if(@stmt is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, rarity_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao adicionar raridade: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Raridade adicionada no catalogo: " + rarity_name, 0);
+}
+
+void cmd_item_builder_del_rarity(int player_index, string rarity_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_rarity", "Permissao negada.");
+        return;
+    }
+    rarity_name = rarity_name.trim_whitespace();
+    if(rarity_name == "" || !item_builder_is_valid_identifier(rarity_name)) {
+        send_admin_error(player_index, "ib_del_rarity", "Raridade invalida.");
+        return;
+    }
+    if(item_builder_is_protected_rarity(rarity_name)) {
+        send_admin_error(player_index, "ib_del_rarity", "Raridade padrao protegida. Nao pode ser removida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM item_builder_rarities WHERE rarity_name = ?;");
+    if(@stmt is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, rarity_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao remover raridade: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Raridade removida do catalogo: " + rarity_name, 0);
+}
+
+void cmd_item_builder_add_category(int player_index, string item_type, string category_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_category", "Permissao negada.");
+        return;
+    }
+    item_type = item_type.trim_whitespace();
+    category_name = category_name.trim_whitespace();
+    if(item_type == "" || !item_builder_is_valid_identifier(item_type)) {
+        send_admin_error(player_index, "ib_add_category", "Tipo invalido.");
+        return;
+    }
+    if(category_name == "" || !item_builder_is_valid_identifier(category_name)) {
+        send_admin_error(player_index, "ib_add_category", "Categoria invalida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+
+    sqlite3statement@ type_stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES (?);");
+    if(@type_stmt !is null) {
+        type_stmt.bind_text(1, item_type);
+        type_stmt.step();
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES (?, ?);");
+    if(@stmt is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, item_type);
+    stmt.bind_text(2, category_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao adicionar categoria: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Categoria adicionada: " + item_type + " -> " + category_name, 0);
+}
+
+void cmd_item_builder_del_category(int player_index, string item_type, string category_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_category", "Permissao negada.");
+        return;
+    }
+    item_type = item_type.trim_whitespace();
+    category_name = category_name.trim_whitespace();
+    if(item_type == "" || !item_builder_is_valid_identifier(item_type)) {
+        send_admin_error(player_index, "ib_del_category", "Tipo invalido.");
+        return;
+    }
+    if(category_name == "" || !item_builder_is_valid_identifier(category_name)) {
+        send_admin_error(player_index, "ib_del_category", "Categoria invalida.");
+        return;
+    }
+    if(item_builder_is_protected_category(item_type, category_name)) {
+        send_admin_error(player_index, "ib_del_category", "Categoria padrao protegida. Nao pode ser removida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM item_builder_categories WHERE item_type = ? AND category_name = ?;");
+    if(@stmt is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, item_type);
+    stmt.bind_text(2, category_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao remover categoria: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable(players[player_index].peer_id, "msg2 Categoria removida: " + item_type + " -> " + category_name, 0);
+}
 void cmd_create_item_tool(int player_index, string data) {
-    // Verificar se é admin
-    if(!is_admin(player_index)) {
-        send_admin_error(player_index, "create_item_tool", "Permissão negada. Apenas admins podem criar itens.");
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "create_item_tool", "Permissao negada. Apenas staff de construcao pode criar itens.");
         return;
     }
-    
-    // Parsear dados separados por |
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
     string[] parts = data.split("|");
-    if(parts.length() < 12) {
-        send_admin_error(player_index, "create_item_tool", "Dados insuficientes. Esperado 12+ campos.");
-        debug_log("Item Builder: dados insuficientes: " + parts.length() + " campos");
+    if(parts.length() < 2) {
+        send_admin_error(player_index, "create_item_tool", "Dados insuficientes. Esperado ao menos type|name.");
         return;
     }
-    
-    // Extrair dados
-    string item_type = parts[0];     // weapon, armor, consumable, misc
-    string name = parts[1];          // ID interno
-    string display = parts[2];       // Nome visível
-    string desc = parts[3];          // Descrição
-    string category = parts[4];      // Subcategoria (sword, potion, etc)
-    int damage = string_to_number(parts[5]);
-    int defense = string_to_number(parts[6]);
-    int heal = string_to_number(parts[7]);
-    int mp = string_to_number(parts[8]);
-    float weight = parse_float(parts[9]);
-    int value = string_to_number(parts[10]);
-    string rarity = parts[11];
-    string sound_file = parts.length() > 12 ? parts[12] : "";
-    int max_stack = parts.length() > 13 ? string_to_number(parts[13]) : 1;
-    float drop_rate = parts.length() > 14 ? parse_float(parts[14]) : 1.0;
-    
-    // Validar ID interno (sem espaços, alfanumérico)
-    if(name.length() == 0 || name.find(" ") >= 0) {
-        send_admin_error(player_index, "create_item_tool", "ID interno inválido. Não pode ter espaços.");
+
+    string item_type = parts[0].trim_whitespace();
+    string name = parts[1].trim_whitespace();
+    string display = parts.length() > 2 ? parts[2].trim_whitespace() : "";
+    string desc = parts.length() > 3 ? parts[3].trim_whitespace() : "";
+    string sound_file = parts.length() > 12 ? parts[12].trim_whitespace() : "";
+
+    int heal = 0;
+
+    if(item_builder_is_blank(item_type) || item_builder_is_blank(name)) {
+        if(item_builder_is_blank(item_type)) item_builder_send_empty_field_error(player_index, "create_item_tool", "type");
+        else item_builder_send_empty_field_error(player_index, "create_item_tool", "name");
         return;
     }
-    
-    // Determinar se é empilhável baseado no tipo
-    bool stackable = (item_type == "consumable" || item_type == "misc");
-    if(max_stack <= 1) {
-        stackable = false;
-        max_stack = 1;
+
+    if(parts.length() > 7 && !item_builder_is_blank(parts[7])) {
+        if(!item_builder_parse_int_field(player_index, "create_item_tool", "heal", parts[7], 0, 100000, heal)) return;
     }
-    
-    // Tentar criar no banco de dados
+
+    if(!item_builder_is_valid_identifier(name)) {
+        item_builder_send_invalid_field_error(player_index, "create_item_tool", "name", "use letras, numeros e underscore");
+        return;
+    }
+
+    if(desc == "") desc = display;
+    if(desc == "") desc = name;
+
     bool success = create_item(
-        name, display, desc, item_type, category,
-        damage, defense, heal, mp,
-        stackable, max_stack, weight, value,
-        rarity, drop_rate, false, true, true,
+        name, display, desc, item_type, "legacy",
+        0, 0, heal, 0,
+        true, 999, 1.0, 0,
+        "common", 1.0, false, true, true,
         "", sound_file
     );
-    
+
     if(success) {
-        // Recarregar itens na memória
         load_items_from_database();
-        
-        string msg = "✅ Item criado com sucesso: " + display + " (" + name + ")";
+        string msg = "Item criado com sucesso: " + display + " (" + name + ")";
         send_reliable(players[player_index].peer_id, "msg2 " + msg, 0);
         debug_log("ITEM BUILDER: " + players[player_index].charname + " criou item " + name);
     } else {
-        send_reliable(players[player_index].peer_id, "msg2 ❌ Erro ao criar item. O ID '" + name + "' já existe?", 0);
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao criar item. O ID '" + name + "' ja existe?", 0);
     }
 }
-
 // Comando /create_weapon_tool - Criar arma de fogo (formato weapons_list.db)
 // Formato: name=ammo=sound_shoot=sound_impact=sound_draw=sound_reload=damage=distance=ammo_total=ammo_cantity=speed=speed_burst=speed_loading=require_ammo=enable_burst=is_dropable=sound_impact_on_corpse=sound_unload=sound_mode1=sound_mode2=ammo_cantity_descount=sound_shoot_dist=degradation_point
 void cmd_create_weapon_tool(int player_index, string data) {
-    if(!is_admin(player_index)) {
-        send_admin_error(player_index, "create_weapon_tool", "Permissão negada. Apenas admins podem criar armas.");
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "create_weapon_tool", "Permissao negada. Apenas staff de construcao pode criar armas.");
         return;
     }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
 
     if(!file_exists("weapons_list.db")) {
         file f;
@@ -1837,20 +2204,14 @@ void cmd_create_weapon_tool(int player_index, string data) {
     if(!created_in_db) {
         string upsert_query = """
             UPDATE items
-            SET display_name = ?, description = ?, item_type = 'weapon', category = 'firearm',
-                damage = ?, stackable = 0, max_stack = 1, weight = 2.0, value = ?,
-                sound_file = ?, use_sound = ?, updated_at = CURRENT_TIMESTAMP
+            SET audio = ?, msg = ?, health = 0, updated_at = CURRENT_TIMESTAMP
             WHERE name = ?;
         """;
         sqlite3statement@ up_stmt = bancoJogo.prepare(upsert_query);
         if(@up_stmt != null) {
-            up_stmt.bind_text(1, display_name);
+            up_stmt.bind_text(1, shoot_sound == "" ? "none" : shoot_sound);
             up_stmt.bind_text(2, description);
-            up_stmt.bind_int(3, damage);
-            up_stmt.bind_int(4, value);
-            up_stmt.bind_text(5, shoot_sound);
-            up_stmt.bind_text(6, shoot_sound);
-            up_stmt.bind_text(7, weapon_name);
+            up_stmt.bind_text(3, weapon_name);
             up_stmt.step();
         }
     }
@@ -1865,73 +2226,87 @@ void cmd_create_weapon_tool(int player_index, string data) {
 
 // Comando /list_items - Listar itens disponíveis
 void cmd_list_items(int player_index) {
-    if(!is_admin(player_index)) {
-        send_admin_error(player_index, "list_items", "Permissão negada.");
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "list_items", "Permissao negada.");
         return;
     }
 
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro: banco de dados não inicializado.", 0);
+        return;
+    }
+
+    // Garante que a tabela exista mesmo em cenários de bootstrap parcial
+    create_items_tables();
+
     string list_items = "=== Itens do Banco de Dados ===\n";
 
-    string query = "SELECT name, display_name, item_type, value FROM items ORDER BY item_type, name LIMIT 200;";
+    string query = "SELECT name, msg, audio FROM items ORDER BY name LIMIT 200;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
 
     int count = 0;
     if(@stmt != null) {
         while(stmt.step() == SQLITE_ROW) {
             string name = stmt.column_text(0);
-            string display = stmt.column_text(1);
-            string type = stmt.column_text(2);
-            int value = stmt.column_int(3);
-
-            list_items += "[" + type + "] " + name + " - " + display + " (" + value + "g)\n";
+            string msg = stmt.column_text(1);
+            string audio = stmt.column_text(2);
+            string display = msg;
+            if(display == "") display = name;
+            list_items += "[legacy] " + name + " - " + display;
+            if(audio != "" && audio != "none") {
+                list_items += " (audio: " + audio + ")";
+            }
+            list_items += "\n";
             count++;
         }
+    }
+    else {
+        // Se a query falhou (ex: tabela ausente/corrompida), retorna erro claro sem derrubar servidor
+        send_reliable(players[player_index].peer_id, "msg2 Erro ao listar itens: " + bancoJogo.get_last_error_text(), 0);
+        return;
     }
 
     if(count == 0) {
         list_items += "(Nenhum item cadastrado)\n";
     }
 
-    list_items += "\n(Fonte unica: tabela items do SQLite)\n";
+    list_items += "\n(Fonte unica: tabela items do SQLite / database/ig.db)\n";
     send_reliable(players[player_index].peer_id, "msg2 " + list_items, 0);
 }
 
 // Comando /edit_item_tool - Editar item existente no catalogo SQLite
-// Formato: name|display|desc|type|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
+// Formato aceito (compat): name|display|desc|type|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
+// Campos efetivamente persistidos no schema BGT: msg(desc/display), audio(sound), health(heal)
 void cmd_edit_item_tool(int player_index, string data) {
-    if(!is_admin(player_index)) {
-        send_admin_error(player_index, "edit_item_tool", "Permissao negada. Apenas admins podem editar itens.");
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "edit_item_tool", "Permissao negada. Apenas staff de construcao pode editar itens.");
         return;
     }
 
-    string[] parts = data.split("|");
-    if(parts.length() < 15) {
-        send_admin_error(player_index, "edit_item_tool", "Dados insuficientes. Esperado 15 campos separados por |.");
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
+    string[] raw_parts = data.split("|");
+    if(raw_parts.length() < 1) {
+        send_admin_error(player_index, "edit_item_tool", "Dados insuficientes. Campo name obrigatorio ausente.");
+        return;
+    }
+    string[] parts(15);
+    for(uint i = 0; i < parts.length(); i++) parts[i] = "";
+    for(uint i = 0; i < raw_parts.length() && i < parts.length(); i++) {
+        parts[i] = raw_parts[i];
+    }
+
+    string name = parts[0].trim_whitespace();
+    if(name == "" || !item_builder_is_valid_identifier(name)) {
+        item_builder_send_invalid_field_error(player_index, "edit_item_tool", "name", "id invalido");
         return;
     }
 
-    string name = parts[0];
-    string display = parts[1];
-    string desc = parts[2];
-    string item_type = parts[3];
-    string category = parts[4];
-    int damage = string_to_number(parts[5]);
-    int defense = string_to_number(parts[6]);
-    int heal = string_to_number(parts[7]);
-    int mp = string_to_number(parts[8]);
-    float weight = parse_float(parts[9]);
-    int value = string_to_number(parts[10]);
-    string rarity = parts[11];
-    string sound_file = parts[12];
-    int max_stack = string_to_number(parts[13]);
-    float drop_rate = parse_float(parts[14]);
-
-    if(name == "") {
-        send_admin_error(player_index, "edit_item_tool", "Nome interno do item invalido.");
-        return;
-    }
-
-    string exists_query = "SELECT id FROM items WHERE name = ? LIMIT 1;";
+    string exists_query = "SELECT id, msg, audio, health FROM items WHERE name = ? LIMIT 1;";
     sqlite3statement@ exists_stmt = bancoJogo.prepare(exists_query);
     if(@exists_stmt == null) {
         send_reliable(players[player_index].peer_id, "msg2 Erro ao validar item: " + bancoJogo.get_last_error_text(), 0);
@@ -1943,44 +2318,42 @@ void cmd_edit_item_tool(int player_index, string data) {
         return;
     }
 
-    bool stackable = (item_type == "consumable" || item_type == "misc");
-    if(max_stack <= 1) {
-        stackable = false;
-        max_stack = 1;
+    string msg_value = exists_stmt.column_text(1);
+    string audio_value = exists_stmt.column_text(2);
+    double health_value = exists_stmt.column_double(3);
+
+    if(!item_builder_is_blank(parts[2])) {
+        msg_value = parts[2].trim_whitespace();
+    } else if(!item_builder_is_blank(parts[1])) {
+        msg_value = parts[1].trim_whitespace();
+    }
+    if(!item_builder_is_blank(parts[12])) {
+        audio_value = parts[12].trim_whitespace();
+    }
+    if(!item_builder_is_blank(parts[7])) {
+        int heal = 0;
+        if(!item_builder_parse_int_field(player_index, "edit_item_tool", "heal", parts[7], 0, 100000, heal)) return;
+        health_value = heal;
     }
 
-    string query = """
-        UPDATE items
-        SET display_name = ?, description = ?, item_type = ?, category = ?,
-            damage = ?, defense = ?, heal_amount = ?, mp_restore = ?,
-            stackable = ?, max_stack = ?, weight = ?, value = ?,
-            rarity = ?, drop_rate = ?, sound_file = ?, use_sound = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE name = ?;
-    """;
+    if(item_builder_is_blank(msg_value)) {
+        item_builder_send_empty_field_error(player_index, "edit_item_tool", "desc");
+        return;
+    }
 
+    if(audio_value == "") audio_value = "none";
+
+    string query = "UPDATE items SET msg = ?, audio = ?, health = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) {
         send_reliable(players[player_index].peer_id, "msg2 Erro ao preparar UPDATE: " + bancoJogo.get_last_error_text(), 0);
         return;
     }
 
-    stmt.bind_text(1, display);
-    stmt.bind_text(2, desc);
-    stmt.bind_text(3, item_type);
-    stmt.bind_text(4, category);
-    stmt.bind_int(5, damage);
-    stmt.bind_int(6, defense);
-    stmt.bind_int(7, heal);
-    stmt.bind_int(8, mp);
-    stmt.bind_int(9, stackable ? 1 : 0);
-    stmt.bind_int(10, max_stack);
-    stmt.bind_double(11, weight);
-    stmt.bind_int(12, value);
-    stmt.bind_text(13, rarity);
-    stmt.bind_double(14, drop_rate);
-    stmt.bind_text(15, sound_file);
-    stmt.bind_text(16, sound_file);
-    stmt.bind_text(17, name);
+    stmt.bind_text(1, msg_value);
+    stmt.bind_text(2, audio_value);
+    stmt.bind_double(3, health_value);
+    stmt.bind_text(4, name);
 
     if(stmt.step() != SQLITE_DONE) {
         send_reliable(players[player_index].peer_id, "msg2 Erro ao editar item: " + bancoJogo.get_last_error_text(), 0);
@@ -1991,13 +2364,18 @@ void cmd_edit_item_tool(int player_index, string data) {
     send_reliable(players[player_index].peer_id, "msg2 Item atualizado com sucesso: " + name, 0);
     debug_log("ITEM BUILDER: " + players[player_index].charname + " editou item " + name);
 }
-
 // Comando /delete_item_tool - Excluir item do catalogo SQLite
 void cmd_delete_item_tool(int player_index, string item_name) {
-    if(!is_admin(player_index)) {
-        send_admin_error(player_index, "delete_item_tool", "Permissao negada. Apenas admins podem excluir itens.");
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "delete_item_tool", "Permissao negada. Apenas staff de construcao pode excluir itens.");
         return;
     }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable(players[player_index].peer_id, "msg2 Erro: banco de dados não inicializado.", 0);
+        return;
+    }
+    create_items_tables();
 
     item_name = item_name.trim_whitespace();
     if(item_name == "") {

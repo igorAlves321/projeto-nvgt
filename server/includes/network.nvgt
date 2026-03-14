@@ -156,12 +156,36 @@ void remove_connected_peer(uint64 peer_id) {
     debug_log("Peer desconectado: " + peer_id);
 }
 
+// Desconecta (opcional) e limpa completamente o estado de sessao do peer
+void force_disconnect_and_cleanup(uint64 peer_id, bool disconnect_peer = true) {
+    if(disconnect_peer) {
+        server_net.disconnect_peer_forcefully(peer_id);
+    }
+
+    remove_player(peer_id);
+    remove_connected_peer(peer_id);
+    remove_tracker(peer_id);
+    connected_count = int(connected_peers.size());
+}
+
 // Loop de rede - processar eventos usando API NVGT nativa
 void network_loop() {
     const network_event@ event;
     while((@event = server_net.request()) !is null && event.type != event_none) {
         debug_log("📥 Evento de rede recebido: tipo=" + event.type + ", peer=" + event.peer_id);
-        server_handle_network_event_const(event);
+        try {
+            server_handle_network_event_const(event);
+        }
+        catch {
+            string event_info = "type=" + event.type + " channel=" + event.channel;
+            string packet_info = event_info;
+            if(event.type == event_receive) {
+                packet_info += " raw=" + event.message;
+            }
+
+            log_network_exception_with_context(event.peer_id, packet_info, "network_loop:event_dispatch");
+            force_disconnect_and_cleanup(event.peer_id, true);
+        }
     }
 }
 
@@ -196,7 +220,7 @@ string get_peer_name(uint64 peer_id) {
 
 // ===== SISTEMA DE DETECÇÃO DE JOGADORES FANTASMA =====
 // Detecta jogadores que perderam conexão mas não desconectaram corretamente
-const int GHOST_TIMEOUT = 30000;  // 30 segundos sem atividade = fantasma
+const int GHOST_TIMEOUT = 180000;  // 180 segundos sem atividade = fantasma
 timer ghost_check_timer;
 
 // Função para verificar e remover jogadores fantasma
@@ -209,19 +233,19 @@ void check_ghost_players() {
     // Iterar players de trás pra frente (para permitir remoção segura)
     for(int i = int(players.length()) - 1; i >= 0; i--) {
         if(players[i].last_activity.elapsed > GHOST_TIMEOUT) {
-            debug_log("👻 Jogador fantasma detectado: " + players[i].charname + 
-                      " (inativo há " + (players[i].last_activity.elapsed / 1000) + "s)");
-            
-            // Enviar mensagem de kick (se ainda tiver conexão)
-            send_reliable(players[i].peer_id, "say Você foi desconectado por inatividade.", 0);
-            
-            // Desconectar forçadamente
-            server_net.disconnect_peer_forcefully(players[i].peer_id);
-            
-            // Remover da lista de peers conectados
-            remove_connected_peer(players[i].peer_id);
-            
-            debug_log("✅ Jogador " + players[i].charname + " removido (fantasma)");
+            uint64 ghost_peer = players[i].peer_id;
+            string ghost_name = players[i].charname;
+            int inactive_seconds = int(players[i].last_activity.elapsed / 1000);
+            debug_log("Jogador fantasma detectado: " + ghost_name +
+                      " (inativo ha " + inactive_seconds + "s, timeout=" + int(GHOST_TIMEOUT / 1000) + "s)");
+
+            // Enviar mensagem de kick (se ainda tiver conexao)
+            send_reliable(ghost_peer, "say Voce foi desconectado por inatividade.", 0);
+
+            // Desconectar e remover completamente das estruturas de sessao
+            force_disconnect_and_cleanup(ghost_peer, true);
+
+            debug_log("Jogador " + ghost_name + " removido (fantasma)");
         }
     }
 }

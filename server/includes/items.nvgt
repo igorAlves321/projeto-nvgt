@@ -11,6 +11,22 @@
 class GameItem {
     int id;
     string name;
+    // Campos legados BGT (fonte de verdade no banco)
+    string items_to_give;
+    string audio;
+    string msg;
+    string map;
+    int newx;
+    int newy;
+    float xp;
+    float health;
+    float thirst;
+    float fill_thirst;
+    float hunger;
+    float fill_hunger;
+    float degradation;
+
+    // Campos de compatibilidade (mantidos para código atual)
     string display_name;
     string description;
     string item_type;      // weapon, armor, consumable, misc
@@ -42,9 +58,22 @@ class GameItem {
     GameItem() {
         id = 0;
         name = "";
+        items_to_give = "none";
+        audio = "none";
+        msg = "";
+        map = "none";
+        newx = 0;
+        newy = 0;
+        xp = 0;
+        health = 0;
+        thirst = 0;
+        fill_thirst = 0;
+        hunger = 0;
+        fill_hunger = 0;
+        degradation = 0;
         display_name = "";
         description = "";
-        item_type = "misc";
+        item_type = "legacy";
         category = "";
         
         damage = 0;
@@ -102,44 +131,116 @@ dictionary world_items_by_map;    // map_name -> WorldItem[]
 // Referência ao banco de dados - declaração global
 // Estas variáveis são definidas em server.nvgt
 
+bool items_table_has_column(const string&in table_name, const string&in column_name) {
+    sqlite3statement@ stmt = bancoJogo.prepare("PRAGMA table_info(" + table_name + ");");
+    if(@stmt == null) return false;
+    while(stmt.step() == SQLITE_ROW) {
+        if(stmt.column_text(1) == column_name) return true;
+    }
+    return false;
+}
+
+void migrate_items_table_to_bgt_if_needed() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    sqlite3statement@ table_stmt = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='items' LIMIT 1;");
+    if(@table_stmt == null) return;
+    if(table_stmt.step() != SQLITE_ROW) return;
+
+    bool has_items_to_give = items_table_has_column("items", "items_to_give");
+    bool has_display_name = items_table_has_column("items", "display_name");
+    if(has_items_to_give && !has_display_name) return;
+
+    debug_log("MIGRATION: convertendo tabela items para schema legado BGT...");
+
+    if(bancoJogo.execute("ALTER TABLE items RENAME TO items_old;") != SQLITE_OK) {
+        debug_log("ERRO migration items: rename falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    string create_items_legacy = """
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            items_to_give TEXT DEFAULT 'none',
+            audio TEXT DEFAULT 'none',
+            msg TEXT DEFAULT '',
+            map TEXT DEFAULT 'none',
+            newx INTEGER DEFAULT 0,
+            newy INTEGER DEFAULT 0,
+            xp REAL DEFAULT 0,
+            health REAL DEFAULT 0,
+            thirst REAL DEFAULT 0,
+            fill_thirst REAL DEFAULT 0,
+            hunger REAL DEFAULT 0,
+            fill_hunger REAL DEFAULT 0,
+            degradation REAL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    if(bancoJogo.execute(create_items_legacy) != SQLITE_OK) {
+        debug_log("ERRO migration items: criar tabela nova falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    string migrate_sql = """
+        INSERT INTO items (
+            id, name, items_to_give, audio, msg, map, newx, newy,
+            xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation,
+            created_at, updated_at
+        )
+        SELECT
+            id,
+            name,
+            'none',
+            CASE WHEN sound_file IS NULL OR sound_file = '' THEN 'none' ELSE sound_file END,
+            CASE
+                WHEN description IS NOT NULL AND description != '' THEN description
+                WHEN display_name IS NOT NULL AND display_name != '' THEN display_name
+                ELSE name
+            END,
+            'none',
+            0, 0,
+            0,
+            CASE WHEN heal_amount IS NULL THEN 0 ELSE heal_amount END,
+            0, 0, 0, 0,
+            0,
+            COALESCE(created_at, CURRENT_TIMESTAMP),
+            COALESCE(updated_at, CURRENT_TIMESTAMP)
+        FROM items_old;
+    """;
+    if(bancoJogo.execute(migrate_sql) != SQLITE_OK) {
+        debug_log("ERRO migration items: copiar dados falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    bancoJogo.execute("DROP TABLE IF EXISTS items_old;");
+    debug_log("MIGRATION: tabela items convertida para schema legado BGT.");
+}
+
 // Criar tabelas de itens no banco
 void create_items_tables() {
     if(!database_initialized) return;
     
-    // Tabela de definições de itens
+    // Tabela de definicoes de itens (schema legado BGT)
     string create_items = """
         CREATE TABLE IF NOT EXISTS items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            item_type TEXT NOT NULL DEFAULT 'misc',
-            category TEXT,
-            
-            -- Estatísticas
-            damage INTEGER DEFAULT 0,
-            defense INTEGER DEFAULT 0,
-            heal_amount INTEGER DEFAULT 0,
-            mp_restore INTEGER DEFAULT 0,
-            
-            -- Propriedades
-            stackable BOOLEAN DEFAULT TRUE,
-            max_stack INTEGER DEFAULT 99,
-            weight REAL DEFAULT 1.0,
-            value INTEGER DEFAULT 1,
-            
-            -- Raridade e disponibilidade
-            rarity TEXT DEFAULT 'common',
-            drop_rate REAL DEFAULT 1.0,
-            craftable BOOLEAN DEFAULT FALSE,
-            sellable BOOLEAN DEFAULT TRUE,
-            tradeable BOOLEAN DEFAULT TRUE,
-            
-            -- Som e efeitos
-            sound_file TEXT,
-            use_sound TEXT,
-            
-            -- Metadados
+            items_to_give TEXT DEFAULT 'none',
+            audio TEXT DEFAULT 'none',
+            msg TEXT DEFAULT '',
+            map TEXT DEFAULT 'none',
+            newx INTEGER DEFAULT 0,
+            newy INTEGER DEFAULT 0,
+            xp REAL DEFAULT 0,
+            health REAL DEFAULT 0,
+            thirst REAL DEFAULT 0,
+            fill_thirst REAL DEFAULT 0,
+            hunger REAL DEFAULT 0,
+            fill_hunger REAL DEFAULT 0,
+            degradation REAL DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -169,7 +270,7 @@ void create_items_tables() {
         );
     """;
     
-    // Tabela de inventários de jogadores
+    // Tabela de inventarios de jogadores
     string create_inventories = """
         CREATE TABLE IF NOT EXISTS player_inventories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,16 +278,16 @@ void create_items_tables() {
             item_id INTEGER NOT NULL,
             quantity INTEGER DEFAULT 1,
             
-            -- Localização no inventário
+            -- Localizacao no inventario
             slot_type TEXT DEFAULT 'inventory',
             slot_position INTEGER,
             
-            -- Propriedades do item específico
+            -- Propriedades do item especifico
             durability REAL DEFAULT 100.0,
             enchantments TEXT,
             custom_name TEXT,
             
-            -- Histórico
+            -- Historico
             acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             acquired_from TEXT DEFAULT 'unknown',
             
@@ -196,7 +297,7 @@ void create_items_tables() {
         );
     """;
     
-    // Executar criação
+    // Executar criacao
     if(bancoJogo.execute(create_items) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela items: " + bancoJogo.get_last_error_text());
     }
@@ -208,6 +309,8 @@ void create_items_tables() {
     if(bancoJogo.execute(create_inventories) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela player_inventories: " + bancoJogo.get_last_error_text());
     }
+
+    migrate_items_table_to_bgt_if_needed();
     
     debug_log("Tabelas de itens criadas com sucesso");
 }
@@ -215,52 +318,65 @@ void create_items_tables() {
 // Carregar itens do banco de dados
 void load_items_from_database() {
     if(!database_initialized) return;
-    
-    string query = "SELECT * FROM items ORDER BY id;";
+
+    string query = "SELECT id, name, items_to_give, audio, msg, map, newx, newy, xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation FROM items ORDER BY id;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
-    
+
     if(@stmt == null) {
         debug_log("ERRO ao preparar query de itens: " + bancoJogo.get_last_error_text());
         return;
     }
-    
+
+    // Recarrega caches
+    items_database.delete_all();
+    items_by_name.delete_all();
+
     int count = 0;
     while(stmt.step() == SQLITE_ROW) {
         GameItem@ item = GameItem();
-        
+
         item.id = stmt.column_int(0);
         item.name = stmt.column_text(1);
-        item.display_name = stmt.column_text(2);
-        item.description = stmt.column_text(3);
-        item.item_type = stmt.column_text(4);
-        item.category = stmt.column_text(5);
-        
-        item.damage = stmt.column_int(6);
-        item.defense = stmt.column_int(7);
-        item.heal_amount = stmt.column_int(8);
-        item.mp_restore = stmt.column_int(9);
-        
-        item.stackable = stmt.column_int(10) > 0;
-        item.max_stack = stmt.column_int(11);
-        item.weight = stmt.column_double(12);
-        item.value = stmt.column_int(13);
-        
-        item.rarity = stmt.column_text(14);
-        item.drop_rate = stmt.column_double(15);
-        item.craftable = stmt.column_int(16) > 0;
-        item.sellable = stmt.column_int(17) > 0;
-        item.tradeable = stmt.column_int(18) > 0;
-        
-        item.sound_file = stmt.column_text(19);
-        item.use_sound = stmt.column_text(20);
-        
-        // Adicionar aos dicionários
+        item.items_to_give = stmt.column_text(2);
+        item.audio = stmt.column_text(3);
+        item.msg = stmt.column_text(4);
+        item.map = stmt.column_text(5);
+        item.newx = stmt.column_int(6);
+        item.newy = stmt.column_int(7);
+        item.xp = stmt.column_double(8);
+        item.health = stmt.column_double(9);
+        item.thirst = stmt.column_double(10);
+        item.fill_thirst = stmt.column_double(11);
+        item.hunger = stmt.column_double(12);
+        item.fill_hunger = stmt.column_double(13);
+        item.degradation = stmt.column_double(14);
+
+        // Compatibilidade com chamadas antigas
+        item.display_name = item.name;
+        item.description = item.msg;
+        item.item_type = "legacy";
+        item.category = "legacy";
+        item.damage = 0;
+        item.defense = 0;
+        item.heal_amount = int(item.health);
+        item.mp_restore = 0;
+        item.stackable = true;
+        item.max_stack = 999;
+        item.weight = 1.0;
+        item.value = 0;
+        item.rarity = "common";
+        item.drop_rate = 1.0;
+        item.craftable = false;
+        item.sellable = true;
+        item.tradeable = true;
+        item.sound_file = (item.audio == "none" ? "" : item.audio);
+        item.use_sound = item.sound_file;
+
         items_database["" + item.id] = item;
         items_by_name[item.name] = item;
-        
         count++;
     }
-    
+
     debug_log("Carregados " + count + " itens do banco de dados");
 }
 
@@ -330,62 +446,50 @@ void import_legacy_weapons_catalog() {
     }
 }
 
-// Inserir itens padrão no banco
+// Inserir itens padrao no banco (alinhado ao schema legado BGT)
 void seed_default_items() {
     if(!database_initialized) return;
     
-    // Verificar se já existem itens
+    // Verificar se ja existem itens
     string check_query = "SELECT COUNT(*) FROM items;";
     sqlite3statement@ check_stmt = bancoJogo.prepare(check_query);
     
     if(@check_stmt != null && check_stmt.step() == SQLITE_ROW) {
         int existing_count = check_stmt.column_int(0);
         if(existing_count > 0) {
-            debug_log("Itens já existem no banco (" + existing_count + "), ignorando seed");
+            debug_log("Itens ja existem no banco (" + existing_count + "), ignorando seed");
             return;
         }
     }
     
-    debug_log("Inserindo itens padrão no banco de dados...");
+    debug_log("Inserindo itens padrao no banco de dados (schema legado)...");
     
-    // Itens básicos
-    create_item("potion", "Poção de Vida", "Restaura 50 de vida", "consumable", "potion", 
-                0, 0, 50, 0, true, 20, 0.5, 10, "common", 0.8, false, true, true, "potion_use.wav", "");
+    // Itens focados no que o schema legado usa: name, msg, audio, health
+    create_item("potion", "Pocao de Vida", "Recupera 50 de vida", "consumable", "legacy",
+                0, 0, 50, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "potion_use.wav", "");
+
+    create_item("bread", "Pao", "Comida simples. Recupera 20 de vida", "consumable", "legacy",
+                0, 0, 20, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "eat.wav", "");
+
+    create_item("mana_potion", "Pocao de Mana", "Item legado. Uso geral", "consumable", "legacy",
+                0, 0, 0, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "potion_use.wav", "");
+
+    create_item("wood", "Madeira", "Material basico", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "", "");
+
+    create_item("iron_ore", "Minerio de Ferro", "Material para forja", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "", "");
+
+    create_item("gold_coin", "Moeda de Ouro", "Moeda padrao", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "coin.wav", "");
+
+    create_item("wooden_sword", "Espada de Madeira", "Arma legado. Dano tratado por outros sistemas", "weapon", "legacy",
+                0, 0, 0, 0, false, 1, 1.0, 0, "common", 1.0, false, true, true, "sword_swing.wav", "");
+
+    create_item("wooden_bow", "Arco de Madeira", "Arma legado. Alcance tratado por outros sistemas", "weapon", "legacy",
+                0, 0, 0, 0, false, 1, 1.0, 0, "common", 1.0, false, true, true, "bow_shoot.wav", "");
     
-    create_item("mana_potion", "Poção de Mana", "Restaura 30 de mana", "consumable", "potion",
-                0, 0, 0, 30, true, 20, 0.5, 15, "common", 0.7, false, true, true, "potion_use.wav", "");
-    
-    create_item("bread", "Pão", "Alimento básico que restaura 20 de vida", "consumable", "food",
-                0, 0, 20, 0, true, 50, 0.2, 2, "common", 1.0, true, true, true, "eat.wav", "");
-    
-    // Armas básicas
-    create_item("wooden_sword", "Espada de Madeira", "Uma espada simples feita de madeira", "weapon", "sword",
-                15, 0, 0, 0, false, 1, 2.0, 20, "common", 0.9, true, true, true, "", "sword_swing.wav");
-    
-    create_item("iron_sword", "Espada de Ferro", "Uma espada resistente de ferro", "weapon", "sword",
-                30, 0, 0, 0, false, 1, 3.5, 100, "uncommon", 0.5, true, true, true, "", "sword_swing.wav");
-    
-    create_item("wooden_bow", "Arco de Madeira", "Um arco básico para ataques à distância", "weapon", "bow",
-                20, 0, 0, 0, false, 1, 1.5, 50, "common", 0.7, true, true, true, "", "bow_shoot.wav");
-    
-    // Armaduras
-    create_item("leather_armor", "Armadura de Couro", "Proteção básica de couro", "armor", "chest",
-                0, 10, 0, 0, false, 1, 3.0, 40, "common", 0.8, true, true, true, "", "");
-    
-    create_item("iron_armor", "Armadura de Ferro", "Proteção sólida de ferro", "armor", "chest",
-                0, 25, 0, 0, false, 1, 8.0, 200, "uncommon", 0.4, true, true, true, "", "");
-    
-    // Materiais
-    create_item("wood", "Madeira", "Material básico para construção", "misc", "material",
-                0, 0, 0, 0, true, 64, 0.5, 1, "common", 1.0, false, true, true, "", "");
-    
-    create_item("iron_ore", "Minério de Ferro", "Minério para forjar itens de ferro", "misc", "material",
-                0, 0, 0, 0, true, 32, 2.0, 5, "common", 0.6, false, true, true, "", "");
-    
-    create_item("gold_coin", "Moeda de Ouro", "Moeda padrão do reino", "misc", "currency",
-                0, 0, 0, 0, true, 999, 0.01, 1, "common", 1.0, false, true, true, "coin.wav", "");
-    
-    debug_log("Itens padrão inseridos no banco de dados");
+    debug_log("Itens padrao inseridos no banco de dados (schema legado)");
 }
 
 // Criar novo item no banco
@@ -395,49 +499,54 @@ bool create_item(string name, string display_name, string description, string it
                  string rarity, float drop_rate, bool craftable, bool sellable, bool tradeable,
                  string sound_file, string use_sound) {
     if(!database_initialized) return false;
-    
+
+    // Compatibilidade: mant�m assinatura nova, mas persiste no formato legado BGT.
+    string audio_value = sound_file;
+    if(audio_value == "") audio_value = use_sound;
+    if(audio_value == "") audio_value = "none";
+
+    string msg_value = description;
+    if(msg_value == "") msg_value = display_name;
+    if(msg_value == "") msg_value = name;
+
+    double health_value = 0;
+    if(heal_amount > 0) health_value = heal_amount;
+
     string query = """
-        INSERT INTO items (name, display_name, description, item_type, category,
-                          damage, defense, heal_amount, mp_restore,
-                          stackable, max_stack, weight, value,
-                          rarity, drop_rate, craftable, sellable, tradeable,
-                          sound_file, use_sound)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO items (
+            name, items_to_give, audio, msg, map, newx, newy,
+            xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) {
-        debug_log("ERRO ao preparar inserção de item: " + bancoJogo.get_last_error_text());
+        debug_log("ERRO ao preparar insercao de item: " + bancoJogo.get_last_error_text());
         return false;
     }
-    
+
     stmt.bind_text(1, name);
-    stmt.bind_text(2, display_name);
-    stmt.bind_text(3, description);
-    stmt.bind_text(4, item_type);
-    stmt.bind_text(5, category);
-    stmt.bind_int(6, damage);
-    stmt.bind_int(7, defense);
-    stmt.bind_int(8, heal_amount);
-    stmt.bind_int(9, mp_restore);
-    stmt.bind_int(10, stackable ? 1 : 0);
-    stmt.bind_int(11, max_stack);
-    stmt.bind_double(12, weight);
-    stmt.bind_int(13, value);
-    stmt.bind_text(14, rarity);
-    stmt.bind_double(15, drop_rate);
-    stmt.bind_int(16, craftable ? 1 : 0);
-    stmt.bind_int(17, sellable ? 1 : 0);
-    stmt.bind_int(18, tradeable ? 1 : 0);
-    stmt.bind_text(19, sound_file);
-    stmt.bind_text(20, use_sound);
-    
+    stmt.bind_text(2, "none");
+    stmt.bind_text(3, audio_value);
+    stmt.bind_text(4, msg_value);
+    stmt.bind_text(5, "none");
+    stmt.bind_int(6, 0);
+    stmt.bind_int(7, 0);
+    stmt.bind_double(8, 0);
+    stmt.bind_double(9, health_value);
+    stmt.bind_double(10, 0);
+    stmt.bind_double(11, 0);
+    stmt.bind_double(12, 0);
+    stmt.bind_double(13, 0);
+    stmt.bind_double(14, 0);
+
     if(stmt.step() != SQLITE_DONE) {
         debug_log("ERRO ao inserir item " + name + ": " + bancoJogo.get_last_error_text());
         return false;
     }
-    
-    debug_log("Item " + name + " criado com sucesso");
+
+    debug_log("Item " + name + " criado com sucesso (schema legado BGT)");
     return true;
 }
 
@@ -655,3 +764,6 @@ void cleanup_expired_items() {
     // NOTA: A limpeza de objs[] nos mapas é feita por cleanup_expired_items_task()
     // em server_map.nvgt, que executa de forma assíncrona
 }
+
+
+

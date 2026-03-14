@@ -472,12 +472,28 @@ void save_player_to_database_async(string name, int level, int exp, int gold,
                                    string race, string map_name, int x, int y, int z,
                                    bool is_admin, int gender) {
     if(!database_initialized) return;
+
+    int guild_id = 0;
+    for(uint i = 0; i < active_guilds.length(); i++) {
+        if(active_guilds[i] !is null && active_guilds[i].is_member(name)) {
+            guild_id = int(i) + 1; // índice 1-based persistido no DB
+            break;
+        }
+    }
+
+    int party_id = 0;
+    for(uint i = 0; i < active_parties.length(); i++) {
+        if(active_parties[i] !is null && active_parties[i].is_member(name)) {
+            party_id = int(i) + 1; // índice 1-based persistido no DB
+            break;
+        }
+    }
     
     string query = """
         UPDATE players SET 
             level = ?, experience = ?, gold = ?, hp = ?, max_hp = ?,
             mp = ?, max_mp = ?, race = ?, map_name = ?, x = ?, y = ?, z = ?,
-            is_admin = ?, gender = ?, last_activity = CURRENT_TIMESTAMP
+            is_admin = ?, gender = ?, guild_id = ?, party_id = ?, last_activity = CURRENT_TIMESTAMP
         WHERE username = ?;
     """;
     
@@ -497,7 +513,9 @@ void save_player_to_database_async(string name, int level, int exp, int gold,
         stmt.bind_int(12, z);
         stmt.bind_int(13, is_admin ? 1 : 0);
         stmt.bind_int(14, gender);
-        stmt.bind_text(15, name);
+        stmt.bind_int(15, guild_id);
+        stmt.bind_int(16, party_id);
+        stmt.bind_text(17, name);
         
         if(stmt.step() != SQLITE_DONE) {
             debug_log("ERRO ao salvar jogador no banco: " + bancoJogo.get_last_error_text());
@@ -711,8 +729,22 @@ uint64 get_player_peer_id(player@ p) {
 }
 
 void update_all_players() {
-    // ImplementaÃ§Ã£o bÃ¡sica para atualizaÃ§Ã£o dos jogadores
-    // TODO: Implementar lÃ³gica completa de atualizaÃ§Ã£o
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i] is null) continue;
+        if(!players[i].is_logged_in) continue;
+
+        try {
+            players[i].playerloop();
+        }
+        catch {
+            string player_name = players[i].name;
+            if(player_name == "") player_name = players[i].charname;
+            debug_log(
+                "ERRO em playerloop para '" + player_name + "': " +
+                get_exception_info() + " (" + get_exception_file() + ":" + get_exception_line() + ")"
+            );
+        }
+    }
 }
 
 void remove_player(uint64 peer_id) {
@@ -752,6 +784,16 @@ void broadcast_to_map(string map_name, string message, uint64 exclude_peer = 0) 
     }
 }
 
+string[] split_non_empty_tokens(const string&in text) {
+    string[] raw = text.split(" ");
+    string[] tokens;
+    for(uint i = 0; i < raw.length(); i++) {
+        string t = raw[i].trim_whitespace();
+        if(t != "") tokens.insert_last(t);
+    }
+    return tokens;
+}
+
 // Processamento de comando de jogador
 void process_player_command(uint64 peer_id, string command) {
     player@ player = get_player_by_peer(peer_id);
@@ -760,6 +802,9 @@ void process_player_command(uint64 peer_id, string command) {
         return;
     }
     
+    command = command.trim_whitespace();
+    if(command == "") return;
+
     // Log do comando
     log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
     
@@ -794,7 +839,7 @@ void process_player_command(uint64 peer_id, string command) {
 
     // Compatibilidade Builder (BGT/NVGT): /mapupdate <mapa>
     if(command.find("/mapupdate ") == 0) {
-        string[] parsed_update = command.split(" ");
+        string[] parsed_update = split_non_empty_tokens(command);
         if(parsed_update.length() >= 2) {
             builder_update_map(player, parsed_update[1]);
         } else {
@@ -805,7 +850,7 @@ void process_player_command(uint64 peer_id, string command) {
 
     // Compatibilidade Builder: /rawdata <mapa> (tratado como atualização de mapa)
     if(command.find("/rawdata") == 0 || command.find("rawdata") == 0) {
-        string[] parsed_raw = command.split(" ");
+        string[] parsed_raw = split_non_empty_tokens(command);
         if(parsed_raw.length() >= 2) {
             builder_update_map(player, parsed_raw[1]);
         } else {
@@ -816,7 +861,7 @@ void process_player_command(uint64 peer_id, string command) {
 
     // Criação de novo mapa: /newmap <nome> <largura> <altura> [som_piso]
     if(command.find("/newmap ") == 0 || command.find("newmap ") == 0) {
-        string[] parsed_newmap = command.split(" ");
+        string[] parsed_newmap = split_non_empty_tokens(command);
         if(parsed_newmap.length() < 4) {
             send_reliable(peer_id, "say Uso: /newmap <nome> <largura> <altura> [som_piso]", 0);
             return;
@@ -832,7 +877,7 @@ void process_player_command(uint64 peer_id, string command) {
 
     // Remoção de mapa: /delmap <nome>
     if(command.find("/delmap ") == 0 || command.find("delmap ") == 0) {
-        string[] parsed_delmap = command.split(" ");
+        string[] parsed_delmap = split_non_empty_tokens(command);
         if(parsed_delmap.length() < 2) {
             send_reliable(peer_id, "say Uso: /delmap <nome>", 0);
             return;
@@ -858,7 +903,7 @@ void process_player_command(uint64 peer_id, string command) {
     // Usar sistema de comandos avanÃ§ado
     if(!process_command(player, command)) {
         // Fallback para comandos bÃ¡sicos se não processado
-        string[] parts = command.split(" ");
+        string[] parts = split_non_empty_tokens(command);
         if(parts.length() == 0) return;
 
         string cmd = parts[0].lower();
@@ -1196,7 +1241,7 @@ void process_player_command(uint64 peer_id, string command) {
 
         // getmotd - Retornar mensagem do dia (F2)
         if(cmd == "getmotd") {
-            string motd = "Bem-vindo ao servidor IG! VersÃ£o " + server_version;
+            string motd = "Bem-vindo ao servidor IG! Versão " + server_version;
             send_reliable(peer_id, "say " + motd, 0);
             debug_log("ðŸ“¢ " + player.name + " solicitou MOTD");
             return;
@@ -1730,7 +1775,7 @@ void process_player_command(uint64 peer_id, string command) {
                 }
             }
             if(count == 1) {
-                send_reliable(peer_id, "say Você está sozinho no mapa.", 0);
+                send_reliable(peer_id, "say a só você conectado", 0);
             } else {
                 send_reliable(peer_id, "say " + players_list + " (Total: " + count + ")", 0);
             }
@@ -1884,6 +1929,39 @@ void process_player_command(uint64 peer_id, string command) {
     }
 }
 
+void log_network_exception_with_context(uint64 peer_id, const string& in packet_message, const string& in context) {
+    datetime dt;
+    string log_ts = dt.format("%Y-%m-%d %H:%M:%S");
+    string log_file = "debug/erros_servidor.log";
+
+    string log_text = "[network_exception]\n";
+    log_text += "timestamp=" + log_ts + "\n";
+    log_text += "role=server\n";
+    log_text += "context=" + context + "\n";
+    log_text += "peer_id=" + peer_id + "\n";
+    log_text += "packet=" + packet_message + "\n";
+    log_text += "exception_file=" + get_exception_file() + "\n";
+    log_text += "exception_line=" + get_exception_line() + "\n";
+    log_text += "exception_info=" + get_exception_info() + "\n";
+    log_text += "call_stack_begin\n";
+    log_text += last_exception_call_stack + "\n";
+    log_text += "call_stack_end\n";
+    log_text += "[/network_exception]\n\n";
+
+    directory_create("debug");
+    file f;
+    if(f.open(log_file, "a")) {
+        f.write(log_text);
+        f.close();
+    }
+
+    debug_log("ERRO DE REDE CAPTURADO de peer " + peer_id + ". Detalhes em " + log_file);
+}
+
+void log_network_exception(uint64 peer_id, const string& in packet_message) {
+    log_network_exception_with_context(peer_id, packet_message, "server_handle_network_event_const:event_receive");
+}
+
 // Handler de eventos de rede do servidor
 void server_handle_network_event_const(const network_event@ event) {
     debug_log("ðŸ” Processando evento: tipo=" + event.type);
@@ -1909,109 +1987,118 @@ void server_handle_network_event_const(const network_event@ event) {
             // Salvar dados antes de desconectar
             save_player_to_database(player);
             log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
-
-            remove_player(event.peer_id);
         }
-
-        remove_connected_peer(event.peer_id);
-        remove_tracker(event.peer_id);  // âœ… Limpar rate limiter
-        connected_count--;
+        force_disconnect_and_cleanup(event.peer_id, false);
 
         string msg = player_name != "" ? player_name + " desconectou" : "Desconexão: " + event.peer_id;
         debug_log(msg + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
         // screen_reader_speak(msg, false); // Comentado para não bugar NVDA
     }
     else if(event.type == event_receive) {
-        // âœ… Rate Limiting: verificar ANTES de descriptografar (protege CPU)
-        if(!check_client_rate_limit(event.peer_id)) {
-            debug_log("ðŸš« FLOOD detectado de peer " + event.peer_id + " - kickando!");
-            send_reliable(event.peer_id, "say Você foi desconectado por enviar pacotes demais.", 0);
-            server_net.disconnect_peer_forcefully(event.peer_id);
-            remove_connected_peer(event.peer_id);
-            remove_tracker(event.peer_id);
-            return;
-        }
-        
-        string decrypted = decrypt_packet(event.message);
-        debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + decrypted);
+        try {
+            const uint MAX_PACKET_CHARS = 8192;
 
-        // âœ… Ghost detection: atualizar timestamp de atividade do jogador
-        player@ p = get_player_by_peer(event.peer_id);
-        if(p !is null) {
-            p.last_activity.restart();
-        }
-
-        // Processar comandos de autenticaÃ§Ã£o ANTES de verificar login
-        string[] parts = decrypted.split(" ");
-        if(parts.length() == 0) return;
-
-        string cmd = parts[0];
-        
-        // ===== VALIDAÃ‡ÃƒO DE SEQUENCE NUMBER =====
-        // Pacotes com prefixo "seq:NNNN" sÃ£o validados para evitar processamento fora de ordem
-        if(cmd.find("seq:") == 0 && p !is null) {
-            // Formato: seq:NNNN comando args...
-            string seq_str = cmd.substr(4);  // Remove "seq:"
-            uint16 packet_seq = uint16(parse_int(seq_str));
-            
-            // Verificar se Ã© mais novo que o Ãºltimo recebido
-            // Considera wrap-around: se diff > 32000, provavelmente Ã© um wrap
-            int diff = int(packet_seq) - int(p.last_seq);
-            if(diff < 0 && diff > -32000) {
-                // Pacote antigo - descartar silenciosamente
-                debug_log("ðŸ“¦ Pacote descartado (seq " + packet_seq + " < last " + p.last_seq + ")");
+            // âœ… Rate Limiting: verificar ANTES de descriptografar (protege CPU)
+            if(!check_client_rate_limit(event.peer_id)) {
+                debug_log("ðŸš« FLOOD detectado de peer " + event.peer_id + " - kickando!");
+                send_reliable(event.peer_id, "say Você foi desconectado por enviar pacotes demais.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
                 return;
             }
             
-            // Atualizar Ãºltimo seq recebido
-            p.last_seq = packet_seq;
-            
-            // Remover prefixo seq: e continuar processando
-            if(parts.length() > 1) {
-                cmd = parts[1];
-                // Shift parts array (remover primeiro elemento)
-                string[] new_parts;
-                for(uint i = 1; i < parts.length(); i++) {
-                    new_parts.insert_last(parts[i]);
-                }
-                parts = new_parts;
-            } else {
-                return;  // Pacote sÃ³ tinha seq sem comando
+            string decrypted = decrypt_packet(event.message);
+            if(decrypted.length() > MAX_PACKET_CHARS) {
+                debug_log("🚫 Pacote excessivo de peer " + event.peer_id + " (" + decrypted.length() + " chars)");
+                send_reliable(event.peer_id, "say Pacote inválido: tamanho excedido.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
+                return;
             }
-        }
+            if(decrypted.trim_whitespace() == "") return;
+            debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + decrypted);
 
-        // xt55: Criar conta - formato: xt55 <username> <password_hash> <email> <gender>
-        if(cmd == "xt55" && parts.length() >= 5) {
-            string username = parts[1];
-            string password_hash = parts[2];
-            string email = parts[3];
-            int gender = parse_int(parts[4]);
-            handle_create_account(event.peer_id, username, password_hash, email, gender);
-            return;
-        }
+            // âœ… Ghost detection: atualizar timestamp de atividade do jogador
+            player@ p = get_player_by_peer(event.peer_id);
+            if(p !is null) {
+                p.last_activity.restart();
+            }
 
-        // h33j: Login - formato: h33j <username> <password_hash> <version> <computer_id>
-        if(cmd == "h33j" && parts.length() >= 5) {
-            string username = parts[1];
-            string password_hash = parts[2];
-            double version = parse_float(parts[3]);
-            string computer_id = parts[4];
-            handle_login(event.peer_id, username, password_hash, version, computer_id);
-            return;
-        }
+            // Processar comandos de autenticaÃ§Ã£o ANTES de verificar login
+            string[] parts = split_non_empty_tokens(decrypted);
+            if(parts.length() == 0) return;
 
-        // =====================================================
-        // PROCESSAMENTO POR CANAL (igual ao BGT)
-        // =====================================================
-        
-        // Canal 1: Chat global
-        if(event.channel == 1) {
-            process_chat_message(event.peer_id, decrypted);
-            return;
+            string cmd = parts[0].trim_whitespace();
+            if(cmd == "") return;
+            
+            // ===== VALIDAÃ‡ÃƒO DE SEQUENCE NUMBER =====
+            // Pacotes com prefixo "seq:NNNN" sÃ£o validados para evitar processamento fora de ordem
+            if(cmd.find("seq:") == 0 && p !is null) {
+                // Formato: seq:NNNN comando args...
+                string seq_str = cmd.substr(4);  // Remove "seq:"
+                uint16 packet_seq = uint16(parse_int(seq_str));
+                
+                // Verificar se Ã© mais novo que o Ãºltimo recebido
+                // Considera wrap-around: se diff > 32000, provavelmente Ã© um wrap
+                int diff = int(packet_seq) - int(p.last_seq);
+                if(diff < 0 && diff > -32000) {
+                    // Pacote antigo - descartar silenciosamente
+                    debug_log("ðŸ“¦ Pacote descartado (seq " + packet_seq + " < last " + p.last_seq + ")");
+                    return;
+                }
+                
+                // Atualizar Ãºltimo seq recebido
+                p.last_seq = packet_seq;
+                
+                // Remover prefixo seq: e continuar processando
+                if(parts.length() > 1) {
+                    cmd = parts[1];
+                    // Shift parts array (remover primeiro elemento)
+                    string[] new_parts;
+                    for(uint i = 1; i < parts.length(); i++) {
+                        new_parts.insert_last(parts[i]);
+                    }
+                    parts = new_parts;
+                } else {
+                    return;  // Pacote sÃ³ tinha seq sem comando
+                }
+            }
+
+            // xt55: Criar conta - formato: xt55 <username> <password_hash> <email> <gender>
+            if(cmd == "xt55" && parts.length() >= 5) {
+                string username = parts[1];
+                string password_hash = parts[2];
+                string email = parts[3];
+                int gender = parse_int(parts[4]);
+                handle_create_account(event.peer_id, username, password_hash, email, gender);
+                return;
+            }
+
+            // h33j: Login - formato: h33j <username> <password_hash> <version> <computer_id>
+            if(cmd == "h33j" && parts.length() >= 5) {
+                string username = parts[1];
+                string password_hash = parts[2];
+                double version = parse_float(parts[3]);
+                string computer_id = parts[4];
+                handle_login(event.peer_id, username, password_hash, version, computer_id);
+                return;
+            }
+
+            // =====================================================
+            // PROCESSAMENTO POR CANAL (igual ao BGT)
+            // =====================================================
+            
+            // Canal 1: Chat global
+            if(event.channel == 1) {
+                process_chat_message(event.peer_id, decrypted);
+                return;
+            }
+            
+            // Canal 0 e outros: Comandos normais
+            process_player_command(event.peer_id, decrypted);
         }
-        
-        // Canal 0 e outros: Comandos normais
-        process_player_command(event.peer_id, decrypted);
+        catch {
+            log_network_exception(event.peer_id, event.message);
+            force_disconnect_and_cleanup(event.peer_id, true);
+        }
     }
 }
 

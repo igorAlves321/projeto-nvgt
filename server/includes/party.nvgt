@@ -79,6 +79,11 @@ class party {
 // Array global de parties ativas
 party@[] active_parties;
 
+void party_save_social_state_if_online(string player_name) {
+	int idx = get_player_index_from(player_name);
+	if(idx >= 0) save_player_to_database(players[idx]);
+}
+
 // Obter índice da party de um jogador
 int get_party_index(string player_name) {
 	for(uint i = 0; i < active_parties.length(); i++) {
@@ -112,6 +117,7 @@ void cmd_createparty(int player_index) {
 	
 	party p(players[player_index].charname);
 	active_parties.insert_last(p);
+	party_save_social_state_if_online(players[player_index].charname);
 	
 	send_reliable(players[player_index].peer_id, "msg2 Grupo criado! Você é o líder.", 0);
 	send_reliable(players[player_index].peer_id, "msg2 Use /invite <jogador> para convidar membros", 0);
@@ -191,6 +197,7 @@ void cmd_joinparty(int player_index) {
 	// Adicionar ao grupo
 	found_party.add_member(players[player_index].charname);
 	found_party.remove_invite(players[player_index].charname);
+	party_save_social_state_if_online(players[player_index].charname);
 	
 	// Notificar
 	send_reliable(players[player_index].peer_id, "msg2 Você entrou no grupo de " + found_party.leader + "!", 0);
@@ -212,11 +219,15 @@ void cmd_leaveparty(int player_index) {
 	// Se é o líder, dissolver grupo
 	if(p.is_leader(pname)) {
 		p.broadcast_message("O líder saiu. Grupo dissolvido!");
+		for(uint i = 0; i < p.members.length(); i++) {
+			party_save_social_state_if_online(p.members[i]);
+		}
 		
 		int party_idx = get_party_index(pname);
 		if(party_idx >= 0) {
 			active_parties.remove_at(party_idx);
 		}
+		party_save_social_state_if_online(pname);
 		
 		debug_log("PARTY: Grupo de " + pname + " dissolvido");
 	} else {
@@ -224,6 +235,7 @@ void cmd_leaveparty(int player_index) {
 		p.remove_member(pname);
 		p.broadcast_message(pname + " saiu do grupo");
 		send_reliable(players[player_index].peer_id, "msg2 Você saiu do grupo", 0);
+		party_save_social_state_if_online(pname);
 		
 		debug_log("PARTY: " + pname + " saiu do grupo de " + p.leader);
 	}
@@ -260,6 +272,7 @@ void cmd_kickparty(int player_index, string target_name) {
 	
 	p.remove_member(target_name);
 	p.broadcast_message(target_name + " foi expulso do grupo");
+	party_save_social_state_if_online(target_name);
 	
 	debug_log("PARTY: " + players[player_index].charname + " expulsou " + target_name);
 }
@@ -278,11 +291,15 @@ void cmd_disbandparty(int player_index) {
 	}
 	
 	p.broadcast_message("Grupo dissolvido pelo líder");
+	for(uint i = 0; i < p.members.length(); i++) {
+		party_save_social_state_if_online(p.members[i]);
+	}
 	
 	int party_idx = get_party_index(players[player_index].charname);
 	if(party_idx >= 0) {
 		active_parties.remove_at(party_idx);
 	}
+	party_save_social_state_if_online(players[player_index].charname);
 	
 	debug_log("PARTY: Grupo de " + players[player_index].charname + " dissolvido");
 }

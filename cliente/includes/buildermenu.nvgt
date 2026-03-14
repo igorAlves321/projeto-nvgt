@@ -218,11 +218,25 @@ void process_builder_selection(string selected_id) {
 
 // Helper para enviar ao servidor
 void send_to_server(string packet, int channel, bool reliable) {
+	if(!is_connected) {
+		debug_log("send_to_server bloqueado: sem conexão ativa. pacote='" + packet + "'");
+		speak(pu.get_value("Sem conexão com o servidor."), true);
+		return;
+	}
+
+	debug_log("send_to_server: tentando enviar '" + packet + "' canal=" + channel + " reliable=" + reliable);
+	bool ok = false;
 	if(reliable) {
-		game_net.send(net_peer_id, encrypt_packet(packet), channel, true);
+		ok = game_client.send_reliable(packet, channel);
 	}
 	else {
-		game_net.send(net_peer_id, encrypt_packet(packet), channel, false);
+		ok = game_client.send_unreliable(packet, channel);
+	}
+	if(!ok) {
+		debug_log("send_to_server falhou: canal=" + channel + " reliable=" + reliable + " erro=" + game_client.get_last_error());
+	}
+	else {
+		debug_log("send_to_server: envio ok");
 	}
 }
 
@@ -1405,3 +1419,4 @@ void portalsmenu() {
 void correccionmenu() {
 	speak(pu.get_value("Menu de correção de código ainda não implementado"));
 }
+
