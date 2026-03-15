@@ -48,13 +48,17 @@ void log_client_network_exception(const string& in context, uint64 peer_id, cons
     datetime dt;
     string log_ts = dt.format("%Y-%m-%d %H:%M:%S");
     string log_file = "debug/erros_client.log";
+    string safe_packet = packet_message;
+    if(safe_packet.length() > MAX_NETWORK_LOG_PACKET_CHARS) {
+        safe_packet = safe_packet.substr(0, MAX_NETWORK_LOG_PACKET_CHARS) + "... [TRUNCADO]";
+    }
 
     string log_text = "[network_exception]\n";
     log_text += "timestamp=" + log_ts + "\n";
     log_text += "role=client\n";
     log_text += "context=" + context + "\n";
     log_text += "peer_id=" + peer_id + "\n";
-    log_text += "packet=" + packet_message + "\n";
+    log_text += "packet=" + safe_packet + "\n";
     log_text += "exception_file=" + get_exception_file() + "\n";
     log_text += "exception_line=" + get_exception_line() + "\n";
     log_text += "exception_info=" + get_exception_info() + "\n";
@@ -148,6 +152,14 @@ void net_create() {
 		}
 		else if(event.type == event_receive) {
 			try {
+				if(event.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
+					log_client_network_exception("net_create:event_receive:oversize", event.peer_id, event.message);
+					con.destroy();
+					is_connected = false;
+					account_creating = false;
+					menuprincipal();
+					return;
+				}
 				string received_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
 				if(received_msg == "created") {
 					account_creating = false;
@@ -314,6 +326,14 @@ void net_logar(bool localhost = false) {
 
 		if(event.type == event_receive) {
 			try {
+				if(event.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
+					log_client_network_exception("net_logar:event_receive:oversize", event.peer_id, event.message);
+					con.destroy();
+					is_connected = false;
+					reset();
+					menuprincipal();
+					return;
+				}
 				string full_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
 				debug_log("ðŸ“¨ Mensagem recebida do servidor: '" + full_msg + "'");
 				string[] parsed = full_msg.split(" ");
@@ -430,6 +450,13 @@ void netloop() {
 		// === RECEBIMENTO DE MENSAGENS ===
 		if(ev.type == event_receive) {
 			try {
+				if(ev.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
+					log_client_network_exception("netloop:event_receive:oversize", ev.peer_id, ev.message);
+					is_connected = false;
+					reset();
+					relogin_flag = true;
+					return;
+				}
 				string full_msg = decrypt_packet(ev.message);
 				string[] parsed = full_msg.split(" ");
 				
