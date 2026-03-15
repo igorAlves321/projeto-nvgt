@@ -474,7 +474,11 @@ void item_builder_weapon_melee() {
                         int(damage) + "|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(distance);
         
         send_to_server(packet, 0, true);
-        speak(pu.get_value("Solicitação enviada: ") + display);
+        string action_feedback = "";
+        if(item_builder_wait_action_response(action_feedback)) {
+            speak(action_feedback, true);
+            add_add_item("avisos", action_feedback);
+        }
         return;
     }
 }
@@ -583,7 +587,11 @@ void item_builder_armor() {
                         "0|" + int(defense) + "|0|0|" + weight + "|" + int(value) + "|" + rarity + "|";
         
         send_to_server(packet, 0, true);
-        speak(pu.get_value("Solicitação enviada: ") + display);
+        string action_feedback = "";
+        if(item_builder_wait_action_response(action_feedback)) {
+            speak(action_feedback, true);
+            add_add_item("avisos", action_feedback);
+        }
         return;
     }
 }
@@ -668,7 +676,11 @@ void item_builder_consumable() {
                     "0|0|" + int(heal) + "|" + int(mana) + "|" + weight + "|" + int(value) + "|" + rarity + "|" + sound_file + "|" + int(max_stack);
     
     send_to_server(packet, 0, true);
-    speak(pu.get_value("Solicitação enviada: ") + display);
+    string action_feedback = "";
+    if(item_builder_wait_action_response(action_feedback)) {
+        speak(action_feedback, true);
+        add_add_item("avisos", action_feedback);
+    }
     return;
     }
 }
@@ -744,7 +756,11 @@ void item_builder_misc() {
                     "0|0|0|0|" + weight + "|" + int(value) + "|" + rarity + "||" + int(max_stack) + "|" + drop_rate;
     
     send_to_server(packet, 0, true);
-    speak(pu.get_value("Solicitação enviada: ") + display);
+    string action_feedback = "";
+    if(item_builder_wait_action_response(action_feedback)) {
+        speak(action_feedback, true);
+        add_add_item("avisos", action_feedback);
+    }
     return;
     }
 }
@@ -824,6 +840,34 @@ bool item_builder_wait_list_response(string&out payload) {
 
     payload = item_list_response_payload;
     item_list_response_ready = false;
+    return true;
+}
+
+bool item_builder_wait_action_response(string&out payload) {
+    item_builder_action_request_pending = true;
+    item_builder_action_response_ready = false;
+    item_builder_action_response_payload = "";
+
+    timer wait_action_timer;
+    wait_action_timer.restart();
+
+    while(item_builder_action_request_pending && wait_action_timer.elapsed < 7000) {
+        netloop();
+        wait(5);
+    }
+
+    if(item_builder_action_request_pending) {
+        item_builder_action_request_pending = false;
+        speak(pu.get_value("Tempo de resposta esgotado para a operação."));
+        return false;
+    }
+
+    if(!item_builder_action_response_ready || item_builder_action_response_payload == "") {
+        return false;
+    }
+
+    payload = item_builder_action_response_payload;
+    item_builder_action_response_ready = false;
     return true;
 }
 
@@ -999,7 +1043,11 @@ void item_builder_edit_item() {
                       max_stack + "|" + drop_rate;
         
         send_to_server("/edit_item_tool " + data, 0, true);
-        speak(pu.get_value("Solicitacao de edicao enviada: ") + name);
+        string action_feedback = "";
+        if(item_builder_wait_action_response(action_feedback)) {
+            speak(action_feedback, true);
+            add_add_item("avisos", action_feedback);
+        }
         return;
     }
 }
@@ -1023,7 +1071,11 @@ void item_builder_delete_item() {
     if(game_menu.get_item_id(confirm) != "yes") return;
 
     send_to_server("/delete_item_tool " + selected_id, 0, true);
-    speak(pu.get_value("Solicitacao de exclusao enviada: ") + selected_id);
+    string action_feedback = "";
+    if(item_builder_wait_action_response(action_feedback)) {
+        speak(action_feedback, true);
+        add_add_item("avisos", action_feedback);
+    }
 }
 
 // NOTA: A função send_to_server() é definida em buildermenu.nvgt

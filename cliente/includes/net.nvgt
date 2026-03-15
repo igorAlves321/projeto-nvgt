@@ -645,6 +645,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 				a.find("/create_item_tool") >= 0 ||
 				a.find("/edit_item_tool") >= 0 ||
 				a.find("/delete_item_tool") >= 0 ||
+				a.find("/create_weapon_tool") >= 0 ||
 				a.find("/item_builder_meta") >= 0);
 			if(is_item_builder_error) {
 				if(item_list_request_pending) {
@@ -656,6 +657,11 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 					item_builder_meta_response_payload = "";
 					item_builder_meta_response_ready = false;
 					item_builder_meta_request_pending = false;
+				}
+				if(item_builder_action_request_pending) {
+					item_builder_action_response_payload = a;
+					item_builder_action_response_ready = true;
+					item_builder_action_request_pending = false;
 				}
 				speak(a, true);
 				add_add_item("avisos", a);
@@ -672,6 +678,25 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			speak(pu.get_value("Nenhum item cadastrado."), true);
 			add_add_item("avisos", pu.get_value("Nenhum item cadastrado."));
 			return;
+		}
+		// Feedback de create/edit/delete do item builder para fluxos com espera ativa.
+		if(item_builder_action_request_pending) {
+			bool is_item_builder_action_feedback = (
+				a.find("[ERRO] /create_item_tool") == 0 ||
+				a.find("[ERRO] /edit_item_tool") == 0 ||
+				a.find("[ERRO] /delete_item_tool") == 0 ||
+				a.find("[ERRO] /create_weapon_tool") == 0 ||
+				a.find("Item criado com sucesso:") >= 0 ||
+				a.find("Item atualizado com sucesso:") >= 0 ||
+				a.find("Item removido do catalogo:") >= 0 ||
+				a.find("Arma criada com sucesso:") >= 0
+			);
+			if(is_item_builder_action_feedback) {
+				item_builder_action_response_payload = a;
+				item_builder_action_response_ready = true;
+				item_builder_action_request_pending = false;
+				return;
+			}
 		}
 		
 		string[] b = a.split(";");
