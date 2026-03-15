@@ -279,6 +279,18 @@ bool item_builder_parse_server_item_line(const string&in line, string&out item_i
     return true;
 }
 
+int item_builder_count_items_in_payload(const string&in payload) {
+    string clean = payload.replace("\r", "");
+    string[] lines = clean.split("\n");
+    int count = 0;
+    for(uint i = 0; i < lines.length(); i++) {
+        string item_id = "";
+        string visual_label = "";
+        if(item_builder_parse_server_item_line(lines[i], item_id, visual_label)) count++;
+    }
+    return count;
+}
+
 // ============================================================================
 // CRIADOR DE ARMA DE FOGO (formato weapons.db)
 // Campos baseados no weapons.bgt original
@@ -764,9 +776,15 @@ void item_builder_list_items() {
 
     if(item_list_response_ready) {
         item_list_response_ready = false;
-
-        if(item_list_response_payload.find("=== Itens do Banco de Dados ===") >= 0) {
+        int item_count = item_builder_count_items_in_payload(item_list_response_payload);
+        if(item_count > 0) {
             show_items_list_menu(item_list_response_payload);
+            return;
+        }
+
+        if(item_list_response_payload.find("Nenhum item cadastrado") >= 0 || item_list_response_payload.find("(Nenhum item cadastrado)") >= 0) {
+            speak(pu.get_value("Nenhum item cadastrado."));
+            add_add_item("avisos", pu.get_value("Nenhum item cadastrado."));
             return;
         }
 
@@ -815,9 +833,14 @@ bool item_builder_pick_item_id(string&out picked_id, string&out picked_label) {
         return false;
     }
 
-    if(payload.find("=== Itens do Banco de Dados ===") < 0) {
-        speak(payload, true);
-        add_add_item("avisos", payload);
+    int payload_item_count = item_builder_count_items_in_payload(payload);
+    if(payload_item_count <= 0) {
+        if(payload.find("Nenhum item cadastrado") >= 0 || payload.find("(Nenhum item cadastrado)") >= 0) {
+            speak(pu.get_value("Nenhum item cadastrado."));
+        } else if(payload != "") {
+            speak(payload, true);
+            add_add_item("avisos", payload);
+        }
         return false;
     }
 
