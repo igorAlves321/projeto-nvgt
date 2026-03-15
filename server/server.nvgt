@@ -2102,14 +2102,18 @@ void process_player_command(uint64 peer_id, string command) {
 void log_network_exception_with_context(uint64 peer_id, const string& in packet_message, const string& in context) {
     datetime dt;
     string log_ts = dt.format("%Y-%m-%d %H:%M:%S");
-    string log_file = "debug/erros_servidor.log";
+    string log_file = "debug/erros_servidor_" + dt.format("%Y_%m_%d") + ".log";
+    string safe_packet = packet_message;
+    if(safe_packet.length() > MAX_NETWORK_LOG_PACKET_CHARS) {
+        safe_packet = safe_packet.substr(0, MAX_NETWORK_LOG_PACKET_CHARS) + "... [TRUNCADO]";
+    }
 
     string log_text = "[network_exception]\n";
     log_text += "timestamp=" + log_ts + "\n";
     log_text += "role=server\n";
     log_text += "context=" + context + "\n";
     log_text += "peer_id=" + peer_id + "\n";
-    log_text += "packet=" + packet_message + "\n";
+    log_text += "packet=" + safe_packet + "\n";
     log_text += "exception_file=" + get_exception_file() + "\n";
     log_text += "exception_line=" + get_exception_line() + "\n";
     log_text += "exception_info=" + get_exception_info() + "\n";
@@ -2166,12 +2170,17 @@ void server_handle_network_event_const(const network_event@ event) {
     }
     else if(event.type == event_receive) {
         try {
-            const uint MAX_PACKET_CHARS = 8192;
-
             // ✅ Rate Limiting: verificar ANTES de descriptografar (protege CPU)
             if(!check_client_rate_limit(event.peer_id)) {
                 debug_log("🚫 FLOOD detectado de peer " + event.peer_id + " - kickando!");
                 send_reliable_text(event.peer_id, "say Voc� foi desconectado por enviar pacotes demais.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
+                return;
+            }
+
+            if(event.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
+                debug_log("Pacote bruto excessivo de peer " + event.peer_id + " (" + event.message.length() + " chars)");
+                send_reliable_text(event.peer_id, "say Pacote invalido: tamanho excedido.", 0);
                 force_disconnect_and_cleanup(event.peer_id, true);
                 return;
             }
@@ -2592,6 +2601,9 @@ OBSERVAÇÕES:
 - Algumas funcionalidades aguardam implementação futura (Threading, History, Statistics)
 - Manter este bloco atualizado ao desativar/reativar funcionalidades
 */
+
+
+
 
 
 
