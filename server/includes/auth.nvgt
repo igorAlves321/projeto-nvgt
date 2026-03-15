@@ -1,256 +1,200 @@
 // auth.nvgt - Sistema de Autenticação do Servidor EVM
 // ✅ Task 1.2.2: Usa hash SHA-256 + Salt para armazenamento seguro de senhas
 
+// Mantém compatibilidade com sistema legado de banimentos em arquivo.
+// Deixe false para priorizar exclusivamente o fluxo SQL.
+const bool AUTH_ENABLE_LEGACY_BAN_FALLBACK = false;
+
 // Criar nova conta de jogador
 // NOTA: password_hash pode ser a senha bruta ou hash do cliente
 // O salt é gerado no servidor em create_player_account()
 void handle_create_account(uint64 peer_id, string username, string password_hash, string email, int gender) {
-    debug_log("Tentativa de criação de conta: " + username + " (peer: " + peer_id + ")");
+    username = username.trim_whitespace();
+    email = email.trim_whitespace();
+    password_hash = password_hash.trim_whitespace();
 
-    // Validar username
+    debug_log("Tentativa de criacao de conta: " + username + " (peer: " + peer_id + ")");
+
     if(!is_valid_username(username)) {
-        send_reliable(peer_id, "Erro: Nome de usuário inválido. Use 3-20 caracteres alfanuméricos.", 0);
-        debug_log("Criação falhou: username inválido - " + username);
+        send_reliable_text(peer_id, "Erro: Nome de usuario invalido. Use 3-20 caracteres alfanumericos.", 0);
+        debug_log("Criacao falhou: username invalido - " + username);
         return;
     }
 
-    // Validar email
     if(!is_valid_email(email)) {
-        send_reliable(peer_id, "Erro: E-mail inválido.", 0);
-        debug_log("Criação falhou: email inválido - " + email);
+        send_reliable_text(peer_id, "Erro: E-mail invalido.", 0);
+        debug_log("Criacao falhou: email invalido - " + email);
         return;
     }
 
-    // Verificar se conta já existe
+    if(password_hash == "" || password_hash.length() < 6 || password_hash.length() > 256) {
+        send_reliable_text(peer_id, "Erro: Senha invalida.", 0);
+        debug_log("Criacao falhou: senha invalida (tamanho) - " + username);
+        return;
+    }
+
+    if(gender < 0 || gender > 2) {
+        send_reliable_text(peer_id, "Erro: Genero invalido.", 0);
+        debug_log("Criacao falhou: genero invalido - " + username + " (" + gender + ")");
+        return;
+    }
+
     if(player_exists_in_database(username)) {
-        send_reliable(peer_id, "Erro: Esta conta já existe.", 0);
-        debug_log("Criação falhou: conta já existe - " + username);
+        send_reliable_text(peer_id, "Erro: Esta conta ja existe.", 0);
+        debug_log("Criacao falhou: conta ja existe - " + username);
         return;
     }
 
-    // ✅ Task 1.2.2: Criar conta no banco de dados (salt é gerado internamente)
     if(!create_player_account(username, password_hash, email, gender)) {
-        send_reliable(peer_id, "Erro: Falha ao criar conta. Tente novamente.", 0);
+        send_reliable_text(peer_id, "Erro: Falha ao criar conta. Tente novamente.", 0);
         debug_log("ERRO: Falha ao criar conta no banco - " + username);
         return;
     }
 
-    // Sucesso
-    send_reliable(peer_id, "created", 0);
-    debug_log("✓ Conta criada: " + username + " (" + email + ") [COM SALT]");
+    send_reliable_text(peer_id, "created", 0);
+    debug_log("Conta criada: " + username + " (" + email + ") [COM SALT]");
     log_to_database("INFO", "AUTH", "Nova conta criada: " + username, 0, username);
 }
 
 // ✅ Task 1.2.2: Processar login de jogador COM SALT
 void handle_login(uint64 peer_id, string username, string password_input, double client_version, string computer_id) {
+    username = username.trim_whitespace();
+    password_input = password_input.trim_whitespace();
+    computer_id = computer_id.trim_whitespace();
+
     debug_log("Tentativa de login: " + username + " (peer: " + peer_id + ")");
 
-    // Verificar se conta existe
-    if(!player_exists_in_database(username)) {
-        send_reliable(peer_id, "Erro: Conta não encontrada.", 0);
-        debug_log("Login falhou: conta não existe - " + username);
+    if(!is_valid_username(username)) {
+        send_reliable_text(peer_id, "Erro: Conta invalida.", 0);
+        return;
+    }
+    if(password_input == "" || password_input.length() > 256) {
+        send_reliable_text(peer_id, "Erro: Senha invalida.", 0);
+        return;
+    }
+    if(computer_id.length() > 128) {
+        send_reliable_text(peer_id, "Erro: Identificador do dispositivo invalido.", 0);
         return;
     }
 
-    // ✅ Task 1.2.2: Obter hash E salt armazenados do banco
+    if(!player_exists_in_database(username)) {
+        send_reliable_text(peer_id, "Erro: Conta nao encontrada.", 0);
+        debug_log("Login falhou: conta nao existe - " + username);
+        return;
+    }
+
     string stored_hash = get_player_password_hash(username);
     string stored_salt = get_player_password_salt(username);
-    
     if(stored_hash == "") {
-        send_reliable(peer_id, "Erro: Dados da conta corrompidos.", 0);
+        send_reliable_text(peer_id, "Erro: Dados da conta corrompidos.", 0);
         debug_log("ERRO: Hash vazio para conta - " + username);
         return;
     }
 
-    // ✅ Task 1.2.2: Verificar senha usando salt
-    // Se salt existe, usar sistema novo; senão, usar sistema legado
     bool password_valid = false;
-    
     if(stored_salt != "" && stored_salt.length() > 0) {
-        // Sistema NOVO com salt: recalcular hash com salt + senha de entrada
         string calculated_hash = hash_password_with_salt(password_input, stored_salt);
-        password_valid = (calculated_hash == stored_hash);
-        debug_log("Login usando sistema COM SALT para " + username);
+        string legacy_hash = stored_salt + "::" + password_input;
+        password_valid = (calculated_hash == stored_hash || legacy_hash == stored_hash);
     } else {
-        // Sistema LEGADO: comparação direta (para contas antigas sem salt)
         password_valid = (password_input == stored_hash);
-        debug_log("Login usando sistema LEGADO (sem salt) para " + username);
     }
-    
+
     if(!password_valid) {
-        send_reliable(peer_id, "Erro: Senha incorreta.", 0);
+        send_reliable_text(peer_id, "Erro: Senha incorreta.", 0);
         debug_log("Login falhou: senha incorreta - " + username);
         log_to_database("WARNING", "AUTH", "Tentativa de login com senha incorreta", 0, username);
         return;
     }
 
-    // ✅ Task 1.2.2: Migração automática de contas legadas
-    // Se o login foi bem-sucedido mas a conta não tem salt, migrar agora
     if(stored_salt == "" || stored_salt.length() == 0) {
         if(migrate_account_to_salt(username, password_input)) {
-            debug_log("✅ Conta " + username + " migrada automaticamente para sistema com salt");
+            debug_log("Conta " + username + " migrada automaticamente para sistema com salt");
             log_to_database("INFO", "AUTH", "Conta migrada para sistema com salt", 0, username);
-        } else {
-            debug_log("⚠ Falha ao migrar conta " + username + " para sistema com salt");
         }
     }
 
-    // Verificar versão do cliente
     if(client_version < minversion) {
-        send_reliable(peer_id, "updatenow", 0);
-        debug_log("Login falhou: versão antiga - " + username + " (v" + client_version + ")");
+        send_reliable_text(peer_id, "updatenow", 0);
+        debug_log("Login falhou: versao antiga - " + username + " (v" + client_version + ")");
         return;
     }
 
-    // ✅ NOVA VERIFICAÇÃO DE BANIMENTO (SQL) - Substitui flat-files
     string ban_reason = "";
     int ban_time_left = 0;
-    
-    if (check_ban_db(username, computer_id, ban_reason, ban_time_left)) {
+    if(check_ban_db(username, computer_id, ban_reason, ban_time_left)) {
         string msg_ban = "";
-        if (ban_time_left == -1) {
-            // Banimento permanente
-            msg_ban = "Erro: Esta conta ou computador foi banido permanentemente. Motivo: " + ban_reason;
-        } else {
-            // Banimento temporário
-            msg_ban = "Erro: Banimento temporário ativo. Restam " + ban_time_left + " minutos. Motivo: " + ban_reason;
-        }
-        
-        send_reliable(peer_id, msg_ban, 0);
+        if(ban_time_left == -1) msg_ban = "Erro: Esta conta ou computador foi banido permanentemente. Motivo: " + ban_reason;
+        else msg_ban = "Erro: Banimento temporario ativo. Restam " + ban_time_left + " minutos. Motivo: " + ban_reason;
+        send_reliable_text(peer_id, msg_ban, 0);
         debug_log("Login recusado (BAN SQL): " + username + " HWID: " + computer_id + " - " + ban_reason);
         return;
     }
-    
-    // Fallback: Verificação legada (para compatibilidade durante migração)
-    // TODO: Remover após migração completa
-    if(is_computer_banned(computer_id)) {
-        send_reliable(peer_id, "Erro: Você foi banido.", 0);
-        debug_log("Login falhou: computer_id banido (sistema legado) - " + computer_id);
-        return;
-    }
-    
-    // Fallback: Verificar ban temporário legado
-    // TODO: Remover após migração completa
-    if(tempbancheck(username, computer_id)) {
-        int ban_index = get_tempban_index(username);
-        if(ban_index >= 0) {
-            int time_left = int((tempbans[ban_index].ms - tempbans[ban_index].tempbantimer.elapsed) / 60000);
-            string motivo = tempbans[ban_index].motivo;
-            send_reliable(peer_id, "Erro: Você está temporariamente banido. Tempo restante: " + time_left + " minutos. Motivo: " + motivo, 0);
-            debug_log("Login falhou: ban temporário ativo (sistema legado) - " + username + " (" + time_left + " minutos restantes)");
+
+    if(AUTH_ENABLE_LEGACY_BAN_FALLBACK) {
+        if(is_computer_banned(computer_id)) {
+            send_reliable_text(peer_id, "Erro: Voce foi banido.", 0);
             return;
         }
-    }
-
-    // Verificar limite de jogadores
-    if(connected_count >= MAX_PLAYERS) {
-        send_reliable(peer_id, "Erro: Servidor cheio. Tente mais tarde.", 0);
-        debug_log("Login falhou: servidor cheio - " + username);
-        return;
-    }
-
-    // Desconectar sessão anterior se existir
-    player@ existing = get_player_by_name(username);
-    if(existing !is null) {
-        debug_log("Sessão anterior detectada para " + username + ", desconectando...");
-        remove_player(existing.peer_id);
-    }
-
-    // Criar sessão do jogador
-    if(!spawn_player_session(peer_id, username, client_version, computer_id)) {
-        send_reliable(peer_id, "Erro: Falha ao iniciar sessão.", 0);
-        debug_log("ERRO: Falha ao criar sessão - " + username);
-        return;
-    }
-
-    // Carregar dados do jogador
-    player@ p = get_player_by_peer(peer_id);
-    if(p is null) {
-        debug_log("ERRO CRÍTICO: Jogador não encontrado após spawn - " + username);
-        return;
-    }
-
-    // ✅ Epic 1 Task 2: Usar sistema completo de carregamento
-    if(!load_player_complete(p)) {
-        debug_log("ERRO: Falha ao carregar dados completos do jogador - " + username);
-        send_reliable(peer_id, "Erro: Falha ao carregar seus dados. Tente novamente.", 0);
-        remove_player(peer_id);
-        return;
-    }
-
-    // Enviar confirmação de login
-    send_reliable(peer_id, "loggedin", 0);
-    
-    // Enviar changemap para entrar no jogo
-    int player_index = get_player_index_from(username);
-    if(player_index >= 0) {
-        // ✅ Carregar cargos/permissões do jogador
-        load_player_roles(username);
-        debug_log("🔐 Cargos carregados para " + username);
-        print("🔐 Cargos carregados para " + username + "\n");
-        
-        // 🆕 FALLBACK: Verificar se é um desenvolvedor padrão (mesmo se o banco não funcionar)
-        string[] default_devs = {"caos", "elkiller"};
-        bool is_default_dev = false;
-        string username_lower = username.lower();
-        for(uint d = 0; d < default_devs.length(); d++) {
-            if(username_lower == default_devs[d]) {
-                is_default_dev = true;
-                print("⚡ FALLBACK: " + username + " é desenvolvedor padrão!\n");
-                break;
+        if(tempbancheck(username, computer_id)) {
+            int ban_index = get_tempban_index(username);
+            if(ban_index >= 0) {
+                int time_left = int((tempbans[ban_index].ms - tempbans[ban_index].tempbantimer.elapsed) / 60000);
+                string motivo = tempbans[ban_index].motivo;
+                send_reliable_text(peer_id, "Erro: Voce esta temporariamente banido. Tempo restante: " + time_left + " minutos. Motivo: " + motivo, 0);
+                return;
             }
         }
-        
-        // 🔍 DEBUG: Verificar todos os cargos do jogador
-        string[] player_roles_list = get_player_roles(username);
-        debug_log("🔍 DEBUG: " + username + " tem " + player_roles_list.length() + " cargos registrados");
-        print("🔍 DEBUG: " + username + " tem " + player_roles_list.length() + " cargos registrados\n");
-        for(uint r = 0; r < player_roles_list.length(); r++) {
-            debug_log("🔍 DEBUG: - Cargo: " + player_roles_list[r]);
-            print("🔍 DEBUG: - Cargo: " + player_roles_list[r] + "\n");
-        }
-        
-        // 🔍 DEBUG: Verificar has_role diretamente
-        bool is_dev_check = has_role(username, "dev");
-        bool is_admin_check = has_role(username, "admin");
-        debug_log("🔍 DEBUG: has_role('" + username + "', 'dev') = " + is_dev_check);
-        debug_log("🔍 DEBUG: has_role('" + username + "', 'admin') = " + is_admin_check);
-        print("🔍 DEBUG: has_role('" + username + "', 'dev') = " + is_dev_check + "\n");
-        print("🔍 DEBUG: has_role('" + username + "', 'admin') = " + is_admin_check + "\n");
-        
-        // Primeiro fazer changemap para que o cliente entre no jogo
-        changemap(p.map_name, player_index, p.x, p.y);
-        
-        // Enviar inventário APÓS o changemap para garantir que o cliente esteja pronto
-        send_inventory_to_client(p);
-        debug_log("📦 Inventário reenviado após changemap");
-        
-        // ✅ Enviar informações de cargo para o cliente APÓS changemap
-        // FALLBACK: Se é dev padrão OU tem role de dev no banco
-        if(is_dev_check || is_default_dev) {
-            send_reliable(peer_id, "djogador", 0);
-            debug_log("📤 Enviado djogador (dev) para " + username);
-            print("📤 Enviado djogador (dev) para " + username + " [fallback=" + is_default_dev + "]\n");
-        }
-        if(is_admin_check) {
-            send_reliable(peer_id, "ajogador", 0);
-            debug_log("📤 Enviado ajogador (admin) para " + username);
-            print("📤 Enviado ajogador (admin) para " + username + "\n");
-        }
-        if(has_role(username, "moderator")) {
-            send_reliable(peer_id, "mjogador", 0);
-            debug_log("📤 Enviado mjogador (moderator) para " + username);
-            print("📤 Enviado mjogador (moderator) para " + username + "\n");
-        }
-        if(has_role(username, "builder")) {
-            send_reliable(peer_id, "bjogador", 0);
-            debug_log("📤 Enviado bjogador (builder) para " + username);
-            print("📤 Enviado bjogador (builder) para " + username + "\n");
-        }
     }
 
-    debug_log("✓ " + username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");
-    // screen_reader_speak(username + " logou", false); // Comentado para não bugar NVDA
+    if(connected_count >= MAX_PLAYERS) {
+        send_reliable_text(peer_id, "Erro: Servidor cheio. Tente mais tarde.", 0);
+        return;
+    }
+
+    player@ existing = get_player_by_name(username);
+    if(existing !is null) {
+        debug_log("Sessao anterior detectada para " + username + ", desconectando...");
+        send_reliable_text(existing.peer_id, "terminate relogin", 0);
+        force_disconnect_and_cleanup(existing.peer_id, true);
+    }
+
+    if(!spawn_player_session(peer_id, username, client_version, computer_id)) {
+        send_reliable_text(peer_id, "Erro: Falha ao iniciar sessao.", 0);
+        debug_log("ERRO: Falha ao criar sessao - " + username);
+        return;
+    }
+
+    player@ p = get_player_by_peer(peer_id);
+    if(p is null) {
+        debug_log("ERRO CRITICO: Jogador nao encontrado apos spawn - " + username);
+        return;
+    }
+
+    if(!load_player_complete(p)) {
+        send_reliable_text(peer_id, "Erro: Falha ao carregar seus dados. Tente novamente.", 0);
+        force_disconnect_and_cleanup(peer_id, true);
+        return;
+    }
+
+    send_reliable_text(peer_id, "loggedin", 0);
+
+    int player_index = get_player_index_from(username);
+    if(player_index >= 0) {
+        load_player_roles(username);
+        bool is_dev_check = has_role(username, "dev");
+        bool is_admin_check = has_role(username, "admin");
+
+        changemap(p.map_name, player_index, p.x, p.y);
+        send_inventory_to_client(p);
+
+        if(is_dev_check) send_reliable_text(peer_id, "djogador", 0);
+        if(is_admin_check) send_reliable_text(peer_id, "ajogador", 0);
+        if(has_role(username, "moderator")) send_reliable_text(peer_id, "mjogador", 0);
+        if(has_role(username, "builder")) send_reliable_text(peer_id, "bjogador", 0);
+    }
+
+    debug_log(username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");
     log_to_database("INFO", "AUTH", "Login bem-sucedido", 0, username);
 }
 
@@ -296,4 +240,6 @@ bool spawn_player_session(uint64 peer_id, string username, double version, strin
     debug_log("Sessão criada para " + username + " (peer: " + peer_id + ")");
     return true;
 }
+
+
 

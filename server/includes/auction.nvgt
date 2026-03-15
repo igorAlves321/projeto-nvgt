@@ -1,41 +1,41 @@
-// auction.nvgt - Sistema de Leilões Thread-Safe (Task 1.4.2)
-// Sistema completo de leilões com proteção por mutex e operações atômicas
+﻿// auction.nvgt - Sistema de LeilÃµes Thread-Safe (Task 1.4.2)
+// Sistema completo de leilÃµes com proteÃ§Ã£o por mutex e operaÃ§Ãµes atÃ´micas
 
 // ============================================================================
-// CONSTANTES DO SISTEMA DE LEILÕES
+// CONSTANTES DO SISTEMA DE LEILÃ•ES
 // ============================================================================
-const int MIN_BID_INCREASE = 10;        // Incremento mínimo de lance
-const int MIN_AUCTION_DURATION = 60;    // Duração mínima (segundos)
-const int MAX_AUCTION_DURATION = 86400; // Duração máxima (24 horas)
+const int MIN_BID_INCREASE = 10;        // Incremento mÃ­nimo de lance
+const int MIN_AUCTION_DURATION = 60;    // DuraÃ§Ã£o mÃ­nima (segundos)
+const int MAX_AUCTION_DURATION = 86400; // DuraÃ§Ã£o mÃ¡xima (24 horas)
 const int AUCTION_CLEANUP_INTERVAL = 30000; // Intervalo de limpeza (30s)
 
 // ============================================================================
-// CLASSE AUCTION - Representa um leilão ativo
+// CLASSE AUCTION - Representa um leilÃ£o ativo
 // ============================================================================
 class Auction {
-	// Identificação
-	int id;                      // ID único do leilão
-	string owner_id;             // ID do jogador que criou o leilão
-	string owner_name;           // Nome do jogador (para exibição)
+	// IdentificaÃ§Ã£o
+	int id;                      // ID Ãºnico do leilÃ£o
+	string owner_id;             // ID do jogador que criou o leilÃ£o
+	string owner_name;           // Nome do jogador (para exibiÃ§Ã£o)
 
 	// Item sendo leiloado
 	string item_name;            // Nome do item
 	int item_quantity;           // Quantidade do item
 
-	// Informações de lance
+	// InformaÃ§Ãµes de lance
 	int starting_bid;            // Lance inicial
 	int current_bid;             // Lance atual
 	string current_bidder_id;    // ID do jogador com maior lance
 	string current_bidder_name;  // Nome do jogador com maior lance
 
-	// Temporização
-	uint64 start_time;           // Timestamp de início (ticks)
+	// TemporizaÃ§Ã£o
+	uint64 start_time;           // Timestamp de inÃ­cio (ticks)
 	uint64 end_time;             // Timestamp de fim (ticks)
-	int duration_seconds;        // Duração em segundos
+	int duration_seconds;        // DuraÃ§Ã£o em segundos
 
 	// Estado
-	bool is_active;              // Se o leilão está ativo
-	bool is_finalized;           // Se o leilão foi finalizado
+	bool is_active;              // Se o leilÃ£o estÃ¡ ativo
+	bool is_finalized;           // Se o leilÃ£o foi finalizado
 
 	// Construtor
 	Auction(int auction_id, string owner, string owner_nm, string item, int qty, int start_bid, int duration) {
@@ -55,7 +55,7 @@ class Auction {
 		this.is_finalized = false;
 	}
 
-	// Verifica se o leilão expirou
+	// Verifica se o leilÃ£o expirou
 	bool is_expired() {
 		return ticks() >= end_time;
 	}
@@ -67,9 +67,9 @@ class Auction {
 		return int((end_time - current) / 1000);
 	}
 
-	// Retorna informações formatadas do leilão
+	// Retorna informaÃ§Ãµes formatadas do leilÃ£o
 	string get_info() {
-		string info = "Leilão #" + id + ": " + item_name;
+		string info = "LeilÃ£o #" + id + ": " + item_name;
 		info += " (x" + item_quantity + ")";
 		info += " | Lance atual: " + current_bid + " ouro";
 		if (current_bidder_name != "") {
@@ -81,18 +81,18 @@ class Auction {
 }
 
 // ============================================================================
-// SISTEMA GLOBAL DE LEILÕES
+// SISTEMA GLOBAL DE LEILÃ•ES
 // ============================================================================
-mutex auction_mutex;                // Mutex para proteger operações de leilão
-Auction@[] active_auctions;         // Array de leilões ativos
-int next_auction_id = 1;            // Próximo ID de leilão
-timer last_auction_cleanup;         // Timer para limpeza de leilões expirados
+mutex auction_mutex;                // Mutex para proteger operaÃ§Ãµes de leilÃ£o
+Auction@[] active_auctions;         // Array de leilÃµes ativos
+int next_auction_id = 1;            // PrÃ³ximo ID de leilÃ£o
+timer last_auction_cleanup;         // Timer para limpeza de leilÃµes expirados
 
 // ============================================================================
-// FUNÇÕES DE GERENCIAMENTO DE LEILÕES
+// FUNÃ‡Ã•ES DE GERENCIAMENTO DE LEILÃ•ES
 // ============================================================================
 
-// Busca um leilão pelo ID
+// Busca um leilÃ£o pelo ID
 Auction@ get_auction_by_id(int auction_id) {
 	for (uint i = 0; i < active_auctions.length(); i++) {
 		if (active_auctions[i].id == auction_id) {
@@ -102,317 +102,294 @@ Auction@ get_auction_by_id(int auction_id) {
 	return null;
 }
 
-// Nota: get_player_by_id() já está definido em player.nvgt
+// Nota: get_player_by_id() jÃ¡ estÃ¡ definido em player.nvgt
+
+player@ get_auction_player_by_name(const string&in username) {
+    return get_player_by_name(username);
+}
+
+bool auction_take_item(player@ p, const string&in item_name, int quantity) {
+    if (@p == null) return false;
+    if (quantity <= 0 || item_name == "") return false;
+    if (p.inv_item_number(item_name) < quantity) return false;
+    p.inv_remove_item(item_name, quantity);
+    return true;
+}
+
+void auction_give_item(player@ p, const string&in item_name, int quantity) {
+    if (@p == null) return;
+    if (quantity <= 0 || item_name == "") return;
+    p.inv_add_item(item_name, quantity, true);
+}
+
+bool auction_credit_offline_gold(const string&in username, int amount) {
+    if (username == "" || amount == 0) return false;
+    string query = "UPDATE players SET gold = gold + ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if (@stmt == null) return false;
+    stmt.bind_int(1, amount);
+    stmt.bind_text(2, username);
+    return stmt.step() == SQLITE_DONE;
+}
 
 // ============================================================================
-// CRIAR NOVO LEILÃO
+// CRIAR NOVO LEILÃƒO
 // ============================================================================
 void cmd_create_auction(int player_index, string item_name, int quantity, int starting_bid, int duration_seconds) {
-	if (player_index < 0 || player_index >= int(players.length())) return;
-	player@ p = @players[player_index];
+    if (player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
 
-	// Validações
-	if (item_name.is_empty()) {
-		send_reliable(p.peer_id, "msg2 Erro: Nome do item inválido.", 0);
-		return;
-	}
+    if (item_name.is_empty()) {
+        send_reliable_text(p.peer_id, "msg2 Erro: Nome do item invalido.", 0);
+        return;
+    }
+    if (quantity <= 0) {
+        send_reliable_text(p.peer_id, "msg2 Erro: Quantidade invalida.", 0);
+        return;
+    }
+    if (starting_bid <= 0) {
+        send_reliable_text(p.peer_id, "msg2 Erro: Lance inicial deve ser maior que 0.", 0);
+        return;
+    }
+    if (duration_seconds < MIN_AUCTION_DURATION || duration_seconds > MAX_AUCTION_DURATION) {
+        send_reliable_text(p.peer_id, "msg2 Erro: Duracao deve estar entre " + MIN_AUCTION_DURATION + " e " + MAX_AUCTION_DURATION + " segundos.", 0);
+        return;
+    }
+    if (!auction_take_item(p, item_name, quantity)) {
+        send_reliable_text(p.peer_id, "msg2 Erro: Voce nao possui " + quantity + "x " + item_name + ".", 0);
+        return;
+    }
 
-	if (quantity <= 0) {
-		send_reliable(p.peer_id, "msg2 Erro: Quantidade inválida.", 0);
-		return;
-	}
+    auction_mutex.lock();
+    int auction_id = next_auction_id++;
+    Auction new_auction(auction_id, p.charname, p.charname, item_name, quantity, starting_bid, duration_seconds);
+    active_auctions.insert_last(new_auction);
+    auction_mutex.unlock();
 
-	if (starting_bid <= 0) {
-		send_reliable(p.peer_id, "msg2 Erro: Lance inicial deve ser maior que 0.", 0);
-		return;
-	}
-
-	if (duration_seconds < MIN_AUCTION_DURATION || duration_seconds > MAX_AUCTION_DURATION) {
-		send_reliable(p.peer_id, "msg2 Erro: Duração deve estar entre " + MIN_AUCTION_DURATION + " e " + MAX_AUCTION_DURATION + " segundos.", 0);
-		return;
-	}
-
-	// Verificar se o jogador possui o item
-	// TODO: Implementar verificação de inventário quando sistema estiver completo
-	// if (!p.has_item(item_name, quantity)) {
-	//     send_reliable(p.peer_id, "msg2 Erro: Você não possui este item.", 0);
-	//     return;
-	// }
-
-	// Remover item do inventário do jogador
-	// TODO: Implementar remoção quando sistema estiver completo
-	// p.remove_item(item_name, quantity);
-
-	// 🔒 SEÇÃO CRÍTICA - Protegida por mutex
-	auction_mutex.lock();
-
-	// Criar novo leilão
-	int auction_id = next_auction_id++;
-	Auction new_auction(auction_id, p.charname, p.charname, item_name, quantity, starting_bid, duration_seconds);
-	active_auctions.insert_last(new_auction);
-
-	auction_mutex.unlock();
-	// 🔓 FIM DA SEÇÃO CRÍTICA
-
-	// Notificar jogador
-	send_reliable(p.peer_id, "msg2 Leilão #" + auction_id + " criado com sucesso!", 0);
-
-	// Broadcast para todos
-	send_packet(0, "msg2 Novo leilão: " + new_auction.get_info(), 0);
-
-	debug_log("[AUCTION] Leilão #" + auction_id + " criado por " + p.charname + ": " + item_name + " x" + quantity);
+    send_reliable_text(p.peer_id, "msg2 Leilao #" + auction_id + " criado com sucesso!", 0);
+    send_packet(0, "msg2 Novo leilao: " + new_auction.get_info(), 0);
+    save_player_to_database(p);
+    debug_log("[AUCTION] Leilao #" + auction_id + " criado por " + p.charname + ": " + item_name + " x" + quantity);
 }
 
 // ============================================================================
 // HANDLER: FAZER LANCE (req_place_bid) - THREAD-SAFE
 // ============================================================================
 void req_place_bid(int player_index, int auction_id, int amount) {
-	if (player_index < 0 || player_index >= int(players.length())) return;
-	player@ p = @players[player_index];
+    if (player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
 
-	// 🔒 SEÇÃO CRÍTICA - Protegida por mutex
-	auction_mutex.lock();
+    auction_mutex.lock();
+    Auction@ auction = get_auction_by_id(auction_id);
+    if (@auction == null) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Leilao nao encontrado.", 0);
+        return;
+    }
+    if (!auction.is_active || auction.is_finalized) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Este leilao nao esta mais ativo.", 0);
+        return;
+    }
+    if (auction.is_expired()) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Este leilao ja expirou.", 0);
+        return;
+    }
+    if (p.charname == auction.owner_id) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Voce nao pode dar lances no seu proprio leilao.", 0);
+        return;
+    }
+    if (p.charname == auction.current_bidder_id) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Voce ja e o maior licitante.", 0);
+        return;
+    }
 
-	// Buscar leilão
-	Auction@ auction = get_auction_by_id(auction_id);
-	if (@auction == null) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Leilão não encontrado.", 0);
-		return;
-	}
+    int min_bid = auction.current_bid + MIN_BID_INCREASE;
+    if (amount < min_bid) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Lance muito baixo. Minimo: " + min_bid + " ouro.", 0);
+        return;
+    }
+    if (p.gold < amount) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Ouro insuficiente. Voce tem " + p.gold + ", precisa de " + amount + ".", 0);
+        return;
+    }
 
-	// Verificar se o leilão ainda está ativo
-	if (!auction.is_active || auction.is_finalized) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Este leilão não está mais ativo.", 0);
-		return;
-	}
+    string previous_bidder_id = auction.current_bidder_id;
+    int previous_bid_amount = auction.current_bid;
+    if (!previous_bidder_id.is_empty()) {
+        player@ previous_bidder = get_auction_player_by_name(previous_bidder_id);
+        if (@previous_bidder != null) {
+            previous_bidder.gold += previous_bid_amount;
+            send_reliable_text(previous_bidder.peer_id, "msg2 Seu lance de " + previous_bid_amount + " foi superado no leilao #" + auction_id + ".", 0);
+        } else {
+            if (!auction_credit_offline_gold(previous_bidder_id, previous_bid_amount)) {
+                debug_log("[AUCTION] Falha ao devolver ouro no DB para jogador offline: " + previous_bidder_id);
+            }
+        }
+    }
 
-	// Verificar se o leilão expirou
-	if (auction.is_expired()) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Este leilão já expirou.", 0);
-		return;
-	}
+    p.gold -= amount;
+    auction.current_bid = amount;
+    auction.current_bidder_id = p.charname;
+    auction.current_bidder_name = p.charname;
+    auction_mutex.unlock();
 
-	// Verificar se o jogador não é o dono do leilão
-	if (p.charname == auction.owner_id) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Você não pode dar lances no seu próprio leilão.", 0);
-		return;
-	}
-
-	// Verificar se o jogador já é o maior licitante
-	if (p.charname == auction.current_bidder_id) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Você já é o maior licitante.", 0);
-		return;
-	}
-
-	// 1. Verificação de Lance Mínimo
-	int min_bid = auction.current_bid + MIN_BID_INCREASE;
-	if (amount < min_bid) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Lance muito baixo. Mínimo: " + min_bid + " ouro.", 0);
-		return;
-	}
-
-	// 2. Verificação de Ouro (Leitura Atômica)
-	if (p.gold < amount) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Ouro insuficiente. Você tem " + p.gold + ", precisa de " + amount + ".", 0);
-		return;
-	}
-
-	// --- VALIDAÇÃO BEM-SUCEDIDA: Execução da Transação ---
-
-	string previous_bidder_id = auction.current_bidder_id;
-	int previous_bid_amount = auction.current_bid;
-
-	// A. Devolver ouro ao licitante anterior (OPERAÇÃO ATÔMICA)
-	if (!previous_bidder_id.is_empty()) {
-		player@ previous_bidder = get_player_by_id(previous_bidder_id);
-
-		if (@previous_bidder != null) {
-			// Adição Atômica (RMW): thread-safe
-			previous_bidder.gold += previous_bid_amount;
-			send_reliable(previous_bidder.peer_id, "msg2 Seu lance de " + previous_bid_amount + " foi superado no leilão #" + auction_id + ".", 0);
-		} else {
-			// Jogador offline - salvar devolução para quando conectar
-			// TODO: Implementar lógica de DB para jogadores offline
-			debug_log("[AUCTION] Jogador offline " + previous_bidder_id + " receberá " + previous_bid_amount + " ouro de volta.");
-		}
-	}
-
-	// B. Subtrair ouro do novo licitante (OPERAÇÃO ATÔMICA)
-	p.gold -= amount;
-
-	// C. Atualizar o registro do Leilão (Protegido pelo auction_mutex)
-	auction.current_bid = amount;
-	auction.current_bidder_id = p.charname;
-	auction.current_bidder_name = p.charname;
-
-	auction_mutex.unlock();
-	// 🔓 FIM DA SEÇÃO CRÍTICA
-
-	// Notificar o licitante
-	send_reliable(p.peer_id, "msg2 Lance de " + amount + " ouro aceito no leilão #" + auction_id + "!", 0);
-
-	// Broadcast para todos
-	send_packet(0, "msg2 " + p.charname + " deu lance de " + amount + " ouro no leilão #" + auction_id + "!", 0);
-
-	debug_log("[AUCTION] " + p.charname + " deu lance de " + amount + " no leilão #" + auction_id);
+    send_reliable_text(p.peer_id, "msg2 Lance de " + amount + " ouro aceito no leilao #" + auction_id + "!", 0);
+    send_packet(0, "msg2 " + p.charname + " deu lance de " + amount + " ouro no leilao #" + auction_id + "!", 0);
+    save_player_to_database(p);
+    if (!previous_bidder_id.is_empty()) {
+        player@ previous_bidder_online = get_auction_player_by_name(previous_bidder_id);
+        if (@previous_bidder_online != null) save_player_to_database(previous_bidder_online);
+    }
+    debug_log("[AUCTION] " + p.charname + " deu lance de " + amount + " no leilao #" + auction_id);
 }
 
 // ============================================================================
-// CANCELAR LEILÃO (apenas o dono pode cancelar)
+// CANCELAR LEILÃƒO (apenas o dono pode cancelar)
 // ============================================================================
 void cmd_cancel_auction(int player_index, int auction_id) {
-	if (player_index < 0 || player_index >= int(players.length())) return;
-	player@ p = @players[player_index];
+    if (player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
 
-	// 🔒 SEÇÃO CRÍTICA
-	auction_mutex.lock();
+    auction_mutex.lock();
+    Auction@ auction = get_auction_by_id(auction_id);
+    if (@auction == null) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Leilao nao encontrado.", 0);
+        return;
+    }
+    if (auction.owner_id != p.charname) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Apenas o dono pode cancelar o leilao.", 0);
+        return;
+    }
+    if (auction.is_finalized) {
+        auction_mutex.unlock();
+        send_reliable_text(p.peer_id, "msg2 Erro: Este leilao ja foi finalizado.", 0);
+        return;
+    }
 
-	Auction@ auction = get_auction_by_id(auction_id);
-	if (@auction == null) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Leilão não encontrado.", 0);
-		return;
-	}
+    if (!auction.current_bidder_id.is_empty()) {
+        player@ bidder = get_auction_player_by_name(auction.current_bidder_id);
+        if (@bidder != null) {
+            bidder.gold += auction.current_bid;
+            send_reliable_text(bidder.peer_id, "msg2 O leilao #" + auction_id + " foi cancelado. Seu lance de " + auction.current_bid + " foi devolvido.", 0);
+            save_player_to_database(bidder);
+        } else {
+            if (!auction_credit_offline_gold(auction.current_bidder_id, auction.current_bid)) {
+                debug_log("[AUCTION] Falha ao devolver ouro de cancelamento para offline: " + auction.current_bidder_id);
+            }
+        }
+    }
 
-	// Verificar se é o dono
-	if (auction.owner_id != p.charname) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Apenas o dono pode cancelar o leilão.", 0);
-		return;
-	}
+    auction_give_item(p, auction.item_name, auction.item_quantity);
+    auction.is_active = false;
+    auction.is_finalized = true;
+    auction_mutex.unlock();
 
-	// Verificar se já foi finalizado
-	if (auction.is_finalized) {
-		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Erro: Este leilão já foi finalizado.", 0);
-		return;
-	}
-
-	// Devolver ouro ao licitante atual (se houver)
-	if (!auction.current_bidder_id.is_empty()) {
-		player@ bidder = get_player_by_id(auction.current_bidder_id);
-		if (@bidder != null) {
-			bidder.gold += auction.current_bid;
-			send_reliable(bidder.peer_id, "msg2 O leilão #" + auction_id + " foi cancelado. Seu lance de " + auction.current_bid + " foi devolvido.", 0);
-		}
-	}
-
-	// Devolver item ao dono
-	// TODO: Implementar devolução de item quando sistema estiver completo
-	// p.add_item(auction.item_name, auction.item_quantity);
-
-	// Marcar como inativo e finalizado
-	auction.is_active = false;
-	auction.is_finalized = true;
-
-	auction_mutex.unlock();
-	// 🔓 FIM DA SEÇÃO CRÍTICA
-
-	send_reliable(p.peer_id, "msg2 Leilão #" + auction_id + " cancelado com sucesso.", 0);
-	send_packet(0, "msg2 Leilão #" + auction_id + " foi cancelado pelo dono.", 0);
-
-	debug_log("[AUCTION] Leilão #" + auction_id + " cancelado por " + p.charname);
+    send_reliable_text(p.peer_id, "msg2 Leilao #" + auction_id + " cancelado com sucesso.", 0);
+    send_packet(0, "msg2 Leilao #" + auction_id + " foi cancelado pelo dono.", 0);
+    save_player_to_database(p);
+    debug_log("[AUCTION] Leilao #" + auction_id + " cancelado por " + p.charname);
 }
 
 // ============================================================================
-// FINALIZAR LEILÃO (executado automaticamente quando expira)
+// FINALIZAR LEILÃƒO (executado automaticamente quando expira)
 // ============================================================================
 void finalize_auction(Auction@ auction) {
-	if (@auction == null || auction.is_finalized) return;
+    if (@auction == null || auction.is_finalized) return;
+    auction.is_finalized = true;
+    auction.is_active = false;
 
-	// Marcar como finalizado
-	auction.is_finalized = true;
-	auction.is_active = false;
+    if (!auction.current_bidder_id.is_empty()) {
+        player@ winner = get_auction_player_by_name(auction.current_bidder_id);
+        player@ owner = get_auction_player_by_name(auction.owner_id);
 
-	// Se houve lances
-	if (!auction.current_bidder_id.is_empty()) {
-		player@ winner = get_player_by_id(auction.current_bidder_id);
-		player@ owner = get_player_by_id(auction.owner_id);
+        if (@winner != null) {
+            auction_give_item(winner, auction.item_name, auction.item_quantity);
+            send_reliable_text(winner.peer_id, "msg2 Parabens! Voce venceu o leilao #" + auction.id + " de " + auction.item_name + " por " + auction.current_bid + " ouro!", 0);
+            save_player_to_database(winner);
+        } else {
+            debug_log("[AUCTION] Vencedor offline no leilao #" + auction.id + ": " + auction.current_bidder_id + ". Entrega do item pendente.");
+        }
 
-		// Dar item ao vencedor
-		if (@winner != null) {
-			// TODO: Implementar entrega de item quando sistema estiver completo
-			// winner.add_item(auction.item_name, auction.item_quantity);
-			send_reliable(winner.peer_id, "msg2 Parabéns! Você venceu o leilão #" + auction.id + " de " + auction.item_name + " por " + auction.current_bid + " ouro!", 0);
-		}
+        if (@owner != null) {
+            owner.gold += auction.current_bid;
+            send_reliable_text(owner.peer_id, "msg2 Seu leilao #" + auction.id + " foi finalizado! Voce recebeu " + auction.current_bid + " ouro.", 0);
+            save_player_to_database(owner);
+        } else {
+            if (!auction_credit_offline_gold(auction.owner_id, auction.current_bid)) {
+                debug_log("[AUCTION] Falha ao creditar ouro no DB para dono offline: " + auction.owner_id);
+            }
+        }
 
-		// Dar ouro ao dono
-		if (@owner != null) {
-			owner.gold += auction.current_bid;
-			send_reliable(owner.peer_id, "msg2 Seu leilão #" + auction.id + " foi finalizado! Você recebeu " + auction.current_bid + " ouro.", 0);
-		}
-
-		// Broadcast
-		send_packet(0, "msg2 Leilão #" + auction.id + " finalizado! Vencedor: " + auction.current_bidder_name + " por " + auction.current_bid + " ouro.", 0);
-
-		debug_log("[AUCTION] Leilão #" + auction.id + " finalizado - Vencedor: " + auction.current_bidder_name);
-	} else {
-		// Sem lances - devolver item ao dono
-		player@ owner = get_player_by_id(auction.owner_id);
-		if (@owner != null) {
-			// TODO: Implementar devolução de item
-			// owner.add_item(auction.item_name, auction.item_quantity);
-			send_reliable(owner.peer_id, "msg2 Seu leilão #" + auction.id + " expirou sem lances. Item devolvido.", 0);
-		}
-
-		debug_log("[AUCTION] Leilão #" + auction.id + " expirou sem lances");
-	}
+        send_packet(0, "msg2 Leilao #" + auction.id + " finalizado! Vencedor: " + auction.current_bidder_name + " por " + auction.current_bid + " ouro.", 0);
+        debug_log("[AUCTION] Leilao #" + auction.id + " finalizado - Vencedor: " + auction.current_bidder_name);
+    } else {
+        player@ owner = get_auction_player_by_name(auction.owner_id);
+        if (@owner != null) {
+            auction_give_item(owner, auction.item_name, auction.item_quantity);
+            send_reliable_text(owner.peer_id, "msg2 Seu leilao #" + auction.id + " expirou sem lances. Item devolvido.", 0);
+            save_player_to_database(owner);
+        } else {
+            debug_log("[AUCTION] Dono offline no leilao sem lances #" + auction.id + ": " + auction.owner_id + ". Devolucao de item pendente.");
+        }
+        debug_log("[AUCTION] Leilao #" + auction.id + " expirou sem lances");
+    }
 }
 
 // ============================================================================
-// LOOP DE LIMPEZA - Remove leilões expirados
+// LOOP DE LIMPEZA - Remove leilÃµes expirados
 // ============================================================================
 void auction_cleanup_loop() {
 	if (last_auction_cleanup.elapsed < AUCTION_CLEANUP_INTERVAL) return;
 	last_auction_cleanup.restart();
 
-	// 🔒 SEÇÃO CRÍTICA
+	// ðŸ”’ SEÃ‡ÃƒO CRÃTICA
 	auction_mutex.lock();
 
-	// Iteração reversa para remoção segura
+	// IteraÃ§Ã£o reversa para remoÃ§Ã£o segura
 	for (int i = int(active_auctions.length()) - 1; i >= 0; i--) {
 		Auction@ auction = @active_auctions[i];
 
-		// Se expirou e ainda não foi finalizado
+		// Se expirou e ainda nÃ£o foi finalizado
 		if (auction.is_expired() && !auction.is_finalized) {
 			finalize_auction(auction);
 		}
 
-		// Remover leilões finalizados com mais de 5 minutos
+		// Remover leilÃµes finalizados com mais de 5 minutos
 		if (auction.is_finalized && (ticks() - auction.end_time) > 300000) {
 			active_auctions.remove_at(i);
-			debug_log("[AUCTION] Leilão #" + auction.id + " removido da memória.");
+			debug_log("[AUCTION] LeilÃ£o #" + auction.id + " removido da memÃ³ria.");
 		}
 	}
 
 	auction_mutex.unlock();
-	// 🔓 FIM DA SEÇÃO CRÍTICA
+	// ðŸ”“ FIM DA SEÃ‡ÃƒO CRÃTICA
 }
 
 // ============================================================================
-// LISTAR LEILÕES ATIVOS
+// LISTAR LEILÃ•ES ATIVOS
 // ============================================================================
 void cmd_list_auctions(int player_index) {
 	if (player_index < 0 || player_index >= int(players.length())) return;
 	player@ p = @players[player_index];
 
-	// 🔒 SEÇÃO CRÍTICA
+	// ðŸ”’ SEÃ‡ÃƒO CRÃTICA
 	auction_mutex.lock();
 
 	if (active_auctions.length() == 0) {
 		auction_mutex.unlock();
-		send_reliable(p.peer_id, "msg2 Não há leilões ativos no momento.", 0);
+		send_reliable_text(p.peer_id, "msg2 NÃ£o hÃ¡ leilÃµes ativos no momento.", 0);
 		return;
 	}
 
-	string list = "=== Leilões Ativos ===\r\n";
+	string list = "=== LeilÃµes Ativos ===\r\n";
 	int count = 0;
 
 	for (uint i = 0; i < active_auctions.length(); i++) {
@@ -423,11 +400,15 @@ void cmd_list_auctions(int player_index) {
 	}
 
 	auction_mutex.unlock();
-	// 🔓 FIM DA SEÇÃO CRÍTICA
+	// ðŸ”“ FIM DA SEÃ‡ÃƒO CRÃTICA
 
 	if (count == 0) {
-		send_reliable(p.peer_id, "msg2 Não há leilões ativos no momento.", 0);
+		send_reliable_text(p.peer_id, "msg2 NÃ£o hÃ¡ leilÃµes ativos no momento.", 0);
 	} else {
-		send_reliable(p.peer_id, "msg2 " + list, 0);
+		send_reliable_text(p.peer_id, "msg2 " + list, 0);
 	}
 }
+
+
+
+

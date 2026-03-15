@@ -204,20 +204,48 @@ string equipment_to_json(player@ p) {
     if(@p == null) return "{}";
 
     string json = "{";
-
-    // Equipamentos (usando campos que existem)
     json += "\"equipped\":{";
-    json += "\"shield\":\"" + (p.escudo > 0 ? "shield" : "") + "\"";
-    // TODO: Adicionar outros equipamentos quando campos forem adicionados à classe player
+
+    bool first = true;
+    if(p.escudo > 0) { if(!first) json += ","; json += "\"shield\":\"escudo\""; first = false; }
+    if(p.luvas > 0) { if(!first) json += ","; json += "\"hands\":\"luvas\""; first = false; }
+
+    if(p.capacetepolicia > 0) { if(!first) json += ","; json += "\"head\":\"capacete_policia\""; first = false; }
+    else if(p.chapeupanama > 0) { if(!first) json += ","; json += "\"head\":\"chapeu_panama\""; first = false; }
+    else if(p.bonemizuno > 0) { if(!first) json += ","; json += "\"head\":\"bone_mizuno\""; first = false; }
+
+    if(p.colete_aprova_de_balas > 0) { if(!first) json += ","; json += "\"body\":\"colete_aprova_de_balas\""; first = false; }
+    else if(p.coletemilitar > 0) { if(!first) json += ","; json += "\"body\":\"coletemilitar\""; first = false; }
+    else if(p.coletecamuflado > 0) { if(!first) json += ","; json += "\"body\":\"coletecamuflado\""; first = false; }
+    else if(p.coletesalvavida > 0) { if(!first) json += ","; json += "\"body\":\"coletesalvavida\""; first = false; }
+    else if(p.coletemizuno > 0) { if(!first) json += ","; json += "\"body\":\"coletemizuno\""; first = false; }
+
+    if(p.coturnomilitar > 0) { if(!first) json += ","; json += "\"feet\":\"coturno_militar\""; first = false; }
+    else if(p.tenisnike > 0) { if(!first) json += ","; json += "\"feet\":\"tenis_nike\""; first = false; }
+    else if(p.tenisadidas > 0) { if(!first) json += ","; json += "\"feet\":\"tenis_adidas\""; first = false; }
+
+    if(p.pulseiraouro > 0) { if(!first) json += ","; json += "\"accessory_1\":\"pulseira_ouro\""; first = false; }
+    else if(p.pulseiraprata > 0) { if(!first) json += ","; json += "\"accessory_1\":\"pulseira_prata\""; first = false; }
+    else if(p.pulseirabronze > 0) { if(!first) json += ","; json += "\"accessory_1\":\"pulseira_bronze\""; first = false; }
+    else if(p.pulseira > 0) { if(!first) json += ","; json += "\"accessory_1\":\"pulseira\""; first = false; }
+
+    if(p.anel > 0) { if(!first) json += ","; json += "\"accessory_2\":\"anel\""; first = false; }
+
     json += "},";
-
-    // Buffs ativos
     json += "\"active_buffs\":[";
-    // TODO: Adicionar buffs quando implementado no player
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    bool first_buff = true;
+    for(uint i = 0; i < active_buffs_store.length(); i++) {
+        if(active_buff_owners[i] != owner_name) continue;
+        buff@ b = active_buffs_store[i];
+        if(b is null) continue;
+        if(!first_buff) json += ",";
+        first_buff = false;
+        json += buff_to_json(b);
+    }
     json += "]";
-
     json += "}";
-
     return json;
 }
 
@@ -230,50 +258,69 @@ string generate_buff_id() {
     return "buff_" + ticks() + "_" + random(0, 999999);
 }
 
-// Adicionar array de buffs ao player se não existir
-void ensure_player_buffs_array(player@ p) {
-    // NOTA: Como a classe player atual não tem array de buffs,
-    // vamos adicionar isso via dictionary temporariamente
-    // Em produção, adicionar: buff@[] active_buffs; na classe player
+// Armazenamento global de buffs ativos (player_name -> buff)
+string[] active_buff_owners;
+buff@[] active_buffs_store;
+
+void apply_buff_effect(player@ p, buff@ b, bool apply) {
+    if(@p == null || @b == null) return;
+    float signal = apply ? 1.0 : -1.0;
+
+    if(b.stat == "speed") {
+        p.speed_multiplier += (b.value * signal);
+        if(p.speed_multiplier < 0.1) p.speed_multiplier = 0.1;
+    }
+    else if(b.stat == "hp_max") {
+        p.hp += int(b.value * signal);
+        if(p.hp < 1) p.hp = 1;
+    }
+}
+
+int find_active_buff_index(const string&in owner_name, const string&in buff_id) {
+    for(uint i = 0; i < active_buffs_store.length(); i++) {
+        if(active_buff_owners[i] == owner_name && active_buffs_store[i] !is null && active_buffs_store[i].buff_id == buff_id) {
+            return int(i);
+        }
+    }
+    return -1;
+}
+
+void remove_active_buff_at(int idx) {
+    if(idx < 0 || idx >= int(active_buffs_store.length())) return;
+    active_buffs_store.remove_at(idx);
+    active_buff_owners.remove_at(idx);
 }
 
 // Aplicar buff a um jogador
 bool apply_buff(player@ p, buff@ b) {
     if(@p == null || @b == null) return false;
 
-    debug_log("✨ BUFF: Aplicando " + b.buff_id + " a " + p.name + " (" + b.stat + " +" + b.value + ")");
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    if(owner_name == "") return false;
 
-    // TODO: Verificar stack behavior e lidar com buffs existentes
-    // Por enquanto, implementação simplificada
+    debug_log("BUFF: Aplicando " + b.buff_id + " a " + owner_name + " (" + b.stat + " +" + b.value + ")");
 
-    // Aplicar efeito imediatamente aos stats do player
-    if(b.stat == "attack") {
-        // TODO: Adicionar campo attack na classe player
-        debug_log("  + Attack +" + b.value);
+    // stack behavior básico
+    if(b.stack_behavior == STACK_BEHAVIOR_REPLACE || b.stack_behavior == STACK_BEHAVIOR_REFRESH) {
+        for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
+            buff@ current = active_buffs_store[i];
+            if(active_buff_owners[i] != owner_name || current is null) continue;
+            if(current.stat != b.stat) continue;
+            if(b.source_id != "" && current.source_id != b.source_id) continue;
+
+            apply_buff_effect(p, current, false);
+            remove_active_buff_at(i);
+        }
     }
-    else if(b.stat == "defense") {
-        // TODO: Adicionar campo defense na classe player
-        debug_log("  + Defense +" + b.value);
-    }
-    else if(b.stat == "speed") {
-        p.speed_multiplier += b.value;
-    }
-    else if(b.stat == "hp_max") {
-        p.hp += int(b.value);
-        // hpm não existe, usando hp
-    }
+
+    apply_buff_effect(p, b, true);
+    active_buff_owners.insert_last(owner_name);
+    active_buffs_store.insert_last(b);
 
     // Notificar cliente
     string msg = "{\"type\":\"buff_applied\",\"buff\":" + buff_to_json(b) + "}";
-    send_reliable(p.peer_id, msg, 0);
-
-    // Agendar expiração se temporário
-    if(b.expires_at > 0) {
-        // TODO: Implementar scheduler de expiração
-        debug_log("  ⏰ Expira em " + b.time_remaining() + "ms");
-    } else {
-        debug_log("  ♾️ Buff permanente");
-    }
+    send_reliable_text(p.peer_id, msg, 0);
 
     // Recalcular stats
     recalculate_player_stats(p);
@@ -285,13 +332,19 @@ bool apply_buff(player@ p, buff@ b) {
 bool remove_buff(player@ p, string buff_id) {
     if(@p == null) return false;
 
-    debug_log("❌ BUFF: Removendo " + buff_id + " de " + p.name);
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    if(owner_name == "") return false;
 
-    // TODO: Implementar remoção do array de buffs
-    // Por enquanto, apenas notifica o cliente
+    int idx = find_active_buff_index(owner_name, buff_id);
+    if(idx < 0) return false;
+
+    buff@ existing = active_buffs_store[idx];
+    apply_buff_effect(p, existing, false);
+    remove_active_buff_at(idx);
 
     string msg = "{\"type\":\"buff_expired\",\"buff_id\":\"" + buff_id + "\"}";
-    send_reliable(p.peer_id, msg, 0);
+    send_reliable_text(p.peer_id, msg, 0);
 
     // Recalcular stats
     recalculate_player_stats(p);
@@ -306,8 +359,14 @@ void recalculate_player_stats(player@ p) {
     // Criar stats temporários para cálculo
     player_stats calculated_stats;
 
-    // TODO: Somar buffs ativos
-    // Por enquanto, usar stats base do player
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    for(uint i = 0; i < active_buffs_store.length(); i++) {
+        if(active_buff_owners[i] != owner_name) continue;
+        buff@ b = active_buffs_store[i];
+        if(b is null) continue;
+        calculated_stats.apply_buff(b);
+    }
 
     // Notificar cliente com stats atualizados
     string msg = "{\"type\":\"stat_update\",\"stats\":" + stats_to_json(calculated_stats) + "}";
@@ -326,7 +385,7 @@ bool equip_item(player@ p, string item_name) {
 
     // Verificar se tem o item
     if(!p.inv.exists(item_name)) {
-        send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não encontrado\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não encontrado\"}", 0);
         return false;
     }
 
@@ -361,6 +420,10 @@ bool equip_item(player@ p, string item_name) {
     }
     // Escudos
     else if(item_name.find("escudo") >= 0 || item_name.find("shield") >= 0) {
+        if(p.escudo > 0) {
+            send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Escudo ja equipado\"}", 0);
+            return false;
+        }
         p.escudo = 1;
         equipped = true;
 
@@ -370,7 +433,7 @@ bool equip_item(player@ p, string item_name) {
     }
 
     if(!equipped) {
-        send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não equipável\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não equipável\"}", 0);
         return false;
     }
 
@@ -387,10 +450,10 @@ bool equip_item(player@ p, string item_name) {
     save_player_to_database(p);
 
     // Notificar sucesso
-    send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
+    send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
 
     // Enviar sincronização de equipamentos
-    send_reliable(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
+    send_reliable_text(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
 
     debug_log("  ✓ Item equipado com sucesso");
 
@@ -407,29 +470,33 @@ bool unequip_item(player@ p, string equip_slot) {
     bool unequipped = false;
 
     // Determinar qual item desequipar
-    if(equip_slot == EQUIP_SLOT_SHIELD && p.escudo > 0) {
+    if((equip_slot == EQUIP_SLOT_SHIELD || equip_slot == "escudo") && p.escudo > 0) {
         p.escudo = 0;
-        item_name = "shield";
+        item_name = "escudo";
         unequipped = true;
     }
     // TODO: Adicionar outros slots quando campos forem adicionados na classe player
 
     if(!unequipped) {
-        send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Nenhum item neste slot\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Nenhum item neste slot\"}", 0);
         return false;
     }
 
-    // TODO: Retornar item ao inventário
-    // TODO: Remover buff associado
+    // Retornar item ao inventário
+    if(item_name != "") {
+        int current = 0;
+        if(p.inv.exists(item_name)) p.inv.get(item_name, current);
+        p.inv.set(item_name, current + 1);
+    }
 
     // Salvar no banco
     save_player_to_database(p);
 
     // Notificar sucesso
-    send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
+    send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
 
     // Enviar sincronização
-    send_reliable(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
+    send_reliable_text(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
 
     debug_log("  ✓ Item desequipado");
 
@@ -440,8 +507,8 @@ bool unequip_item(player@ p, string equip_slot) {
 void sync_equipment_and_buffs(player@ p) {
     if(@p == null) return;
 
-    string msg = "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1);
-    send_reliable(p.peer_id, msg, 0);
+string msg = "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1);
+    send_reliable_text(p.peer_id, msg, 0);
 
     debug_log("📤 Equipment sync enviado para " + p.name);
 }
@@ -453,12 +520,22 @@ void sync_equipment_and_buffs(player@ p) {
 // Handler: Equipar item
 void handle_equip_request(player@ p, string item_name) {
     if(@p == null) return;
+    item_name = item_name.trim_whitespace();
+    if(item_name == "" || item_name.length() > 64) {
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item invalido\"}", 0);
+        return;
+    }
     equip_item(p, item_name);
 }
 
 // Handler: Desequipar item
 void handle_unequip_request(player@ p, string equip_slot) {
     if(@p == null) return;
+    equip_slot = equip_slot.trim_whitespace();
+    if(equip_slot == "" || equip_slot.length() > 32) {
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Slot invalido\"}", 0);
+        return;
+    }
     unequip_item(p, equip_slot);
 }
 
@@ -472,36 +549,81 @@ void handle_get_equipment_request(player@ p) {
 // DISPATCHER DE MENSAGENS JSON
 // ============================================================
 
-// Parser simples para extrair campo "slot" de string
+bool equipment_json_has_only_safe_chars(const string&in value) {
+    for(uint i = 0; i < value.length(); i++) {
+        string ch = value.substr(i, 1);
+        if(ch[0] < 32) return false;
+    }
+    return true;
+}
+
+// Parser de JSON para extrair string de campo (suporta escape básico)
 string json_get_string(string json, string field) {
     string search = "\"" + field + "\":\"";
     int pos = json.find(search);
     if(pos < 0) return "";
 
     int start = pos + search.length();
-    int end = json.find("\"", start);
-    if(end < 0) return "";
+    string parsed_value = "";
+    bool escaping = false;
+    for(int i = start; i < int(json.length()); i++) {
+        string ch = json.substr(i, 1);
+        if(escaping) {
+            if(ch == "n") parsed_value += "\n";
+            else if(ch == "r") parsed_value += "\r";
+            else if(ch == "t") parsed_value += "\t";
+            else parsed_value += ch;
+            escaping = false;
+            continue;
+        }
+        if(ch == "\\") {
+            escaping = true;
+            continue;
+        }
+        if(ch == "\"") break;
+        parsed_value += ch;
+        if(parsed_value.length() > 128) return "";
+    }
+    if(!equipment_json_has_only_safe_chars(parsed_value)) return "";
+    return parsed_value.trim_whitespace();
+}
 
-    return json.substr(start, end - start);
+string equipment_json_get_type(const string&in json_message) {
+    return json_get_string(json_message, "type");
 }
 
 // Dispatcher principal para mensagens de equipamentos
 void dispatch_equipment_json(player@ p, string json_message) {
     if(@p == null) return;
+    if(json_message.length() == 0 || json_message.length() > 2048) {
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Payload invalido\"}", 0);
+        return;
+    }
 
-    string msg_type = json_get_type(json_message);
+    string trimmed = json_message.trim_whitespace();
+    if(trimmed.length() < 2 || trimmed[0] != '{' || trimmed[trimmed.length() - 1] != '}') {
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"JSON invalido\"}", 0);
+        return;
+    }
+
+    string msg_type = equipment_json_get_type(json_message);
+    if(msg_type == "") {
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Tipo ausente\"}", 0);
+        return;
+    }
 
     if(msg_type == "equip") {
         string item_name = json_get_string(json_message, "item");
         if(item_name == "") {
-            // Fallback: usar slot como índice
             int slot = json_get_int(json_message, "slot");
             if(slot >= 0) {
                 string[] items = p.inv.get_keys();
-                if(slot < int(items.length())) {
-                    item_name = items[slot];
-                }
+                if(slot < int(items.length())) item_name = items[slot];
             }
+        }
+        if(item_name == "") {
+            send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item invalido\"}", 0);
+            return;
         }
         handle_equip_request(p, item_name);
     }
@@ -513,8 +635,8 @@ void dispatch_equipment_json(player@ p, string json_message) {
         handle_get_equipment_request(p);
     }
     else {
-        debug_log("⚠️ Tipo de mensagem de equipamento desconhecido: " + msg_type);
-        send_reliable(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Unknown message type\"}", 0);
+        debug_log("Tipo de mensagem de equipamento desconhecido: " + msg_type);
+        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Unknown message type\"}", 0);
     }
 }
 
@@ -531,10 +653,22 @@ void check_expired_buffs() {
     if(buff_expiration_timer.elapsed < 1000) return;
     buff_expiration_timer.restart();
 
-    // TODO: Iterar sobre todos os jogadores e verificar buffs
-    // Por enquanto, placeholder
+    for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
+        buff@ b = active_buffs_store[i];
+        if(b is null) {
+            remove_active_buff_at(i);
+            continue;
+        }
+        if(!b.is_expired()) continue;
 
-    debug_log("🕐 Verificando buffs expirados...");
+        string owner = active_buff_owners[i];
+        player@ owner_player = get_player_by_name(owner);
+        if(owner_player !is null) {
+            remove_buff(owner_player, b.buff_id);
+        } else {
+            remove_active_buff_at(i);
+        }
+    }
 }
 
 // ============================================================
@@ -579,12 +713,20 @@ bool apply_skill_buff(player@ p, string skill_name, string stat, float value, ui
 void clear_all_buffs(player@ p) {
     if(@p == null) return;
 
-    debug_log("🧹 Limpando todos os buffs de " + p.name);
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    if(owner_name == "") return;
 
-    // TODO: Remover todos os buffs do array
-    // Recalcular stats
+    for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
+        if(active_buff_owners[i] != owner_name) continue;
+        buff@ b = active_buffs_store[i];
+        if(b !is null) apply_buff_effect(p, b, false);
+        remove_active_buff_at(i);
+    }
+
     recalculate_player_stats(p);
 
     // Notificar cliente
-    send_reliable(p.peer_id, "{\"type\":\"buffs_cleared\"}", 0);
+    send_reliable_text(p.peer_id, "{\"type\":\"buffs_cleared\"}", 0);
 }
+

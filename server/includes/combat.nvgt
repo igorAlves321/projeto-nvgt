@@ -48,6 +48,19 @@ class CombatInstance {
 // 🆕 Sistema global de combate com array e mutex
 mutex combat_mutex;
 CombatInstance@[] active_combats;
+dictionary combat_defense_flags; // player_id -> 1 (defesa ativa para o próximo ataque)
+
+void set_player_defending(string player_id) {
+    if(player_id == "") return;
+    combat_defense_flags.set(player_id, 1);
+}
+
+bool consume_player_defense(string player_id) {
+    if(player_id == "") return false;
+    if(!combat_defense_flags.exists(player_id)) return false;
+    combat_defense_flags.delete(player_id);
+    return true;
+}
 
 // Funções de combate
 
@@ -132,6 +145,10 @@ void end_combat(string player_id, string reason) {
                                  get_player_hp(player_id), get_player_hp(player_id),
                                  get_player_hp(opponent_id), get_player_hp(opponent_id), reason);
 
+                // Limpar flag de defesa ao encerrar combate
+                if(combat_defense_flags.exists(player_id)) combat_defense_flags.delete(player_id);
+                if(combat_defense_flags.exists(opponent_id)) combat_defense_flags.delete(opponent_id);
+
                 // Notificar players
                 player@ player = get_player_by_id(player_id);
                 player@ opponent = get_player_by_id(opponent_id);
@@ -179,12 +196,28 @@ int calculate_damage(string attacker_id, string defender_id, string weapon_type 
     
     // Defesa do defensor
     int defense = defender.player_level + 5;
-    
-    // Adicionar defesa de equipamentos (simplificado)
-    // TODO: Implementar sistema de equipamentos detalhado
+
+    // Defesa de equipamentos/roupas
+    int equip_defense = 0;
+    if(defender.escudo == 1) equip_defense += 8;
+    if(defender.colete_aprova_de_balas == 1) equip_defense += 6;
+    else if(defender.coletemilitar == 1) equip_defense += 5;
+    else if(defender.coletecamuflado == 1) equip_defense += 4;
+    else if(defender.coletesalvavida == 1) equip_defense += 3;
+    else if(defender.coletemizuno == 1) equip_defense += 2;
+    if(defender.capacetepolicia == 1) equip_defense += 2;
+    if(defender.luvas == 1) equip_defense += 1;
+    if(defender.coturnomilitar == 1) equip_defense += 1;
+
+    defender.calculate_clothing_protection();
+    double clothing_reduction = defender.clothing_protection / 100.0;
+    if(clothing_reduction < 0.0) clothing_reduction = 0.0;
+    if(clothing_reduction > 0.90) clothing_reduction = 0.90;
     
     // Calcular damage final
-    int final_damage = base_damage - defense;
+    int final_damage = base_damage - defense - equip_defense;
+    if(final_damage < 1) final_damage = 1;
+    final_damage = int(double(final_damage) * (1.0 - clothing_reduction));
     if(final_damage < 1) final_damage = 1;
     
     // Chance de crítico (5%)
@@ -218,6 +251,16 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
     // Calcular damage
     int damage = calculate_damage(attacker_id, defender_id, weapon_type);
     int defender_hp_before = defender.hp;
+    int blocked_damage = 0;
+
+    // Defesa ativa reduz o próximo dano recebido (consome ao usar)
+    if(consume_player_defense(defender_id)) {
+        int reduced = int(damage * 0.5);
+        if(reduced < 1) reduced = 1;
+        blocked_damage = damage - reduced;
+        damage = reduced;
+        defender.send_message("say Sua defesa reduziu parte do dano recebido!");
+    }
     
     // Aplicar damage
     defender.hp -= damage;
@@ -239,7 +282,7 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
     string action_type = "attack";
     if(damage >= defender_hp_before * 0.5) action_type = "critical";
     
-    log_combat_action(attacker_id, defender_id, action_type, weapon_type, damage, 0,
+    log_combat_action(attacker_id, defender_id, action_type, weapon_type, damage, blocked_damage,
                      attacker.hp, attacker.hp, defender_hp_before, defender.hp, "ongoing");
     
     // Mensagens

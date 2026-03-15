@@ -578,146 +578,157 @@ bool spawn_item_at(string item_name, string map_name, int x, int y, int z, int q
         debug_log("ERRO: Item " + item_name + " não encontrado para spawn");
         return false;
     }
-    
-    if(!database_initialized) return false;
-    
-    string query = """
-        INSERT INTO world_items (item_id, map_name, x, y, z, quantity, spawned_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
-    """;
-    
-    sqlite3statement@ stmt = bancoJogo.prepare(query);
-    if(@stmt == null) {
-        debug_log("ERRO ao preparar spawn de item: " + bancoJogo.get_last_error_text());
+
+    uint64 owner_id = 0;
+    string source = spawned_by.trim_whitespace();
+    if(source.find("player:") == 0) {
+        source = source.substr(7);
+    }
+    int owner_index = get_player_index_from(source);
+    if(owner_index >= 0 && owner_index < int(players.length())) {
+        owner_id = players[owner_index].peer_id;
+    }
+
+    string drop_id = spawn_drop(item_name, quantity, map_name, x, y, owner_id);
+    if(drop_id == "") {
+        debug_log("ERRO ao spawnar drop para item " + item_name + " em " + map_name + " (" + x + "," + y + ")");
         return false;
     }
-    
-    stmt.bind_int(1, item.id);
-    stmt.bind_text(2, map_name);
-    stmt.bind_int(3, x);
-    stmt.bind_int(4, y);
-    stmt.bind_int(5, z);
-    stmt.bind_int(6, quantity);
-    stmt.bind_text(7, spawned_by);
-    
-    if(stmt.step() != SQLITE_DONE) {
-        debug_log("ERRO ao spawnar item: " + bancoJogo.get_last_error_text());
-        return false;
-    }
-    
-    // Adicionar à lista de itens no mundo
-    WorldItem@ world_item = WorldItem();
-    world_item.id = bancoJogo.last_insert_rowid;
-    world_item.item_id = item.id;
-    world_item.map_name = map_name;
-    world_item.x = x; world_item.y = y; world_item.z = z;
-    world_item.quantity = quantity;
-    world_item.spawned_by = spawned_by;
-    
-    world_items.insert_last(world_item);
-    
-    debug_log("Item " + item_name + " (x" + quantity + ") spawnado em " + map_name + " (" + x + "," + y + "," + z + ")");
+
+    debug_log("Item " + item_name + " (x" + quantity + ") spawnado em " + map_name + " (" + x + "," + y + "," + z + ") via drop_id=" + drop_id);
     return true;
 }
 
 // Pegar item do mundo
 bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
-    // Buscar item na posição
-    for(uint i = 0; i < world_items.length(); i++) {
-        WorldItem@ world_item = world_items[i];
-        if(world_item.map_name == map_name && world_item.x == x && world_item.y == y && world_item.z == z && world_item.is_active) {
-            
-            GameItem@ item = get_item_by_id(world_item.item_id);
-            if(item is null) continue;
-            
-            // ✅ IMPLEMENTADO: Adicionar item ao inventário do jogador
-            int player_index = get_player_index_from(player_name);
-            if (player_index >= 0 && player_index < int(players.length())) {
-                // Adicionar ao inventário usando o nome do item
-                players[player_index].inv_add_item(item.name, world_item.quantity);
-                
-                // Tocar som de pickup (se configurado)
-                if (item.sound_file != "") {
-                    server_broadcast("play " + item.sound_file + " " + x + " " + y, map_name);
-                }
-                
-                // Notificar jogador
-                send_reliable(players[player_index].peer_id, "msg Você pegou " + world_item.quantity + "x " + item.display_name + "!", 0);
-            }
-            
-            // Remover do banco
-            string delete_query = "DELETE FROM world_items WHERE id = ?;";
-            sqlite3statement@ stmt = bancoJogo.prepare(delete_query);
-            if(@stmt != null) {
-                stmt.bind_int(1, world_item.id);
-                stmt.step();
-            }
-            
-            // Remover da lista
-            world_items.remove_at(i);
-            
-            debug_log("Jogador " + player_name + " pegou " + item.display_name + " (x" + world_item.quantity + ")");
-            return true;
-        }
+    int player_index = get_player_index_from(player_name);
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    player@ p = players[player_index];
+    if(p is null) return false;
+
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != x || d.y != y) continue;
+        return pickup_drop(p, d.drop_id);
     }
-    
     return false;
 }
 
 // Carregar itens do mundo do banco
-void load_world_items_from_database() {
+void migrate_legacy_world_items_to_drops() {
     if(!database_initialized) return;
-    
-    string query = "SELECT * FROM world_items WHERE is_active = 1;";
+
+    string query = "SELECT id, item_id, map_name, x, y, z, quantity, spawned_by, is_active FROM world_items WHERE is_active = 1;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
-    
     if(@stmt == null) {
-        debug_log("ERRO ao preparar query de world_items: " + bancoJogo.get_last_error_text());
+        debug_log("LEGACY MIGRATION: falha ao preparar query world_items: " + bancoJogo.get_last_error_text());
         return;
     }
-    
-    int count = 0;
+
+    int migrated = 0;
+    int failed = 0;
+
     while(stmt.step() == SQLITE_ROW) {
-        WorldItem@ world_item = WorldItem();
-        
-        world_item.id = stmt.column_int(0);
-        world_item.item_id = stmt.column_int(1);
-        world_item.map_name = stmt.column_text(2);
-        world_item.x = stmt.column_int(3);
-        world_item.y = stmt.column_int(4);
-        world_item.z = stmt.column_int(5);
-        world_item.quantity = stmt.column_int(6);
-        world_item.spawned_by = stmt.column_text(9);
-        world_item.is_active = stmt.column_int(10) > 0;
-        world_item.respawn_time = stmt.column_int(11);
-        
-        world_items.insert_last(world_item);
-        count++;
+        int legacy_id = stmt.column_int(0);
+        int legacy_item_id = stmt.column_int(1);
+        string map_name = stmt.column_text(2);
+        int x = stmt.column_int(3);
+        int y = stmt.column_int(4);
+        int z = stmt.column_int(5);
+        int qty = stmt.column_int(6);
+        string spawned_by = stmt.column_text(7);
+
+        GameItem@ gi = get_item_by_id(legacy_item_id);
+        if(gi is null || qty <= 0) {
+            failed++;
+            bancoJogo.execute("DELETE FROM world_items WHERE id = " + legacy_id + ";");
+            continue;
+        }
+
+        uint64 owner_id = 0;
+        string source = spawned_by.trim_whitespace();
+        if(source.find("player:") == 0) source = source.substr(7);
+        int owner_index = get_player_index_from(source);
+        if(owner_index >= 0 && owner_index < int(players.length())) {
+            owner_id = players[owner_index].peer_id;
+        }
+
+        string drop_id = spawn_drop(gi.name, qty, map_name, x, y, owner_id);
+        if(drop_id == "") {
+            failed++;
+            continue;
+        }
+
+        migrated++;
+        bancoJogo.execute("DELETE FROM world_items WHERE id = " + legacy_id + ";");
     }
-    
-    debug_log("Carregados " + count + " itens do mundo do banco de dados");
+
+    world_items.resize(0);
+    debug_log("LEGACY MIGRATION: world_items -> drops. Migrados=" + migrated + ", falhas=" + failed);
+}
+
+void load_world_items_from_database() {
+    // Mantido apenas por compatibilidade de chamadas legadas
+    migrate_legacy_world_items_to_drops();
 }
 
 // Obter itens em um mapa específico
 WorldItem@[] get_items_in_map(string map_name) {
     WorldItem@[] items_here;
-    
-    for(uint i = 0; i < world_items.length(); i++) {
-        if(world_items[i].map_name == map_name && world_items[i].is_active) {
-            items_here.push_back(world_items[i]);
-        }
+
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+
+        GameItem@ gi = get_item_by_name(d.item_id);
+        if(gi is null) continue;
+
+        WorldItem@ projected = WorldItem();
+        projected.id = -1;
+        projected.item_id = gi.id;
+        projected.map_name = map_name;
+        projected.x = d.x;
+        projected.y = d.y;
+        projected.z = 0;
+        projected.quantity = d.quantity;
+        projected.is_active = true;
+        items_here.push_back(projected);
     }
-    
+
     return items_here;
 }
 
 // Obter item na posição específica
 WorldItem@ get_item_at_position(string map_name, int x, int y, int z) {
-    for(uint i = 0; i < world_items.length(); i++) {
-        WorldItem@ item = world_items[i];
-        if(item.map_name == map_name && item.x == x && item.y == y && item.z == z && item.is_active) {
-            return item;
-        }
+    // Compatibilidade: projetar um drop moderno como WorldItem para códigos legados
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != x || d.y != y) continue;
+
+        GameItem@ gi = get_item_by_name(d.item_id);
+        if(gi is null) continue;
+
+        WorldItem@ projected = WorldItem();
+        projected.id = -1;
+        projected.item_id = gi.id;
+        projected.map_name = map_name;
+        projected.x = x;
+        projected.y = y;
+        projected.z = z;
+        projected.quantity = d.quantity;
+        projected.is_active = true;
+        return projected;
     }
     return null;
 }
@@ -738,32 +749,27 @@ void init_items_system() {
     load_items_from_database();
     
     // Carregar itens do mundo
-    load_world_items_from_database();
-    
-    debug_log("Sistema de itens inicializado com " + items_database.get_size() + " tipos de itens e " + world_items.length() + " itens no mundo");
+    migrate_legacy_world_items_to_drops();
+
+    int active_drops = int(global_drops.get_size());
+    debug_log("Sistema de itens inicializado com " + items_database.get_size() + " tipos de itens e " + active_drops + " drops ativos");
 }
 
 // Limpar itens expirados (executar periodicamente)
 // 🆕 Task 1.1.2: Atualizado para processar banco de dados E memória
 void cleanup_expired_items() {
     if(!database_initialized) return;
-    
-    // Remover itens expirados do banco de dados (world_items table)
+
+    // Compatibilidade legado: limpa residuos na tabela antiga
     string cleanup_query = "DELETE FROM world_items WHERE expires_at IS NOT NULL AND expires_at < DATETIME('now');";
     bancoJogo.execute(cleanup_query);
-    
-    // 🆕 Também limpar o array world_items em memória
-    // Usa iteração reversa para segurança ao remover elementos
-    for(int i = int(world_items.length()) - 1; i >= 0; i--) {
-        WorldItem@ item = world_items[i];
-        if(item is null || !item.is_active) {
-            world_items.remove_at(i);
-        }
-    }
-    
-    // NOTA: A limpeza de objs[] nos mapas é feita por cleanup_expired_items_task()
-    // em server_map.nvgt, que executa de forma assíncrona
+
+    // Fluxo moderno: limpeza real dos drops ativos
+    cleanup_expired_drops();
 }
+
+
+
 
 
 

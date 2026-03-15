@@ -1,40 +1,41 @@
+﻿// ============================================================
+// SISTEMA DE INVENTÃRIO COM SINCRONIZAÃ‡ÃƒO REALTIME (JSON)
 // ============================================================
-// SISTEMA DE INVENTÁRIO COM SINCRONIZAÇÃO REALTIME (JSON)
-// ============================================================
-// ✅ Epic 1 Task 5: Sistema de Inventário + Sincronização Realtime
+// âœ… Epic 1 Task 5: Sistema de InventÃ¡rio + SincronizaÃ§Ã£o Realtime
 //
-// Implementa protocolo JSON para operações de inventário com:
-// - Sincronização completa (inv_request_sync → inv_sync)
-// - Atualizações incrementais (inv_update)
+// Implementa protocolo JSON para operaÃ§Ãµes de inventÃ¡rio com:
+// - SincronizaÃ§Ã£o completa (inv_request_sync â†’ inv_sync)
+// - AtualizaÃ§Ãµes incrementais (inv_update)
 // - Respostas padronizadas (inv_result)
-// - Broadcasts para players próximos
-// - Persistência automática no banco de dados
+// - Broadcasts para players prÃ³ximos
+// - PersistÃªncia automÃ¡tica no banco de dados
 //
 // Protocolo JSON:
-// Cliente → Servidor:
+// Cliente â†’ Servidor:
 //   {"type":"inv_request_sync"}
 //   {"type":"inv_use","slot":3}
 //   {"type":"inv_move","from":0,"to":5}
 //   {"type":"inv_drop","slot":2,"quantity":1}
 //
-// Servidor → Cliente:
+// Servidor â†’ Cliente:
 //   {"type":"inv_sync","slots":[...]}
 //   {"type":"inv_update","slot":3,"item_name":"","quantity":0}
 //   {"type":"inv_result","status":"ok|error","reason":""}
-//   {"type":"inv_broadcast_pickup","player":"João","item":"espada","x":10,"y":20}
+//   {"type":"inv_broadcast_pickup","player":"JoÃ£o","item":"espada","x":10,"y":20}
 
 // ============================================================
 // CONSTANTES
 // ============================================================
 
-const int MAX_INVENTORY_SLOTS = 50;  // Número máximo de slots por jogador
+const int MAX_INVENTORY_SLOTS = 50;  // NÃºmero mÃ¡ximo de slots por jogador
 const float INVENTORY_BROADCAST_RANGE = 20.0;  // Alcance para broadcasts (metros)
+const uint INVENTORY_JSON_MAX_MESSAGE_CHARS = 4096;
 
 // ============================================================
 // ESTRUTURAS DE DADOS
 // ============================================================
 
-// Slot de inventário (usado para serialização JSON)
+// Slot de inventÃ¡rio (usado para serializaÃ§Ã£o JSON)
 class inventory_slot {
     int slot_index;
     string item_name;
@@ -54,10 +55,10 @@ class inventory_slot {
 }
 
 // ============================================================
-// FUNÇÕES DE SERIALIZAÇÃO JSON
+// FUNÃ‡Ã•ES DE SERIALIZAÃ‡ÃƒO JSON
 // ============================================================
 
-// Converter inventário do jogador para JSON
+// Converter inventÃ¡rio do jogador para JSON
 string inventory_to_json(player@ p) {
     if(@p == null) return "{\"slots\":[]}";
 
@@ -82,7 +83,7 @@ string inventory_to_json(player@ p) {
     return json;
 }
 
-// Criar mensagem de atualização incremental
+// Criar mensagem de atualizaÃ§Ã£o incremental
 string create_inv_update_json(int slot, string item_name, int quantity) {
     string json = "{\"type\":\"inv_update\",";
     json += "\"slot\":" + slot + ",";
@@ -125,10 +126,10 @@ string create_inv_broadcast_drop_json(string player_name, string item_name, int 
 }
 
 // ============================================================
-// FUNÇÕES DE BROADCAST
+// FUNÃ‡Ã•ES DE BROADCAST
 // ============================================================
 
-// Enviar broadcast para players próximos
+// Enviar broadcast para players prÃ³ximos
 void broadcast_inventory_change(player@ source, string message, float range = INVENTORY_BROADCAST_RANGE) {
     if(@source == null) return;
 
@@ -136,21 +137,21 @@ void broadcast_inventory_change(player@ source, string message, float range = IN
     for(uint i = 0; i < players.length(); i++) {
         player@ target = players[i];
 
-        // Validações
+        // ValidaÃ§Ãµes
         if(@target == null) continue;
         if(!target.is_logged_in) continue;
         if(target.peer_id == 0) continue;
-        if(target.name == source.name) continue;  // Não enviar para si mesmo
+        if(target.name == source.name) continue;  // NÃ£o enviar para si mesmo
         if(target.map != source.map) continue;  // Mesmo mapa
 
-        // Calcular distância
+        // Calcular distÃ¢ncia
         float dx = target.x - source.x;
         float dy = target.y - source.y;
         float distance = sqrt(dx * dx + dy * dy);
 
         // Enviar se estiver dentro do alcance
         if(distance <= range) {
-            send_reliable(target.peer_id, message, 0);
+            send_reliable_text(target.peer_id, message, 0);
         }
     }
 }
@@ -159,30 +160,30 @@ void broadcast_inventory_change(player@ source, string message, float range = IN
 // HANDLERS DE PROTOCOLO JSON
 // ============================================================
 
-// Handler: Sincronização completa do inventário
+// Handler: SincronizaÃ§Ã£o completa do inventÃ¡rio
 void handle_inv_request_sync(player@ p) {
     if(@p == null) return;
 
-    debug_log("📦 INV_SYNC: " + p.name + " solicitou sincronização completa");
+    debug_log("ðŸ“¦ INV_SYNC: " + p.name + " solicitou sincronizaÃ§Ã£o completa");
 
-    // Enviar inventário completo em JSON
+    // Enviar inventÃ¡rio completo em JSON
     string json_inventory = inventory_to_json(p);
-    send_reliable(p.peer_id, json_inventory, 0);
+    send_reliable_text(p.peer_id, json_inventory, 0);
 
-    debug_log("  ✓ Inventário enviado: " + p.inv.get_keys().length() + " tipos de itens");
+    debug_log("  âœ“ InventÃ¡rio enviado: " + p.inv.get_keys().length() + " tipos de itens");
 }
 
-// Handler: Usar item (versão JSON)
+// Handler: Usar item (versÃ£o JSON)
 void handle_inv_use_json(player@ p, int slot) {
     if(@p == null) return;
 
-    debug_log("💊 INV_USE_JSON: " + p.name + " usando slot " + slot);
+    debug_log("ðŸ’Š INV_USE_JSON: " + p.name + " usando slot " + slot);
 
-    // Obter item no slot (simplificado - usar índice do array de keys)
+    // Obter item no slot (simplificado - usar Ã­ndice do array de keys)
     string[] item_names = p.inv.get_keys();
 
     if(slot < 0 || slot >= int(item_names.length())) {
-        send_reliable(p.peer_id, create_inv_result_json(false, "Slot inválido"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Slot invÃ¡lido"), 0);
         return;
     }
 
@@ -191,7 +192,7 @@ void handle_inv_use_json(player@ p, int slot) {
     p.inv.get(item_name, quantity);
 
     if(quantity <= 0) {
-        send_reliable(p.peer_id, create_inv_result_json(false, "Item esgotado"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Item esgotado"), 0);
         return;
     }
 
@@ -205,49 +206,49 @@ void handle_inv_use_json(player@ p, int slot) {
         p.inv.delete(item_name);
     }
 
-    // Atualização incremental
+    // AtualizaÃ§Ã£o incremental
     string update_msg = create_inv_update_json(slot, quantity > 0 ? item_name : "", quantity);
-    send_reliable(p.peer_id, update_msg, 0);
+    send_reliable_text(p.peer_id, update_msg, 0);
 
     // Resultado de sucesso
-    send_reliable(p.peer_id, create_inv_result_json(true), 0);
+    send_reliable_text(p.peer_id, create_inv_result_json(true), 0);
 
     // Salvar no banco
     save_player_to_database(p);
 
-    debug_log("  ✓ Item usado: " + item_name + " (restam " + quantity + ")");
+    debug_log("  âœ“ Item usado: " + item_name + " (restam " + quantity + ")");
 }
 
 // Handler: Mover item entre slots
 void handle_inv_move_json(player@ p, int from_slot, int to_slot) {
     if(@p == null) return;
 
-    debug_log("🔄 INV_MOVE_JSON: " + p.name + " movendo " + from_slot + " → " + to_slot);
+    debug_log("ðŸ”„ INV_MOVE_JSON: " + p.name + " movendo " + from_slot + " â†’ " + to_slot);
 
     string[] item_names = p.inv.get_keys();
 
     if(from_slot < 0 || from_slot >= int(item_names.length())) {
-        send_reliable(p.peer_id, create_inv_result_json(false, "Slot origem inválido"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Slot origem invÃ¡lido"), 0);
         return;
     }
 
     // NOTA: Movimento real de slots requer sistema de slots fixos
-    // Por enquanto, apenas confirma a operação
-    send_reliable(p.peer_id, create_inv_result_json(true), 0);
+    // Por enquanto, apenas confirma a operaÃ§Ã£o
+    send_reliable_text(p.peer_id, create_inv_result_json(true), 0);
 
-    debug_log("  ✓ Movimento confirmado (sistema de slots simplificado)");
+    debug_log("  âœ“ Movimento confirmado (sistema de slots simplificado)");
 }
 
 // Handler: Dropar item
 void handle_inv_drop_json(player@ p, int slot, int quantity) {
     if(@p == null) return;
 
-    debug_log("📤 INV_DROP_JSON: " + p.name + " dropando slot " + slot + " x" + quantity);
+    debug_log("ðŸ“¤ INV_DROP_JSON: " + p.name + " dropando slot " + slot + " x" + quantity);
 
     string[] item_names = p.inv.get_keys();
 
     if(slot < 0 || slot >= int(item_names.length())) {
-        send_reliable(p.peer_id, create_inv_result_json(false, "Slot inválido"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Slot invÃ¡lido"), 0);
         return;
     }
 
@@ -256,11 +257,11 @@ void handle_inv_drop_json(player@ p, int slot, int quantity) {
     p.inv.get(item_name, current);
 
     if(current < quantity) {
-        send_reliable(p.peer_id, create_inv_result_json(false, "Quantidade insuficiente"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Quantidade insuficiente"), 0);
         return;
     }
 
-    // Remover do inventário
+    // Remover do inventÃ¡rio
     current -= quantity;
     if(current > 0) {
         p.inv.set(item_name, current);
@@ -268,32 +269,39 @@ void handle_inv_drop_json(player@ p, int slot, int quantity) {
         p.inv.delete(item_name);
     }
 
-    // TODO: Criar objeto no chão (requer sistema de itens dropados)
+    // Criar drop no chÃ£o no sistema global de loot
+    string drop_id = spawn_drop(item_name, quantity, p.map, p.x, p.y, p.peer_id);
+    if(drop_id == "") {
+        // Reverter alteraÃ§Ã£o no inventÃ¡rio em caso de falha de spawn
+        p.inv.set(item_name, current + quantity);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Falha ao criar drop no chÃ£o"), 0);
+        return;
+    }
 
-    // Atualização incremental
+    // AtualizaÃ§Ã£o incremental
     string update_msg = create_inv_update_json(slot, current > 0 ? item_name : "", current);
-    send_reliable(p.peer_id, update_msg, 0);
+    send_reliable_text(p.peer_id, update_msg, 0);
 
     // Resultado de sucesso
-    send_reliable(p.peer_id, create_inv_result_json(true), 0);
+    send_reliable_text(p.peer_id, create_inv_result_json(true), 0);
 
-    // Broadcast para players próximos
+    // Broadcast para players prÃ³ximos
     string broadcast_msg = create_inv_broadcast_drop_json(p.name, item_name, p.x, p.y, quantity);
     broadcast_inventory_change(p, broadcast_msg);
 
     // Salvar no banco
     save_player_to_database(p);
 
-    debug_log("  ✓ Item dropado: " + item_name + " x" + quantity);
+    debug_log("  âœ“ Item dropado: " + item_name + " x" + quantity);
 }
 
 // ============================================================
 // DISPATCHER DE MENSAGENS JSON
 // ============================================================
 
-// Parser simples de JSON (extrai campos básicos)
+// Parser simples de JSON (extrai campos bÃ¡sicos)
 string json_get_type(string json) {
-    // Extrair tipo: "type":"inv_use" → inv_use
+    // Extrair tipo: "type":"inv_use" â†’ inv_use
     int type_pos = json.find("\"type\":");
     if(type_pos < 0) return "";
 
@@ -307,7 +315,7 @@ string json_get_type(string json) {
 }
 
 int json_get_int(string json, string field) {
-    // Extrair inteiro: "slot":3 → 3
+    // Extrair inteiro: "slot":3 â†’ 3
     string search = "\"" + field + "\":";
     int pos = json.find(search);
     if(pos < 0) return -1;
@@ -315,7 +323,7 @@ int json_get_int(string json, string field) {
     int start = pos + search.length();
     int end = start;
 
-    // Encontrar fim do número
+    // Encontrar fim do nÃºmero
     while(end < int(json.length())) {
         string c = json.substr(end, 1);
         if(c >= "0" && c <= "9") {
@@ -329,38 +337,84 @@ int json_get_int(string json, string field) {
     return parse_int(json.substr(start, end - start));
 }
 
-// Dispatcher principal para mensagens JSON de inventário
+// Dispatcher principal para mensagens JSON de inventÃ¡rio
 void dispatch_inventory_json(player@ p, string json_message) {
     if(@p == null) return;
 
-    string msg_type = json_get_type(json_message);
+    string payload = json_message.trim_whitespace();
+    if(payload == "") {
+        network_log_invalid_payload(p, "dispatch_inventory_json", "payload vazio", json_message);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Dados invalidos"), 0);
+        return;
+    }
+    if(payload.length() > INVENTORY_JSON_MAX_MESSAGE_CHARS) {
+        network_log_invalid_payload(p, "dispatch_inventory_json", "payload acima do limite", json_message);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Dados invalidos"), 0);
+        return;
+    }
+    if(payload.substr(0, 1) != "{" || payload.substr(payload.length() - 1, 1) != "}") {
+        network_log_invalid_payload(p, "dispatch_inventory_json", "json malformado", json_message);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Dados invalidos"), 0);
+        return;
+    }
+    if(payload.find("\"type\"") < 0) {
+        network_log_invalid_payload(p, "dispatch_inventory_json", "campo type ausente", json_message);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Dados invalidos"), 0);
+        return;
+    }
+
+    string msg_type = json_get_type(payload);
+    if(msg_type == "") {
+        network_log_invalid_payload(p, "dispatch_inventory_json", "type vazio", json_message);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Dados invalidos"), 0);
+        return;
+    }
 
     if(msg_type == "inv_request_sync") {
         handle_inv_request_sync(p);
     }
     else if(msg_type == "inv_use") {
-        int slot = json_get_int(json_message, "slot");
+        int slot = json_get_int(payload, "slot");
+        if(slot < 0 || slot >= MAX_INVENTORY_SLOTS) {
+            network_log_invalid_payload(p, "dispatch_inventory_json", "slot invalido em inv_use", json_message);
+            send_reliable_text(p.peer_id, create_inv_result_json(false, "Slot invalido"), 0);
+            return;
+        }
         handle_inv_use_json(p, slot);
     }
     else if(msg_type == "inv_move") {
-        int from = json_get_int(json_message, "from");
-        int to = json_get_int(json_message, "to");
+        int from = json_get_int(payload, "from");
+        int to = json_get_int(payload, "to");
+        if(from < 0 || from >= MAX_INVENTORY_SLOTS || to < 0 || to >= MAX_INVENTORY_SLOTS) {
+            network_log_invalid_payload(p, "dispatch_inventory_json", "from/to invalidos em inv_move", json_message);
+            send_reliable_text(p.peer_id, create_inv_result_json(false, "Slots invalidos"), 0);
+            return;
+        }
         handle_inv_move_json(p, from, to);
     }
     else if(msg_type == "inv_drop") {
-        int slot = json_get_int(json_message, "slot");
-        int quantity = json_get_int(json_message, "quantity");
-        if(quantity <= 0) quantity = 1;
+        int slot = json_get_int(payload, "slot");
+        int quantity = json_get_int(payload, "quantity");
+        if(slot < 0 || slot >= MAX_INVENTORY_SLOTS) {
+            network_log_invalid_payload(p, "dispatch_inventory_json", "slot invalido em inv_drop", json_message);
+            send_reliable_text(p.peer_id, create_inv_result_json(false, "Slot invalido"), 0);
+            return;
+        }
+        if(quantity <= 0 || quantity > 9999) {
+            network_log_invalid_payload(p, "dispatch_inventory_json", "quantity invalida em inv_drop", json_message);
+            send_reliable_text(p.peer_id, create_inv_result_json(false, "Quantidade invalida"), 0);
+            return;
+        }
         handle_inv_drop_json(p, slot, quantity);
     }
     else {
-        debug_log("⚠️ Tipo de mensagem JSON desconhecido: " + msg_type);
-        send_reliable(p.peer_id, create_inv_result_json(false, "Unknown message type"), 0);
+        debug_log("Tipo de mensagem JSON desconhecido: " + msg_type);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Unknown message type"), 0);
     }
 }
 
 // ============================================================
-// FUNÇÕES AUXILIARES
+// FUNÃ‡Ã•ES AUXILIARES
 // ============================================================
 
 // Validar slot
@@ -370,7 +424,7 @@ bool is_valid_slot(player@ p, int slot) {
     return slot >= 0 && slot < int(items.length());
 }
 
-// Adicionar item ao inventário (com sincronização automática)
+// Adicionar item ao inventÃ¡rio (com sincronizaÃ§Ã£o automÃ¡tica)
 bool add_item_with_sync(player@ p, string item_name, int quantity) {
     if(@p == null) return false;
 
@@ -383,14 +437,14 @@ bool add_item_with_sync(player@ p, string item_name, int quantity) {
 
     p.inv.set(item_name, current + quantity);
 
-    // Sincronização automática
+    // SincronizaÃ§Ã£o automÃ¡tica
     string[] items = p.inv.get_keys();
     for(uint i = 0; i < items.length(); i++) {
         if(items[i] == item_name) {
             int new_qty = 0;
             p.inv.get(item_name, new_qty);
             string update = create_inv_update_json(i, item_name, new_qty);
-            send_reliable(p.peer_id, update, 0);
+            send_reliable_text(p.peer_id, update, 0);
             break;
         }
     }
@@ -401,7 +455,7 @@ bool add_item_with_sync(player@ p, string item_name, int quantity) {
     return true;
 }
 
-// Remover item do inventário (com sincronização automática)
+// Remover item do inventÃ¡rio (com sincronizaÃ§Ã£o automÃ¡tica)
 bool remove_item_with_sync(player@ p, string item_name, int quantity) {
     if(@p == null) return false;
 
@@ -429,10 +483,10 @@ bool remove_item_with_sync(player@ p, string item_name, int quantity) {
         p.inv.delete(item_name);
     }
 
-    // Sincronização automática
+    // SincronizaÃ§Ã£o automÃ¡tica
     if(slot >= 0) {
         string update = create_inv_update_json(slot, current > 0 ? item_name : "", current);
-        send_reliable(p.peer_id, update, 0);
+        send_reliable_text(p.peer_id, update, 0);
     }
 
     // Salvar no banco
@@ -440,3 +494,4 @@ bool remove_item_with_sync(player@ p, string item_name, int quantity) {
 
     return true;
 }
+

@@ -109,7 +109,7 @@ string get_lang_code(string lang) {
 // Formato: "translate TARGET_LANG|TEXT"
 void req_translate_message(int index, string[] parsed) {
 	if(parsed.length() < 2) {
-		send_reliable(players[index].peer_id, "msg2 ;Uso: /traduzir idioma texto;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Uso: /traduzir idioma texto;", 0);
 		return;
 	}
 	
@@ -130,7 +130,7 @@ void req_translate_message(int index, string[] parsed) {
 			parts[0] = full_msg.substr(0, space_pos);
 			parts[1] = full_msg.substr(space_pos + 1);
 		} else {
-			send_reliable(players[index].peer_id, "msg2 ;Formato: /traduzir idioma|texto;", 0);
+			send_reliable_text(players[index].peer_id, "msg2 ;Formato: /traduzir idioma|texto;", 0);
 			return;
 		}
 	}
@@ -139,7 +139,7 @@ void req_translate_message(int index, string[] parsed) {
 	string text_to_translate = parts[1];
 	
 	if(text_to_translate.length() == 0) {
-		send_reliable(players[index].peer_id, "msg2 ;Texto vazio.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Texto vazio.;", 0);
 		return;
 	}
 	
@@ -155,7 +155,7 @@ void req_translate_message(int index, string[] parsed) {
 	pending_translations.insert_last(ctx);
 	
 	// Notificar usuário
-	send_reliable(players[index].peer_id, "msg2 ;Traduzindo para " + target_lang + "...;", 0);
+	send_reliable_text(players[index].peer_id, "msg2 ;Traduzindo para " + target_lang + "...;", 0);
 	
 	// Iniciar tradução assíncrona
 	start_async_translation(pending_translations.length() - 1);
@@ -366,7 +366,7 @@ void check_translation_results() {
 			// Verificar se peer ainda está conectado
 			int player_index = get_player_index_from_peer(ctx.peer_id);
 			if(player_index >= 0) {
-				send_reliable(ctx.peer_id, response, 0);
+				send_reliable_text(ctx.peer_id, response, 0);
 				debug_log("📤 Tradução enviada ao cliente: " + ctx.result);
 			}
 			
@@ -383,7 +383,7 @@ void check_translation_results() {
 				// Usar tradução local como fallback no timeout
 				string fallback = do_local_translation(ctx.original_text, ctx.target_lang);
 				string response = "translated " + ctx.message_id + "|" + ctx.original_text + "|" + fallback;
-				send_reliable(ctx.peer_id, response, 0);
+				send_reliable_text(ctx.peer_id, response, 0);
 				debug_log("⏱️ Timeout - enviando fallback: " + fallback);
 			}
 			pending_translations.remove_at(i);
@@ -454,18 +454,18 @@ void cmd_translate(int index, string[] parsed) {
 // /enable_translate PLAYER - Habilitar tradução para jogador
 void cmd_enable_translate(int index, string[] parsed) {
 	if(!players[index].admin) {
-		send_reliable(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
 		return;
 	}
 	
 	if(parsed.length() < 2) {
-		send_reliable(players[index].peer_id, "msg2 ;Uso: /enable_translate jogador;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Uso: /enable_translate jogador;", 0);
 		return;
 	}
 	
 	int target_index = get_player_index_from(parsed[1]);
 	if(target_index < 0) {
-		send_reliable(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
 		return;
 	}
 	
@@ -476,28 +476,28 @@ void cmd_enable_translate(int index, string[] parsed) {
 		f.write("enabled");
 		f.close();
 		
-		send_reliable(players[target_index].peer_id, "enabletranslate", 0);
-		send_reliable(players[index].peer_id, "msg2 ;" + players[target_index].charname + " agora é tradutor.;", 0);
+		send_reliable_text(players[target_index].peer_id, "enabletranslate", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;" + players[target_index].charname + " agora é tradutor.;", 0);
 	} else {
-		send_reliable(players[index].peer_id, "msg2 ;Jogador já é tradutor.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Jogador já é tradutor.;", 0);
 	}
 }
 
 // /remove_translate PLAYER - Remover permissão de tradução
 void cmd_remove_translate(int index, string[] parsed) {
 	if(!players[index].admin) {
-		send_reliable(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Sem permissão.;", 0);
 		return;
 	}
 	
 	if(parsed.length() < 2) {
-		send_reliable(players[index].peer_id, "msg2 ;Uso: /remove_translate jogador;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Uso: /remove_translate jogador;", 0);
 		return;
 	}
 	
 	int target_index = get_player_index_from(parsed[1]);
 	if(target_index < 0) {
-		send_reliable(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Jogador não encontrado.;", 0);
 		return;
 	}
 	
@@ -505,13 +505,14 @@ void cmd_remove_translate(int index, string[] parsed) {
 	if(file_exists(translator_file)) {
 		file_delete(translator_file);
 		
-		send_reliable(players[target_index].peer_id, "disabletranslate", 0);
-		send_reliable(players[index].peer_id, "msg2 ;" + players[target_index].charname + " não é mais tradutor.;", 0);
+		send_reliable_text(players[target_index].peer_id, "disabletranslate", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;" + players[target_index].charname + " não é mais tradutor.;", 0);
 	} else {
-		send_reliable(players[index].peer_id, "msg2 ;Jogador não é tradutor.;", 0);
+		send_reliable_text(players[index].peer_id, "msg2 ;Jogador não é tradutor.;", 0);
 	}
 }
 
 // ============================================================================
 // FIM DO ARQUIVO qol.nvgt
 // ============================================================================
+

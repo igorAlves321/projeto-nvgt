@@ -248,21 +248,21 @@ void cmd_sendmail(int player_index, string recipient, string subject, string mes
 	}
 	
 	if(!recipient_exists) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador '" + recipient + "' não encontrado!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Jogador '" + recipient + "' não encontrado!", 0);
 		return;
 	}
 	
 	mailbox@ mb = get_mailbox(recipient);
 	
 	if(mb.is_full()) {
-		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
 		return;
 	}
 	
 	// Custo de envio: 10 gold
 	int cost = 10;
 	if(players[player_index].gold < cost) {
-		send_reliable(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
 		return;
 	}
 	
@@ -273,12 +273,12 @@ void cmd_sendmail(int player_index, string recipient, string subject, string mes
 	mb.add_message(msg);
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 Mail enviado para " + recipient + "!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Mail enviado para " + recipient + "!", 0);
 	
 	// Notificar se estiver online
 	int recipient_idx = get_player_index_from(recipient);
 	if(recipient_idx >= 0) {
-		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um novo mail de " + players[player_index].charname + "!", 0);
+		send_reliable_text(players[recipient_idx].peer_id, "msg2 Você recebeu um novo mail de " + players[player_index].charname + "!", 0);
 	}
 	
 	debug_log("MAIL: " + players[player_index].charname + " enviou mail para " + recipient);
@@ -289,18 +289,18 @@ void cmd_inbox(int player_index) {
 	mailbox@ mb = get_mailbox(players[player_index].charname);
 	
 	if(mb.messages.length() == 0) {
-		send_reliable(players[player_index].peer_id, "msg2 Sua caixa de entrada está vazia", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Sua caixa de entrada está vazia", 0);
 		return;
 	}
 	
-	send_reliable(players[player_index].peer_id, "msg2 === Caixa de Entrada (" + mb.messages.length() + "/" + mb.max_messages + ") ===", 0);
-	send_reliable(players[player_index].peer_id, "msg2 Mensagens não lidas: " + mb.get_unread_count(), 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 === Caixa de Entrada (" + mb.messages.length() + "/" + mb.max_messages + ") ===", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Mensagens não lidas: " + mb.get_unread_count(), 0);
 	
 	for(uint i = 0; i < mb.messages.length(); i++) {
-		send_reliable(players[player_index].peer_id, "msg2 #" + mb.messages[i].id + " - " + mb.messages[i].get_preview(), 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 #" + mb.messages[i].id + " - " + mb.messages[i].get_preview(), 0);
 	}
 	
-	send_reliable(players[player_index].peer_id, "msg2 Use /readmail <id> para ler uma mensagem", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Use /readmail <id> para ler uma mensagem", 0);
 }
 
 // Comando: Ler mail
@@ -309,7 +309,7 @@ void cmd_readmail(int player_index, int mail_id) {
 	
 	mail_message@ msg = mb.get_message(mail_id);
 	if(msg is null) {
-		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
 		return;
 	}
 	
@@ -320,11 +320,11 @@ void cmd_readmail(int player_index, int mail_id) {
 	// Enviar conteúdo
 	string[] content = msg.get_full_content();
 	for(uint i = 0; i < content.length(); i++) {
-		send_reliable(players[player_index].peer_id, "msg2 " + content[i], 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 " + content[i], 0);
 	}
 	
 	if(msg.has_attachments) {
-		send_reliable(players[player_index].peer_id, "msg2 Use /takeattachments " + mail_id + " para pegar os anexos", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Use /takeattachments " + mail_id + " para pegar os anexos", 0);
 	}
 }
 
@@ -334,19 +334,19 @@ void cmd_takeattachments(int player_index, int mail_id) {
 	
 	mail_message@ msg = mb.get_message(mail_id);
 	if(msg is null) {
-		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
 		return;
 	}
 	
 	if(!msg.has_attachments) {
-		send_reliable(players[player_index].peer_id, "msg2 Essa mensagem não tem anexos!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Essa mensagem não tem anexos!", 0);
 		return;
 	}
 	
 	// Transferir gold
 	if(msg.gold_attached > 0) {
 		players[player_index].gold += msg.gold_attached;
-		send_reliable(players[player_index].peer_id, "msg2 Você recebeu " + msg.gold_attached + " gold!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você recebeu " + msg.gold_attached + " gold!", 0);
 		msg.gold_attached = 0;
 	}
 	
@@ -364,7 +364,7 @@ void cmd_takeattachments(int player_index, int mail_id) {
 			players[player_index].inv.set(item_keys[i], qty);
 		}
 		
-		send_reliable(players[player_index].peer_id, "msg2 Você recebeu " + item_keys[i] + " x" + qty, 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você recebeu " + item_keys[i] + " x" + qty, 0);
 	}
 	
 	// Limpar anexos
@@ -374,7 +374,7 @@ void cmd_takeattachments(int player_index, int mail_id) {
 	
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 Anexos recebidos! A mensagem pode ser deletada", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Anexos recebidos! A mensagem pode ser deletada", 0);
 }
 
 // Comando: Deletar mail
@@ -383,19 +383,19 @@ void cmd_deletemail(int player_index, int mail_id) {
 	
 	mail_message@ msg = mb.get_message(mail_id);
 	if(msg is null) {
-		send_reliable(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Mensagem não encontrada!", 0);
 		return;
 	}
 	
 	if(msg.has_attachments) {
-		send_reliable(players[player_index].peer_id, "msg2 Remova os anexos antes de deletar! Use /takeattachments " + mail_id, 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Remova os anexos antes de deletar! Use /takeattachments " + mail_id, 0);
 		return;
 	}
 	
 	mb.delete_message(mail_id);
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 Mensagem deletada!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Mensagem deletada!", 0);
 }
 
 // Comando: Deletar todas as mensagens lidas
@@ -408,18 +408,18 @@ void cmd_clearinbox(int player_index) {
 	
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 " + (before - after) + " mensagens deletadas!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + (before - after) + " mensagens deletadas!", 0);
 }
 
 // Comando: Enviar mail com anexo de gold
 void cmd_sendmailgold(int player_index, string recipient, string subject, string message, int gold_amount) {
 	if(gold_amount <= 0) {
-		send_reliable(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
 		return;
 	}
 	
 	if(players[player_index].gold < gold_amount) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem " + gold_amount + " gold!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem " + gold_amount + " gold!", 0);
 		return;
 	}
 	
@@ -431,21 +431,21 @@ void cmd_sendmailgold(int player_index, string recipient, string subject, string
 	}
 	
 	if(!recipient_exists) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
 		return;
 	}
 	
 	mailbox@ mb = get_mailbox(recipient);
 	
 	if(mb.is_full()) {
-		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
 		return;
 	}
 	
 	// Custo de envio: 10 gold + gold anexado
 	int cost = 10 + gold_amount;
 	if(players[player_index].gold < cost) {
-		send_reliable(players[player_index].peer_id, "msg2 Você precisa de " + cost + " gold total!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você precisa de " + cost + " gold total!", 0);
 		return;
 	}
 	
@@ -457,12 +457,12 @@ void cmd_sendmailgold(int player_index, string recipient, string subject, string
 	mb.add_message(msg);
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 Mail com " + gold_amount + " gold enviado para " + recipient + "!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Mail com " + gold_amount + " gold enviado para " + recipient + "!", 0);
 	
 	// Notificar se estiver online
 	int recipient_idx = get_player_index_from(recipient);
 	if(recipient_idx >= 0) {
-		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
+		send_reliable_text(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
 	}
 	
 	debug_log("MAIL: " + players[player_index].charname + " enviou " + gold_amount + " gold via mail para " + recipient);
@@ -471,13 +471,13 @@ void cmd_sendmailgold(int player_index, string recipient, string subject, string
 // Comando: Enviar mail com item
 void cmd_sendmailitem(int player_index, string recipient, string subject, string message, string item_name, int quantity = 1) {
 	if(quantity <= 0) {
-		send_reliable(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
 		return;
 	}
 	
 	// Verificar se tem o item
 	if(!players[player_index].inv.exists(item_name)) {
-		send_reliable(players[player_index].peer_id, "msg2 Você não tem esse item!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem esse item!", 0);
 		return;
 	}
 	
@@ -485,7 +485,7 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	players[player_index].inv.get(item_name, current_qty_d);
 	int current_qty = int(current_qty_d);
 	if(current_qty < quantity) {
-		send_reliable(players[player_index].peer_id, "msg2 Você só tem " + current_qty + " desse item!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Você só tem " + current_qty + " desse item!", 0);
 		return;
 	}
 	
@@ -497,21 +497,21 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	}
 	
 	if(!recipient_exists) {
-		send_reliable(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Jogador não encontrado!", 0);
 		return;
 	}
 	
 	mailbox@ mb = get_mailbox(recipient);
 	
 	if(mb.is_full()) {
-		send_reliable(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Caixa de " + recipient + " está cheia!", 0);
 		return;
 	}
 	
 	// Custo de envio
 	int cost = 10;
 	if(players[player_index].gold < cost) {
-		send_reliable(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
+		send_reliable_text(players[player_index].peer_id, "msg2 Enviar mail custa " + cost + " gold!", 0);
 		return;
 	}
 	
@@ -530,13 +530,14 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	mb.add_message(msg);
 	mb.save();
 	
-	send_reliable(players[player_index].peer_id, "msg2 Mail com " + item_name + " x" + quantity + " enviado!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Mail com " + item_name + " x" + quantity + " enviado!", 0);
 	
 	// Notificar se estiver online
 	int recipient_idx = get_player_index_from(recipient);
 	if(recipient_idx >= 0) {
-		send_reliable(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
+		send_reliable_text(players[recipient_idx].peer_id, "msg2 Você recebeu um mail com anexos de " + players[player_index].charname + "!", 0);
 	}
 	
 	debug_log("MAIL: " + players[player_index].charname + " enviou " + item_name + " x" + quantity + " via mail para " + recipient);
 }
+

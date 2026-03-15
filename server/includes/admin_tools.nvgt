@@ -1,13 +1,13 @@
-// admin_tools.nvgt - Ferramentas Especiais de Administração
-// ✅ Task 2.6.3: Lanterna e Detector (restritos a admins)
+﻿// admin_tools.nvgt - Ferramentas Especiais de AdministraÃ§Ã£o
+// âœ… Task 2.6.3: Lanterna e Detector (restritos a admins)
 
 // ============================================================================
-// 🔦 SISTEMA DE LANTERNA (Admin)
+// ðŸ”¦ SISTEMA DE LANTERNA (Admin)
 // ============================================================================
-// A lanterna permite ao admin iluminar a área, tornando visível para outros jogadores
+// A lanterna permite ao admin iluminar a Ã¡rea, tornando visÃ­vel para outros jogadores
 
 // Constantes
-const int ADMIN_TOOL_MIN_RANK = 5;  // Rank mínimo para usar ferramentas admin
+const int ADMIN_TOOL_MIN_RANK = 5;  // Rank mÃ­nimo para usar ferramentas admin
 const int LANTERNA_RANGE = 15;       // Raio de alcance da lanterna
 const int DETECTOR_RANGE = 20;       // Raio de alcance do detector
 
@@ -17,41 +17,41 @@ void admin_toggle_lanterna(int player_index) {
     
     player@ p = @players[player_index];
     
-    // Verificar permissão de admin
+    // Verificar permissÃ£o de admin
     if(p.rank < ADMIN_TOOL_MIN_RANK && !p.dev && !p.admin) {
-        send_reliable(p.peer_id, "say Você não tem permissão para usar a lanterna.", 0);
+        send_reliable_text(p.peer_id, "say VocÃª nÃ£o tem permissÃ£o para usar a lanterna.", 0);
         return;
     }
     
     // Toggle estado da lanterna (usar campo existente ou criar novo)
-    // Usaremos um campo auxiliar que será adicionado ao player
+    // Usaremos um campo auxiliar que serÃ¡ adicionado ao player
     bool lanterna_on = p.item_active == "lanterna";
     
     if(lanterna_on) {
         // Desligar lanterna
         p.item_active = "";
-        send_reliable(p.peer_id, "ps lanterna_off.ogg", 0);
-        send_reliable(p.peer_id, "say Lanterna desligada.", 0);
+        send_reliable_text(p.peer_id, "ps lanterna_off.ogg", 0);
+        send_reliable_text(p.peer_id, "say Lanterna desligada.", 0);
         
         // Notificar outros jogadores no mapa
         broadcast_to_map_except(p.map_name, "sound lanterna_off.ogg " + p.x + " " + p.y, p.peer_id);
         
-        debug_log("🔦 Admin " + p.name + " desligou a lanterna em " + p.map_name);
+        debug_log("ðŸ”¦ Admin " + p.name + " desligou a lanterna em " + p.map_name);
     }
     else {
         // Ligar lanterna
         p.item_active = "lanterna";
-        send_reliable(p.peer_id, "ps lanterna_on.ogg", 0);
-        send_reliable(p.peer_id, "say Lanterna ligada. Iluminando área.", 0);
+        send_reliable_text(p.peer_id, "ps lanterna_on.ogg", 0);
+        send_reliable_text(p.peer_id, "say Lanterna ligada. Iluminando Ã¡rea.", 0);
         
         // Notificar outros jogadores no mapa com som posicional
         broadcast_to_map_except(p.map_name, "sound lanterna_on.ogg " + p.x + " " + p.y, p.peer_id);
         
-        debug_log("🔦 Admin " + p.name + " ligou a lanterna em " + p.map_name);
+        debug_log("ðŸ”¦ Admin " + p.name + " ligou a lanterna em " + p.map_name);
     }
 }
 
-// Atualizar efeito da lanterna (chamado periodicamente se lanterna está ativa)
+// Atualizar efeito da lanterna (chamado periodicamente se lanterna estÃ¡ ativa)
 void admin_lanterna_pulse(int player_index) {
     if(player_index < 0 || player_index >= int(players.length())) return;
     
@@ -59,68 +59,68 @@ void admin_lanterna_pulse(int player_index) {
     
     if(p.item_active != "lanterna") return;
     
-    // Enviar pulso de luz para jogadores próximos
+    // Enviar pulso de luz para jogadores prÃ³ximos
     for(uint i = 0; i < players.length(); i++) {
         if(!players[i].is_logged_in) continue;
         if(players[i].map_name != p.map_name) continue;
         if(players[i].peer_id == p.peer_id) continue;
         
-        // Calcular distância
+        // Calcular distÃ¢ncia
         int dx = players[i].x - p.x;
         int dy = players[i].y - p.y;
         double dist = sqrt(double(dx * dx + dy * dy));
         
         if(dist <= LANTERNA_RANGE) {
-            // Jogador está no alcance da lanterna - enviar som posicional
-            send_reliable(players[i].peer_id, "sound2d lanterna_pulse.ogg " + p.x + " " + p.y, 0);
+            // Jogador estÃ¡ no alcance da lanterna - enviar som posicional
+            send_reliable_text(players[i].peer_id, "sound2d lanterna_pulse.ogg " + p.x + " " + p.y, 0);
         }
     }
 }
 
 // ============================================================================
-// 🔍 SISTEMA DE DETECTOR (Admin)
+// ðŸ” SISTEMA DE DETECTOR (Admin)
 // ============================================================================
-// O detector revela objetos invisíveis, jogadores escondidos e anomalias
+// O detector revela objetos invisÃ­veis, jogadores escondidos e anomalias
 
 void admin_use_detector(int player_index) {
     if(player_index < 0 || player_index >= int(players.length())) return;
     
     player@ p = @players[player_index];
     
-    // Verificar permissão de admin
+    // Verificar permissÃ£o de admin
     if(p.rank < ADMIN_TOOL_MIN_RANK && !p.dev && !p.admin) {
-        send_reliable(p.peer_id, "say Você não tem permissão para usar o detector.", 0);
+        send_reliable_text(p.peer_id, "say VocÃª nÃ£o tem permissÃ£o para usar o detector.", 0);
         return;
     }
     
     // Tocar som de escaneamento
-    send_reliable(p.peer_id, "ps detector_scan.ogg", 0);
+    send_reliable_text(p.peer_id, "ps detector_scan.ogg", 0);
     
     // Resultados da varredura
     string results = "";
     int found_count = 0;
     
-    // 1. Detectar jogadores invisíveis ou escondidos no raio
+    // 1. Detectar jogadores invisÃ­veis ou escondidos no raio
     for(uint i = 0; i < players.length(); i++) {
         if(!players[i].is_logged_in) continue;
         if(players[i].map_name != p.map_name) continue;
         if(players[i].peer_id == p.peer_id) continue;
         
-        // Calcular distância
+        // Calcular distÃ¢ncia
         int dx = players[i].x - p.x;
         int dy = players[i].y - p.y;
         double dist = sqrt(double(dx * dx + dy * dy));
         
         if(dist <= DETECTOR_RANGE) {
-            // Verificar se jogador está invisível ou camuflado
+            // Verificar se jogador estÃ¡ invisÃ­vel ou camuflado
             if(players[i].invisible || players[i].inv_item_exists("pocao_invisibilidade")) {
-                results += "Jogador invisível detectado: " + players[i].charname + " em (" + players[i].x + ", " + players[i].y + "). ";
+                results += "Jogador invisÃ­vel detectado: " + players[i].charname + " em (" + players[i].x + ", " + players[i].y + "). ";
                 found_count++;
-                // Tocar bip de detecção
-                send_reliable(p.peer_id, "ps detector_bip.ogg", 0);
+                // Tocar bip de detecÃ§Ã£o
+                send_reliable_text(p.peer_id, "ps detector_bip.ogg", 0);
             }
             
-            // Verificar se está agachado (tentando se esconder)
+            // Verificar se estÃ¡ agachado (tentando se esconder)
             if(players[i].crouched) {
                 results += "Jogador agachado: " + players[i].charname + " em (" + players[i].x + ", " + players[i].y + "). ";
                 found_count++;
@@ -128,39 +128,67 @@ void admin_use_detector(int player_index) {
         }
     }
     
-    // 2. Detectar itens escondidos no chão (se o sistema de itens no chão existir)
-    // TODO: Implementar quando sistema de itens no chão for criado
+    // 2. Detectar drops no chao (sistema loot_drops)
+    string[] map_drops = get_drops_in_map(p.map);
+    for(uint di = 0; di < map_drops.length(); di++) {
+        drop_entity@ d = get_drop(map_drops[di]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+
+        int ddx = d.x - p.x;
+        int ddy = d.y - p.y;
+        double ddist = sqrt(double(ddx * ddx + ddy * ddy));
+        if(ddist > DETECTOR_RANGE) continue;
+
+        results += "Drop detectado: " + d.item_id + " x" + d.quantity + " em (" + d.x + ", " + d.y + "). ";
+        found_count++;
+    }
     
-    // 3. Detectar anomalias/bugs (posições inválidas, etc)
+    // 3. Detectar anomalias/bugs (posiÃ§Ãµes invÃ¡lidas, etc)
     for(uint i = 0; i < players.length(); i++) {
         if(!players[i].is_logged_in) continue;
         if(players[i].map_name != p.map_name) continue;
         
-        // Detectar posições suspeitas (negativas ou muito grandes)
+        // Detectar posiÃ§Ãµes suspeitas (negativas ou muito grandes)
         if(players[i].x < -1000 || players[i].x > 10000 || 
            players[i].y < -1000 || players[i].y > 10000) {
-            results += "Anomalia de posição: " + players[i].charname + " em posição suspeita (" + players[i].x + ", " + players[i].y + "). ";
+            results += "Anomalia de posiÃ§Ã£o: " + players[i].charname + " em posiÃ§Ã£o suspeita (" + players[i].x + ", " + players[i].y + "). ";
             found_count++;
-            send_reliable(p.peer_id, "ps detector_anomaly.ogg", 0);
+            send_reliable_text(p.peer_id, "ps detector_anomaly.ogg", 0);
         }
         
         // Detectar jogadores com velocidade suspeita (speedhack)
-        // TODO: Implementar verificação de velocidade quando tracking de movimento for melhorado
+        // Usa dados do validador de movimento (last_valid_*, last_move_time, violation_count).
+        int speed_dx = players[i].x - players[i].last_valid_x;
+        int speed_dy = players[i].y - players[i].last_valid_y;
+        double speed_dist = sqrt(double(speed_dx * speed_dx + speed_dy * speed_dy));
+        double elapsed_seconds = double(players[i].last_move_time.elapsed) / 1000.0;
+        if(elapsed_seconds < 0.05) elapsed_seconds = 0.05;
+        double speed_estimate = speed_dist / elapsed_seconds;
+        double suspicious_limit = players[i].MAX_WALK_SPEED * 1.8;
+        if(suspicious_limit < 20.0) suspicious_limit = 20.0;
+
+        if(players[i].violation_count >= 3 || (speed_dist > 0.0 && speed_estimate > suspicious_limit)) {
+            results += "Velocidade suspeita: " + players[i].charname + " (" + speed_estimate + " tiles/s, violacoes: " + players[i].violation_count + "). ";
+            found_count++;
+            send_reliable_text(p.peer_id, "ps detector_anomaly.ogg", 0);
+        }
     }
     
     // Enviar resultados ao admin
     if(found_count == 0) {
-        send_reliable(p.peer_id, "say Varredura completa. Nenhuma anomalia ou objeto oculto detectado no raio de " + DETECTOR_RANGE + " metros.", 0);
+        send_reliable_text(p.peer_id, "say Varredura completa. Nenhuma anomalia ou objeto oculto detectado no raio de " + DETECTOR_RANGE + " metros.", 0);
     }
     else {
-        send_reliable(p.peer_id, "say Varredura completa. " + found_count + " detecção(ões): " + results, 0);
+        send_reliable_text(p.peer_id, "say Varredura completa. " + found_count + " detecÃ§Ã£o(Ãµes): " + results, 0);
     }
     
-    debug_log("🔍 Admin " + p.name + " usou detector em " + p.map_name + ": " + found_count + " detecções");
+    debug_log("ðŸ” Admin " + p.name + " usou detector em " + p.map_name + ": " + found_count + " detecÃ§Ãµes");
 }
 
 // ============================================================================
-// 📡 COMANDOS DE REDE PARA FERRAMENTAS ADMIN
+// ðŸ“¡ COMANDOS DE REDE PARA FERRAMENTAS ADMIN
 // ============================================================================
 
 // Handler para comando de lanterna do cliente: "admin_lanterna"
@@ -181,11 +209,12 @@ void handle_admin_detector_command(uint64 peer_id) {
     admin_use_detector(player_index);
 }
 
-// Função auxiliar para broadcast exceto um peer
+// FunÃ§Ã£o auxiliar para broadcast exceto um peer
 void broadcast_to_map_except(string map_name, string message, uint64 except_peer) {
     for(uint i = 0; i < players.length(); i++) {
         if(players[i].map_name == map_name && players[i].peer_id != except_peer && players[i].is_logged_in) {
-            send_reliable(players[i].peer_id, message, 0);
+            send_reliable_text(players[i].peer_id, message, 0);
         }
     }
 }
+

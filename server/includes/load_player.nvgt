@@ -237,105 +237,289 @@ bool load_player_inventory_from_database(player@ p, bool allow_legacy_file_fallb
 
     return false;
 }
+string json_escape_string(const string&in input) {
+    string output = "";
+    for(uint i = 0; i < input.length(); i++) {
+        string ch = input.substr(i, 1);
+        if(ch == "\\") output += "\\\\";
+        else if(ch == "\"") output += "\\\"";
+        else if(ch == "\n") output += "\\n";
+        else if(ch == "\r") output += "\\r";
+        else if(ch == "\t") output += "\\t";
+        else output += ch;
+    }
+    return output;
+}
+
+string json_unescape_string(const string&in input) {
+    string output = "";
+    bool escaping = false;
+    for(uint i = 0; i < input.length(); i++) {
+        string ch = input.substr(i, 1);
+        if(escaping) {
+            if(ch == "n") output += "\n";
+            else if(ch == "r") output += "\r";
+            else if(ch == "t") output += "\t";
+            else output += ch;
+            escaping = false;
+            continue;
+        }
+        if(ch == "\\") {
+            escaping = true;
+            continue;
+        }
+        output += ch;
+    }
+    if(escaping) output += "\\";
+    return output;
+}
+
+string[] parse_simple_json_object_entries(const string&in object_inner) {
+    string[] entries;
+    string current = "";
+    bool in_quotes = false;
+    bool escaping = false;
+
+    for(uint i = 0; i < object_inner.length(); i++) {
+        string ch = object_inner.substr(i, 1);
+        if(escaping) {
+            current += ch;
+            escaping = false;
+            continue;
+        }
+        if(ch == "\\") {
+            current += ch;
+            escaping = true;
+            continue;
+        }
+        if(ch == "\"") {
+            in_quotes = !in_quotes;
+            current += ch;
+            continue;
+        }
+        if(ch == "," && !in_quotes) {
+            entries.insert_last(current.trim_whitespace());
+            current = "";
+            continue;
+        }
+        current += ch;
+    }
+
+    string tail = current.trim_whitespace();
+    if(tail != "") entries.insert_last(tail);
+    return entries;
+}
+
 void load_player_inventory(player@ p, string inventory_json) {
-    debug_log("Carregando inventário de " + p.charname);
-
-    // TODO: Implementar parsing de JSON do inventário
-    // Por enquanto, vamos criar uma implementação básica
-    // que desserializa o JSON e popula o inventário do jogador
-
-    // O inventário está no formato JSON: {"item_name": quantidade, ...}
-    // Exemplo: {"espada_ferro": 1, "pocao_vida": 5, "ouro": 100}
-
-    // NVGT não tem JSON nativo, então vamos fazer parsing manual simples
-    // Para produção, seria melhor usar uma biblioteca JSON ou implementar parser completo
+    debug_log("Carregando inventario de " + p.charname);
 
     if(inventory_json == "" || inventory_json == "{}") {
-        debug_log("Inventário vazio para " + p.charname);
+        debug_log("Inventario vazio para " + p.charname);
         return;
     }
 
-    // Remover chaves do JSON
-    inventory_json = inventory_json.substr(1, inventory_json.length() - 2);
-
-    // Split por vírgulas (itens)
-    string[] items = inventory_json.split(",");
-
-    for(uint i = 0; i < items.length(); i++) {
-        // Split por : (nome:quantidade)
-        string[] parts = items[i].split(":");
-        if(parts.length() >= 2) {
-            string item_name = parts[0].trim_whitespace();
-            item_name = item_name.substr(1, item_name.length() - 2); // Remover aspas
-
-            int quantidade = string_to_number(parts[1].trim_whitespace());
-
-            // Adicionar item ao inventário do jogador
-            p.inv.set(item_name, quantidade);
-            debug_log("  + " + item_name + " x" + quantidade);
-        }
+    if(inventory_json.length() < 2 || inventory_json[0] != '{' || inventory_json[inventory_json.length() - 1] != '}') {
+        debug_log("Inventario JSON invalido para " + p.charname + ": formato inesperado");
+        return;
     }
 
-    debug_log("✓ Inventário carregado: " + p.inv.get_keys().length() + " tipos de itens");
+    inventory_json = inventory_json.substr(1, inventory_json.length() - 2);
+    if(inventory_json.trim_whitespace() == "") {
+        debug_log("Inventario vazio para " + p.charname);
+        return;
+    }
+
+    string[] items = parse_simple_json_object_entries(inventory_json);
+    for(uint i = 0; i < items.length(); i++) {
+        string entry = items[i].trim_whitespace();
+        if(entry == "") continue;
+
+        int sep = entry.find_first(":");
+        if(sep <= 0) continue;
+
+        string key_raw = entry.substr(0, sep).trim_whitespace();
+        string val_raw = entry.substr(sep + 1).trim_whitespace();
+        if(key_raw.length() < 2 || key_raw[0] != '"' || key_raw[key_raw.length() - 1] != '"') continue;
+
+        string item_name = json_unescape_string(key_raw.substr(1, key_raw.length() - 2));
+        int quantidade = string_to_number(val_raw);
+        if(item_name == "" || quantidade <= 0) continue;
+
+        p.inv.set(item_name, quantidade);
+        debug_log("  + " + item_name + " x" + quantidade);
+    }
+
+    debug_log("Inventario carregado: " + p.inv.get_keys().length() + " tipos de itens");
 }
 
 // Salvar inventário do jogador no banco de dados
 void save_player_inventory_to_db(player@ p) {
     if(@p == null) return;
-    
-    // Gerar JSON do inventário
+
     string json = "{";
     string[] keys = p.inv.get_keys();
+    bool first = true;
     for(uint i = 0; i < keys.length(); i++) {
         int qty = 0;
         p.inv.get(keys[i], qty);
-        if(i > 0) json += ",";
-        json += "\"" + keys[i] + "\":" + qty;
+        if(qty <= 0) continue;
+
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(keys[i]) + "\":" + qty;
     }
     json += "}";
-    
-    // Atualizar no banco
+
     string query = "UPDATE players SET inventory = ? WHERE username = ?;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt != null) {
         stmt.bind_text(1, json);
         stmt.bind_text(2, p.charname);
         stmt.step();
-        debug_log("✓ Inventário salvo no banco para " + p.charname);
+        debug_log("Inventario salvo no banco para " + p.charname);
     }
+}
+
+string build_player_equipment_json(player@ p) {
+    if(@p == null) return "{}";
+
+    string json = "{";
+    bool first = true;
+
+    string slot_name = "";
+    string item_name = "";
+
+    if(p.colete_aprova_de_balas == 1) { slot_name = "colete"; item_name = "colete_aprova_de_balas"; }
+    else if(p.coletemilitar == 1) { slot_name = "colete"; item_name = "coletemilitar"; }
+    else if(p.coletecamuflado == 1) { slot_name = "colete"; item_name = "coletecamuflado"; }
+    else if(p.coletesalvavida == 1) { slot_name = "colete"; item_name = "coletesalvavida"; }
+    else if(p.coletemizuno == 1) { slot_name = "colete"; item_name = "coletemizuno"; }
+    if(slot_name != "") {
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(slot_name) + "\":\"" + json_escape_string(item_name) + "\"";
+        slot_name = ""; item_name = "";
+    }
+
+    if(p.capacetepolicia == 1) { slot_name = "capacete"; item_name = "capacete_policia"; }
+    else if(p.chapeupanama == 1) { slot_name = "capacete"; item_name = "chapeu_panama"; }
+    else if(p.bonemizuno == 1) { slot_name = "capacete"; item_name = "bone_mizuno"; }
+    if(slot_name != "") {
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(slot_name) + "\":\"" + json_escape_string(item_name) + "\"";
+        slot_name = ""; item_name = "";
+    }
+
+    if(p.escudo == 1) {
+        if(!first) json += ",";
+        first = false;
+        json += "\"escudo\":\"escudo\"";
+    }
+    if(p.luvas == 1) {
+        if(!first) json += ",";
+        first = false;
+        json += "\"luvas\":\"luvas\"";
+    }
+
+    if(p.coturnomilitar == 1) { slot_name = "sapato"; item_name = "coturno_militar"; }
+    else if(p.tenisnike == 1) { slot_name = "sapato"; item_name = "tenis_nike"; }
+    else if(p.tenisadidas == 1) { slot_name = "sapato"; item_name = "tenis_adidas"; }
+    if(slot_name != "") {
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(slot_name) + "\":\"" + json_escape_string(item_name) + "\"";
+        slot_name = ""; item_name = "";
+    }
+
+    if(p.pulseiraouro == 1) { slot_name = "pulseira"; item_name = "pulseira_ouro"; }
+    else if(p.pulseiraprata == 1) { slot_name = "pulseira"; item_name = "pulseira_prata"; }
+    else if(p.pulseirabronze == 1) { slot_name = "pulseira"; item_name = "pulseira_bronze"; }
+    else if(p.pulseira == 1) { slot_name = "pulseira"; item_name = "pulseira"; }
+    if(slot_name != "") {
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(slot_name) + "\":\"" + json_escape_string(item_name) + "\"";
+        slot_name = ""; item_name = "";
+    }
+
+    if(p.anel == 1) {
+        if(!first) json += ",";
+        first = false;
+        json += "\"anel\":\"anel\"";
+    }
+    if(p.bracadeira == 1) {
+        if(!first) json += ",";
+        first = false;
+        json += "\"bracadeira\":\"bracadeira\"";
+    }
+
+    if(p.caneleirametal == 1) { slot_name = "caneleira"; item_name = "caneleira_metal"; }
+    else if(p.caneleiramadeira == 1) { slot_name = "caneleira"; item_name = "caneleira_madeira"; }
+    if(slot_name != "") {
+        if(!first) json += ",";
+        first = false;
+        json += "\"" + json_escape_string(slot_name) + "\":\"" + json_escape_string(item_name) + "\"";
+    }
+
+    json += "}";
+    return json;
+}
+
+void save_player_equipment_to_db(player@ p) {
+    if(@p == null || !database_initialized || bancoJogo is null) return;
+
+    string equipment_json = build_player_equipment_json(p);
+    string query = "UPDATE players SET equipment = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return;
+
+    stmt.bind_text(1, equipment_json);
+    stmt.bind_text(2, p.charname);
+    stmt.step();
 }
 
 void load_player_equipment(player@ p, string equipment_json) {
     debug_log("Carregando equipamentos de " + p.charname);
-
-    // Equipamentos no formato JSON: {"slot": "item_name", ...}
-    // Exemplo: {"arma": "espada_ferro", "armadura": "colete_kevlar", "capacete": "capacete_policia"}
 
     if(equipment_json == "" || equipment_json == "{}") {
         debug_log("Equipamentos vazios para " + p.charname);
         return;
     }
 
-    // Parsing simples de JSON (similar ao inventário)
-    equipment_json = equipment_json.substr(1, equipment_json.length() - 2);
-    string[] equipments = equipment_json.split(",");
-
-    for(uint i = 0; i < equipments.length(); i++) {
-        string[] parts = equipments[i].split(":");
-        if(parts.length() >= 2) {
-            string slot = parts[0].trim_whitespace();
-            slot = slot.substr(1, slot.length() - 2); // Remover aspas
-
-            string item = parts[1].trim_whitespace();
-            item = item.substr(1, item.length() - 2); // Remover aspas
-
-            // Aplicar equipamento baseado no slot
-            apply_equipment_to_player(p, slot, item);
-            debug_log("  + Equipado: " + item + " em " + slot);
-        }
+    if(equipment_json.length() < 2 || equipment_json[0] != '{' || equipment_json[equipment_json.length() - 1] != '}') {
+        debug_log("Equipamentos JSON invalido para " + p.charname + ": formato inesperado");
+        return;
     }
 
-    debug_log("✓ Equipamentos carregados");
+    equipment_json = equipment_json.substr(1, equipment_json.length() - 2);
+    if(equipment_json.trim_whitespace() == "") {
+        debug_log("Equipamentos vazios para " + p.charname);
+        return;
+    }
+
+    string[] equipments = parse_simple_json_object_entries(equipment_json);
+    for(uint i = 0; i < equipments.length(); i++) {
+        string entry = equipments[i].trim_whitespace();
+        if(entry == "") continue;
+
+        int sep = entry.find_first(":");
+        if(sep <= 0) continue;
+
+        string slot_raw = entry.substr(0, sep).trim_whitespace();
+        string item_raw = entry.substr(sep + 1).trim_whitespace();
+        if(slot_raw.length() < 2 || slot_raw[0] != '"' || slot_raw[slot_raw.length() - 1] != '"') continue;
+        if(item_raw.length() < 2 || item_raw[0] != '"' || item_raw[item_raw.length() - 1] != '"') continue;
+
+        string slot = json_unescape_string(slot_raw.substr(1, slot_raw.length() - 2));
+        string item = json_unescape_string(item_raw.substr(1, item_raw.length() - 2));
+        if(slot == "" || item == "") continue;
+
+        apply_equipment_to_player(p, slot, item);
+        debug_log("  + Equipado: " + item + " em " + slot);
+    }
+
+    debug_log("Equipamentos carregados");
 }
 
 void apply_equipment_to_player(player@ p, string slot, string item_name) {
@@ -658,7 +842,7 @@ void send_players(player@ p, bool to_others = true) {
         final = "set_map_players none";
     }
     
-    send_reliable(p.peer_id, final, 6);
+    send_reliable_text(p.peer_id, final, 6);
     debug_log("  ✓ Lista de jogadores enviada (" + count + " jogadores no mapa)");
     
     // Notificar outros jogadores no mapa
@@ -689,7 +873,7 @@ void send_inventory_to_client(player@ p) {
         }
     }
 
-    send_reliable(p.peer_id, inv_packet, 0);
+    send_reliable_text(p.peer_id, inv_packet, 0);
     debug_log("  ✓ Inventário enviado (" + keys.length() + " itens)");
 }
 
@@ -698,7 +882,7 @@ void send_inventory_to_client(player@ p) {
 void send_item_update_to_client(player@ p, string item_name, int quantidade) {
     if(@p == null) return;
     string packet = "inv " + item_name + "=" + quantidade + "\r\n";
-    send_reliable(p.peer_id, packet, 0);
+    send_reliable_text(p.peer_id, packet, 0);
 }
 
 void send_equipment_to_client(player@ p) {
@@ -723,7 +907,7 @@ void send_equipment_to_client(player@ p) {
         if(i > 0) equipment_csv += ",";
         equipment_csv += equipped[i];
     }
-    send_reliable(p.peer_id, "setequipment " + equipment_csv, 0);
+    send_reliable_text(p.peer_id, "setequipment " + equipment_csv, 0);
 
     debug_log("  ✓ Equipamentos enviados");
 }
@@ -739,7 +923,7 @@ void send_stats_to_client(player@ p) {
     stats_packet += p.level + "|";
     stats_packet += p.gold;
 
-    send_reliable(p.peer_id, stats_packet, 0);
+    send_reliable_text(p.peer_id, stats_packet, 0);
 
     debug_log("  ✓ Stats enviados");
 }
@@ -759,7 +943,7 @@ void send_configs_to_client(player@ p) {
     }
 
     // Protocolo estruturado para cliente: setconfig idioma|voice|voice_id
-    send_reliable(p.peer_id, "setconfig " + p.idiomachat + "|" + p.voice + "|" + p.voice_id, 0);
+    send_reliable_text(p.peer_id, "setconfig " + p.idiomachat + "|" + p.voice + "|" + p.voice_id, 0);
 
     debug_log("  ✓ Configurações enviadas");
 }
@@ -769,11 +953,11 @@ void send_welcome_message(player@ p) {
     string welcome = "Bem-vindo de volta, " + p.charname + "!";
     // TODO: Adicionar campo last_login na classe player se necessário
 
-    send_reliable(p.peer_id, "msg|" + welcome, 0);
+    send_reliable_text(p.peer_id, "msg|" + welcome, 0);
 
     // Informações adicionais
-    send_reliable(p.peer_id, "msg|Nível: " + p.level + " | XP: " + p.exp + "/" + p.xprequerida, 0);
-    send_reliable(p.peer_id, "msg|Ouro: " + p.gold + " | Stryx: " + p.stryx, 0);
+    send_reliable_text(p.peer_id, "msg|Nível: " + p.level + " | XP: " + p.exp + "/" + p.xprequerida, 0);
+    send_reliable_text(p.peer_id, "msg|Ouro: " + p.gold + " | Stryx: " + p.stryx, 0);
 
     debug_log("  ✓ Mensagem de boas-vindas enviada");
 }
@@ -863,3 +1047,5 @@ bool load_player_complete(player@ p) {
 //
 // Este é o sistema que substitui load_configs.bgt + get_player_info.bgt
 // ============================================================
+
+

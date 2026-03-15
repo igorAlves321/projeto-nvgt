@@ -55,7 +55,7 @@ void netloop() {
 
 // send_unreliable wrapper (NVGT pode usar apenas reliable)
 void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
-    send_reliable(peer_id, packet, channel);
+    send_reliable_text(peer_id, packet, channel);
 }
 
 // ==================== FUNÇÕES ADMINISTRATIVAS (Únicas aqui) ====================
@@ -67,7 +67,7 @@ void msgadm(string message) {
     msgadm_array.push_back(message);
     for(uint i = 0; i < players.length(); i++) {
         if(players[i].admin_status) {
-            send_reliable(players[i].peer_id, "msg [ADM] " + message);
+            send_reliable_text(players[i].peer_id, "msg [ADM] " + message);
         }
     }
 }
@@ -101,7 +101,7 @@ void apply_doublexp(string player_name, int amount) {
     players[index].exp += amount * 2;
     players[index].xp += amount * 2;
     check_level_up(index);
-    send_reliable(players[index].peer_id,
+    send_reliable_text(players[index].peer_id,
         "msg2 Você ganhou +" + (amount * 2) + " XP (Dobrado)!", 0);
     debug_log("DOUBLEXP: " + player_name + " ganhou " + (amount * 2) + " XP");
 }
@@ -112,7 +112,7 @@ void ge(string playername, double amount) {
     int index = get_player_index_from(playername);
     if (index > -1) {
         players[index].creditos += amount;
-        send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " créditos!", 0);
+        send_reliable_text(players[index].peer_id, "msg2 Você recebeu " + amount + " créditos!", 0);
         debug_log("GE: " + playername + " recebeu " + amount + " créditos");
     }
 }
@@ -122,7 +122,7 @@ void gc(string playername, double amount) {
     int index = get_player_index_from(playername);
     if (index > -1) {
         players[index].inv_add_item("coins", int(amount));
-        send_reliable(players[index].peer_id, "msg2 Você recebeu " + amount + " moedas!", 0);
+        send_reliable_text(players[index].peer_id, "msg2 Você recebeu " + amount + " moedas!", 0);
         debug_log("GC: " + playername + " recebeu " + amount + " moedas");
     }
 }
@@ -153,8 +153,48 @@ bool exists_player_in_my_map(int npc_index) {
 
     return false;
 }
-int select_player_to_attack(int npc_index) { return -1; }
-void change_player(int npc_index) {}
+int select_player_to_attack(int npc_index) {
+    if(npc_index < 0) return -1;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            if(server_maps[m].mapplayers.length() == 0) return -1;
+            int pick = random(0, server_maps[m].mapplayers.length() - 1);
+            int player_index = server_maps[m].mapplayers[pick];
+            if(player_index < 0 || player_index >= int(players.length())) return -1;
+            return player_index;
+        }
+        flat_index += npc_count;
+    }
+    return -1;
+}
+
+int change_player(int npc_index, int exclude = -1) {
+    if(npc_index < 0) return -1;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            for(uint i = 0; i < server_maps[m].mapplayers.length(); i++) {
+                int candidate = server_maps[m].mapplayers[i];
+                if(candidate == exclude) continue;
+                if(candidate < 0 || candidate >= int(players.length())) continue;
+                if(players[candidate].health <= 0 || players[candidate].afk || players[candidate].pacifico == 1 || players[candidate].newbie) continue;
+                return candidate;
+            }
+            return -1;
+        }
+        flat_index += npc_count;
+    }
+    return -1;
+}
+
+void change_player(int npc_index) {
+    change_player(npc_index, -1);
+}
 
 bool exists_player_in_my_map(string map_name) {
     if(map_name == "") return false;
@@ -177,7 +217,31 @@ double round(double value) {
 
 // Função de split customizada
 string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
-    return str.split(delimiter);
+    string[] result;
+
+    if(delimiter == "") {
+        result.insert_last(str);
+        return result;
+    }
+
+    if(max_parts <= 0) {
+        return str.split(delimiter);
+    }
+
+    int start = 0;
+    int pieces = 0;
+
+    while(pieces < max_parts - 1) {
+        int pos = str.find(delimiter, start);
+        if(pos < 0) break;
+
+        result.insert_last(str.substr(start, pos - start));
+        start = pos + delimiter.length();
+        pieces++;
+    }
+
+    result.insert_last(str.substr(start));
+    return result;
 }
 
 // ==================== FUNÇÕES DE STRING (Únicas aqui) ====================
@@ -336,28 +400,28 @@ void changename(int player_index, string new_name) {
     p.validated_name = "";
 
     if(old_name == "" || target_name == "") {
-        send_reliable(p.peer_id, "msg2 Nao foi possivel alterar nome: dados invalidos.", 0);
+        send_reliable_text(p.peer_id, "msg2 Nao foi possivel alterar nome: dados invalidos.", 0);
         return;
     }
 
     if(target_name == old_name) {
-        send_reliable(p.peer_id, "msg2 Seu nome ja estava atualizado.", 0);
+        send_reliable_text(p.peer_id, "msg2 Seu nome ja estava atualizado.", 0);
         return;
     }
 
     if(!is_valid_username(target_name)) {
-        send_reliable(p.peer_id, "msg2 Nome invalido. Use apenas letras/numeros (3 a 20).", 0);
+        send_reliable_text(p.peer_id, "msg2 Nome invalido. Use apenas letras/numeros (3 a 20).", 0);
         return;
     }
 
     int conflict_online = get_player_index_from(target_name);
     if(conflict_online >= 0 && conflict_online != player_index) {
-        send_reliable(p.peer_id, "msg2 Ja existe um jogador online com esse nome.", 0);
+        send_reliable_text(p.peer_id, "msg2 Ja existe um jogador online com esse nome.", 0);
         return;
     }
 
     if(player_exists_in_database(target_name)) {
-        send_reliable(p.peer_id, "msg2 Esse nome ja esta em uso.", 0);
+        send_reliable_text(p.peer_id, "msg2 Esse nome ja esta em uso.", 0);
         return;
     }
 
@@ -366,14 +430,14 @@ void changename(int player_index, string new_name) {
         string q = "UPDATE players SET username = ? WHERE username = ?;";
         sqlite3statement@ stmt = bancoJogo.prepare(q);
         if(stmt is null) {
-            send_reliable(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+            send_reliable_text(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
             debug_log("CHANGENAME: falha prepare players update: " + bancoJogo.get_last_error_text());
             return;
         }
         stmt.bind_text(1, target_name);
         stmt.bind_text(2, old_name);
-        if(!stmt.step()) {
-            send_reliable(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+        if(stmt.step() != SQLITE_DONE) {
+            send_reliable_text(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
             debug_log("CHANGENAME: falha step players update: " + bancoJogo.get_last_error_text());
             return;
         }
@@ -414,6 +478,32 @@ void changename(int player_index, string new_name) {
     p.charname = target_name;
     p.name = target_name;
     set_peer_name(p.peer_id, target_name);
+
+    // Atualizar referencias em outros jogadores online (respostas, observacao, equipe, bounty)
+    for(uint oi = 0; oi < players.length(); oi++) {
+        if(players[oi] is null) continue;
+
+        if(players[oi].replyname == old_name) {
+            players[oi].replyname = target_name;
+        }
+        if(players[oi].w_name == old_name) {
+            players[oi].w_name = target_name;
+        }
+        if(players[oi].bounty_owner == old_name) {
+            players[oi].bounty_owner = target_name;
+        }
+
+        for(uint ni = 0; ni < players[oi].nomesequipe.length(); ni++) {
+            if(players[oi].nomesequipe[ni] == old_name) {
+                players[oi].nomesequipe[ni] = target_name;
+            }
+        }
+        for(uint wi = 0; wi < players[oi].watcher_list.length(); wi++) {
+            if(players[oi].watcher_list[wi] == old_name) {
+                players[oi].watcher_list[wi] = target_name;
+            }
+        }
+    }
 
     // Atualizar guilds ativas + indice player_guilds
     for(uint gi = 0; gi < active_guilds.length(); gi++) {
@@ -530,18 +620,13 @@ void changename(int player_index, string new_name) {
     string old_dir = "players/" + old_name;
     string new_dir = "players/" + target_name;
     if(directory_exists(old_dir) && !directory_exists(new_dir)) {
-        directory_copy(old_dir, new_dir, true);
-        if(directory_exists(new_dir)) {
-            directory_delete(old_dir);
-        } else {
-            debug_log("CHANGENAME: aviso - nao foi possivel copiar pasta legada de " + old_dir + " para " + new_dir);
-        }
+        debug_log("CHANGENAME: migracao automatica de pasta legada nao suportada por este runtime (" + old_dir + " -> " + new_dir + ").");
     }
 
     // Persistir estado atual completo do jogador com o novo username
     save_player_to_database(p);
 
-    send_reliable(p.peer_id, "msg2 Nome alterado com sucesso para " + target_name + ".", 0);
+    send_reliable_text(p.peer_id, "msg2 Nome alterado com sucesso para " + target_name + ".", 0);
     debug_log("CHANGENAME: " + old_name + " -> " + target_name);
 }
 
@@ -551,7 +636,7 @@ bool cmd_server_info(player@ player, string[] args) {
     info += "Versão: NVGT Alpha\\r\\n";
     info += "Jogadores Online: " + connected_count + "/" + MAX_PLAYERS + "\\r\\n";
     info += "Uptime: " + (server_uptime.elapsed / 1000) + " segundos\\r\\n";
-    send_reliable(player.peer_id, "say " + info);
+    send_reliable_text(player.peer_id, "say " + info);
     return true;
 }
 
@@ -560,7 +645,21 @@ void player_add_status_property() {}
 
 // Função de spawn de fogo do jogador (versão alternativa)
 void spawn_playerfire(int x, int y, string map_name, string owner = "") {
-    // TODO: Implementar spawn_playerfire
+    if(map_name == "") return;
+
+    string fire_owner = owner.trim_whitespace();
+    if(fire_owner == "") fire_owner = "ambiente";
+
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i] is null) continue;
+        if(!players[i].is_logged_in) continue;
+        if(players[i].map != map_name) continue;
+        if(players[i].health <= 0) continue;
+        if(players[i].x != x || players[i].y != y) continue;
+        if(owner != "" && players[i].charname == owner) continue;
+
+        players[i].spawn_playerfire(fire_owner);
+    }
 }
 
 // ==================== FUNÇÕES DE HISTORY (Log e Estatísticas) ====================
@@ -575,6 +674,10 @@ int stats_items_collected = 0;
 int stats_messages_sent = 0;
 int stats_database_queries = 0;
 int stats_backup_count = 0;
+const int ACTION_HISTORY_MAX = 500;
+string[] action_history_lines;
+string[] action_history_players;
+string[] action_history_types;
 
 void log_action(string player_name, string action_type, string action_details,
                 string map_name = "", int x = 0, int y = 0, int z = 0,
@@ -594,6 +697,14 @@ void log_action(string player_name, string action_type, string action_details,
         log_msg += " [Extra: " + additional_data + "]";
     }
     debug_log(log_msg);
+    action_history_lines.insert_last(log_msg);
+    action_history_players.insert_last(player_name);
+    action_history_types.insert_last(action_type);
+    while(action_history_lines.length() > ACTION_HISTORY_MAX) {
+        action_history_lines.remove_at(0);
+        action_history_players.remove_at(0);
+        action_history_types.remove_at(0);
+    }
 }
 
 void update_statistics(string stat_type, int increment = 1) {
@@ -638,9 +749,21 @@ string get_current_statistics_report() {
 }
 
 string[] get_recent_actions(int limit = 50, string action_type = "", string player_name = "") {
-    // Retorna array vazio - implementação completa em history.nvgt
     string[] results;
-    results.push_back("Histórico disponível quando history.nvgt estiver ativo");
+    if(limit <= 0) limit = 1;
+    string type_filter = action_type.trim_whitespace();
+    string player_filter = player_name.trim_whitespace();
+
+    for(int i = int(action_history_lines.length()) - 1; i >= 0; i--) {
+        if(player_filter != "" && action_history_players[i] != player_filter) continue;
+        if(type_filter != "" && action_history_types[i] != type_filter) continue;
+        results.insert_last(action_history_lines[i]);
+        if(int(results.length()) >= limit) break;
+    }
+
+    if(results.length() == 0) {
+        results.insert_last("Nenhuma acao registrada com os filtros informados.");
+    }
     return results;
 }
 
@@ -697,3 +820,4 @@ class clothes_data {
 clothes_data@[] clothes;
 
 // ==================== FIM DO ARQUIVO ====================
+
