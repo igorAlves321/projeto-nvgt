@@ -639,6 +639,29 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			add_add_item("avisos", a);
 			return;
 		}
+		// Captura erros padronizados do item builder para não deixar requisições pendentes.
+		if(a.find("[ERRO] /") == 0) {
+			bool is_item_builder_error = (a.find("/list_items") >= 0 ||
+				a.find("/create_item_tool") >= 0 ||
+				a.find("/edit_item_tool") >= 0 ||
+				a.find("/delete_item_tool") >= 0 ||
+				a.find("/item_builder_meta") >= 0);
+			if(is_item_builder_error) {
+				if(item_list_request_pending) {
+					item_list_response_payload = a;
+					item_list_response_ready = true;
+					item_list_request_pending = false;
+				}
+				if(item_builder_meta_request_pending) {
+					item_builder_meta_response_payload = "";
+					item_builder_meta_response_ready = false;
+					item_builder_meta_request_pending = false;
+				}
+				speak(a, true);
+				add_add_item("avisos", a);
+				return;
+			}
+		}
 		if(a.find("Nenhum item cadastrado") >= 0) {
 			if(item_list_request_pending) {
 				item_list_response_payload = pu.get_value("Nenhum item cadastrado.");
