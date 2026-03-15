@@ -1,0 +1,203 @@
+// msound.nvgt - Sistema de Sons Móveis do Servidor (Refatorado)
+// =============================================================================
+// ARQUITETURA: O servidor gerencia apenas ENTIDADES LÓGICAS (coordenadas).
+// O áudio 3D é processado pelos CLIENTES após receberem os pacotes cm/um/dm.
+// =============================================================================
+
+// Classe de dados pura - SEM processamento de áudio
+class msound_entity {
+	string id;           // ID único do som
+	string soundfile;    // Arquivo de som (ex: "helicopteroloop.ogg")
+	int x, y;            // Posição no mapa (2D)
+	string map;          // Nome do mapa
+	bool looping;        // Se o som faz loop
+	bool active;         // Se a entidade está ativa
+	timer lifetime;      // Timer de vida útil
+	int max_lifetime;    // Vida útil máxima (ms), 0 = infinito
+	
+	// Construtor
+	msound_entity(string i, string snd, int sx, int sy, string smap, bool loop = true, int life = 0) {
+		id = i;
+		soundfile = snd;
+		x = sx;
+		y = sy;
+		map = smap;
+		looping = loop;
+		max_lifetime = life;
+		active = true;
+		lifetime.restart();
+	}
+	
+	// Atualizar posição
+	void update_position(int new_x, int new_y) {
+		x = new_x;
+		y = new_y;
+	}
+	
+	// Verificar se deve ser removido
+	bool should_remove() {
+		if (!active) return true;
+		
+		// Verificar lifetime
+		if (max_lifetime > 0 && lifetime.elapsed >= max_lifetime * 1000) {
+			active = false;
+			return true;
+		}
+		
+		return false;
+	}
+	
+	// Desativar entidade
+	void stop() {
+		active = false;
+	}
+}
+
+// Array global de entidades de som
+msound_entity@[] msounds;
+
+// Contador para gerar IDs únicos
+int msound_next_id = 1;
+
+// =============================================================================
+// FUNÇÕES PÚBLICAS - Usadas pelo código do jogo
+// =============================================================================
+
+// Criar som móvel e notificar clientes
+// Retorna: ID numérico do som
+int spawn_moving_sound(string soundfile, int x, int y, string map) {
+	int id = msound_next_id++;
+	
+	// Criar entidade lógica
+	msound_entity@ entity = msound_entity("" + id, soundfile, x, y, map, true, 0);
+	msounds.insert_last(entity);
+	
+	// BROADCAST para todos os clientes no mapa
+	// Formato: cm <id> <soundfile> <x> <y> <map>
+	broadcast_to_map(map, "cm " + id + " " + soundfile + " " + x + " " + y + " " + map);
+	
+	debug_log("✅ Som móvel criado: ID=" + id + " som=" + soundfile + " pos=(" + x + "," + y + ") mapa=" + map);
+	
+	return id;
+}
+
+// Criar som móvel com vida útil limitada
+int spawn_moving_sound_timed(string soundfile, int x, int y, string map, int lifetime_ms) {
+	int id = msound_next_id++;
+	
+	msound_entity@ entity = msound_entity("" + id, soundfile, x, y, map, true, lifetime_ms);
+	msounds.insert_last(entity);
+	
+	broadcast_to_map(map, "cm " + id + " " + soundfile + " " + x + " " + y + " " + map);
+	
+	debug_log("✅ Som móvel temporário criado: ID=" + id + " lifetime=" + lifetime_ms + "ms");
+	
+	return id;
+}
+
+// Atualizar posição de som móvel e notificar clientes
+void update_moving_sound(int id, int new_x, int new_y) {
+	for (uint i = 0; i < msounds.length(); i++) {
+		if (msounds[i].id == "" + id) {
+			msounds[i].update_position(new_x, new_y);
+			
+			// BROADCAST atualização de posição
+			// Formato: um <id> <x> <y>
+			broadcast_to_map(msounds[i].map, "um " + id + " " + new_x + " " + new_y);
+			return;
+		}
+	}
+}
+
+// Destruir som móvel e notificar clientes
+void destroy_moving_sound(int id) {
+	for (uint i = 0; i < msounds.length(); i++) {
+		if (msounds[i].id == "" + id) {
+			string map = msounds[i].map;
+			
+			// BROADCAST destruição
+			// Formato: destroymsound <id>
+			broadcast_to_map(map, "destroymsound " + id);
+			
+			@msounds[i] = null;
+			msounds.remove_at(i);
+			
+			debug_log("🗑️ Som móvel destruído: ID=" + id);
+			return;
+		}
+	}
+}
+
+// Destruir todos os sons em um mapa
+void clear_moving_sounds_in_map(string map) {
+	for (uint i = 0; i < msounds.length(); i++) {
+		if (msounds[i].map == map) {
+			broadcast_to_map(map, "destroymsound " + msounds[i].id);
+			@msounds[i] = null;
+			msounds.remove_at(i);
+			i--;
+		}
+	}
+}
+
+// =============================================================================
+// LOOP DE MANUTENÇÃO - Chamar periodicamente no game loop
+// =============================================================================
+
+void moving_sounds_loop() {
+	// Remover sons expirados
+	for (uint i = 0; i < msounds.length(); i++) {
+		if (msounds[i].should_remove()) {
+			// Notificar clientes antes de remover
+			broadcast_to_map(msounds[i].map, "destroymsound " + msounds[i].id);
+			
+			@msounds[i] = null;
+			msounds.remove_at(i);
+			i--;
+		}
+	}
+}
+
+// =============================================================================
+// FUNÇÕES DE COMPATIBILIDADE - Mantém assinatura original BGT
+// =============================================================================
+
+// Destruir por ID string
+void destroy_moving_sound(string id) {
+	destroy_moving_sound(parse_int(id));
+}
+
+// Atualizar por ID string
+void update_moving_sound(string id, int x, int y) {
+	update_moving_sound(parse_int(id), x, y);
+}
+
+// =============================================================================
+// INICIALIZAÇÃO
+// =============================================================================
+
+void init_moving_sounds() {
+	msounds.resize(0);
+	msound_next_id = 1;
+	debug_log("✅ Sistema de sons móveis inicializado (servidor - broadcast mode)");
+}
+
+// =============================================================================
+// DIAGNÓSTICO
+// =============================================================================
+
+int get_active_sounds_count() {
+	return msounds.length();
+}
+
+string get_sounds_info() {
+	string info = "Sons móveis ativos: " + msounds.length() + "\n";
+	
+	for (uint i = 0; i < msounds.length(); i++) {
+		info += "  [" + msounds[i].id + "] " + msounds[i].soundfile + 
+		        " @ (" + msounds[i].x + ", " + msounds[i].y + ")" +
+		        " - Mapa: " + msounds[i].map + "\n";
+	}
+	
+	return info;
+}

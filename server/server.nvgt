@@ -1,0 +1,2605 @@
+#pragma plugin nvgt_sqlite
+
+// SQLite deve vir antes de m�dulos que dependem dele
+#include "sqlite3constants.nvgt"
+
+// Utilitários
+#include "token_gen.nvgt"  // Task 1.2.2: Geração de salt
+
+// Configurações do servidor
+const int SERVER_PORT = 9317;
+const string server_version = "1.0.0-alpha"; // Versão do servidor
+// const int MAX_PLAYERS = 100; // Movido para stubs.nvgt como variável modificável
+const string DATABASE_FILE = "server/database/evm.db";
+
+// Forward declaration removida - NVGT n�o suporta forward declarations com void
+
+// Sistema de banco de dados - variáveis definidas em shared_globals.nvgt
+
+#include "includes/shared_globals.nvgt"
+#include "includes/globals.nvgt"
+#include "includes/network.nvgt"
+#include "includes/var_management.nvgt"  // Sistema de gerenciamento de variáveis (necessário para player.nvgt)
+#include "includes/db.nvgt"  // Sistema de invent�rio (necessário para player.nvgt)
+#include "includes/player.nvgt"
+#include "includes/settitle.nvgt"  // Sistema de patentes/t�tulos
+#include "includes/bounty.nvgt"    // Sistema de recompensas
+#include "includes/store.nvgt"     // ✅ Task 1.4.1: Sistema de Lojas NPC
+#include "includes/builder.nvgt"   // ✅ Task 1.5.3: Sistema de Construção de Mapas
+#include "includes/auction.nvgt"   // ✅ Task 1.4.2: Sistema de Leilões Thread-Safe
+#include "includes/arena.nvgt"     // Sistema de Arena PvP
+#include "includes/progressive_death.nvgt"  // Sistema de morte progressiva
+#include "includes/clothing.nvgt"  // Sistema avançado de vestimentas
+#include "includes/calendar.nvgt"  // Sistema de calendário/tempo
+#include "includes/db_auth.nvgt"  // Funções de banco de dados para autenticação
+#include "includes/db_bans.nvgt"  // ✅ Migração SQL: Sistema de banimentos SQLite
+#include "includes/auth.nvgt"  // Sistema de autenticação com hash SHA-256
+#include "includes/server_map.nvgt"
+#include "includes/item.nvgt"
+#include "includes/bullet.nvgt"
+#include "includes/refletir.nvgt"  // Sistema de reflexo de dano (extraído de comandos.nvgt)
+#include "includes/commands.nvgt"  // Comandos do servidor
+#include "includes/mine/mina.nvgt"
+#include "includes/moving_sound/msound.nvgt"
+#include "includes/mine/objmagnet.nvgt"
+#include "includes/wall.nvgt"
+#include "includes/voids.nvgt"
+#include "includes/rotation.nvgt"
+#include "includes/splay.nvgt"
+#include "includes/projetei.nvgt"
+#include "includes/missilguiado.nvgt"
+#include "includes/stubs.nvgt"
+#include "includes/apartamento.nvgt"
+#include "includes/banheiro.nvgt"
+#include "includes/bombaatomica.nvgt"
+#include "includes/bombanuclear.nvgt"
+#include "includes/comandos/maxbomba.nvgt" // Sistema de bomba máxima
+#include "includes/canhao.nvgt"
+#include "includes/fogo.nvgt"
+#include "includes/pia.nvgt"
+#include "includes/fonteagua.nvgt"
+#include "includes/fogogrudado.nvgt"
+#include "includes/fitaexplosiva.nvgt"
+#include "includes/computador.nvgt"
+#include "includes/bombadefogo.nvgt"
+#include "includes/help.nvgt"
+#include "includes/ip_locale.nvgt"
+#include "includes/changes.nvgt"
+#include "includes/compban.nvgt"
+#include "includes/minaouro.nvgt"
+#include "includes/helicoptero.nvgt"
+#include "includes/boladefogo.nvgt"
+#include "includes/maquinatempo.nvgt"
+#include "includes/tempocair.nvgt"
+#include "includes/items.nvgt"
+#include "includes/combat.nvgt"
+#include "includes/playerfires.nvgt"  // Sistema de fogo contínuo
+#include "includes/npc.nvgt"  // 🆕 Sistema completo de NPCs
+#include "includes/monstruo.nvgt"  // 🆕 Sistema completo de Monstros
+#include "includes/placeholder_classes.nvgt"  // Classes temporárias (apenas arbol agora)
+#include "includes/platforms.nvgt"  // 🆕 Sistema de plataformas móveis e escadas
+#include "includes/portals.nvgt"  // 🆕 Sistema de portais e teleporte
+#include "includes/vehicles.nvgt"  // 🆕 Sistema de veículos (carros, motos, lanchas)
+#include "includes/safezones.nvgt"  // 🆕 Sistema de zonas seguras (sem PvP)
+#include "includes/tempban.nvgt"  // 🆕 Sistema de banimento temporário
+#include "includes/trading.nvgt"  // 🆕 FASE 4: Sistema de trocas entre jogadores
+#include "includes/party.nvgt"  // 🆕 FASE 4: Sistema de grupos/party
+#include "includes/friends.nvgt"  // 🆕 FASE 4: Sistema de amigos
+#include "includes/guilds.nvgt"  // 🆕 FASE 4: Sistema de guilds/clans
+#include "includes/chat_advanced.nvgt"  // 🆕 FASE 4: Sistema de chat avançado
+#include "includes/qol.nvgt"  // ✅ Task 3.3: Sistema QoL (Frases Rápidas + Tradução)
+#include "includes/mail.nvgt"  // 🆕 FASE 4: Sistema de correio/mail
+#include "includes/quests.nvgt"  // 🆕 FASE 5: Sistema de quests/missões
+#include "includes/achievements.nvgt"  // 🆕 FASE 5: Sistema de conquistas
+#include "includes/daily_rewards.nvgt"  // 🆕 FASE 5: Sistema de recompensas diárias
+#include "includes/bosses.nvgt"  // 🆕 FASE 5: Sistema de bosses
+#include "includes/inventory_sync.nvgt"  // ✅ Task 1.5: Sistema de Inventário + Sincronização Realtime (JSON)
+#include "includes/equipment_buffs.nvgt"  // ✅ Task 1.6: Sistema de Equipamentos e Buffs (Equip + Buff/Debuff)
+#include "includes/loot_drops.nvgt"  // ✅ Task 1.7: Sistema de Loot / Drops no Mapa
+#include "includes/dungeons.nvgt"  // 🆕 FASE 5: Sistema de dungeons
+#include "includes/admin_tools.nvgt"  // ✅ Task 2.6.3: Ferramentas de admin (lanterna/detector)
+#include "includes/events.nvgt"  // 🆕 FASE 5: Sistema de eventos
+#include "includes/weapons.nvgt"  // 🆕 Sistema de armas
+#include "includes/crafting.nvgt"  // Sistema de crafting
+#include "includes/consumables.nvgt"  // 🆕 Sistema de itens consumíveis (poções, comida, buffs)
+#include "includes/inventory_advanced.nvgt"  // 🆕 Sistema de invent�rio avançado
+#include "includes/admin_commands.nvgt"  // Comandos administrativos
+#include "includes/systems_advanced.nvgt"  // Sistemas avançados
+#include "includes/interactions.nvgt"    // ✅ Phase 1: Ported Logic (Validation Required)
+#include "includes/roles.nvgt"  // ✅ Sistema de Cargos/Permissões
+#include "includes/afk_pacifico.nvgt"  // ✅ Modos Ausente (AFK) e Pacífico
+#include "includes/admin_chat.nvgt"  // ✅ Sistema de Chat Administrativo
+#include "db_props.nvgt"
+// sqlite3constants.nvgt já incluído no topo
+
+// ✅ Epic 1 Task 1: Módulo de Inicialização do Servidor
+#include "includes/iniciar.nvgt"
+
+// ✅ Epic 1 Task 2: Módulo de Carregamento do Jogador
+#include "includes/load_player.nvgt"
+
+// ✅ Epic 1 Task 3: Sistema de Rede e Handlers
+#include "includes/network_handlers.nvgt"
+
+// ✅ Epic 1 Task 1.6.1: Sistema de Voice Chat
+#include "includes/voice_chat_handler.nvgt"
+
+// Estados do servidor - variáveis definidas em shared_globals.nvgt
+
+// Temporizadores do servidor
+timer server_uptime;
+timer last_save;
+timer last_backup;
+timer last_combat_cleanup; // 🆕 Timer para cleanup de combates
+timer last_items_cleanup;  // 🆕 Timer para cleanup de itens expirados (Task 1.1.2)
+
+// 🆕 PASSO 3: Rastreador da tarefa assíncrona de limpeza de combates
+async<void>@ cleanup_task;
+// 🆕 Rastreador da tarefa assíncrona de limpeza de itens (Task 1.1.2)
+async<void>@ items_cleanup_task;
+
+// Inicialização do banco de dados
+bool init_database() {
+    debug_log("Inicializando banco de dados SQLite");
+    
+    // Criar diretório database se n�o existir
+    if(!directory_exists("database")) {
+        debug_log("Criando diretório database/");
+        directory_create("database");
+    }
+    
+    // Usar caminho relativo correto
+    string db_path = "database/ig.db";
+    debug_log("Abrindo banco de dados: " + db_path);
+    
+    @bancoJogo = sqlite3();
+    if(@bancoJogo == null) {
+        debug_log("ERRO: Não foi poss�vel criar inst�ncia sqlite3");
+        return false;
+    }
+    
+    int result = bancoJogo.open(db_path);
+    debug_log("Resultado do open(): " + result + " (SQLITE_OK=" + SQLITE_OK + ")");
+    
+    if(result != SQLITE_OK) {
+        debug_log("ERRO: Não foi poss�vel abrir banco de dados: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    debug_log("Banco de dados aberto com sucesso, criando tabelas...");
+    
+    // Criar tabelas se n�o existirem
+    create_database_tables();
+    
+    database_initialized = true;
+    debug_log("Banco de dados inicializado com sucesso");
+    
+    // ✅ Criar tabela de cargos/permissões (depois de database_initialized = true)
+    create_roles_table();
+    
+    // ✅ Migração SQL: Inicializar tabela de banimentos
+    init_bans_table();
+    migrate_legacy_bans(); // Migra banidos.dat e tempbans.usr para SQLite
+    
+    return true;
+}
+
+// Criar estrutura do banco de dados
+void create_database_tables() {
+    // ✅ Epic 1 Task 2: Tabela de jogadores expandida com todos os dados necessários
+    string create_players = """
+        CREATE TABLE IF NOT EXISTS players (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT DEFAULT '',
+            email TEXT,
+            gender INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_login DATETIME,
+
+            -- Dados do jogo
+            level INTEGER DEFAULT 1,
+            experience INTEGER DEFAULT 0,
+            xp_requerida INTEGER DEFAULT 100,
+            gold INTEGER DEFAULT 100,
+            hp INTEGER DEFAULT 100,
+            max_hp INTEGER DEFAULT 100,
+            mp INTEGER DEFAULT 50,
+            max_mp INTEGER DEFAULT 50,
+            race TEXT DEFAULT 'humano',
+
+            -- Localização
+            map_name TEXT DEFAULT 'test',
+            x INTEGER DEFAULT 0,
+            y INTEGER DEFAULT 0,
+            z INTEGER DEFAULT 0,
+
+            -- Status
+            is_admin BOOLEAN DEFAULT FALSE,
+            is_banned BOOLEAN DEFAULT FALSE,
+            is_online BOOLEAN DEFAULT FALSE,
+            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+            -- Inventário e Equipamentos (JSON serializado)
+            inventory TEXT DEFAULT '{}',
+            equipment TEXT DEFAULT '{}',
+
+            -- Estatísticas de jogo
+            play_time INTEGER DEFAULT 0,
+            deaths INTEGER DEFAULT 0,
+            kills INTEGER DEFAULT 0,
+            matou INTEGER DEFAULT 0,
+            arena_wins INTEGER DEFAULT 0,
+            arena_kills INTEGER DEFAULT 0,
+            reencarnacoes INTEGER DEFAULT 0,
+
+            -- Economia
+            stryx REAL DEFAULT 0,
+            creditos REAL DEFAULT 0,
+            saldo REAL DEFAULT 100,
+            gcoins INTEGER DEFAULT 0,
+            greais INTEGER DEFAULT 0,
+
+            -- Sistema de Bounty
+            bounty_on_head INTEGER DEFAULT 0,
+            bounty_value INTEGER DEFAULT 0,
+            bounty_owner TEXT DEFAULT '',
+
+            -- Título e Rank
+            title TEXT DEFAULT '',
+            rank INTEGER DEFAULT 0,
+
+            -- Status/Condições
+            stamina INTEGER DEFAULT 100,
+            fome INTEGER DEFAULT 0,
+            sanity REAL DEFAULT 100.0,
+            radiation INTEGER DEFAULT 0,
+
+            -- Configurações do Jogador
+            voice_id TEXT DEFAULT 'default',
+            idioma_chat TEXT DEFAULT 'pt',
+
+            -- IDs Sociais
+            guild_id INTEGER DEFAULT 0,
+            party_id INTEGER DEFAULT 0
+        );
+    """;
+    
+    // Tabela de logs do servidor
+    string create_logs = """
+        CREATE TABLE IF NOT EXISTS server_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            level TEXT NOT NULL,  -- INFO, WARNING, ERROR, DEBUG
+            category TEXT NOT NULL,  -- NETWORK, PLAYER, GAME, SYSTEM
+            message TEXT NOT NULL,
+            player_id INTEGER,
+            additional_data TEXT,
+            FOREIGN KEY (player_id) REFERENCES players(id)
+        );
+    """;
+    
+    // Tabela de sessões ativas
+    string create_sessions = """
+        CREATE TABLE IF NOT EXISTS player_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            peer_id TEXT NOT NULL,
+            login_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            FOREIGN KEY (player_id) REFERENCES players(id)
+        );
+    """;
+    
+    // Tabela de configurações do servidor
+    string create_config = """
+        CREATE TABLE IF NOT EXISTS server_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            description TEXT,
+            last_modified DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    
+    // Executar criação das tabelas
+    if(bancoJogo.execute(create_players) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela players: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_logs) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela server_logs: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_sessions) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela player_sessions: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_config) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela server_config: " + bancoJogo.get_last_error_text());
+    }
+    
+    // Criar tabela de invent�rio inicial
+    string create_initial_inv = """
+        CREATE TABLE IF NOT EXISTS initial_inventory (
+            item_name TEXT PRIMARY KEY,
+            quantity INTEGER DEFAULT 1
+        );
+    """;
+    
+    if(bancoJogo.execute(create_initial_inv) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela initial_inventory: " + bancoJogo.get_last_error_text());
+    }
+    
+    // Popular com itens padrão se estiver vazia
+    populate_initial_inventory();
+    
+    debug_log("Tabelas do banco de dados criadas/verificadas");
+    
+    // Migrar banco de dados se necessário (adicionar colunas faltantes)
+    migrate_database();
+}
+
+// Função de migração para adicionar colunas faltantes em bancos existentes
+void migrate_database() {
+    // Lista de colunas que podem estar faltando em bancos antigos
+    string[][] migrations = {
+        // {nome_coluna, tipo, valor_default}
+        {"password_salt", "TEXT", "''"},
+        {"stryx", "REAL", "0"},
+        {"creditos", "REAL", "0"},
+        {"saldo", "REAL", "100"},
+        {"gcoins", "INTEGER", "0"},
+        {"greais", "INTEGER", "0"},
+        {"xp_requerida", "INTEGER", "100"},
+        {"matou", "INTEGER", "0"},
+        {"reencarnacoes", "INTEGER", "0"},
+        {"stamina", "INTEGER", "100"},
+        {"fome", "INTEGER", "0"},
+        {"sanity", "REAL", "100.0"},
+        {"radiation", "INTEGER", "0"},
+        {"voice_id", "TEXT", "'default'"},
+        {"idioma_chat", "TEXT", "'pt'"},
+        {"guild_id", "INTEGER", "0"},
+        {"party_id", "INTEGER", "0"},
+        {"bounty_on_head", "INTEGER", "0"},
+        {"bounty_value", "INTEGER", "0"},
+        {"bounty_owner", "TEXT", "''"},
+        {"title", "TEXT", "''"},
+        {"rank", "INTEGER", "0"},
+        {"arena_wins", "INTEGER", "0"},
+        {"arena_kills", "INTEGER", "0"},
+        {"kills", "INTEGER", "0"},
+        {"deaths", "INTEGER", "0"},
+        {"play_time", "INTEGER", "0"}
+    };
+    
+    int migrations_applied = 0;
+    
+    for(uint i = 0; i < migrations.length(); i++) {
+        string col_name = migrations[i][0];
+        string col_type = migrations[i][1];
+        string col_default = migrations[i][2];
+        
+        // Tentar adicionar a coluna - se já existir, vai falhar silenciosamente
+        string alter_query = "ALTER TABLE players ADD COLUMN " + col_name + " " + col_type + " DEFAULT " + col_default + ";";
+        
+        // Executar sem verificar erro (coluna já existente gera erro, mas é OK)
+        int result = bancoJogo.execute(alter_query);
+        if(result == SQLITE_OK) {
+            debug_log("MIGRAÇÃO: Coluna '" + col_name + "' adicionada à tabela players");
+            migrations_applied++;
+        }
+        // Se falhar é porque já existe, n�o precisa logar
+    }
+    
+    if(migrations_applied > 0) {
+        debug_log("MIGRAÇÃO: " + migrations_applied + " colunas adicionadas ao banco de dados");
+    }
+}
+
+// Popular tabela initial_inventory com itens padrão se estiver vazia
+void populate_initial_inventory() {
+    // Primeiro, limpar a tabela para garantir que est� atualizada
+    bancoJogo.execute("DELETE FROM initial_inventory;");
+    
+    debug_log("Populando tabela initial_inventory com itens padrão...");
+    
+    // Itens iniciais padrão (Start Kit)
+    // 1 faca para defesa básica
+    bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('faca', 1);");
+    // 200 reais para economia inicial
+    bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('reais', 200);");
+    
+    debug_log("✅ Inventário inicial configurado: 1 faca, 200 reais");
+}
+
+// Logging no banco de dados (thread-safe)
+void log_to_database(string level, string category, string message, int player_id = -1, string additional_data = "") {
+    if(!database_initialized) return;
+    
+    // Implementação de threading
+    async<void>(log_to_database_async, level, category, message, player_id, additional_data);
+}
+
+void log_to_database_async(string level, string category, string message, int player_id, string additional_data) {
+    if(!database_initialized) return;
+    
+    string query = """
+        INSERT INTO server_logs (level, category, message, player_id, additional_data)
+        VALUES (?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt != null) {
+        stmt.bind_text(1, level);
+        stmt.bind_text(2, category);
+        stmt.bind_text(3, message);
+        
+        if(player_id > 0) {
+            stmt.bind_int(4, player_id);
+        } else {
+            stmt.bind_null(4);
+        }
+        
+        stmt.bind_text(5, additional_data);
+        
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao inserir log no banco: " + bancoJogo.get_last_error_text());
+        }
+    }
+}
+
+// Salvar dados do jogador no banco (async)
+void save_player_to_database(player@ player) {
+    if(!database_initialized || player is null) return;
+    
+    // 1. Salvar dados básicos (Stats, Posição) - async
+    string save_name = player.charname;
+    if(save_name == "") save_name = player.name;
+    if(save_name == "") return;
+
+    async<void>(save_player_to_database_async, save_name, player.player_level, player.exp,
+                player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
+                player.race, player.map_name, player.x, player.y, player.z,
+                player.admin_status, player.sexo);
+    
+    // 2. ✅ Salvar o Inventário Dinâmico (IMPORTANTE!)
+    // Isso garante que itens ganhos/perdidos durante o jogo sejam persistidos
+    save_player_inventory_to_db(player);
+    save_player_equipment_to_db(player);
+}
+
+void save_player_to_database_async(string name, int level, int exp, int gold, 
+                                   int hp, int max_hp, int mp, int max_mp,
+                                   string race, string map_name, int x, int y, int z,
+                                   bool is_admin, int gender) {
+    if(!database_initialized) return;
+
+    int guild_id = 0;
+    for(uint i = 0; i < active_guilds.length(); i++) {
+        if(active_guilds[i] !is null && active_guilds[i].is_member(name)) {
+            guild_id = int(i) + 1; // �ndice 1-based persistido no DB
+            break;
+        }
+    }
+
+    int party_id = 0;
+    for(uint i = 0; i < active_parties.length(); i++) {
+        if(active_parties[i] !is null && active_parties[i].is_member(name)) {
+            party_id = int(i) + 1; // �ndice 1-based persistido no DB
+            break;
+        }
+    }
+    
+    string query = """
+        UPDATE players SET 
+            level = ?, experience = ?, gold = ?, hp = ?, max_hp = ?,
+            mp = ?, max_mp = ?, race = ?, map_name = ?, x = ?, y = ?, z = ?,
+            is_admin = ?, gender = ?, guild_id = ?, party_id = ?, last_activity = CURRENT_TIMESTAMP
+        WHERE username = ?;
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt != null) {
+        stmt.bind_int(1, level);
+        stmt.bind_int(2, exp);
+        stmt.bind_int(3, gold);
+        stmt.bind_int(4, hp);
+        stmt.bind_int(5, max_hp);
+        stmt.bind_int(6, mp);
+        stmt.bind_int(7, max_mp);
+        stmt.bind_text(8, race);
+        stmt.bind_text(9, map_name);
+        stmt.bind_int(10, x);
+        stmt.bind_int(11, y);
+        stmt.bind_int(12, z);
+        stmt.bind_int(13, is_admin ? 1 : 0);
+        stmt.bind_int(14, gender);
+        stmt.bind_int(15, guild_id);
+        stmt.bind_int(16, party_id);
+        stmt.bind_text(17, name);
+        
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao salvar jogador no banco: " + bancoJogo.get_last_error_text());
+        } else {
+            debug_log("Jogador " + name + " salvo no banco de dados");
+        }
+    }
+}
+
+// Backup automático do banco (async)
+void perform_database_backup() {
+    if(async_backup_running) {
+        debug_log("Backup já est� em andamento, ignorando");
+        return;
+    }
+    
+    async_backup_running = true;
+    // Implementação de threading
+    async<void>(perform_database_backup_async);
+}
+
+void perform_database_backup_async() {
+    debug_log("Iniciando backup automático do banco de dados");
+    
+    string backup_timestamp = datetime_now();
+    backup_timestamp.replace_this(":", "_");
+    backup_timestamp.replace_this(" ", "_");
+
+    string backup_dir = "backups";
+    string backup_file = backup_dir + "/evm_backup_" + backup_timestamp + ".db";
+    
+    // Criar diretório se n�o existir
+    if(!directory_exists(backup_dir)) {
+        directory_create(backup_dir);
+    }
+    
+    // Backup usando SQLite backup API
+    sqlite3@ backup_db = sqlite3();
+    if(backup_db.open(backup_file) == SQLITE_OK) {
+        // TODO: Implementar backup SQLite nativo quando dispon�vel
+        // Por agora, fazer cópia simples
+        string backup_sql = "VACUUM main INTO '" + backup_file + "';";
+        if(bancoJogo.execute(backup_sql) == SQLITE_OK) {
+            debug_log("Backup realizado com sucesso: " + backup_file);
+            log_to_database("INFO", "SYSTEM", "Backup automático realizado", -1, backup_file);
+        } else {
+            debug_log("ERRO no backup: " + bancoJogo.get_last_error_text());
+            log_to_database("ERROR", "SYSTEM", "Falha no backup automático", -1, bancoJogo.get_last_error_text());
+        }
+        backup_db.close();
+    }
+    
+    async_backup_running = false;
+}
+
+// ============================================================================
+// FUNÇÕES DE REBOOT/RESTART DO SERVIDOR (igual ao BGT)
+// ============================================================================
+
+// Salvar preferências e dados antes de reiniciar
+void writeprefs(bool force_save = false) {
+    debug_log("📝 Salvando preferências e dados de todos os jogadores...");
+    
+    for(uint i = 0; i < players.length(); i++) {
+        if(@players[i] != null && players[i].name != "") {
+            save_player_to_database(players[i]);
+        }
+    }
+    
+    debug_log("📝 Todos os jogadores salvos");
+}
+
+// Reiniciar servidor imediatamente (igual ao BGT rebootfast)
+void rebootfast() {
+    debug_log("🔄 REBOOT RÁPIDO iniciado!");
+    
+    // Salvar todos os dados
+    writeprefs(true);
+    
+    // Avisar clientes com som e mensagem antes do restart imediato
+    send_reliable_text(0, "ps menuenter.ogg", 0);
+    send_reliable_text(0, "msgnormal Reiniciando servidor agora!", 0);
+    wait(700);
+
+    // Avisar clientes para reiniciar
+    send_reliable_text(0, "reiniciar", 0);
+    
+    wait(150);
+    
+    debug_log("🔄 SCRIPT_COMPILED=" + (SCRIPT_COMPILED ? "true" : "false"));
+    debug_log("🔄 SCRIPT_EXECUTABLE=" + SCRIPT_EXECUTABLE);
+    debug_log("🔄 SCRIPT_CURRENT_FILE=" + SCRIPT_CURRENT_FILE);
+    
+    // Criar um batch file para reiniciar o servidor
+    string bat_content = "@echo off\r\n";
+    bat_content += "echo Aguardando servidor encerrar...\r\n";
+    bat_content += "timeout /t 2 /nobreak > nul\r\n";
+    bat_content += "echo Reiniciando servidor...\r\n";
+    
+    if(SCRIPT_COMPILED) {
+        // Servidor compilado - executar diretamente
+        bat_content += "start \"Servidor EVM\" \"" + SCRIPT_EXECUTABLE + "\"\r\n";
+    } else {
+        // Rodando do source - passar o arquivo nvgt
+        bat_content += "start \"Servidor EVM\" \"" + SCRIPT_EXECUTABLE + "\" \"" + SCRIPT_CURRENT_FILE + "\"\r\n";
+    }
+    
+    file f;
+    if(f.open("restart_server.bat", "w")) {
+        f.write(bat_content);
+        f.close();
+        debug_log("🔄 Batch de restart criado");
+    }
+    
+    // Iniciar o batch em background e sair
+    // Usando urlopen como alternativa se run n�o funcionar
+    debug_log("🔄 Executando batch de restart...");
+    
+    // Tentar iniciar com cmd/start primeiro (mais confi�vel no Windows)
+    bool started = run("cmd.exe", "/c start \"\" restart_server.bat", false, false);
+    debug_log("🔄 run() retornou: " + (started ? "true" : "false"));
+    
+    if(!started) {
+        // Alternativa: executar o batch diretamente
+        started = run("restart_server.bat", "", false, false);
+        debug_log("🔄 cmd.exe retornou: " + (started ? "true" : "false"));
+    }
+    
+    debug_log("🔄 Encerrando servidor atual...");
+    exit();
+}
+
+// Reiniciar com countdown de 15 segundos (mais rápido)
+void reboot_countdown() {
+    debug_log("🔄 REBOOT COM COUNTDOWN iniciado!");
+    
+    // 1. Salvar todos os dados PRIMEIRO (antes de qualquer aviso)
+    writeprefs(true);
+    
+    // Avisar 15 segundos (usando som que certamente existe)
+    send_reliable_text(0, "ps menuenter.ogg", 0); // Som de alerta
+    send_reliable_text(0, "msgnormal ⚠️ Reiniciando servidor em 15 segundos!", 0);
+    wait(5000);
+    
+    // Avisar 10 segundos
+    send_reliable_text(0, "ps menuenter.ogg", 0);
+    send_reliable_text(0, "msgnormal ⚠️ Reiniciando em 10 segundos!", 0);
+    wait(5000);
+    
+    // Avisar 5 segundos
+    send_reliable_text(0, "ps menuenter.ogg", 0);
+    send_reliable_text(0, "msgnormal ⚠️ Reiniciando em 5 segundos!", 0);
+    wait(3000);
+    
+    // Contagem final: 2, 1
+    send_reliable_text(0, "ps menuenter.ogg", 0);
+    send_reliable_text(0, "msgnormal 2...", 0);
+    wait(1000);
+    
+    send_reliable_text(0, "ps menuenter.ogg", 0);
+    send_reliable_text(0, "msgnormal 1...", 0);
+    wait(1000);
+    
+    // Reiniciar!
+    send_reliable_text(0, "msgnormal 🔄 Reiniciando agora!", 0);
+    rebootfast();
+}
+
+// Auto-save de todos os jogadores (async)
+void auto_save_all_players() {
+    if(async_save_running) {
+        debug_log("Auto-save já est� em andamento, ignorando");
+        return;
+    }
+    
+    async_save_running = true;
+    // Implementação de threading
+    async<void>(auto_save_all_players_async);
+}
+
+void auto_save_all_players_async() {
+    debug_log("Iniciando auto-save de todos os jogadores");
+    
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].is_logged_in) {
+            save_player_to_database(players[i]);
+            wait(10); // Pequena pausa entre saves para n�o sobrecarregar
+        }
+    }
+    
+    debug_log("Auto-save concluído para " + get_online_players().length() + " jogadores");
+    log_to_database("INFO", "GAME", "Auto-save concluído", -1, "" + get_online_players().length() + " jogadores");
+    
+    async_save_running = false;
+    last_save.restart();
+}
+
+// Funções auxiliares para jogadores (implementação básica)
+player@ get_player_by_peer(uint64 peer_id) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].peer_id == peer_id) {
+            return players[i];
+        }
+    }
+    return null;
+}
+
+uint64 get_player_peer_id(player@ p) {
+    if(p is null) return 0;
+    return p.peer_id;
+}
+
+void update_all_players() {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i] is null) continue;
+        if(!players[i].is_logged_in) continue;
+
+        try {
+            players[i].playerloop();
+        }
+        catch {
+            string player_name = players[i].name;
+            if(player_name == "") player_name = players[i].charname;
+            debug_log(
+                "ERRO em playerloop para '" + player_name + "': " +
+                get_exception_info() + " (" + get_exception_file() + ":" + get_exception_line() + ")"
+            );
+        }
+    }
+}
+
+void remove_player(uint64 peer_id) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].peer_id == peer_id) {
+            clear_all_buffs(players[i]);
+            // Notificar outros jogadores no mesmo mapa
+            int mapindex = players[i].mapindex;
+            string charname = players[i].charname;
+            
+            if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+                server_maps[mapindex].send_to_others(peer_id, 0, 
+                    "remove_player_from_map " + charname, true);
+            }
+            
+            players.erase(i);
+            break;
+        }
+    }
+}
+
+string[] get_online_players() {
+    string[] online_list;
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].is_logged_in) {
+            string online_name = players[i].charname != "" ? players[i].charname : players[i].name;
+            online_list.push_back(online_name);
+        }
+    }
+    return online_list;
+}
+
+// Broadcast mensagem para todos os jogadores em um mapa específico
+void broadcast_to_map(string map_name, string message, uint64 exclude_peer = 0) {
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map_name == map_name && players[i].peer_id != exclude_peer) {
+            send_reliable_text(players[i].peer_id, message, 0);
+        }
+    }
+}
+
+string[] split_non_empty_tokens(const string&in text) {
+    string[] raw = text.split(" ");
+    string[] tokens;
+    for(uint i = 0; i < raw.length(); i++) {
+        string t = raw[i].trim_whitespace();
+        if(t != "") tokens.insert_last(t);
+    }
+    return tokens;
+}
+
+bool is_safe_packet_text(const string&in text) {
+    if(text == "") return false;
+    for(uint i = 0; i < text.length(); i++) {
+        string ch = text.substr(i, 1);
+        if(ch == "") return false;
+        if(ch[0] < 32 && ch != "`t" && ch != "`n" && ch != "`r") return false;
+    }
+    return true;
+}
+
+bool try_parse_int_token(const string&in token, int &out value) {
+    string t = token.trim_whitespace();
+    if(t == "") return false;
+
+    uint start = 0;
+    if(t[0] == '-' || t[0] == '+') {
+        if(t.length() == 1) return false;
+        start = 1;
+    }
+
+    for(uint i = start; i < t.length(); i++) {
+        if(t[i] < '0' || t[i] > '9') return false;
+    }
+
+    value = parse_int(t);
+    return true;
+}
+
+bool try_parse_float_token(const string&in token, double &out value) {
+    string t = token.trim_whitespace();
+    if(t == "") return false;
+
+    uint start = 0;
+    bool has_digit = false;
+    bool has_dot = false;
+
+    if(t[0] == '-' || t[0] == '+') {
+        if(t.length() == 1) return false;
+        start = 1;
+    }
+
+    for(uint i = start; i < t.length(); i++) {
+        if(t[i] >= '0' && t[i] <= '9') {
+            has_digit = true;
+            continue;
+        }
+        if(t[i] == '.' && !has_dot) {
+            has_dot = true;
+            continue;
+        }
+        return false;
+    }
+
+    if(!has_digit) return false;
+    value = parse_float(t);
+    return true;
+}
+
+// Processamento de comando de jogador
+void process_player_command(uint64 peer_id, string command) {
+    player@ player = get_player_by_peer(peer_id);
+    if(player is null) {
+        debug_log("Comando recebido de peer desconhecido: " + peer_id);
+        return;
+    }
+    
+    command = command.trim_whitespace();
+    if(command == "") return;
+
+    // Log do comando
+    log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
+    
+    // ✅ Task 1.5.3: Handler de Builder Mode (add_line::)
+    // Formato: add_line::<dados_do_elemento>
+    if(command.find("add_line::") == 0) {
+        string element_data = command.substr(10);  // Remove "add_line::"
+        req_builder_create_element(player, element_data);
+        return;
+    }
+
+    // Undo do �ltimo elemento de builder
+    // Formato: undo_last::<linha_original>
+    if(command.find("undo_last::") == 0) {
+        string line_hint = command.substr(11); // Remove "undo_last::"
+        builder_undo_last_element(player, line_hint);
+        return;
+    }
+    
+    // ✅ Task 1.5.3: Handler de salvamento de mapa
+    if(command == "/savemap" || command == "savemap") {
+        map@ current_map = builder_get_player_map(player);
+        builder_save_map(player, current_map);
+        return;
+    }
+    
+    // ✅ Task 1.5.3: Handler de atualização de mapa
+    if(command == "/mapupdate" || command == "mapupdate") {
+        builder_update_map(player);
+        return;
+    }
+
+    // Compatibilidade Builder (BGT/NVGT): /mapupdate <mapa>
+    if(command.find("/mapupdate ") == 0) {
+        string[] parsed_update = split_non_empty_tokens(command);
+        if(parsed_update.length() >= 2) {
+            builder_update_map(player, parsed_update[1]);
+        } else {
+            builder_update_map(player);
+        }
+        return;
+    }
+
+    // Compatibilidade Builder: /rawdata <mapa> (tratado como atualiza��o de mapa)
+    if(command.find("/rawdata") == 0 || command.find("rawdata") == 0) {
+        string[] parsed_raw = split_non_empty_tokens(command);
+        if(parsed_raw.length() >= 2) {
+            builder_update_map(player, parsed_raw[1]);
+        } else {
+            builder_update_map(player);
+        }
+        return;
+    }
+
+    // Cria��o de novo mapa: /newmap <nome> <largura> <altura> [som_piso]
+    if(command.find("/newmap ") == 0 || command.find("newmap ") == 0) {
+        string[] parsed_newmap = split_non_empty_tokens(command);
+        if(parsed_newmap.length() < 4) {
+            send_reliable_text(peer_id, "say Uso: /newmap <nome> <largura> <altura> [som_piso]", 0);
+            return;
+        }
+
+        string map_name = parsed_newmap[1];
+        int map_width = parse_int(parsed_newmap[2]);
+        int map_height = parse_int(parsed_newmap[3]);
+        string floor_sound = parsed_newmap.length() >= 5 ? parsed_newmap[4] : "1";
+        builder_create_new_map(player, map_name, map_width, map_height, floor_sound);
+        return;
+    }
+
+    // Remo��o de mapa: /delmap <nome>
+    if(command.find("/delmap ") == 0 || command.find("delmap ") == 0) {
+        string[] parsed_delmap = split_non_empty_tokens(command);
+        if(parsed_delmap.length() < 2) {
+            send_reliable_text(peer_id, "say Uso: /delmap <nome>", 0);
+            return;
+        }
+        builder_delete_map(player, parsed_delmap[1]);
+        return;
+    }
+    
+    // Verificar se o jogo est� congelado
+    if(game_frozen && !player.admin_status) {
+        send_reliable_text(peer_id, "say Jogo temporariamente congelado. Aguarde.");
+        return;
+    }
+    
+    // ===== HEARTBEAT - Manter conex�o viva =====
+    // Cliente envia a cada 5 segundos para evitar timeout
+    if(command == "heartbeat") {
+        player.last_activity.restart();  // Atualiza timer de atividade
+        // Não precisa responder - apenas registra atividade
+        return;
+    }
+    
+    // Usar sistema de comandos avançado
+    if(!process_command(player, command)) {
+        // Fallback para comandos básicos se n�o processado
+        string[] parts = split_non_empty_tokens(command);
+        if(parts.length() == 0) return;
+
+        string cmd = parts[0].lower();
+        
+        // Obter índice do jogador para comandos que usam player_index
+        int player_index = get_player_index_from(player.name);
+
+        // ✅ Phase 1: Zone Interaction Handler (zsa)
+        if(cmd == "zsa") {
+             // Reconstruct message from parts (excluding "zsa")
+             string zsa_msg = "";
+             if(parts.length() > 1) {
+                 zsa_msg = command.substr(4); // "zsa " is 4 chars
+             }
+             process_zone_interaction(player_index, zsa_msg);
+             return;
+        }
+
+        // ✅ Chat Administrativo - Comando adm (tecla D no cliente)
+        if(cmd == "adm") {
+            // Verificar se é staff
+            bool is_staff = has_role(player.charname, "dev") || 
+                            has_role(player.charname, "admin") || 
+                            has_role(player.charname, "mod");
+            
+            if(is_staff && parts.length() > 1) {
+                string message = command.substr(4);  // Remove "adm "
+                string cargo = get_player_rank(player.charname, "");  // Pegar cargo (dev/admin/mod)
+                string formatted_msg = cargo + " " + player.charname + ": " + message;
+                eadm(formatted_msg);  // Usa assinatura de 2 params (msg, sound com default)
+            }
+            return;
+        }
+
+        // ===== COMANDO DE MOVIMENTO DO JOGADOR (Task 4) =====
+        // Formato aceito: 
+        //   move X Y           (3 partes - posi��o apenas)
+        //   move step_sound X Y (4 partes - com som de passo)
+        if(cmd == "move" && (parts.length() == 3 || parts.length() == 4)) {
+            int new_x, new_y;
+            string step_sound = "";
+            
+            if(parts.length() == 3) {
+                // Formato: move X Y
+                if(!try_parse_int_token(parts[1], new_x) || !try_parse_int_token(parts[2], new_y)) {
+                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    return;
+                }
+            } else {
+                // Formato: move step_sound X Y
+                step_sound = parts[1];
+                if(!try_parse_int_token(parts[2], new_x) || !try_parse_int_token(parts[3], new_y)) {
+                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    return;
+                }
+            }
+            
+            // Validar jogador n�o est� paralisado ou AFK
+            if(player.paralisado || player.paralisado2 || player.afk) {
+                send_reliable_text(peer_id, "msg2 ;Voc� n�o pode se mover agora.;", 0);
+                return;
+            }
+            
+            // Validar movimento n�o é muito grande (anti-cheat)
+            if(!is_valid_movement(player.x, player.y, new_x, new_y, 10)) {
+                debug_log("⚠️ Movimento invalido detectado para " + player.name + ": (" + player.x + "," + player.y + ") → (" + new_x + "," + new_y + ")");
+                send_reliable_text(peer_id, "move " + player.x + " " + player.y, 0); // Corrigir posi��o do cliente
+                return;
+            }
+            
+            // Verificar se a posi��o é caminhável (validação de colisão)
+            if(!is_walkable(new_x, new_y, player.map_name)) {
+                // Posição bloqueada - n�o mover
+                send_reliable_text(peer_id, "move " + player.x + " " + player.y, 0); // Corrigir posi��o do cliente
+                return;
+            }
+            
+            // Obter tipo do tile para sons de passos (usa o enviado pelo cliente ou detecta)
+            string tile_type = step_sound != "" ? step_sound : get_tile_at(new_x, new_y, player.map_name);
+            
+            // Usar a fun��o move() da classe player (inclui toda a lógica de minas, zonas de morte, etc.)
+            player.move(tile_type, new_x, new_y, 0);
+            
+            debug_log("🚶 " + player.name + " → (" + new_x + ", " + new_y + ") [" + tile_type + "]");
+            return;
+        }
+        
+        // ===== COMANDO DE MOVIMENTO DURANTE SALTO/QUEDA (move2) =====
+        // Formato: move2 X Y (atualiza posi��o com validação anti-cheat)
+        if(cmd == "move2" && parts.length() == 3) {
+            int new_x = 0;
+            int new_y = 0;
+            if(!try_parse_int_token(parts[1], new_x) || !try_parse_int_token(parts[2], new_y)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            
+            // ✅ ANTI-CHEAT: Validar movimento contra speedhack/teleporte
+            if(!validate_movement(player, new_x, new_y)) {
+                // Movimento invalido - enviar correção
+                send_position_correction(player);
+                return;
+            }
+            
+            // Atualizar posi��o do jogador (durante salto/queda)
+            player.x = new_x;
+            player.y = new_y;
+            
+            // Broadcast para outros jogadores
+            broadcast_to_map(player.map_name, "pp " + player.name + " " + new_x + " " + new_y, peer_id);
+            return;
+        }
+        
+        // ===== COMANDO DE ATERRISSAGEM (land) =====
+        // Formato: land [altura_queda] (altura é opcional)
+        if(cmd == "land") {
+            int fall_height = 0;
+            if(parts.length() >= 2) {
+                if(!try_parse_int_token(parts[1], fall_height)) {
+                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    return;
+                }
+            }
+            // Por enquanto apenas log, pode implementar dano de queda depois
+            if(fall_height >= 20) {
+                debug_log("⬇️ " + player.name + " aterrissou de altura " + fall_height);
+            }
+            return;
+        }
+        
+        // ===== COMANDO DE SALTO (jump) =====
+        // Formato: jump [som.ogg]
+        // Notifica outros jogadores que este jogador pulou
+        if(cmd == "jump") {
+            string jump_sound = (parts.length() >= 2) ? parts[1] : "jump.ogg";
+            // Broadcast som de salto para outros jogadores no mapa
+            broadcast_to_map(player.map_name, "play " + jump_sound + " " + player.x + " " + player.y, peer_id);
+            return;
+        }
+        
+        // ===== COMANDO DE SOM BROADCAST (draw) =====
+        // Formato: draw som.ogg
+        // Toca um som para outros jogadores no mesmo mapa
+        if(cmd == "draw" && parts.length() >= 2) {
+            string sound_file = parts[1];
+            // Broadcast som para outros jogadores no mapa
+            broadcast_to_map(player.map_name, "play " + sound_file + " " + player.x + " " + player.y, peer_id);
+            return;
+        }
+        
+        // ===== COMANDO DE SOM SOCIAL (playsocial) =====
+        // Formato: playsocial som.ogg
+        // Toca um som para outros jogadores no mesmo mapa (usado ao fechar invent�rio, etc.)
+        if(cmd == "playsocial" && parts.length() >= 2) {
+            string sound_file = parts[1];
+            // Broadcast som para outros jogadores no mapa (usando send_packet10 como no BGT)
+            send_packet10(0, player.charname, player.charname, sound_file + " " + player.x + " " + player.y, player.map_name);
+            return;
+        }
+        
+        // ===== COMANDOS DE CONFIGURAÇÃO (IMPLEMENTADOS) =====
+        
+        // setvoice - Configurar voz/narrador preferido
+        if(cmd == "setvoice" && parts.length() >= 2) {
+            string voice_name = parts[1];
+            player.voice_id = voice_name;
+            save_player_to_database(player);
+            debug_log("🎤 Jogador " + player.name + " configurou voz: " + voice_name);
+            // Não precisa responder - cliente já sabe
+            return;
+        }
+
+        // uitem <item> - Compatibilidade com cliente BGT/NVGT (uso de item sem barra)
+        if(cmd == "uitem" && parts.length() >= 2) {
+            string item_name = command.substr(6).trim_whitespace(); // remove "uitem "
+
+            // Compatibilidade antiga: "uitem r2" era usado para verificar hora
+            if(item_name == "r2") {
+                string[] empty_args;
+                cmd_checktime(player, empty_args);
+                return;
+            }
+
+            if(item_name == "mina" && !mines_enabled) {
+                send_reliable_text(peer_id, "msgnormal Utiliza��o de minas est� desativada no momento.", 0);
+                return;
+            }
+
+            // Fluxo atual de consum�veis
+            use_item(player_index, item_name);
+            return;
+        }
+
+        // Convers�o de moedas (compatibilidade com menu cliente)
+        // Regras iguais ao BGT: quantidade 1 � muito baixa, validar saldo do invent�rio
+        if(cmd == "reaisparaeuro" && parts.length() >= 2) {
+            int conversao = 0;
+            if(!try_parse_int_token(parts[1], conversao)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            if(conversao <= 0) return;
+
+            if(conversao == 1) {
+                send_reliable_text(peer_id, "msgnormal Quantidade muito baixa para ser convertida.", 0);
+                return;
+            }
+
+            if(player.inv_item_number("reais") >= conversao) {
+                player.inv_add_item("reais", -conversao, true);
+                player.inv_add_item("euro", conversao * 10, true);
+                send_reliable_text(peer_id, "msgnormal Convers�o de reais para euros feita com sucesso.", 0);
+                save_player_to_database(player);
+            } else {
+                send_reliable_text(peer_id, "msgnormal Voc� n�o tem reais suficientes para fazer esta convers�o.", 0);
+            }
+            return;
+        }
+
+        if(cmd == "europarareais" && parts.length() >= 2) {
+            int conversao = 0;
+            if(!try_parse_int_token(parts[1], conversao)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            if(conversao <= 0) return;
+
+            if(conversao == 1) {
+                send_reliable_text(peer_id, "msgnormal Quantidade muito baixa para ser convertida.", 0);
+                return;
+            }
+
+            if(player.inv_item_number("euro") >= conversao) {
+                player.inv_add_item("euro", -conversao, true);
+                player.inv_add_item("reais", conversao * 2, true);
+                send_reliable_text(peer_id, "msgnormal Convers�o de euros para reais feita com sucesso.", 0);
+                save_player_to_database(player);
+            } else {
+                send_reliable_text(peer_id, "msgnormal Voc� n�o tem euros suficientes para converter.", 0);
+            }
+            return;
+        }
+
+        // /amina - Ativa/desativa uso de minas (compatibilidade menu admin)
+        if(cmd == "amina" || cmd == "/amina") {
+            if(!check_is_admin(player.charname) && !check_is_mod(player.charname) && !has_role(player.charname, "dev")) {
+                send_reliable_text(peer_id, "say Voc� n�o tem permiss�o para usar este comando.", 0);
+                return;
+            }
+
+            mines_enabled = !mines_enabled;
+            if(mines_enabled) {
+                send_reliable_text(0, "msgnormal Utiliza��o de minas ativada.", 0);
+                debug_log("ADMIN: " + player.charname + " ativou minas.");
+            } else {
+                send_reliable_text(0, "msgnormal Utiliza��o de minas desativada.", 0);
+                debug_log("ADMIN: " + player.charname + " desativou minas.");
+            }
+            return;
+        }
+        
+        // hits - Toggle sons de impacto
+        if(cmd == "hits") {
+            player.ouvirhits = !player.ouvirhits;
+            save_player_to_database(player);
+            string status = player.ouvirhits ? "ativados" : "desativados";
+            debug_log("🔊 Jogador " + player.name + " - sons de impacto " + status);
+            send_reliable_text(peer_id, "say Sons de impacto " + status, 0);
+            return;
+        }
+        
+        // idiomachat - Configurar idioma do chat
+        if(cmd == "idiomachat" && parts.length() >= 2) {
+            string language = parts[1];
+            player.idiomachat = language;
+            save_player_to_database(player);
+            debug_log("🌍 Jogador " + player.name + " configurou idioma: " + language);
+            send_reliable_text(peer_id, "say Idioma do chat configurado: " + language, 0);
+            return;
+        }
+        
+        // dpassos - Desativar sons de passos
+        if(cmd == "dpassos") {
+            player.ouvirpassos = (player.ouvirpassos == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.ouvirpassos == 0) ? "desativados" : "ativados";
+            debug_log("👣 Jogador " + player.name + " - sons de passos " + status);
+            send_reliable_text(peer_id, "say Sons de passos " + status, 0);
+            return;
+        }
+        
+        // ndor - Não ouvir mensagens de dor
+        if(cmd == "ndor") {
+            player.mdor = (player.mdor == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.mdor == 0) ? "ativadas" : "desativadas";
+            debug_log("💢 Jogador " + player.name + " - mensagens de dor " + status);
+            send_reliable_text(peer_id, "say Mensagens de dor " + status, 0);
+            return;
+        }
+        
+        // nnivel - Nao avisar subida de nivel
+        if(cmd == "nnivel") {
+            player.avisanivel = (player.avisanivel == 0) ? 1 : 0;
+            save_player_to_database(player);
+            string status = (player.avisanivel == 0) ? "ativados" : "desativados";
+            debug_log("⬆️ Jogador " + player.name + " - avisos de nivel " + status);
+            send_reliable_text(peer_id, "say Avisos de nivel " + status, 0);
+            return;
+        }
+        
+        // setsexo - Alterar genero do personagem (0=masculino, 1=feminino)
+        if(cmd == "setsexo" && parts.length() > 1) {
+            int new_sexo = 0;
+            if(!try_parse_int_token(parts[1], new_sexo)) {
+                send_reliable_text(peer_id, "say Uso: /setsexo 0 (masculino) ou /setsexo 1 (feminino)", 0);
+                return;
+            }
+            if(new_sexo != 0 && new_sexo != 1) {
+                send_reliable_text(peer_id, "say Uso: /setsexo 0 (masculino) ou /setsexo 1 (feminino)", 0);
+                return;
+            }
+            player.sexo = new_sexo;
+            player.sexo2 = (new_sexo == 0) ? "o" : "a";
+            save_player_to_database(player);
+            string genero = (new_sexo == 0) ? "masculino" : "feminino";
+            send_reliable_text(peer_id, "say Seu genero foi alterado para " + genero + ".", 0);
+            debug_log("Jogador " + player.name + " alterou genero para " + genero);
+            return;
+        }
+        
+        // getversion - Retornar versao do servidor
+        if(cmd == "getversion") {
+            send_reliable_text(peer_id, "version " + server_version, 0);
+            debug_log("ℹ️ Jogador " + player.name + " solicitou vers�o: " + server_version);
+            return;
+        }
+
+        // uptime - Retornar tempo online do servidor (F1)
+        if(cmd == "uptime") {
+            uint64 uptime_ms = server_uptime.elapsed;
+            int total_seconds = int(uptime_ms / 1000);
+            int days = total_seconds / 86400;
+            int hours = (total_seconds % 86400) / 3600;
+            int minutes = (total_seconds % 3600) / 60;
+            int seconds = total_seconds % 60;
+
+            string uptime_msg = "Tempo online do servidor: ";
+            if(days > 0) uptime_msg += days + " dia" + (days > 1 ? "s" : "") + ", ";
+            if(hours > 0) uptime_msg += hours + " hora" + (hours > 1 ? "s" : "") + ", ";
+            if(minutes > 0) uptime_msg += minutes + " minuto" + (minutes > 1 ? "s" : "") + ", ";
+            uptime_msg += seconds + " segundo" + (seconds > 1 ? "s" : "");
+
+            send_reliable_text(peer_id, "say " + uptime_msg, 0);
+            debug_log("⏱️ " + player.name + " verificou uptime: " + days + "d " + hours + "h " + minutes + "m " + seconds + "s");
+            return;
+        }
+
+        // getmotd - Retornar mensagem do dia (F2)
+        if(cmd == "getmotd") {
+            string motd = "Bem-vindo ao servidor IG! Vers�o " + server_version;
+            send_reliable_text(peer_id, "say " + motd, 0);
+            debug_log("📢 " + player.name + " solicitou MOTD");
+            return;
+        }
+
+        // ===== ✅ TASK 2.2: SISTEMA DE STANCE (AGACHAR/SENTAR) =====
+        
+        // crouched::on/off - Sistema de agachar (Shift+Space no cliente BGT)
+        if(cmd == "crouched" && parts.length() >= 2) {
+            string action = parts[1];
+            if(action == "on") {
+                player.crouched = true;
+                debug_log("🦵 " + player.name + " agachou");
+                // Broadcast para outros jogadores no mesmo mapa
+                broadcast_to_map(player.map_name, "crouched " + player.name + " on", peer_id);
+            }
+            else if(action == "off") {
+                player.crouched = false;
+                debug_log("🧍 " + player.name + " levantou (de agachado)");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " off", peer_id);
+            }
+            return;
+        }
+        
+        // Sistema alternativo: crouched::on e crouched::off (formato BGT original)
+        if(command.find("crouched::") == 0) {
+            string action = command.substr(10);  // Remove "crouched::"
+            if(action == "on") {
+                player.crouched = true;
+                debug_log("🦵 " + player.name + " agachou");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " on", peer_id);
+            }
+            else if(action == "off") {
+                player.crouched = false;
+                debug_log("🧍 " + player.name + " levantou (de agachado)");
+                broadcast_to_map(player.map_name, "crouched " + player.name + " off", peer_id);
+            }
+            return;
+        }
+        
+        // sentar/levantar - Sistema de sentar (Z no cliente)
+        // Cliente envia som "centar.ogg" ou "levantar.ogg" para sincronizar
+        if(cmd == "sentar" || cmd == "sit") {
+            if(!player.centado) {
+                player.centado = true;
+                debug_log("🪑 " + player.name + " sentou");
+                // Broadcast som de sentar para outros jogadores
+                broadcast_to_map(player.map_name, "sound centar.ogg " + player.x + " " + player.y, peer_id);
+            }
+            return;
+        }
+        
+        if(cmd == "levantar" || cmd == "stand") {
+            if(player.centado) {
+                player.centado = false;
+                debug_log("🧍 " + player.name + " levantou (de sentado)");
+                broadcast_to_map(player.map_name, "sound levantar.ogg " + player.x + " " + player.y, peer_id);
+            }
+            return;
+        }
+        
+        // Handler de som que também sincroniza estado (compatibilidade BGT)
+        // Cliente envia: sound centar.ogg ou sound levantar.ogg
+        if(cmd == "sound" && parts.length() >= 2) {
+            string sound_name = parts[1];
+            if(sound_name == "centar.ogg") {
+                player.centado = true;
+                debug_log("🪑 " + player.name + " sentou (via som)");
+            }
+            else if(sound_name == "levantar.ogg") {
+                player.centado = false;
+                debug_log("🧍 " + player.name + " levantou (via som)");
+            }
+            // Broadcast o som para outros jogadores
+            int sound_x = player.x;
+            int sound_y = player.y;
+            if(parts.length() >= 3 && !try_parse_int_token(parts[2], sound_x)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            if(parts.length() >= 4 && !try_parse_int_token(parts[3], sound_y)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            broadcast_to_map(player.map_name, "sound " + sound_name + " " + sound_x + " " + sound_y, peer_id);
+            return;
+        }
+        
+        // ===== SISTEMA DE OBSERVAR JOGADOR (WATCH/SPECTATE) =====
+        // olhar <jogador> - Começar a observar outro jogador
+        if(cmd == "olhar" && parts.length() > 1) {
+            // Verificar se é admin ou tem permiss�o
+            if(!player.check_admin()) {
+                send_reliable_text(peer_id, "say Voc� n�o tem permiss�o para observar jogadores.", 0);
+                return;
+            }
+            
+            string target_name = parts[1];
+            
+            // Se já est� observando, parar primeiro
+            if(player.watching == 1) {
+                player.stop_watch();
+            }
+            
+            // Iniciar observação
+            player.watch_player(target_name);
+            
+            // Notificar outros admins
+            eadm(player.charname + " est� observando " + target_name + ".", "notifi10.ogg");
+            debug_log("👁️ " + player.name + " começou a observar " + target_name);
+            return;
+        }
+        
+        // volhar - Parar de observar
+        if(cmd == "volhar") {
+            if(player.watching == 1) {
+                string was_watching = player.w_name;
+                player.stop_watch();
+                eadm(player.charname + " parou de observar " + was_watching + ".", "notifi10.ogg");
+                debug_log("👁️ " + player.name + " parou de observar " + was_watching);
+            }
+            return;
+        }
+
+        // ===== FIM DOS COMANDOS DE CONFIGURAÇÃO =====
+
+        // ping - Responder ao ping do cliente
+        if(cmd == "ping") {
+            send_reliable_text(peer_id, "pong", 0);
+            debug_log("🏓 Ping respondido para " + player.name);
+            return;
+        }
+        
+        // getplayers - Lista de todos jogadores online (tecla F5)
+        if(cmd == "getplayers") {
+            if(player.afk) return;
+            
+            string bell = "|";
+            string bell2 = "||";
+            string data = "";
+            
+            for(uint i = 0; i < players.length(); i++) {
+                // Admin vê todos, outros n�o veem invisíveis
+                if(player.check_admin() || players[i].invs != 1) {
+                    // Usar get_player_rank_by_index para obter patente dinâmica (considera roles)
+                    string rank = get_player_rank_by_index(i);
+                    data += players[i].charname + bell + rank + bell + players[i].seestatus + bell2;
+                }
+            }
+            
+            send_reliable_text(peer_id, "listplayers " + data, 0);
+            debug_log("📋 " + player.name + " solicitou lista de jogadores (" + players.length() + " online)");
+            return;
+        }
+        
+        // ============================================================================
+        // J1-J4: Informações de jogadores (F1-F4 no menu de jogadores)
+        // ============================================================================
+        
+        // j1 - Ver localização do jogador (F1)
+        if(cmd == "j1" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string map_name = players[id].map;
+                send_reliable_text(peer_id, "msg2 " + players[id].charname + " ;est� em; ;" + map_name + ";.", 0);
+                debug_log("📍 " + player.name + " verificou localização de " + target_name + ": " + map_name);
+            } else {
+                send_reliable_text(peer_id, "say Jogador n�o encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j2 - Ver n�vel e patente do jogador (F2)
+        if(cmd == "j2" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                // Usar get_player_rank_by_index para obter patente dinâmica (considera roles admin)
+                string title_text = get_player_rank_by_index(id);
+                send_reliable_text(peer_id, "msg2 " + players[id].charname + " ;est� no n�vel; " + players[id].level + ", ;e na patente; ;" + title_text + ";.", 0);
+                debug_log("📊 " + player.name + " verificou n�vel de " + target_name + ": Lv" + players[id].level);
+            } else {
+                send_reliable_text(peer_id, "say Jogador n�o encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j3 - Ver quantas pessoas o jogador matou (F3)
+        if(cmd == "j3" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string m = "";
+                int kills = players[id].matou;
+                
+                if(kills == 0) {
+                    m = players[id].charname + " ;ainda n�o matou ningu�m;";
+                } else if(kills == 1) {
+                    m = players[id].charname + " ;matou; 1 ;pessoa;";
+                } else {
+                    m = players[id].charname + " ;matou; " + kills + " ;pessoas;";
+                }
+                
+                send_reliable_text(peer_id, "msg2 " + m + ".", 0);
+                debug_log("💀 " + player.name + " verificou kills de " + target_name + ": " + kills);
+            } else {
+                send_reliable_text(peer_id, "say Jogador n�o encontrado.", 0);
+            }
+            return;
+        }
+        
+        // j4 - Ver em qual chat o jogador est� (F4)
+        if(cmd == "j4" && parts.length() > 1) {
+            string target_name = parts[1];
+            int id = get_player_index_from(target_name);
+            
+            if(id > -1) {
+                string chat_name = players[id].idiomachat;
+                if(chat_name == "" || chat_name == "Desativado") {
+                    send_reliable_text(peer_id, "msg2 " + players[id].charname + " ;est� com o chat desativado;.", 0);
+                } else {
+                    send_reliable_text(peer_id, "msg2 " + players[id].charname + " ;est� no chat; ;" + chat_name + ";.", 0);
+                }
+                debug_log("💬 " + player.name + " verificou chat de " + target_name + ": " + chat_name);
+            } else {
+                send_reliable_text(peer_id, "say Jogador n�o encontrado.", 0);
+            }
+            return;
+        }
+        
+        // healthcheck - Retornar HP/MP do jogador (tecla S)
+        if(cmd == "healthcheck") {
+            string health_msg = player.hp + "/" + player.max_hp;
+            send_reliable_text(peer_id, "say " + health_msg, 0);
+            debug_log("❤️ " + player.name + " verificou saúde: HP=" + player.hp + "/" + player.max_hp);
+            return;
+        }
+        
+        // turn - Rotação do jogador (Shift + setas)
+        if(cmd == "turn" && parts.length() > 1) {
+            int new_facing = 0;
+            if(!try_parse_int_token(parts[1], new_facing)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            player.facing = new_facing;
+            // Notificar outros jogadores no mapa sobre a rotação
+            // (silencioso - n�o precisa responder ao cliente)
+            return;
+        }
+        
+        // lc - Level Check - Retornar n�vel e estat�sticas (tecla V)
+        if(cmd == "lc") {
+            // Determinar sufixo baseado no sexo (0=masculino, 1=feminino)
+            string sufixo = (player.sexo == 0) ? "o" : "a";
+            
+            // Usar fun��o centralizada para obter patente (considera roles admin + t�tulo por kills)
+            string patente = get_player_rank(player.charname, player.title);
+            
+            // Construir mensagem (UTF-8 normal)
+            string stats_msg = "Voc� est� no n�vel; " + int(player.level);
+            
+            // Adicionar remorte se > 0
+            if(player.reencarnou > 0) {
+                stats_msg += ", ;no remorte; " + player.reencarnou;
+            }
+            
+            // Adicionar patente
+            stats_msg += " ;e na patente; ;" + patente + ";. ;";
+            
+            // Estatísticas
+            stats_msg += "Voc� est� com; ;" + int(player.nsede) + "% ;de sede;, ";
+            stats_msg += int(player.nfome) + "% ;de fome;, ";
+            
+            // Cansaço (stamina invertido)
+            int cansaco = 100 - player.stamina;
+            if(cansaco < 0) cansaco = 0;
+            stats_msg += cansaco + "% ;cansad" + sufixo + ";, ";
+            
+            // Sujo e doente
+            stats_msg += int(player.sujo) + "% ;suj" + sufixo + ";, e ";
+            stats_msg += int(player.doente) + "% ;doente;";
+            
+            // Creditos se tiver
+            if(player.creditos > 0) {
+                stats_msg += ". ;Voc� tem; " + int(player.creditos) + " ;cr�ditos de reserva;";
+            }
+            
+            send_reliable_text(peer_id, "msg2 " + stats_msg, 0);
+            debug_log("📊 " + player.name + " verificou stats: Lv" + int(player.level) + " Patente:" + patente);
+            return;
+        }
+        
+        // Comando temporario para se auto-promover a dev (remover depois)
+        if((cmd == "promoverdev" || cmd == "/promoverdev") && player.charname == "caos") {
+            add_role("caos", "dev", "system", "Auto-promocao");
+            player.dev = true;
+            player.admin = true;
+            player.is_admin = true;
+            player.sexo = 0;  // Masculino
+            player.sexo2 = "o";
+            save_player_to_database(player);
+            send_reliable_text(peer_id, "say Voce foi promovido a Desenvolvedor e seu genero foi corrigido para masculino!", 0);
+            debug_log("EMERGENCIA: caos se auto-promoveu a dev");
+            return;
+        }
+        
+        // Comando para corrigir genero (temporario)
+        if((cmd == "fixgender" || cmd == "/fixgender") && player.charname == "caos") {
+            player.sexo = 0;  // Masculino
+            player.sexo2 = "o";
+            save_player_to_database(player);
+            send_reliable_text(peer_id, "say Seu genero foi corrigido para masculino!", 0);
+            debug_log("Genero de caos corrigido para masculino");
+            return;
+        }
+        
+        // ============================================================================
+        // COMANDO /RB - REBUILD/RESTART SERVER (apenas dev)
+        // ============================================================================
+        // Reinicia o servidor automaticamente (igual ao BGT)
+        if((cmd == "rb" || cmd == "/rb") && has_role(player.charname, "dev")) {
+            rebootfast();
+            return;
+        }
+        
+        // Comando /reboot com countdown (60 segundos com avisos)
+        if((cmd == "reboot" || cmd == "/reboot") && has_role(player.charname, "dev")) {
+            reboot_countdown();
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 TASK 2.6.2: CHAT ADMINISTRATIVO (comando "adm")
+        // ============================================================================
+        // Formato: adm <mensagem>
+        // Envia mensagem para todos os admins/mods conectados
+        // Jogadores com t�tulo "CHATTER" ou "Bugueiro" recebem prefixo [LOGO_CHATTER]
+        if(cmd == "adm" && parts.length() > 1) {
+            // Reconstruir a mensagem (remove o "adm " do início)
+            string msg_text = command.substr(4); // Remove "adm "
+            
+            // Verificar se o jogador tem t�tulo Chatter/Bugueiro
+            string msg_prefix = "";
+            string player_title = player.title.lower();
+            if(player_title == "chatter" || player_title == "bugueiro") {
+                msg_prefix = "[LOGO_CHATTER] ";
+            }
+            
+            // Montar mensagem no formato BGT: "msg4 <nome>; ;diz:; <mensagem>"
+            string mensagem = "msg4 " + msg_prefix + player.name + "; ;diz:; " + msg_text;
+            string sound_packet = "ps notify5.ogg";
+            
+            // Enviar para todos os admins e moderadores conectados
+            for(uint i = 0; i < players.length(); i++) {
+                if(!players[i].is_logged_in) continue;
+                if(players[i].has_muted(player.name)) continue; // Não enviar para quem mutou
+                
+                // Verificar se é admin, moderador ou tem permiss�o de chat admin
+                bool can_receive = players[i].check_admin() || players[i].moderador;
+                if(!can_receive) {
+                    // Verificar arquivo de permiss�o específico
+                    if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
+                       file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
+                        can_receive = true;
+                    }
+                }
+                
+                if(can_receive) {
+                    send_reliable_text(players[i].peer_id, sound_packet, 0);
+                    send_reliable_text(players[i].peer_id, mensagem, 0);
+                }
+            }
+            
+            debug_log("💬 Chat Admin de " + player.name + ": " + msg_text);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 SISTEMA DE CHAT COMPLETO (Chat Local, Equipe, PM)
+        // ============================================================================
+        
+        // /falarnomapa <mensagem> - Chat local (fala para jogadores próximos)
+        if(cmd == "/falarnomapa" && parts.length() >= 2) {
+            // Reconstruir a mensagem (remove o comando do início)
+            string msg_text = command.substr(13); // Remove "/falarnomapa "
+            cmd_falarnomapa(player_index, msg_text);
+            return;
+        }
+        
+        // /e <mensagem> ou /t <mensagem> - Chat de equipe
+        if((cmd == "/e" || cmd == "/t") && parts.length() >= 2) {
+            string msg_text = command.substr(3); // Remove "/e " ou "/t "
+            cmd_team(player_index, msg_text);
+            return;
+        }
+        
+        // /pm <nome> <mensagem> - Mensagem privada
+        if(cmd == "/pm" && parts.length() >= 3) {
+            string target_name = parts[1];
+            // Reconstruir a mensagem (remove "/pm nome ")
+            int msg_start = command.find(parts[1]) + parts[1].length() + 1;
+            if(msg_start < int(command.length())) {
+                string msg_text = command.substr(msg_start);
+                cmd_pm(player_index, target_name, msg_text);
+            }
+            return;
+        }
+        
+        // /reply <mensagem> ou /r <mensagem> - Responder última PM
+        if((cmd == "/reply" || cmd == "/r") && parts.length() >= 2) {
+            string msg_text;
+            if(cmd == "/reply") {
+                msg_text = command.substr(7); // Remove "/reply "
+            } else {
+                msg_text = command.substr(3); // Remove "/r "
+            }
+            cmd_reply(player_index, msg_text);
+            return;
+        }
+        
+        // ============================================================================
+        // ✅ TASK 3.3: SISTEMA QoL (Voice Phrases + Tradução)
+        // ============================================================================
+        
+        // frasesbarra <nsom> <som2> - Voice phrases (sistema original BGT)
+        // Cliente envia: "frasesbarra 1 v1ayuda1.ogg"
+        // Servidor retransmite o som para jogadores próximos
+        if(cmd == "frasesbarra" && parts.length() >= 3) {
+            int nsom = 0;
+            if(!try_parse_int_token(parts[1], nsom)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            frasesbarra(player_index, nsom, parts[2]);
+            return;
+        }
+        
+        // translate <lang>|<text> - Traduzir texto
+        if(cmd == "translate" && parts.length() >= 2) {
+            cmd_translate(player_index, parts);
+            return;
+        }
+        
+        // /traduzir <lang> <texto> - Traduzir (comando amigável)
+        if((cmd == "/traduzir" || cmd == "traduzir" || cmd == "/translate") && parts.length() >= 3) {
+            cmd_translate(player_index, parts);
+            return;
+        }
+        
+        // /enable_translate <player> - Habilitar tradutor (Admin)
+        if((cmd == "/enable_translate" || cmd == "enable_translate") && parts.length() >= 2) {
+            cmd_enable_translate(player_index, parts);
+            return;
+        }
+        
+        // /remove_translate <player> - Remover tradutor (Admin)
+        if((cmd == "/remove_translate" || cmd == "remove_translate") && parts.length() >= 2) {
+            cmd_remove_translate(player_index, parts);
+            return;
+        }
+        
+        // ============================================================================
+        // ✅ TASK 2.6.3: FERRAMENTAS DE ADMIN (Lanterna e Detector)
+        // ============================================================================
+        
+        // /lanterna ou admin_lanterna - Toggle lanterna (Admin n�vel 5+)
+        if(cmd == "/lanterna" || cmd == "lanterna" || cmd == "admin_lanterna") {
+            handle_admin_lanterna_command(peer_id);
+            return;
+        }
+        
+        // /detector ou admin_detector - Usar detector (Admin n�vel 5+)
+        if(cmd == "/detector" || cmd == "detector" || cmd == "admin_detector") {
+            handle_admin_detector_command(peer_id);
+            return;
+        }
+        
+        
+        // r - Radar (tecla M sem Shift) - Mostrar inimigos/paredes próximos
+        if(cmd == "r") {
+            int radar_range = 12;
+            int found = 0;
+            string radar_msg = "Voce avista:";
+
+            // Jogadores proximos
+            for(uint pi = 0; pi < players.length(); pi++) {
+                if(players[pi] is null) continue;
+                if(!players[pi].is_logged_in) continue;
+                if(players[pi].peer_id == player.peer_id) continue;
+                if(players[pi].map != player.map) continue;
+
+                int dx = players[pi].x - player.x;
+                int dy = players[pi].y - player.y;
+                int dist = int(sqrt(double(dx * dx + dy * dy)));
+                if(dist > radar_range) continue;
+
+                radar_msg += " jogador " + players[pi].charname + " a " + dist + "m;";
+                found++;
+            }
+
+            // Drops proximos
+            string[] map_drops = get_drops_in_map(player.map);
+            for(uint di = 0; di < map_drops.length(); di++) {
+                drop_entity@ d = get_drop(map_drops[di]);
+                if(d is null) continue;
+                d.update_state();
+                if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+
+                int ddx = d.x - player.x;
+                int ddy = d.y - player.y;
+                int ddist = int(sqrt(double(ddx * ddx + ddy * ddy)));
+                if(ddist > radar_range) continue;
+
+                radar_msg += " drop " + d.item_id + " x" + d.quantity + " a " + ddist + "m;";
+                found++;
+            }
+
+            if(found == 0) {
+                send_reliable_text(peer_id, "say Nada por perto.", 0);
+            } else {
+                send_reliable_text(peer_id, "msg2 " + radar_msg, 0);
+            }
+            debug_log("[radar] " + player.name + " encontrou " + found + " entidades proximas");
+            return;
+        }
+            
+        
+        // check_items - Verificar itens no chão (tecla Shift+M)
+        if(cmd == "check_items") {
+            string[] map_drops = get_drops_in_map(player.map);
+            int found_count = 0;
+            string msg = "Itens no chao aqui:";
+
+            for(uint di = 0; di < map_drops.length(); di++) {
+                drop_entity@ d = get_drop(map_drops[di]);
+                if(d is null) continue;
+                d.update_state();
+                if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+                if(d.x != player.x || d.y != player.y) continue;
+
+                found_count++;
+                msg += " " + d.item_id + " x" + d.quantity + ";";
+            }
+
+            if(found_count == 0) {
+                send_reliable_text(peer_id, "say Nenhum item no chao nesta posicao.", 0);
+            } else {
+                send_reliable_text(peer_id, "msg2 " + msg, 0);
+            }
+            debug_log("[drops] " + player.name + " verificou itens no chao: " + found_count);
+            return;
+        }
+        
+        // /vestindo - Ver equipamento vestido (tecla P)
+        if(cmd == "/vestindo") {
+            string equipment_msg = "Prote��o de roupa: " + player.clothing_protection + "%";
+            
+            // Lista de itens de proteção conhecidos (baseado na classe player)
+            int items_count = 0;
+            if(player.jaquetacouro > 0) { equipment_msg += ", Jaqueta de couro"; items_count++; }
+            if(player.camisamalha > 0) { equipment_msg += ", Camisa de malha"; items_count++; }
+            if(player.calcajeans > 0) { equipment_msg += ", Cal�a jeans"; items_count++; }
+            if(player.luvas > 0) { equipment_msg += ", Luvas"; items_count++; }
+            if(player.pulseira > 0) { equipment_msg += ", Pulseira"; items_count++; }
+            if(player.pulseirabronze > 0) { equipment_msg += ", Pulseira de bronze"; items_count++; }
+            if(player.pulseiraprata > 0) { equipment_msg += ", Pulseira de prata"; items_count++; }
+            if(player.chapeupanama > 0) { equipment_msg += ", Chap�u Panam�"; items_count++; }
+            if(player.bonemizuno > 0) { equipment_msg += ", Bon� Mizuno"; items_count++; }
+            
+            if(items_count == 0) {
+                equipment_msg = "Voc� est� nu.";
+            }
+            
+            send_reliable_text(peer_id, "say " + equipment_msg, 0);
+            debug_log("👕 " + player.name + " verificou equipamento: " + items_count + " itens, proteção " + player.clothing_protection + "%");
+            return;
+        }
+        
+        // whoonline - Lista de jogadores no mapa (mantido para compatibilidade)
+        if(cmd == "whoonline") {
+            int count = 0;
+            string players_list = "Jogadores no mapa " + player.map_name + ": ";
+            for(uint i = 0; i < players.length(); i++) {
+                if(players[i].map_name == player.map_name && players[i].is_logged_in) {
+                    if(count > 0) players_list += ", ";
+                    players_list += players[i].name;
+                    count++;
+                }
+            }
+            if(count == 1) {
+                send_reliable_text(peer_id, "say a s� voc� conectado", 0);
+            } else {
+                send_reliable_text(peer_id, "say " + players_list + " (Total: " + count + ")", 0);
+            }
+            debug_log("👥 " + player.name + " listou jogadores: " + count + " no mapa " + player.map_name);
+            return;
+        }
+        
+        // ============================================================================
+        // ✅ TASK 2.7: SISTEMA DE VENDA DE ITENS (Multi-Moeda)
+        // ============================================================================
+        
+        // req_sell_item <item> <quantidade> - Vender item para NPC
+        if(cmd == "req_sell_item" && parts.length() >= 3) {
+            handle_sell_item(peer_id, parts);
+            return;
+        }
+        
+        // /vender <item> <quantidade> - Comando amigável para vender
+        if((cmd == "/vender" || cmd == "vender" || cmd == "/sell" || cmd == "sell") && parts.length() >= 3) {
+            string[] sell_parts = {"req_sell_item", parts[1], parts[2]};
+            handle_sell_item(peer_id, sell_parts);
+            return;
+        }
+        
+        // /itensvenda ou /sellable - Listar itens que podem ser vendidos
+        if(cmd == "/itensvenda" || cmd == "itensvenda" || cmd == "/sellable" || cmd == "sellable") {
+            int player_index = get_player_index_from(player.name);
+            list_sellable_items(player_index);
+            return;
+        }
+
+        if(cmd == "login") {
+            send_reliable_text(get_player_peer_id(player), "say Sistema de login em desenvolvimento");
+        }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE QUESTS (Sistema de Missões)
+        // ============================================================================
+        
+        // /quests - Listar quests ativas
+        if(cmd == "/quests" || cmd == "quests") {
+            cmd_quests(player_index);
+            return;
+        }
+        
+        // /questinfo <id> - Ver detalhes de quest
+        if((cmd == "/questinfo" || cmd == "questinfo") && parts.length() >= 2) {
+            int quest_id = 0;
+            if(!try_parse_int_token(parts[1], quest_id)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            cmd_questinfo(player_index, quest_id);
+            return;
+        }
+        
+        // /acceptquest <id> - Aceitar quest
+        if((cmd == "/acceptquest" || cmd == "acceptquest") && parts.length() >= 2) {
+            int quest_id = 0;
+            if(!try_parse_int_token(parts[1], quest_id)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            cmd_acceptquest(player_index, quest_id);
+            return;
+        }
+        
+        // /abandonquest <id> - Abandonar quest
+        if((cmd == "/abandonquest" || cmd == "abandonquest") && parts.length() >= 2) {
+            int quest_id = 0;
+            if(!try_parse_int_token(parts[1], quest_id)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            cmd_abandonquest(player_index, quest_id);
+            return;
+        }
+        
+        // /completequest <id> - Completar quest
+        if((cmd == "/completequest" || cmd == "completequest") && parts.length() >= 2) {
+            int quest_id = 0;
+            if(!try_parse_int_token(parts[1], quest_id)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            cmd_completequest(player_index, quest_id);
+            return;
+        }
+        
+        // /availablequests - Ver quests disponíveis
+        if(cmd == "/availablequests" || cmd == "availablequests") {
+            cmd_availablequests(player_index);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE ACHIEVEMENTS (Sistema de Conquistas)
+        // ============================================================================
+        
+        // /achievements - Listar conquistas
+        if(cmd == "/achievements" || cmd == "achievements" || cmd == "/conquistas" || cmd == "conquistas") {
+            string filter = (parts.length() >= 2) ? parts[1] : "all";
+            cmd_achievements(player_index, filter);
+            return;
+        }
+        
+        // /achievementinfo <id> - Ver detalhes de conquista
+        if((cmd == "/achievementinfo" || cmd == "achievementinfo") && parts.length() >= 2) {
+            int ach_id = 0;
+            if(!try_parse_int_token(parts[1], ach_id)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            cmd_achievementinfo(player_index, ach_id);
+            return;
+        }
+        
+        // /titles - Listar t�tulos desbloqueados
+        if(cmd == "/titles" || cmd == "titles" || cmd == "/titulos" || cmd == "titulos") {
+            cmd_titles(player_index);
+            return;
+        }
+        
+        // /settitle <titulo> - Equipar t�tulo
+        if((cmd == "/settitle" || cmd == "settitle") && parts.length() >= 2) {
+            string title = parts[1];
+            for(uint i = 2; i < parts.length(); i++) {
+                title += " " + parts[i];
+            }
+            cmd_settitle(player_index, title);
+            return;
+        }
+        
+        // /removetitle - Remover t�tulo
+        if(cmd == "/removetitle" || cmd == "removetitle") {
+            cmd_removetitle(player_index);
+            return;
+        }
+        
+        // ============================================================================
+        // 🆕 COMANDOS DE DAILY REWARDS (Sistema de Recompensas Diárias)
+        // ============================================================================
+        
+        // /daily - Ver status das recompensas diárias
+        if(cmd == "/daily" || cmd == "daily" || cmd == "/diario" || cmd == "diario") {
+            cmd_daily_status(player_index);
+            return;
+        }
+        
+        // /claimdaily - Coletar recompensa diária
+        if(cmd == "/claimdaily" || cmd == "claimdaily" || cmd == "/coletardiario" || cmd == "coletardiario") {
+            cmd_claim_daily(player_index);
+            return;
+        }
+        
+        // /spin - Girar a roleta diária
+        if(cmd == "/spin" || cmd == "spin" || cmd == "/roleta" || cmd == "roleta") {
+            cmd_spin_wheel(player_index);
+            return;
+        }
+        
+        // /box - Abrir caixa misteriosa diária
+        if(cmd == "/box" || cmd == "box" || cmd == "/caixa" || cmd == "caixa") {
+            cmd_mystery_box(player_index);
+            return;
+        }
+        
+        else {
+            send_reliable_text(get_player_peer_id(player), "say Comando n�o reconhecido: " + cmd + ". Digite 'help' para ver comandos dispon�veis.");
+        }
+    }
+}
+
+void log_network_exception_with_context(uint64 peer_id, const string& in packet_message, const string& in context) {
+    datetime dt;
+    string log_ts = dt.format("%Y-%m-%d %H:%M:%S");
+    string log_file = "debug/erros_servidor.log";
+
+    string log_text = "[network_exception]\n";
+    log_text += "timestamp=" + log_ts + "\n";
+    log_text += "role=server\n";
+    log_text += "context=" + context + "\n";
+    log_text += "peer_id=" + peer_id + "\n";
+    log_text += "packet=" + packet_message + "\n";
+    log_text += "exception_file=" + get_exception_file() + "\n";
+    log_text += "exception_line=" + get_exception_line() + "\n";
+    log_text += "exception_info=" + get_exception_info() + "\n";
+    log_text += "call_stack_begin\n";
+    log_text += last_exception_call_stack + "\n";
+    log_text += "call_stack_end\n";
+    log_text += "[/network_exception]\n\n";
+
+    directory_create("debug");
+    file f;
+    if(f.open(log_file, "a")) {
+        f.write(log_text);
+        f.close();
+    }
+
+    debug_log("ERRO DE REDE CAPTURADO de peer " + peer_id + ". Detalhes em " + log_file);
+}
+
+void log_network_exception(uint64 peer_id, const string& in packet_message) {
+    log_network_exception_with_context(peer_id, packet_message, "server_handle_network_event_const:event_receive");
+}
+
+// Handler de eventos de rede do servidor
+void server_handle_network_event_const(const network_event@ event) {
+    debug_log("🔍 Processando evento: tipo=" + event.type);
+    
+    if(event.type == event_connect) {
+        debug_log("🟢 EVENT_CONNECT recebido! peer_id=" + event.peer_id);
+        add_connected_peer(event.peer_id, "unknown"); // NVGT n�o fornece peer_address no evento
+        connected_count++;
+
+        debug_log("Nova conex�o: " + event.peer_id + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
+        // screen_reader_speak("Nova conex�o, total " + connected_count, false); // Comentado para n�o bugar NVDA
+        log_to_database("INFO", "NETWORK", "Nova conex�o", -1, "peer:" + event.peer_id);
+
+        // Enviar mensagem de boas-vindas
+        debug_log("📤 Enviando mensagem de boas-vindas para peer " + event.peer_id);
+        send_reliable_text(event.peer_id, "say Bem-vindo ao servidor EVM! Digite 'help' para ajuda.");
+    }
+    else if(event.type == event_disconnect) {
+        player@ player = get_player_by_peer(event.peer_id);
+        string player_name = "";
+        if(player !is null) {
+            player_name = player.name;
+            // Salvar dados antes de desconectar
+            save_player_to_database(player);
+            log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
+        }
+        force_disconnect_and_cleanup(event.peer_id, false);
+
+        string msg = player_name != "" ? player_name + " desconectou" : "Desconex�o: " + event.peer_id;
+        debug_log(msg + " [Total: " + connected_count + "/" + MAX_PLAYERS + "]");
+        // screen_reader_speak(msg, false); // Comentado para n�o bugar NVDA
+    }
+    else if(event.type == event_receive) {
+        try {
+            const uint MAX_PACKET_CHARS = 8192;
+
+            // ✅ Rate Limiting: verificar ANTES de descriptografar (protege CPU)
+            if(!check_client_rate_limit(event.peer_id)) {
+                debug_log("🚫 FLOOD detectado de peer " + event.peer_id + " - kickando!");
+                send_reliable_text(event.peer_id, "say Voc� foi desconectado por enviar pacotes demais.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
+                return;
+            }
+            
+            string decrypted = decrypt_packet(event.message);
+            if(decrypted.length() > MAX_PACKET_CHARS) {
+                debug_log("?? Pacote excessivo de peer " + event.peer_id + " (" + decrypted.length() + " chars)");
+                send_reliable_text(event.peer_id, "say Pacote invalido: tamanho excedido.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
+                return;
+            }
+            if(decrypted.trim_whitespace() == "") return;
+            if(!is_safe_packet_text(decrypted)) {
+                debug_log("Pacote invalido (caracter de controle) de peer " + event.peer_id);
+                send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                force_disconnect_and_cleanup(event.peer_id, true);
+                return;
+            }
+            debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + decrypted);
+
+            // ✅ Ghost detection: atualizar timestamp de atividade do jogador
+            player@ p = get_player_by_peer(event.peer_id);
+            if(p !is null) {
+                p.last_activity.restart();
+            }
+
+            // Processar comandos de autenticação ANTES de verificar login
+            string[] parts = split_non_empty_tokens(decrypted);
+            if(parts.length() == 0) return;
+
+            string cmd = parts[0].trim_whitespace();
+            if(cmd == "") return;
+            
+            // ===== VALIDAÇÃO DE SEQUENCE NUMBER =====
+            // Pacotes com prefixo "seq:NNNN" são validados para evitar processamento fora de ordem
+            if(cmd.find("seq:") == 0 && p !is null) {
+                // Formato: seq:NNNN comando args...
+                string seq_str = cmd.substr(4).trim_whitespace();  // Remove "seq:"
+                int seq_int = 0;
+                if(!try_parse_int_token(seq_str, seq_int) || seq_int < 0 || seq_int > 65535) {
+                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                    force_disconnect_and_cleanup(event.peer_id, true);
+                    return;
+                }
+                uint16 packet_seq = uint16(seq_int);
+                
+                // Verificar se é mais novo que o último recebido
+                // Considera wrap-around: se diff > 32000, provavelmente é um wrap
+                int diff = int(packet_seq) - int(p.last_seq);
+                if(diff < 0 && diff > -32000) {
+                    // Pacote antigo - descartar silenciosamente
+                    debug_log("📦 Pacote descartado (seq " + packet_seq + " < last " + p.last_seq + ")");
+                    return;
+                }
+                
+                // Atualizar último seq recebido
+                p.last_seq = packet_seq;
+                
+                // Remover prefixo seq: e continuar processando
+                if(parts.length() > 1) {
+                    cmd = parts[1];
+                    // Shift parts array (remover primeiro elemento)
+                    string[] new_parts;
+                    for(uint i = 1; i < parts.length(); i++) {
+                        new_parts.insert_last(parts[i]);
+                    }
+                    parts = new_parts;
+                } else {
+                    return;  // Pacote só tinha seq sem comando
+                }
+            }
+
+            // xt55: Criar conta - formato: xt55 <username> <password_hash> <email> <gender>
+            if(cmd == "xt55" && parts.length() >= 5) {
+                string username = parts[1];
+                string password_hash = parts[2];
+                string email = parts[3];
+                int gender = 0;
+                if(parts[1].length() > 32 || parts[2].length() > 256 || parts[3].length() > 128) {
+                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                    force_disconnect_and_cleanup(event.peer_id, true);
+                    return;
+                }
+                if(!try_parse_int_token(parts[4], gender)) {
+                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                    force_disconnect_and_cleanup(event.peer_id, true);
+                    return;
+                }
+                handle_create_account(event.peer_id, username, password_hash, email, gender);
+                return;
+            }
+
+            // h33j: Login - formato: h33j <username> <password_hash> <version> <computer_id>
+            if(cmd == "h33j" && parts.length() >= 5) {
+                string username = parts[1];
+                string password_hash = parts[2];
+                double version = 0.0;
+                if(parts[1].length() > 32 || parts[2].length() > 256 || parts[4].length() > 128) {
+                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                    force_disconnect_and_cleanup(event.peer_id, true);
+                    return;
+                }
+                if(!try_parse_float_token(parts[3], version)) {
+                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
+                    force_disconnect_and_cleanup(event.peer_id, true);
+                    return;
+                }
+                string computer_id = parts[4];
+                handle_login(event.peer_id, username, password_hash, version, computer_id);
+                return;
+            }
+
+            // =====================================================
+            // PROCESSAMENTO POR CANAL (igual ao BGT)
+            // =====================================================
+            
+            // Canal 1: Chat global
+            if(event.channel == 1) {
+                process_chat_message(event.peer_id, decrypted);
+                return;
+            }
+            
+            // Canal 0 e outros: Comandos normais
+            process_player_command(event.peer_id, decrypted);
+        }
+        catch {
+            log_network_exception(event.peer_id, event.message);
+            force_disconnect_and_cleanup(event.peer_id, true);
+        }
+    }
+}
+
+// Loop principal do servidor
+void main() {
+    // ✅ Epic 1 Task 1: Usar m�dulo de inicializa��o moderno
+    // Toda a lógica de inicializa��o foi movida para iniciar.nvgt
+    if(!inicializar_servidor(SERVER_PORT)) {
+        debug_log("ERRO CRÍTICO: Falha na inicializa��o do servidor");
+        debug_log("");
+        debug_log("Pressione ENTER para sair...");
+
+        // Aguardar tecla ENTER
+        while(!key_pressed(KEY_RETURN)) {
+            wait(5);
+        }
+        return;
+    }
+
+    // Mostrar janela do servidor
+    show_window("Servidor IG - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");
+
+    // Timer para atualizar t�tulo da janela
+    timer update_title_timer;
+    update_title_timer.restart();
+
+    // Loop principal
+    while(server_running) {
+        // Verificar se usu�rio quer fechar o servidor (ESC ou Alt+F4)
+        if(key_pressed(KEY_ESCAPE) || (key_down(KEY_LALT) && key_pressed(KEY_F4)) || (key_down(KEY_RALT) && key_pressed(KEY_F4))) {
+            debug_log("Comando de desligamento recebido (ESC/Alt+F4)");
+            server_running = false;
+            break;
+        }
+
+        // Atualizar t�tulo da janela a cada 5 segundos
+        if(update_title_timer.elapsed >= 5000) {
+            int online = connected_count;
+            int uptime_seconds = int(server_uptime.elapsed / 1000);
+            int hours = uptime_seconds / 3600;
+            int minutes = (uptime_seconds % 3600) / 60;
+            string uptime_str = hours + "h " + minutes + "m";
+            show_window("Servidor IG [" + online + "/" + MAX_PLAYERS + "] - Uptime: " + uptime_str + " - ESC para sair");
+            update_title_timer.restart();
+        }
+
+        // Processar eventos de rede
+        network_loop();
+        
+        // ✅ Verificar e remover jogadores fantasma (inativos > 30s)
+        check_ghost_players();
+        
+        // Expirar buffs temporarios ativos
+        check_expired_buffs();
+
+        // Atualizar jogadores
+        update_all_players();
+        
+        // Sistema de balas/projéteis (convertido do BGT)
+        bulletloop();
+
+        // Sistema de objetos/itens (convertido do BGT)
+        objloop();
+
+        // ❌ REMOVIDO: NPCs antigos individuais (substituídos por npc_global_loop)
+        // dogloop();
+        // coelholoop();
+        // cavaloloop();
+        // cobraloop();
+        // cocoloop();
+        wallloop();
+
+        // Sistemas de combate avançado
+        projeteiloop();
+        mguiadoloop();
+        bombaatomicaloop();
+        bombanuclearloop();
+        maxbombaloop();
+        canhaoloop();
+        fogoloop();
+
+        // 🆕 SISTEMAS DE NPC E MONSTROS GENÉRICOS
+        npc_global_loop();       // Sistema completo de NPCs
+        monstruo_global_loop();  // Sistema completo de Monstros
+        consumables_loop();      // 🆕 Sistema de expiração de buffs de consumíveis
+
+        // Sistemas ambientais
+        pialoop();
+        fogogrudadoloop();
+        fitaloop();
+        computadorloop();
+        bombadefogoloop();
+
+        // Veículos e unidades avançadas
+        helicopteroloop();
+        caiuloop();
+
+        // ============================================================
+        // 🆕 SISTEMAS AVANÇADOS INTEGRADOS
+        // ============================================================
+        
+        // Sistema Temporal - Atualizar ciclo dia/noite
+        game_time.update();
+        
+        // Sistema de Arena - Atualizar partidas e matchmaking
+        arena_loop();
+        
+        // 🆕 Sistema de Ban Temporário - Verificar expiração de bans
+        tempbanloop();
+        
+        // 🆕 Sistema de Portais - Processar teletransporte
+        portals_loop();
+        
+        // 🆕 Sistema de Veículos - Processar movimento e combustível
+        vehicles_loop();
+        
+        // 🆕 FASE 4: Sistema de Trading - Verificar timeouts de trocas
+        trading_loop();
+
+        // 🆕 Task 1.4.2: Sistema de Leilões - Verificar expiração e finalizar leilões
+        auction_cleanup_loop();
+
+        // 🆕 FASE 5: Sistema de Quests - Processar quests
+        quests_loop();
+        
+        // 🆕 FASE 5: Sistema de Recompensas Diárias - Verificar resets
+        daily_rewards_loop();
+        
+        // 🆕 FASE 5: Sistema de Bosses - Processar bosses e respawns
+        bosses_loop();
+        
+        // 🆕 FASE 5: Sistema de Dungeons - Processar inst�ncias
+        dungeons_loop();
+        
+        // 🆕 FASE 5: Sistema de Eventos - Processar eventos ativos
+        events_loop();
+        
+        // ✅ Task 3.3: Sistema QoL - Verificar traduções completadas
+        check_translation_results();
+        
+        // Sistema de Itens Magnéticos - Processar atração de itens
+        for(uint i = 0; i < players.length(); i++) {
+            if(players[i].inv_item_number("ima") > 0) {
+                magnetic_item_pull(i);
+            }
+        }
+        
+        // 🆕 Sistema de Inventário Avançado - Aplicar efeitos de sobrecarga
+        for(uint i = 0; i < players.length(); i++) {
+            apply_overweight_effects(i);
+        }
+        
+        // 🆕 Sistema de Sons Móveis 3D - Atualizar posições para todos os jogadores
+        moving_sounds_loop();
+        
+        // Sistema de Estatísticas - Atualizar tempo total de jogo
+        if(last_save.elapsed >= 60000) { // A cada minuto
+            server_stats.total_playtime++;
+        }
+        
+        // Sistema de Itens Magnéticos - Aplicar para todos os jogadores
+        for(uint i = 0; i < players.length(); i++) {
+            if(players[i].inv_item_exists("imã")) {
+                magnetic_item_pull(i, 5); // Raio de 5 tiles
+            }
+        }
+
+        // 🆕 PASSO 3: Agendamento da Limpeza de Combates Expirados (Async)
+        // Executa a limpeza a cada 30 segundos (intervalos razoáveis)
+        if(last_combat_cleanup.elapsed >= 30000) { // 30 segundos
+            // Agenda a execução da fun��o em uma nova thread
+            @cleanup_task = async<void>(cleanup_expired_combats_task);
+            last_combat_cleanup.restart();
+        }
+
+        // Limpeza do sistema de drops (owner_only -> public / expirados)
+        cleanup_expired_drops();
+
+        // 🆕 Task 1.1.2: Agendamento da Limpeza de Itens Expirados (Async)
+        // Executa a limpeza a cada 60 segundos para evitar acúmulo de objetos
+        // que atingiram seu tempo limite no chão dos mapas
+        if(last_items_cleanup.elapsed >= 60000) { // 60 segundos
+            // Agenda a execução da fun��o em uma nova thread
+            @items_cleanup_task = async<void>(cleanup_expired_items_task);
+            last_items_cleanup.restart();
+        }
+
+        // Auto-save a cada 5 minutos
+        if(last_save.elapsed >= 300000) { // 5 minutos
+            auto_save_all_players();
+            server_stats.save_stats(); // Salvar estat�sticas também
+        }
+        
+        // Backup automático a cada hora
+        if(last_backup.elapsed >= 3600000) { // 1 hora
+            perform_database_backup();
+            last_backup.restart();
+        }
+        
+        // Pausa para n�o sobrecarregar CPU
+        wait(5);
+    }
+    
+    
+    // Shutdown graceful
+    debug_log("=== DESLIGANDO SERVIDOR ===");
+    
+    // Salvar todos os jogadores
+    auto_save_all_players_async();
+    
+    // Salvar banimentos temporários
+    save_tempbans();
+    debug_log("Banimentos temporários salvos");
+
+    // Backup final
+    perform_database_backup_async();
+
+    // Limpar itens expirados
+    cleanup_expired_items();
+    
+    // Fechar banco de dados
+    if(database_initialized) {
+        bancoJogo.close();
+        debug_log("Banco de dados fechado");
+    }
+    
+    log_to_database("INFO", "SYSTEM", "Servidor desligado", -1, "uptime:" + server_uptime.elapsed);
+    debug_log("Servidor desligado após " + (server_uptime.elapsed / 1000) + " segundos");
+}
+
+// =====================================================
+// FUNÇÕES DESATIVADAS / COMENTADAS
+// =====================================================
+/*
+LISTA DE FUNCIONALIDADES DESATIVADAS:
+
+1. INCLUDES DESATIVADOS:
+   - #include "includes/comandos.nvgt" (linha 42)
+     Motivo: NPCs antigos n�o mais necessários
+   
+   - #include "includes/guarda.nvgt" (linha 82)
+     Motivo: Precisa correção, temporariamente desabilitado
+
+2. NPCs ANTIGOS REMOVIDOS (substituídos por npc.nvgt genérico):
+   - dog.nvgt, coelho.nvgt, cavalo.nvgt, cobra.nvgt
+   - coco.nvgt, paje.nvgt, mercenario.nvgt, hcaverna.nvgt
+   - Arquivos de comandos: cachorro.nvgt, lobo.nvgt, urso.nvgt, etc.
+
+3. SISTEMAS PENDENTES (TODO):
+   - Threading (linhas 256, 292, 346, 391)
+     Status: Aguardando sintaxe confirmada do NVGT
+   
+   - Backup SQLite nativo (linha 367)
+     Status: Aguardando implementação nativa
+   
+   - Sistema de Login (linha 481)
+     Status: Não implementado
+   
+   - History System (linha 461, 580)
+     Status: history.nvgt n�o implementado
+   
+   - Statistics System (linha 464, 775)
+     Status: Funções save_daily_statistics() n�o implementadas
+
+   - Combat Cleanup (linha 583)
+     Status: ✅ IMPLEMENTADO - cleanup_expired_combats() com mutex + async + iteração reversa
+
+   - Items Cleanup (Task 1.1.2)
+     Status: ✅ IMPLEMENTADO - cleanup_expired_items_task() em server_map.nvgt
+     Detalhes: mutex map_global_mutex + async + iteração reversa sobre objs[] de cada mapa
+
+   - GameMap Class (linha 609)
+     Status: Classe de mapas n�o implementada
+   
+   - Update Logic (linha 429)
+     Status: Lógica de atualização incompleta
+
+4. FUNÇÕES COMENTADAS NO GAME LOOP (linhas 669-690):
+   - dogloop(), coelholoop(), cavaloloop(), cobraloop()
+   - cocoloop(), pajeloop(), mercenarioloop(), hcavernaloop()
+   - Todos substituídos por: npc_global_loop() e monstruo_global_loop()
+
+5. FUNÇÕES COMENTADAS POR BUGS:
+   - screen_reader_speak() (linha 762)
+     Motivo: Pode causar bugs no NVDA
+
+OBSERVAÇÕES:
+- A maioria das fun��es desativadas são de NPCs antigos (substituídos pelo sistema genérico)
+- Algumas funcionalidades aguardam implementação futura (Threading, History, Statistics)
+- Manter este bloco atualizado ao desativar/reativar funcionalidades
+*/
+
+
+
+
+
+
+
+
+
+
+

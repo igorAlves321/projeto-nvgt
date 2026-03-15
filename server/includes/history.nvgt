@@ -1,0 +1,501 @@
+// Sistema de histórico e estatísticas do servidor NVGT
+// Logging avançado de todas as ações do jogo
+
+#include "globals.nvgt"
+#include "shared_globals.nvgt"
+// history.nvgt - Sistema de Histórico do EVM Server (convertido de BGT)
+// Conversão completa: BGT → NVGT
+
+// Estrutura para log de combate
+class CombatLog {
+    int attacker_id;
+    string attacker_name;
+    int defender_id;
+    string defender_name;
+    string action_type;
+    string weapon_used;
+    int damage_dealt;
+    int damage_blocked;
+    int attacker_hp_before, attacker_hp_after;
+    int defender_hp_before, defender_hp_after;
+    string battle_result;
+    string map_name;
+    int x, y, z;
+    
+    CombatLog() {
+        attacker_id = 0;
+        attacker_name = "";
+        defender_id = 0;
+        defender_name = "";
+        action_type = "";
+        weapon_used = "";
+        damage_dealt = 0;
+        damage_blocked = 0;
+        attacker_hp_before = 0; attacker_hp_after = 0;
+        defender_hp_before = 0; defender_hp_after = 0;
+        battle_result = "ongoing";
+        map_name = "";
+        x = 0; y = 0; z = 0;
+    }
+}
+
+// Estrutura para estatísticas diárias
+class DailyStats {
+    string date;
+    int peak_players;
+    int total_logins;
+    int new_registrations;
+    int unique_players;
+    int total_combats;
+    int items_spawned;
+    int items_collected;
+    int messages_sent;
+    int server_uptime_seconds;
+    int database_queries;
+    int backup_count;
+    
+    DailyStats() {
+        date = "";
+        peak_players = 0;
+        total_logins = 0;
+        new_registrations = 0;
+        unique_players = 0;
+        total_combats = 0;
+        items_spawned = 0;
+        items_collected = 0;
+        messages_sent = 0;
+        server_uptime_seconds = 0;
+        database_queries = 0;
+        backup_count = 0;
+    }
+}
+
+// Estatísticas em tempo real
+DailyStats current_stats;
+timer stats_timer;
+int current_peak_players = 0;
+
+// Criar tabelas de histórico
+void create_history_tables() {
+    if(!database_initialized) return;
+    
+    // Tabela de histórico de ações
+    string create_history = """
+        CREATE TABLE IF NOT EXISTS game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            
+            -- Quem fez a ação
+            player_id INTEGER,
+            player_name TEXT,
+            
+            -- Que tipo de ação
+            action_type TEXT NOT NULL,
+            action_details TEXT NOT NULL,
+            
+            -- Onde aconteceu
+            map_name TEXT,
+            x INTEGER, y INTEGER, z INTEGER,
+            
+            -- Dados específicos (JSON)
+            additional_data TEXT,
+            
+            -- Para consultas
+            affected_player_id INTEGER,
+            item_id INTEGER,
+            
+            FOREIGN KEY (player_id) REFERENCES players(id),
+            FOREIGN KEY (affected_player_id) REFERENCES players(id),
+            FOREIGN KEY (item_id) REFERENCES items(id)
+        );
+    """;
+    
+    // Tabela de logs de combate
+    string create_combat_logs = """
+        CREATE TABLE IF NOT EXISTS combat_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            
+            -- Participantes
+            attacker_id INTEGER,
+            attacker_name TEXT,
+            defender_id INTEGER,
+            defender_name TEXT,
+            
+            -- Detalhes do combate
+            action_type TEXT NOT NULL,
+            weapon_used TEXT,
+            damage_dealt INTEGER DEFAULT 0,
+            damage_blocked INTEGER DEFAULT 0,
+            
+            -- Resultado
+            attacker_hp_before INTEGER,
+            attacker_hp_after INTEGER,
+            defender_hp_before INTEGER,
+            defender_hp_after INTEGER,
+            
+            -- Estado da batalha
+            battle_result TEXT DEFAULT 'ongoing',
+            
+            -- Localização
+            map_name TEXT,
+            x INTEGER, y INTEGER, z INTEGER,
+            
+            FOREIGN KEY (attacker_id) REFERENCES players(id),
+            FOREIGN KEY (defender_id) REFERENCES players(id)
+        );
+    """;
+    
+    // Tabela de estatísticas do servidor
+    string create_stats = """
+        CREATE TABLE IF NOT EXISTS server_statistics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE DEFAULT (DATE('now')),
+            
+            -- Estatísticas de jogadores
+            peak_players INTEGER DEFAULT 0,
+            total_logins INTEGER DEFAULT 0,
+            new_registrations INTEGER DEFAULT 0,
+            unique_players INTEGER DEFAULT 0,
+            
+            -- Estatísticas de gameplay
+            total_combats INTEGER DEFAULT 0,
+            items_spawned INTEGER DEFAULT 0,
+            items_collected INTEGER DEFAULT 0,
+            messages_sent INTEGER DEFAULT 0,
+            
+            -- Performance
+            server_uptime_seconds INTEGER DEFAULT 0,
+            database_queries INTEGER DEFAULT 0,
+            backup_count INTEGER DEFAULT 0,
+            
+            -- Atualizado automaticamente
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+            
+            UNIQUE(date)
+        );
+    """;
+    
+    // Executar criação
+    if(bancoJogo.execute(create_history) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela game_history: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_combat_logs) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela combat_logs: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_stats) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela server_statistics: " + bancoJogo.get_last_error_text());
+    }
+    
+    debug_log("Tabelas de histórico criadas com sucesso");
+}
+
+// Log de ação geral (assíncrono)
+void log_action(string player_name, string action_type, string action_details, 
+                string map_name = "", int x = 0, int y = 0, int z = 0,
+                string additional_data = "", string affected_player = "", string item_name = "") {
+    if(!database_initialized) return;
+    
+    async<void>(log_action_async, player_name, action_type, action_details, 
+                map_name, x, y, z, additional_data, affected_player, item_name);
+}
+
+void log_action_async(string player_name, string action_type, string action_details,
+                     string map_name, int x, int y, int z,
+                     string additional_data, string affected_player, string item_name) {
+    if(!database_initialized) return;
+    
+    string query = """
+        INSERT INTO game_history (player_name, action_type, action_details, 
+                                 map_name, x, y, z, additional_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar log de ação: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    stmt.bind_text(1, player_name);
+    stmt.bind_text(2, action_type);
+    stmt.bind_text(3, action_details);
+    stmt.bind_text(4, map_name);
+    stmt.bind_int(5, x);
+    stmt.bind_int(6, y);
+    stmt.bind_int(7, z);
+    stmt.bind_text(8, additional_data);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao inserir log de ação: " + bancoJogo.get_last_error_text());
+    }
+}
+
+// Log específico de combate (assíncrono)
+void log_combat(CombatLog@ combat_log) {
+    if(!database_initialized || combat_log is null) return;
+    
+    async<void>(log_combat_async, combat_log.attacker_name, combat_log.defender_name,
+                combat_log.action_type, combat_log.weapon_used, combat_log.damage_dealt,
+                combat_log.damage_blocked, combat_log.attacker_hp_before, combat_log.attacker_hp_after,
+                combat_log.defender_hp_before, combat_log.defender_hp_after, combat_log.battle_result,
+                combat_log.map_name, combat_log.x, combat_log.y, combat_log.z);
+}
+
+void log_combat_async(string attacker_name, string defender_name, string action_type,
+                     string weapon_used, int damage_dealt, int damage_blocked,
+                     int attacker_hp_before, int attacker_hp_after,
+                     int defender_hp_before, int defender_hp_after, string battle_result,
+                     string map_name, int x, int y, int z) {
+    if(!database_initialized) return;
+    
+    string query = """
+        INSERT INTO combat_logs (attacker_name, defender_name, action_type, weapon_used,
+                               damage_dealt, damage_blocked, attacker_hp_before, attacker_hp_after,
+                               defender_hp_before, defender_hp_after, battle_result,
+                               map_name, x, y, z)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar log de combate: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    stmt.bind_text(1, attacker_name);
+    stmt.bind_text(2, defender_name);
+    stmt.bind_text(3, action_type);
+    stmt.bind_text(4, weapon_used);
+    stmt.bind_int(5, damage_dealt);
+    stmt.bind_int(6, damage_blocked);
+    stmt.bind_int(7, attacker_hp_before);
+    stmt.bind_int(8, attacker_hp_after);
+    stmt.bind_int(9, defender_hp_before);
+    stmt.bind_int(10, defender_hp_after);
+    stmt.bind_text(11, battle_result);
+    stmt.bind_text(12, map_name);
+    stmt.bind_int(13, x);
+    stmt.bind_int(14, y);
+    stmt.bind_int(15, z);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao inserir log de combate: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    // Atualizar estatísticas
+    current_stats.total_combats++;
+}
+
+// Atualizar estatísticas em tempo real
+void update_statistics(string stat_type, int increment = 1) {
+    if(stat_type == "login") {
+        current_stats.total_logins += increment;
+    }
+    else if(stat_type == "registration") {
+        current_stats.new_registrations += increment;
+    }
+    else if(stat_type == "combat") {
+        current_stats.total_combats += increment;
+    }
+    else if(stat_type == "item_spawn") {
+        current_stats.items_spawned += increment;
+    }
+    else if(stat_type == "item_collect") {
+        current_stats.items_collected += increment;
+    }
+    else if(stat_type == "message") {
+        current_stats.messages_sent += increment;
+    }
+    else if(stat_type == "database_query") {
+        current_stats.database_queries += increment;
+    }
+    else if(stat_type == "backup") {
+        current_stats.backup_count += increment;
+    }
+}
+
+// Atualizar pico de jogadores
+void update_peak_players(int current_players) {
+    if(current_players > current_peak_players) {
+        current_peak_players = current_players;
+        current_stats.peak_players = current_players;
+    }
+}
+
+// Salvar estatísticas diárias no banco (assíncrono)
+void save_daily_statistics() {
+    if(!database_initialized) return;
+    
+    async<void>(save_daily_statistics_async);
+}
+
+void save_daily_statistics_async() {
+    if(!database_initialized) return;
+    
+    string today = datetime_now().substr(0, 10); // YYYY-MM-DD
+    
+    string query = """
+        INSERT OR REPLACE INTO server_statistics 
+        (date, peak_players, total_logins, new_registrations, unique_players,
+         total_combats, items_spawned, items_collected, messages_sent,
+         server_uptime_seconds, database_queries, backup_count, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+    """;
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar save de estatísticas: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    stmt.bind_text(1, today);
+    stmt.bind_int(2, current_stats.peak_players);
+    stmt.bind_int(3, current_stats.total_logins);
+    stmt.bind_int(4, current_stats.new_registrations);
+    stmt.bind_int(5, current_stats.unique_players);
+    stmt.bind_int(6, current_stats.total_combats);
+    stmt.bind_int(7, current_stats.items_spawned);
+    stmt.bind_int(8, current_stats.items_collected);
+    stmt.bind_int(9, current_stats.messages_sent);
+    stmt.bind_int(10, current_stats.server_uptime_seconds);
+    stmt.bind_int(11, current_stats.database_queries);
+    stmt.bind_int(12, current_stats.backup_count);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao salvar estatísticas: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    
+    debug_log("Estatísticas diárias salvas: " + today);
+}
+
+// Buscar histórico recente de ações
+string[] get_recent_actions(int limit = 50, string action_type = "", string player_name = "") {
+    if(!database_initialized) return string[]();
+    
+    string query = """
+        SELECT timestamp, player_name, action_type, action_details, map_name
+        FROM game_history
+        WHERE 1=1
+    """;
+    
+    if(action_type != "") {
+        query += " AND action_type = '" + action_type + "'";
+    }
+    
+    if(player_name != "") {
+        query += " AND player_name = '" + player_name + "'";
+    }
+    
+    query += " ORDER BY timestamp DESC LIMIT " + limit + ";";
+    
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de histórico: " + bancoJogo.get_last_error_text());
+        return string[]();
+    }
+    
+    string[] results;
+    while(stmt.step() == SQLITE_ROW) {
+        string timestamp = stmt.column_text(0);
+        string player = stmt.column_text(1);
+        string action = stmt.column_text(2);
+        string details = stmt.column_text(3);
+        string map = stmt.column_text(4);
+        
+        string log_entry = "[" + timestamp + "] " + player + " - " + action + ": " + details;
+        if(map != "") log_entry += " (" + map + ")";
+        
+        results.push_back(log_entry);
+    }
+    
+    return results;
+}
+
+// Buscar estatísticas de um período
+DailyStats@ get_statistics_for_date(string date) {
+    if(!database_initialized) return null;
+    
+    string query = "SELECT * FROM server_statistics WHERE date = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de estatísticas: " + bancoJogo.get_last_error_text());
+        return null;
+    }
+    
+    stmt.bind_text(1, date);
+    
+    if(stmt.step() == SQLITE_ROW) {
+        DailyStats@ stats = DailyStats();
+        
+        stats.date = stmt.column_text(1);
+        stats.peak_players = stmt.column_int(2);
+        stats.total_logins = stmt.column_int(3);
+        stats.new_registrations = stmt.column_int(4);
+        stats.unique_players = stmt.column_int(5);
+        stats.total_combats = stmt.column_int(6);
+        stats.items_spawned = stmt.column_int(7);
+        stats.items_collected = stmt.column_int(8);
+        stats.messages_sent = stmt.column_int(9);
+        stats.server_uptime_seconds = stmt.column_int(10);
+        stats.database_queries = stmt.column_int(11);
+        stats.backup_count = stmt.column_int(12);
+        
+        return stats;
+    }
+    
+    return null;
+}
+
+// Relatório de estatísticas atual
+string get_current_statistics_report() {
+    string report = "=== ESTATÍSTICAS DO SERVIDOR ===\n";
+    
+    report += "Data: " + datetime_now().substr(0, 10) + "\n";
+    report += "Pico de jogadores: " + current_stats.peak_players + "\n";
+    report += "Total de logins: " + current_stats.total_logins + "\n";
+    report += "Novos registros: " + current_stats.new_registrations + "\n";
+    report += "Combates: " + current_stats.total_combats + "\n";
+    report += "Itens spawnados: " + current_stats.items_spawned + "\n";
+    report += "Itens coletados: " + current_stats.items_collected + "\n";
+    report += "Mensagens enviadas: " + current_stats.messages_sent + "\n";
+    report += "Queries no banco: " + current_stats.database_queries + "\n";
+    report += "Backups realizados: " + current_stats.backup_count + "\n";
+    
+    int uptime_hours = stats_timer.elapsed / 3600000;
+    int uptime_minutes = (stats_timer.elapsed % 3600000) / 60000;
+    report += "Uptime: " + uptime_hours + "h " + uptime_minutes + "m\n";
+    
+    return report;
+}
+
+// Inicializar sistema de histórico
+void init_history_system() {
+    debug_log("Inicializando sistema de histórico...");
+    
+    // Criar tabelas
+    create_history_tables();
+    
+    // Inicializar estatísticas
+    current_stats = DailyStats();
+    current_stats.date = datetime_now().substr(0, 10);
+    stats_timer.restart();
+    
+    debug_log("Sistema de histórico inicializado");
+}
+
+// Processamento periódico (chamar a cada minuto)
+void process_history_maintenance() {
+    // Atualizar uptime nas estatísticas
+    current_stats.server_uptime_seconds = stats_timer.elapsed / 1000;
+    
+    // Salvar estatísticas a cada 10 minutos
+    if((stats_timer.elapsed / 60000) % 10 == 0) {
+        save_daily_statistics();
+    }
+}

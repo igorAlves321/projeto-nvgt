@@ -1,0 +1,64 @@
+// mina.nvgt - Sistema de Minas Terrestres do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+// #include "../network.nvgt" // Já incluído em server.nvgt
+
+class mina {
+	int x, y, damage;
+	string id, owner, map;
+	string sound_explosion = ""; // Som de explosão
+	bool active = true; // Mina ativa ou desativada
+	
+	mina(string mid, int mx, int my, int md, string mo, string mm) {
+		id = mid;
+		x = mx;
+		y = my;
+		damage = md;
+		owner = mo;
+		map = mm;
+	}
+
+	// Calcula dano baseado na distância
+	int get_damage(int distance) {
+		if (distance <= 0) return damage;
+		// Dano diminui com a distância
+		int calculated_damage = damage - (distance * 10);
+		return (calculated_damage > 0) ? calculated_damage : 0;
+	}
+}
+
+mina@[] minas;
+
+void spawnmina(int x, int y, int damage, string owner, string map) {
+	string id;
+	bool breakit = false;
+	
+	// Gerar ID único para a mina
+	while (true) {
+		id = randomstring();
+		breakit = true;
+		for (uint i = 0; i < minas.length(); i++) {
+			if (minas[i].id == id) breakit = false;
+		}
+		if (breakit) break;
+	}
+	
+	// Criar nova mina
+	mina m1(id, x, y, damage, owner, map);
+	minas.insert_last(m1);
+	
+	// Som de colocação da mina
+	int mapindex = get_map_index_from(map);
+	if (mapindex >= 0) {
+		server_maps[mapindex].send_packet(0, "play mineplace.ogg " + x + " " + y, x, y);
+	}
+}
+
+void destroymina(string id) {
+	for (uint i = 0; i < minas.length(); i++) {
+		if (minas[i].id == id) {
+			minas.remove_at(i);
+			continue;
+		}
+	}
+}

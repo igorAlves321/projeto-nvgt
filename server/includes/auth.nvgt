@@ -1,0 +1,245 @@
+// auth.nvgt - Sistema de Autenticação do Servidor EVM
+// ✅ Task 1.2.2: Usa hash SHA-256 + Salt para armazenamento seguro de senhas
+
+// Mantém compatibilidade com sistema legado de banimentos em arquivo.
+// Deixe false para priorizar exclusivamente o fluxo SQL.
+const bool AUTH_ENABLE_LEGACY_BAN_FALLBACK = false;
+
+// Criar nova conta de jogador
+// NOTA: password_hash pode ser a senha bruta ou hash do cliente
+// O salt é gerado no servidor em create_player_account()
+void handle_create_account(uint64 peer_id, string username, string password_hash, string email, int gender) {
+    username = username.trim_whitespace();
+    email = email.trim_whitespace();
+    password_hash = password_hash.trim_whitespace();
+
+    debug_log("Tentativa de criacao de conta: " + username + " (peer: " + peer_id + ")");
+
+    if(!is_valid_username(username)) {
+        send_reliable_text(peer_id, "Erro: Nome de usuario invalido. Use 3-20 caracteres alfanumericos.", 0);
+        debug_log("Criacao falhou: username invalido - " + username);
+        return;
+    }
+
+    if(!is_valid_email(email)) {
+        send_reliable_text(peer_id, "Erro: E-mail invalido.", 0);
+        debug_log("Criacao falhou: email invalido - " + email);
+        return;
+    }
+
+    if(password_hash == "" || password_hash.length() < 6 || password_hash.length() > 256) {
+        send_reliable_text(peer_id, "Erro: Senha invalida.", 0);
+        debug_log("Criacao falhou: senha invalida (tamanho) - " + username);
+        return;
+    }
+
+    if(gender < 0 || gender > 2) {
+        send_reliable_text(peer_id, "Erro: Genero invalido.", 0);
+        debug_log("Criacao falhou: genero invalido - " + username + " (" + gender + ")");
+        return;
+    }
+
+    if(player_exists_in_database(username)) {
+        send_reliable_text(peer_id, "Erro: Esta conta ja existe.", 0);
+        debug_log("Criacao falhou: conta ja existe - " + username);
+        return;
+    }
+
+    if(!create_player_account(username, password_hash, email, gender)) {
+        send_reliable_text(peer_id, "Erro: Falha ao criar conta. Tente novamente.", 0);
+        debug_log("ERRO: Falha ao criar conta no banco - " + username);
+        return;
+    }
+
+    send_reliable_text(peer_id, "created", 0);
+    debug_log("Conta criada: " + username + " (" + email + ") [COM SALT]");
+    log_to_database("INFO", "AUTH", "Nova conta criada: " + username, 0, username);
+}
+
+// ✅ Task 1.2.2: Processar login de jogador COM SALT
+void handle_login(uint64 peer_id, string username, string password_input, double client_version, string computer_id) {
+    username = username.trim_whitespace();
+    password_input = password_input.trim_whitespace();
+    computer_id = computer_id.trim_whitespace();
+
+    debug_log("Tentativa de login: " + username + " (peer: " + peer_id + ")");
+
+    if(!is_valid_username(username)) {
+        send_reliable_text(peer_id, "Erro: Conta invalida.", 0);
+        return;
+    }
+    if(password_input == "" || password_input.length() > 256) {
+        send_reliable_text(peer_id, "Erro: Senha invalida.", 0);
+        return;
+    }
+    if(computer_id.length() > 128) {
+        send_reliable_text(peer_id, "Erro: Identificador do dispositivo invalido.", 0);
+        return;
+    }
+
+    if(!player_exists_in_database(username)) {
+        send_reliable_text(peer_id, "Erro: Conta nao encontrada.", 0);
+        debug_log("Login falhou: conta nao existe - " + username);
+        return;
+    }
+
+    string stored_hash = get_player_password_hash(username);
+    string stored_salt = get_player_password_salt(username);
+    if(stored_hash == "") {
+        send_reliable_text(peer_id, "Erro: Dados da conta corrompidos.", 0);
+        debug_log("ERRO: Hash vazio para conta - " + username);
+        return;
+    }
+
+    bool password_valid = false;
+    if(stored_salt != "" && stored_salt.length() > 0) {
+        string calculated_hash = hash_password_with_salt(password_input, stored_salt);
+        string legacy_hash = stored_salt + "::" + password_input;
+        password_valid = (calculated_hash == stored_hash || legacy_hash == stored_hash);
+    } else {
+        password_valid = (password_input == stored_hash);
+    }
+
+    if(!password_valid) {
+        send_reliable_text(peer_id, "Erro: Senha incorreta.", 0);
+        debug_log("Login falhou: senha incorreta - " + username);
+        log_to_database("WARNING", "AUTH", "Tentativa de login com senha incorreta", 0, username);
+        return;
+    }
+
+    if(stored_salt == "" || stored_salt.length() == 0) {
+        if(migrate_account_to_salt(username, password_input)) {
+            debug_log("Conta " + username + " migrada automaticamente para sistema com salt");
+            log_to_database("INFO", "AUTH", "Conta migrada para sistema com salt", 0, username);
+        }
+    }
+
+    if(client_version < minversion) {
+        send_reliable_text(peer_id, "updatenow", 0);
+        debug_log("Login falhou: versao antiga - " + username + " (v" + client_version + ")");
+        return;
+    }
+
+    string ban_reason = "";
+    int ban_time_left = 0;
+    if(check_ban_db(username, computer_id, ban_reason, ban_time_left)) {
+        string msg_ban = "";
+        if(ban_time_left == -1) msg_ban = "Erro: Esta conta ou computador foi banido permanentemente. Motivo: " + ban_reason;
+        else msg_ban = "Erro: Banimento temporario ativo. Restam " + ban_time_left + " minutos. Motivo: " + ban_reason;
+        send_reliable_text(peer_id, msg_ban, 0);
+        debug_log("Login recusado (BAN SQL): " + username + " HWID: " + computer_id + " - " + ban_reason);
+        return;
+    }
+
+    if(AUTH_ENABLE_LEGACY_BAN_FALLBACK) {
+        if(is_computer_banned(computer_id)) {
+            send_reliable_text(peer_id, "Erro: Voce foi banido.", 0);
+            return;
+        }
+        if(tempbancheck(username, computer_id)) {
+            int ban_index = get_tempban_index(username);
+            if(ban_index >= 0) {
+                int time_left = int((tempbans[ban_index].ms - tempbans[ban_index].tempbantimer.elapsed) / 60000);
+                string motivo = tempbans[ban_index].motivo;
+                send_reliable_text(peer_id, "Erro: Voce esta temporariamente banido. Tempo restante: " + time_left + " minutos. Motivo: " + motivo, 0);
+                return;
+            }
+        }
+    }
+
+    if(connected_count >= MAX_PLAYERS) {
+        send_reliable_text(peer_id, "Erro: Servidor cheio. Tente mais tarde.", 0);
+        return;
+    }
+
+    player@ existing = get_player_by_name(username);
+    if(existing !is null) {
+        debug_log("Sessao anterior detectada para " + username + ", desconectando...");
+        send_reliable_text(existing.peer_id, "terminate relogin", 0);
+        force_disconnect_and_cleanup(existing.peer_id, true);
+    }
+
+    if(!spawn_player_session(peer_id, username, client_version, computer_id)) {
+        send_reliable_text(peer_id, "Erro: Falha ao iniciar sessao.", 0);
+        debug_log("ERRO: Falha ao criar sessao - " + username);
+        return;
+    }
+
+    player@ p = get_player_by_peer(peer_id);
+    if(p is null) {
+        debug_log("ERRO CRITICO: Jogador nao encontrado apos spawn - " + username);
+        return;
+    }
+
+    if(!load_player_complete(p)) {
+        send_reliable_text(peer_id, "Erro: Falha ao carregar seus dados. Tente novamente.", 0);
+        force_disconnect_and_cleanup(peer_id, true);
+        return;
+    }
+
+    send_reliable_text(peer_id, "loggedin", 0);
+
+    int player_index = get_player_index_from(username);
+    if(player_index >= 0) {
+        load_player_roles(username);
+        bool is_dev_check = has_role(username, "dev");
+        bool is_admin_check = has_role(username, "admin");
+
+        changemap(p.map_name, player_index, p.x, p.y);
+        send_inventory_to_client(p);
+
+        if(is_dev_check) send_reliable_text(peer_id, "djogador", 0);
+        if(is_admin_check) send_reliable_text(peer_id, "ajogador", 0);
+        if(has_role(username, "moderator")) send_reliable_text(peer_id, "mjogador", 0);
+        if(has_role(username, "builder")) send_reliable_text(peer_id, "bjogador", 0);
+    }
+
+    debug_log(username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");
+    log_to_database("INFO", "AUTH", "Login bem-sucedido", 0, username);
+}
+
+// Verificar se computer_id está banido
+bool is_computer_banned(string computer_id) {
+    computer_id = computer_id.trim_whitespace();
+    if(computer_id == "") return false;
+
+    string reason = "";
+    int remaining = 0;
+    return check_ban_db("", computer_id, reason, remaining);
+}
+
+// Criar sessão de jogador após login
+bool spawn_player_session(uint64 peer_id, string username, double version, string computer_id) {
+    // Usar construtor com parâmetros conforme definição da classe
+    player@ p = player(peer_id, username, "" + version, computer_id);
+
+    p.is_logged_in = true;
+    p.conectou = 1;
+
+    // Configurações padrão (já inicializadas na classe, mas garantir valores)
+    p.map = mapainicial;
+    p.map_name = mapainicial;
+    p.x = 1;
+    p.y = 0;
+    p.health = 5000;
+    p.maxhealth = 5000;
+
+    players.insert_last(p);
+    set_peer_name(peer_id, username);
+    
+    // Obter índice do jogador recém adicionado
+    int player_index = int(players.length()) - 1;
+    
+    // 🆕 INTEGRAÇÃO: Verificar recompensas diárias no login
+    check_daily_on_login(player_index);
+    
+    // 🆕 INTEGRAÇÃO: Inicializar quest log e achievements do jogador
+    get_player_quest_log(username);
+    get_player_achievements(username);
+
+    debug_log("Sessão criada para " + username + " (peer: " + peer_id + ")");
+    return true;
+}
+
+
+

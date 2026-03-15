@@ -1,0 +1,104 @@
+// platforms.nvgt - Sistema de Plataformas (convertido de platforms.bgt)
+// Conversão: BGT → NVGT
+
+class platform {
+	string plattype;
+	bool is_platform = false;
+	bool is_staircase = false;
+	bool is_wall = false;
+	int min_x;
+	int max_x;
+	int min_y;
+	int max_y;
+	string tiles;
+	
+	platform(string type, int minx, int maxx, int miny, int maxy, string tile) {
+		this.plattype = type;
+		this.min_x = minx;
+		this.max_x = maxx;
+		this.min_y = miny;
+		this.max_y = maxy;
+		this.tiles = tile;
+		set_type(this.plattype);
+	}
+
+	void set_type(string type) {
+		if (type == "p") {
+			is_platform = true;
+		}
+		if (type == "sc") {
+			is_staircase = true;
+		}
+		if (type == "w") {
+			is_wall = true;
+		}
+	}
+} // end platform
+
+// Comando: Criar plataforma
+void cmd_createplatform(int player_index, string type, int size_x, int size_y, string tile = "p") {
+	if(!is_admin(player_index)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	// Validar tipo
+	if(type != "p" && type != "sc" && type != "w") {
+		send_reliable_text(players[player_index].peer_id, "msg2 Tipo inválido! Use: p (plataforma), sc (escada), w (parede)", 0);
+		return;
+	}
+	
+	// Criar plataforma centrada no jogador
+	int min_x = players[player_index].x - (size_x / 2);
+	int max_x = players[player_index].x + (size_x / 2);
+	int min_y = players[player_index].y - (size_y / 2);
+	int max_y = players[player_index].y + (size_y / 2);
+	
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) return;
+	
+	platform plt(type, min_x, max_x, min_y, max_y, tile);
+	server_maps[map_index].platforms.insert_last(plt);
+	
+	string type_name = "plataforma";
+	if(type == "sc") type_name = "escada";
+	if(type == "w") type_name = "parede";
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 " + type_name + " criada!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Área: " + size_x + "x" + size_y + " tiles", 0);
+	
+	debug_log("ADMIN: " + players[player_index].charname + " criou " + type_name + " em " + players[player_index].map);
+}
+
+// Comando: Deletar plataforma próxima
+void cmd_deleteplatform(int player_index, int range = 10) {
+	if(!is_admin(player_index)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem permissão!", 0);
+		return;
+	}
+	
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) return;
+	
+	// Procurar plataforma na posição ou próxima
+	for(uint i = 0; i < server_maps[map_index].platforms.length(); i++) {
+		platform@ plt = server_maps[map_index].platforms[i];
+		
+		// Verificar se está dentro ou próximo
+		if(players[player_index].x >= plt.min_x - range && players[player_index].x <= plt.max_x + range &&
+		   players[player_index].y >= plt.min_y - range && players[player_index].y <= plt.max_y + range) {
+			
+			string type_name = "plataforma";
+			if(plt.is_staircase) type_name = "escada";
+			if(plt.is_wall) type_name = "parede";
+			
+			server_maps[map_index].platforms.remove_at(i);
+			send_reliable_text(players[player_index].peer_id, "msg2 " + type_name + " deletada!", 0);
+			debug_log("ADMIN: " + players[player_index].charname + " deletou " + type_name);
+			return;
+		}
+	}
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 Nenhuma plataforma encontrada próxima!", 0);
+}
+

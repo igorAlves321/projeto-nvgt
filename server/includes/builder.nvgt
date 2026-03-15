@@ -1,0 +1,1116 @@
+// builder.nvgt - Sistema de Construção de Mapas (Builder Mode)
+// ✅ Task 1.5.3: Implementar Handlers e Lógica de Construção de Mapas
+// 
+// Este módulo implementa handlers seguros para manipulação de mapas
+// com validação rigorosa de permissões e parâmetros.
+
+// ============================================================================
+// 🔒 CONSTANTES DE SEGURANÇA
+// ============================================================================
+
+// Nível mínimo de rank para usar o Builder Mode
+// 0 = Jogador normal, 3 = Construtor, 5 = Admin
+const int BUILDER_MIN_RANK = 3;
+
+// Limites máximos do mapa para validação de coordenadas
+const int BUILDER_MAP_MAX_X = 50000;
+const int BUILDER_MAP_MAX_Y = 50000;
+
+// Limite de elementos por tipo em um mapa (proteção contra spam)
+const int BUILDER_MAX_WALLS_PER_MAP = 5000;
+const int BUILDER_MAX_PLATFORMS_PER_MAP = 5000;
+const int BUILDER_MAX_ZONES_PER_MAP = 1000;
+const int BUILDER_MAX_NPCS_PER_MAP = 500;
+const int BUILDER_MAX_ITEMS_PER_MAP = 2000;
+
+// ============================================================================
+// 🔧 FUNÇÕES AUXILIARES DE VALIDAÇÃO
+// ============================================================================
+
+// Verifica se jogador tem permissão de construtor
+bool builder_check_permission(player@ p) {
+    if(p is null) return false;
+    
+    // Verificar rank OU flags especiais
+    // rank >= 3 = Construtor
+    // constructor = flag específica de construtor
+    // dev = desenvolvedor (sempre pode)
+    // admin = administrador (sempre pode)
+    return (p.rank >= BUILDER_MIN_RANK || p.constructor || p.dev || p.admin);
+}
+
+// Envia mensagem de erro para o construtor
+void builder_send_error(player@ p, string message) {
+    if(p is null) return;
+    send_reliable_text(p.peer_id, "say ❌ Builder: " + message, 0);
+    debug_log("BUILDER ERROR [" + p.charname + "]: " + message);
+}
+
+// Envia mensagem de sucesso para o construtor
+void builder_send_success(player@ p, string message) {
+    if(p is null) return;
+    send_reliable_text(p.peer_id, "say ✅ Builder: " + message, 0);
+    debug_log("BUILDER SUCCESS [" + p.charname + "]: " + message);
+}
+
+// Valida coordenadas dentro dos limites do mapa
+bool builder_validate_coords(int x, int y, int max_x = -1, int max_y = -1) {
+    // Usar limites do mapa específico ou padrão
+    int limit_x = (max_x > 0) ? max_x : BUILDER_MAP_MAX_X;
+    int limit_y = (max_y > 0) ? max_y : BUILDER_MAP_MAX_Y;
+    
+    return (x >= 0 && y >= 0 && x <= limit_x && y <= limit_y);
+}
+
+// Valida dimensões (largura/altura)
+bool builder_validate_dimensions(int width, int height) {
+    return (width > 0 && height > 0 && width <= 10000 && height <= 10000);
+}
+
+// Obtém o mapa atual do jogador
+map@ builder_get_player_map(player@ p) {
+    if(p is null) return null;
+    
+    // Buscar mapa pelo nome
+    for(uint i = 0; i < server_maps.length(); i++) {
+        if(server_maps[i].name == p.map_name) {
+            return server_maps[i];
+        }
+    }
+    return null;
+}
+
+string builder_trim(string value) {
+    string result = value;
+    while(result.length() > 0 && (result.substr(0, 1) == " " || result.substr(0, 1) == "\t")) {
+        result = result.substr(1);
+    }
+    while(result.length() > 0 && (result.substr(result.length() - 1, 1) == " " || result.substr(result.length() - 1, 1) == "\t")) {
+        result = result.substr(0, result.length() - 1);
+    }
+    return result;
+}
+
+bool builder_is_valid_map_name(string map_name) {
+    if(map_name == "" || map_name.length() > 80) return false;
+    if(map_name.find(" ") >= 0) return false;
+    if(map_name.find("/") >= 0 || map_name.find("\\") >= 0) return false;
+    if(map_name.find("..") >= 0 || map_name.find(":") >= 0) return false;
+    return true;
+}
+
+string builder_existing_map_path(string map_name) {
+    string path_local = "maps/" + map_name + ".map";
+    if(file_exists(path_local)) return path_local;
+    string path_server = "server/maps/" + map_name + ".map";
+    if(file_exists(path_server)) return path_server;
+    return "";
+}
+
+string builder_preferred_map_path(string map_name) {
+    string existing = builder_existing_map_path(map_name);
+    if(existing != "") return existing;
+    if(directory_exists("server/maps")) return "server/maps/" + map_name + ".map";
+    if(!directory_exists("maps")) directory_create("maps");
+    return "maps/" + map_name + ".map";
+}
+
+// ============================================================================
+// 📦 HANDLER PRINCIPAL: req_builder_create_element
+// ============================================================================
+// Este é o handler principal que processa o pacote "add_line::" do cliente
+// Formato: add_line::<dados_do_elemento>
+// Exemplo: add_line::p:10:0:50:ground
+// ============================================================================
+
+void req_builder_create_element(player@ p, string element_data) {
+    // --- VALIDAÇÃO 1: Permissão do Jogador ---
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada. Nível Construtor (rank 3+) é exigido.");
+        return;  // Interrupção imediata
+    }
+    
+    // --- VALIDAÇÃO 2: Dados não vazios ---
+    if(element_data == "") {
+        builder_send_error(p, "Dados do elemento inválidos (vazio).");
+        return;
+    }
+    
+    // --- VALIDAÇÃO 3: Mapa existe ---
+    map@ current_map = builder_get_player_map(p);
+    if(current_map is null) {
+        builder_send_error(p, "Mapa não encontrado: " + p.map_name);
+        return;
+    }
+    
+    // Parsear dados do elemento (formato: tipo:param1:param2:...)
+    string[] parsed = element_data.split(":");
+    if(parsed.length() < 2) {
+        builder_send_error(p, "Formato inválido. Use: tipo:param1:param2:...");
+        return;
+    }
+    
+    string element_type = parsed[0].lower();
+    
+    // --- ROTEAMENTO PARA HANDLER ESPECÍFICO ---
+    bool success = false;
+    
+    if(element_type == "p" || element_type == "platform") {
+        success = builder_create_platform(p, current_map, parsed);
+    }
+    else if(element_type == "w" || element_type == "wall" || element_type == "pwall") {
+        success = builder_create_wall(p, current_map, parsed);
+    }
+    else if(element_type == "sc" || element_type == "staircase") {
+        success = builder_create_staircase(p, current_map, parsed);
+    }
+    else if(element_type == "z" || element_type == "zone") {
+        success = builder_create_zone(p, current_map, parsed);
+    }
+    else if(element_type == "sz" || element_type == "safezone") {
+        success = builder_create_safezone(p, current_map, parsed);
+    }
+    else if(element_type == "npc") {
+        success = builder_create_npc(p, current_map, parsed);
+    }
+    else if(element_type == "item") {
+        success = builder_create_item(p, current_map, parsed);
+    }
+    else if(element_type == "rt") {
+        success = builder_create_toilet(p, current_map, parsed);
+    }
+    else if(element_type == "lv") {
+        success = builder_create_sink(p, current_map, parsed);
+    }
+    else if(element_type == "ex") {
+        success = builder_create_extraction(p, current_map, parsed);
+    }
+    else if(element_type == "door" || element_type == "porta" || element_type == "dr") {
+        success = builder_create_door(p, current_map, parsed);
+    }
+    else if(element_type == "ss" || element_type == "sound_source" || element_type == "som") {
+        success = builder_create_sound_source(p, current_map, parsed);
+    }
+    else if(element_type == "texto" || element_type == "txt") {
+        success = builder_create_text(p, current_map, parsed);
+    }
+    else if(element_type == "tp" || element_type == "travelpoint") {
+        success = builder_create_travelpoint(p, current_map, parsed);
+    }
+    else if(element_type == "maxx") {
+        success = builder_set_map_max_x(p, current_map, parsed);
+    }
+    else if(element_type == "maxy") {
+        success = builder_set_map_max_y(p, current_map, parsed);
+    }
+    else if(element_type == "teto") {
+        success = builder_set_ceiling(p, current_map, parsed);
+    }
+    else if(element_type == "dv") {
+        success = builder_disable_element(p, current_map, parsed);
+    }
+    else {
+        builder_send_error(p, "Tipo de elemento desconhecido: " + element_type);
+        return;
+    }
+    
+    // --- PÓS-PROCESSAMENTO ---
+    if(success) {
+        // Adicionar linha ao mapdata para persistência
+        current_map.add_line(element_data);
+        
+        // Log para auditoria
+        log_to_database("INFO", "BUILDER", "Elemento criado: " + element_type, 
+                       get_player_index_from(p.charname), p.charname);
+    }
+}
+
+bool builder_remove_last_from_map_array(map@ current_map, string element_type) {
+    if(current_map is null) return false;
+
+    if(element_type == "p" || element_type == "platform" || element_type == "sc" || element_type == "staircase") {
+        if(current_map.platforms.length() == 0) return false;
+        current_map.platforms.remove_at(current_map.platforms.length() - 1);
+        return true;
+    }
+    if(element_type == "w" || element_type == "wall" || element_type == "pwall") {
+        if(current_map.walls.length() == 0) return false;
+        current_map.walls.remove_at(current_map.walls.length() - 1);
+        return true;
+    }
+    if(element_type == "z" || element_type == "zone") {
+        if(current_map.zones.length() == 0) return false;
+        current_map.zones.remove_at(current_map.zones.length() - 1);
+        return true;
+    }
+    if(element_type == "sz" || element_type == "safezone") {
+        if(current_map.safezones.length() == 0) return false;
+        current_map.safezones.remove_at(current_map.safezones.length() - 1);
+        return true;
+    }
+    if(element_type == "npc") {
+        if(current_map.npcs.length() == 0) return false;
+        current_map.npcs.remove_at(current_map.npcs.length() - 1);
+        return true;
+    }
+    if(element_type == "item") {
+        if(current_map.objs.length() == 0) return false;
+        current_map.objs.remove_at(current_map.objs.length() - 1);
+        return true;
+    }
+    if(element_type == "rt") {
+        if(current_map.banheiros.length() == 0) return false;
+        current_map.banheiros.remove_at(current_map.banheiros.length() - 1);
+        return true;
+    }
+    if(element_type == "lv") {
+        if(current_map.pias.length() == 0) return false;
+        current_map.pias.remove_at(current_map.pias.length() - 1);
+        return true;
+    }
+    if(element_type == "ex") {
+        if(current_map.extracts.length() == 0) return false;
+        current_map.extracts.remove_at(current_map.extracts.length() - 1);
+        return true;
+    }
+    if(element_type == "door" || element_type == "porta" || element_type == "dr") {
+        if(current_map.doors.length() == 0) return false;
+        current_map.doors.remove_at(current_map.doors.length() - 1);
+        return true;
+    }
+    if(element_type == "ss" || element_type == "sound_source" || element_type == "som") {
+        if(current_map.sound_sources.length() == 0) return false;
+        current_map.sound_sources.remove_at(current_map.sound_sources.length() - 1);
+        return true;
+    }
+    if(element_type == "texto" || element_type == "txt") {
+        if(current_map.textos.length() == 0) return false;
+        current_map.textos.remove_at(current_map.textos.length() - 1);
+        return true;
+    }
+    if(element_type == "tp" || element_type == "travelpoint") {
+        if(current_map.travel_points.length() == 0) return false;
+        current_map.travel_points.remove_at(current_map.travel_points.length() - 1);
+        return true;
+    }
+
+    return false;
+}
+
+void builder_rebuild_runtime_settings_from_mapdata(map@ current_map) {
+    if(current_map is null) return;
+
+    int rebuilt_max_x = current_map.max_x;
+    int rebuilt_max_y = current_map.max_y;
+    bool has_max_x = false;
+    bool has_max_y = false;
+    string rebuilt_ceiling = "";
+
+    current_map.desactivados.delete_all();
+
+    for(uint i = 0; i < current_map.mapdata.length(); i++) {
+        string[] parsed = current_map.mapdata[i].split(":");
+        if(parsed.length() == 0) continue;
+
+        string element_type = parsed[0].lower();
+        if(element_type == "maxx" && parsed.length() > 1) {
+            int value = string_to_number(parsed[1]);
+            if(value > 0 && value <= BUILDER_MAP_MAX_X) {
+                rebuilt_max_x = value;
+                has_max_x = true;
+            }
+        }
+        else if(element_type == "maxy" && parsed.length() > 1) {
+            int value = string_to_number(parsed[1]);
+            if(value > 0 && value <= BUILDER_MAP_MAX_Y) {
+                rebuilt_max_y = value;
+                has_max_y = true;
+            }
+        }
+        else if(element_type == "teto" && parsed.length() > 1) {
+            rebuilt_ceiling = parsed[1];
+        }
+        else if(element_type == "dv" && parsed.length() > 1) {
+            current_map.desactivados.set(parsed[1], parsed[1]);
+        }
+    }
+
+    if(has_max_x) current_map.max_x = rebuilt_max_x;
+    if(has_max_y) current_map.max_y = rebuilt_max_y;
+    current_map.ceiling_sound = rebuilt_ceiling;
+}
+
+bool builder_undo_last_element(player@ p, string line_hint) {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map@ current_map = builder_get_player_map(p);
+    if(current_map is null) {
+        builder_send_error(p, "Mapa não encontrado: " + p.map_name);
+        return false;
+    }
+
+    if(current_map.mapdata.length() == 0) {
+        builder_send_error(p, "Não há linhas para desfazer.");
+        return false;
+    }
+
+    string target_line = builder_trim(line_hint);
+    if(target_line == "") {
+        target_line = current_map.mapdata[current_map.mapdata.length() - 1];
+    }
+
+    int line_index = -1;
+    for(uint i = 0; i < current_map.mapdata.length(); i++) {
+        if(current_map.mapdata[i] == target_line) {
+            line_index = int(i); // Mantém a última ocorrência
+        }
+    }
+
+    if(line_index < 0) {
+        builder_send_error(p, "Linha para desfazer não encontrada no mapdata atual.");
+        return false;
+    }
+
+    string[] parsed = target_line.split(":");
+    if(parsed.length() == 0 || parsed[0] == "") {
+        builder_send_error(p, "Linha inválida para desfazer.");
+        return false;
+    }
+
+    string element_type = parsed[0].lower();
+    if(element_type == "maxx" || element_type == "maxy" || element_type == "teto" || element_type == "dv") {
+        current_map.mapdata.remove_at(line_index);
+        builder_rebuild_runtime_settings_from_mapdata(current_map);
+        builder_send_success(p, "Ultimo elemento desfeito: " + element_type);
+        log_to_database("INFO", "BUILDER", "Undo elemento: " + element_type,
+                        get_player_index_from(p.charname), p.charname);
+        return true;
+    }
+    if(!builder_remove_last_from_map_array(current_map, element_type)) {
+        builder_send_error(p, "Undo não suportado para o tipo '" + element_type + "' via builder dinâmico.");
+        return false;
+    }
+
+    current_map.mapdata.remove_at(line_index);
+    builder_send_success(p, "Ultimo elemento desfeito: " + element_type);
+    log_to_database("INFO", "BUILDER", "Undo elemento: " + element_type,
+                    get_player_index_from(p.charname), p.charname);
+    return true;
+}
+
+// ============================================================================
+// 🏗️ HANDLERS ESPECÍFICOS POR TIPO DE ELEMENTO
+// ============================================================================
+
+// --- PLATAFORMA (p) ---
+// Formato: p:minx:miny:maxy:sound
+bool builder_create_platform(player@ p, map@ current_map, string[] parsed) {
+    // Validar quantidade de parâmetros
+    if(parsed.length() < 5) {
+        builder_send_error(p, "Plataforma requer: p:minx:miny:maxy:som");
+        return false;
+    }
+    
+    int minx = string_to_number(parsed[1]);
+    int miny = string_to_number(parsed[2]);
+    int maxy = string_to_number(parsed[3]);
+    string snd = parsed[4];
+    
+    // Validar coordenadas
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    // Validar limite de plataformas
+    if(current_map.platforms.length() >= BUILDER_MAX_PLATFORMS_PER_MAP) {
+        builder_send_error(p, "Limite de plataformas atingido (" + BUILDER_MAX_PLATFORMS_PER_MAP + ").");
+        return false;
+    }
+    
+    // Criar plataforma
+    platform@ new_platform = platform(parsed[0], minx, miny, maxy, maxy, snd);
+    current_map.platforms.insert_last(new_platform);
+    
+    builder_send_success(p, "Plataforma criada em x=" + minx + " y=" + miny + "-" + maxy);
+    return true;
+}
+
+// --- PAREDE (w/pwall) ---
+// Formato: pwall:x:miny:maxy:som
+bool builder_create_wall(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 5) {
+        builder_send_error(p, "Parede requer: pwall:x:miny:maxy:som");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int miny = string_to_number(parsed[2]);
+    int maxy = string_to_number(parsed[3]);
+    string snd = parsed[4];
+    
+    // Validar coordenadas
+    if(!builder_validate_coords(x, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    // Validar limite
+    if(current_map.walls.length() >= BUILDER_MAX_WALLS_PER_MAP) {
+        builder_send_error(p, "Limite de paredes atingido (" + BUILDER_MAX_WALLS_PER_MAP + ").");
+        return false;
+    }
+    
+    // Criar parede (vida padrão 600000)
+    wall@ new_wall = wall(x, current_map.name, 600000);
+    new_wall.miny = miny;
+    new_wall.maxy = maxy;
+    new_wall.sound_wall = snd;
+    current_map.walls.insert_last(new_wall);
+    
+    builder_send_success(p, "Parede criada em x=" + x + " y=" + miny + "-" + maxy);
+    return true;
+}
+
+// --- ESCADA (sc/staircase) ---
+// Formato: sc:minx:miny:maxx:maxy:som
+bool builder_create_staircase(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 6) {
+        builder_send_error(p, "Escada requer: sc:minx:miny:maxx:maxy:som");
+        return false;
+    }
+    
+    int minx = string_to_number(parsed[1]);
+    int miny = string_to_number(parsed[2]);
+    int maxx = string_to_number(parsed[3]);
+    int maxy = string_to_number(parsed[4]);
+    string snd = parsed[5];
+
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+
+    // Criar escada como plataforma especial
+    platform@ new_stair = platform("sc", minx, miny, maxx, maxy, snd);
+    current_map.platforms.insert_last(new_stair);
+    
+    builder_send_success(p, "Escada criada de (" + minx + "," + miny + ") a (" + maxx + "," + maxy + ")");
+    return true;
+}
+
+// --- ZONA (z/zone) ---
+// Formato: z:minx:maxx:miny:maxy:nome
+bool builder_create_zone(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 6) {
+        builder_send_error(p, "Zona requer: z:minx:maxx:miny:maxy:nome");
+        return false;
+    }
+    
+    int minx = string_to_number(parsed[1]);
+    int maxx = string_to_number(parsed[2]);
+    int miny = string_to_number(parsed[3]);
+    int maxy = string_to_number(parsed[4]);
+    string name = parsed[5];
+    
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    if(current_map.zones.length() >= BUILDER_MAX_ZONES_PER_MAP) {
+        builder_send_error(p, "Limite de zonas atingido (" + BUILDER_MAX_ZONES_PER_MAP + ").");
+        return false;
+    }
+    
+    zone@ new_zone = zone(minx, maxx, miny, maxy, name);
+    current_map.zones.insert_last(new_zone);
+    
+    builder_send_success(p, "Zona '" + name + "' criada de (" + minx + "," + miny + ") a (" + maxx + "," + maxy + ")");
+    return true;
+}
+
+// --- ZONA SEGURA (sz/safezone) ---
+// Formato: sz:minx:maxx:miny:maxy
+bool builder_create_safezone(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 5) {
+        builder_send_error(p, "Zona segura requer: sz:minx:maxx:miny:maxy");
+        return false;
+    }
+    
+    int minx = string_to_number(parsed[1]);
+    int maxx = string_to_number(parsed[2]);
+    int miny = string_to_number(parsed[3]);
+    int maxy = string_to_number(parsed[4]);
+    
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    safezone@ new_sz = safezone(minx, maxx, miny, maxy);
+    current_map.safezones.insert_last(new_sz);
+    
+    builder_send_success(p, "Zona segura criada de (" + minx + "," + miny + ") a (" + maxx + "," + maxy + ")");
+    return true;
+}
+
+// --- VASO SANITÁRIO (rt) ---
+// Formato: rt:x:y
+bool builder_create_toilet(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 3) {
+        builder_send_error(p, "Vaso sanitário requer: rt:x:y");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    banheiro@ new_toilet = banheiro(x, y, current_map.name);
+    current_map.banheiros.insert_last(new_toilet);
+    
+    builder_send_success(p, "Vaso sanitário criado em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- PIA (lv) ---
+// Formato: lv:x:y
+bool builder_create_sink(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 3) {
+        builder_send_error(p, "Pia requer: lv:x:y");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    pia@ new_sink = pia(x, y, current_map.name);
+    current_map.pias.insert_last(new_sink);
+    
+    builder_send_success(p, "Pia criada em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- ZONA DE EXTRAÇÃO (ex) ---
+// Formato: ex:x1:x2:y1:y2:qty:presses:speed:item:sound_press:sound_spawn
+bool builder_create_extraction(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 11) {
+        builder_send_error(p, "Extração requer 11 parâmetros.");
+        return false;
+    }
+    
+    int x1 = string_to_number(parsed[1]);
+    int x2 = string_to_number(parsed[2]);
+    int y1 = string_to_number(parsed[3]);
+    int y2 = string_to_number(parsed[4]);
+    int qty = string_to_number(parsed[5]);
+    int presses = string_to_number(parsed[6]);
+    int speed = string_to_number(parsed[7]);
+    string item = parsed[8];
+    string sound_press = parsed[9];
+    string sound_spawn = parsed[10];
+    
+    if(!builder_validate_coords(x1, y1, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    // Criar extração
+    extract@ new_extract = extract(x1, x2, y1, y2, qty, presses, speed, item, sound_press, sound_spawn);
+    current_map.extracts.insert_last(new_extract);
+    
+    builder_send_success(p, "Zona de extração '" + item + "' criada.");
+    return true;
+}
+
+// --- ITEM RESPAWNÁVEL ---
+// Formato: item:x:y:timeout:0:qty:name:sound:respawn_time
+bool builder_create_item(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 9) {
+        builder_send_error(p, "Item requer 9 parâmetros.");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    int timeout = string_to_number(parsed[3]);
+    // parsed[4] ignorado (sempre 0)
+    int qty = string_to_number(parsed[5]);
+    string item_name = parsed[6];
+    string snd = parsed[7];
+    int respawn = string_to_number(parsed[8]);
+
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+
+    if(current_map.objs.length() >= BUILDER_MAX_ITEMS_PER_MAP) {
+        builder_send_error(p, "Limite de itens atingido.");
+        return false;
+    }
+
+    // Criar objeto
+    obj@ new_obj = obj(x, y, timeout, 0, qty, item_name, current_map.name, snd, respawn);
+    current_map.objs.insert_last(new_obj);
+    
+    builder_send_success(p, "Item '" + item_name + "' x" + qty + " criado em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- NPC (npc) ---
+// Formato complexo com 26+ parâmetros - validação básica
+bool builder_create_npc(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 26) {
+        builder_send_error(p, "NPC requer 26+ parâmetros. Use o menu de builder.");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    if(current_map.npcs.length() >= BUILDER_MAX_NPCS_PER_MAP) {
+        builder_send_error(p, "Limite de NPCs atingido (" + BUILDER_MAX_NPCS_PER_MAP + ").");
+        return false;
+    }
+    
+    // Ordem compatível com BGT e com o parser de arquivo de mapa (server_map.nvgt):
+    // npc:x:y:vida:xp:attack_dist:damage_received:damage_dealt:mirror_damage:
+    //     attack_time:walk_time:calm_time:items_drop:attack_sounds:calm_sounds:
+    //     death_sound:npc_name:death_msg:respawn_time:multi_respawn:bomb_damage:
+    //     footsteps:x_min:x_max:hit_sounds:degradation
+    npc@ new_npc = npc(
+        string_to_number(parsed[1]),   // x
+        string_to_number(parsed[2]),   // y
+        string_to_number(parsed[3]),   // vida
+        string_to_number(parsed[4]),   // xp_reward
+        string_to_number(parsed[5]),   // attack_dist
+        string_to_number(parsed[6]),   // damage_received
+        string_to_number(parsed[7]),   // damage_dealt
+        string_to_number(parsed[8]),   // mirror_damage
+        string_to_number(parsed[9]),   // attack_time
+        string_to_number(parsed[10]),  // walk_time
+        string_to_number(parsed[11]),  // calm_time
+        parsed[12],                    // items_drop
+        parsed[13],                    // attack_sounds
+        parsed[14],                    // calm_sounds
+        parsed[15],                    // death_sound
+        parsed[16],                    // npc_name
+        parsed[17],                    // death_message
+        string_to_number(parsed[18]),  // respawn_time
+        (string_to_number(parsed[19]) != 0),  // enable_respawn
+        (string_to_number(parsed[20]) != 0),  // enable_bombs
+        current_map.name,              // map
+        parsed[21],                    // footsteps
+        string_to_number(parsed[22]),  // left_range
+        string_to_number(parsed[23]),  // right_range
+        parsed[24],                    // hit_sounds (impactosbala)
+        parsed[25]                     // degradation
+    );
+    
+    current_map.npcs.insert_last(new_npc);
+    
+    builder_send_success(p, "NPC criado em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- PORTA (door) ---
+// Formato: door:x:miny:maxy:type:key:sound_open:sound_close:sound_locked:sound_unlock:sound_walk
+bool builder_create_door(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 10) {
+        builder_send_error(p, "Porta requer 10+ parâmetros.");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int miny = string_to_number(parsed[2]);
+    int maxy = string_to_number(parsed[3]);
+    
+    if(!builder_validate_coords(x, miny, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    // Criar porta (x, y, fx, fy, speed, snd1, snd2, snd3, snd4)
+    door@ new_door = door(x, miny,
+                         x, maxy,                       // fx, fy (mesma coordenada X)
+                         5,                             // speed padrão
+                         parsed[6],                     // sound_open
+                         parsed[7],                     // sound_close
+                         parsed[8],                     // sound_locked
+                         parsed[9]);                    // sound_unlock
+
+    current_map.doors.insert_last(new_door);
+    
+    builder_send_success(p, "Porta criada em x=" + x + " y=" + miny + "-" + maxy);
+    return true;
+}
+
+// --- FONTE SONORA (ss/sound_source) ---
+// Formato: ss:x:y:sound:volume:loop
+bool builder_create_sound_source(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 6) {
+        builder_send_error(p, "Som ambiente requer: ss:x:y:som:volume:loop");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    string snd = parsed[3];
+    double volume = parse_float(parsed[4]);
+    bool loop = (string_to_number(parsed[5]) != 0);
+
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+
+    sound_source@ new_ss = sound_source(x, x, y, y, snd, "ss_" + x + "_" + y);
+    new_ss.volume = int(volume * 100);
+    current_map.sound_sources.insert_last(new_ss);
+
+    builder_send_success(p, "Fonte sonora '" + snd + "' criada em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- TEXTO (texto/txt) ---
+// Formato: texto:x:y:texto
+bool builder_create_text(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 4) {
+        builder_send_error(p, "Texto requer: texto:x:y:conteúdo");
+        return false;
+    }
+    
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    
+    // Juntar o resto como texto (pode conter ":")
+    string content = parsed[3];
+    for(uint i = 4; i < parsed.length(); i++) {
+        content += ":" + parsed[i];
+    }
+    
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas fora dos limites do mapa.");
+        return false;
+    }
+    
+    texto@ new_text = texto(x, y, content);
+    current_map.textos.insert_last(new_text);
+    
+    builder_send_success(p, "Texto criado em (" + x + "," + y + ")");
+    return true;
+}
+
+// --- PONTO DE VIAGEM (tp/travelpoint) ---
+// Formato: tp:zx1:zy1:zx2:zy2:destx:desty:destmap:message
+// zx1,zy1,zx2,zy2 = zona de ativação, destx,desty = coordenadas de destino, destmap = mapa destino, message = mensagem
+bool builder_create_travelpoint(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 9) {
+        builder_send_error(p, "Travelpoint requer 9 parâmetros: tp:zx1:zy1:zx2:zy2:destx:desty:destmap:message");
+        return false;
+    }
+    
+    int zx1 = string_to_number(parsed[1]);
+    int zy1 = string_to_number(parsed[2]);
+    int zx2 = string_to_number(parsed[3]);
+    int zy2 = string_to_number(parsed[4]);
+    int dest_x = string_to_number(parsed[5]);
+    int dest_y = string_to_number(parsed[6]);
+    string dest_map = parsed[7];
+    string message = parsed[8];
+    
+    // Valida coordenadas da zona de ativação
+    if(!builder_validate_coords(zx1, zy1, current_map.max_x, current_map.max_y) ||
+       !builder_validate_coords(zx2, zy2, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas da zona fora dos limites do mapa.");
+        return false;
+    }
+    
+    travel_point@ new_tp = travel_point(zx1, zy1, zx2, zy2, dest_x, dest_y, dest_map, message);
+    current_map.travel_points.insert_last(new_tp);
+    
+    builder_send_success(p, "Travelpoint para '" + dest_map + "' criado na zona (" + zx1 + "," + zy1 + ")-(" + zx2 + "," + zy2 + ")");
+    return true;
+}
+
+// --- CONFIGURAÇÕES DO MAPA ---
+
+bool builder_set_map_max_x(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 2) {
+        builder_send_error(p, "maxx requer valor.");
+        return false;
+    }
+    
+    int new_max_x = string_to_number(parsed[1]);
+    if(new_max_x <= 0 || new_max_x > BUILDER_MAP_MAX_X) {
+        builder_send_error(p, "Valor inválido (1-" + BUILDER_MAP_MAX_X + ").");
+        return false;
+    }
+    
+    current_map.max_x = new_max_x;
+    builder_send_success(p, "Limite X do mapa definido para " + new_max_x);
+    return true;
+}
+
+bool builder_set_map_max_y(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 2) {
+        builder_send_error(p, "maxy requer valor.");
+        return false;
+    }
+    
+    int new_max_y = string_to_number(parsed[1]);
+    if(new_max_y <= 0 || new_max_y > BUILDER_MAP_MAX_Y) {
+        builder_send_error(p, "Valor inválido (1-" + BUILDER_MAP_MAX_Y + ").");
+        return false;
+    }
+    
+    current_map.max_y = new_max_y;
+    builder_send_success(p, "Limite Y do mapa definido para " + new_max_y);
+    return true;
+}
+
+bool builder_set_ceiling(player@ p, map@ current_map, string[] parsed) {
+    // teto:som define o som do teto (ou "none" para desativar)
+    if(parsed.length() < 2) {
+        builder_send_error(p, "teto requer som (ou 'none').");
+        return false;
+    }
+    
+    // Apenas adicionar ao mapdata, o cliente processará
+    current_map.ceiling_sound = parsed[1];
+    builder_send_success(p, "Teto configurado: " + parsed[1]);
+    return true;
+}
+
+bool builder_disable_element(player@ p, map@ current_map, string[] parsed) {
+    // dv:nome desativa uma funcionalidade no mapa
+    if(parsed.length() < 2) {
+        builder_send_error(p, "dv requer nome do elemento.");
+        return false;
+    }
+    
+    current_map.desactivados.set(parsed[1], parsed[1]);
+    builder_send_success(p, "Elemento '" + parsed[1] + "' desativado no mapa.");
+    return true;
+}
+
+// ============================================================================
+// 💾 FUNÇÃO DE SALVAMENTO DE MAPA
+// ============================================================================
+
+// Salva o mapa no disco (usa mutex para segurança de I/O)
+bool builder_save_map(player@ p, map@ target_map) {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+    
+    if(target_map is null) {
+        builder_send_error(p, "Mapa não encontrado.");
+        return false;
+    }
+    
+    // Usar mutex para acesso seguro ao disco
+    map_global_mutex.lock();
+    
+    bool success = false;
+    
+    // Montar conteúdo do arquivo
+    string content = "";
+    for(uint i = 0; i < target_map.mapdata.length(); i++) {
+        if(i > 0) content += "\r\n";
+        content += target_map.mapdata[i];
+    }
+    
+    // Salvar arquivo
+    string map_path = builder_preferred_map_path(target_map.name);
+    file f;
+    if(f.open(map_path, "w")) {
+        f.write(content);
+        f.close();
+        success = true;
+        builder_send_success(p, "Mapa '" + target_map.name + "' salvo com sucesso!");
+        debug_log("BUILDER SAVE: " + p.charname + " salvou mapa " + target_map.name);
+    } else {
+        builder_send_error(p, "Erro ao salvar arquivo do mapa.");
+    }
+    
+    map_global_mutex.unlock();
+    
+    return success;
+}
+
+// ============================================================================
+// 🔄 FUNÇÃO DE ATUALIZAÇÃO DE MAPA
+// ============================================================================
+
+// Recarrega o mapa do disco e reinicializa objetos
+bool builder_update_map(player@ p, string map_name = "") {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+    
+    string target_name = (map_name != "") ? map_name : p.map_name;
+    
+    // Buscar mapa
+    for(uint i = 0; i < server_maps.length(); i++) {
+        if(server_maps[i].name == target_name) {
+            // Reinicializar mapa substituindo a instância para evitar duplicação de arrays
+            map refreshed_map(target_name + ".map");
+            if(refreshed_map.mapdata.length() == 0) {
+                builder_send_error(p, "Falha ao carregar arquivo do mapa '" + target_name + "'.");
+                return false;
+            }
+            refreshed_map.mapindex = int(i);
+            server_maps[i] = refreshed_map;
+            builder_send_success(p, "Mapa '" + target_name + "' atualizado!");
+            
+            // Forçar recarga para todos os jogadores que estão nesse mapa
+            for(uint j = 0; j < players.length(); j++) {
+                if((players[j].map_name == target_name || players[j].map == target_name) && players[j].is_logged_in) {
+                    int pindex = get_player_index_from(players[j].charname);
+                    if(pindex >= 0) {
+                        changemap(target_name, pindex, players[j].x, players[j].y);
+                    }
+                }
+            }
+            
+            return true;
+        }
+    }
+    
+    builder_send_error(p, "Mapa '" + target_name + "' não encontrado.");
+    return false;
+}
+
+bool builder_create_new_map(player@ p, string map_name, int width, int height, string floor_sound = "1") {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map_name = builder_trim(map_name);
+    floor_sound = builder_trim(floor_sound);
+    if(floor_sound == "") floor_sound = "1";
+
+    if(!builder_is_valid_map_name(map_name)) {
+        builder_send_error(p, "Nome de mapa inválido. Use nome sem espaços e sem caracteres de caminho.");
+        return false;
+    }
+
+    if(!builder_validate_dimensions(width, height)) {
+        builder_send_error(p, "Dimensões inválidas.");
+        return false;
+    }
+
+    if(get_map_index_from(map_name) >= 0 || builder_existing_map_path(map_name) != "") {
+        builder_send_error(p, "Já existe um mapa com esse nome.");
+        return false;
+    }
+
+    string[] lines;
+    lines.insert_last("map:" + map_name);
+    lines.insert_last("maxx:" + width);
+    lines.insert_last("maxy:" + height);
+    lines.insert_last("platform:0:0:" + height + ":" + floor_sound);
+    lines.insert_last("wall:0:0:" + height + ":wallgeneric");
+    lines.insert_last("wall:" + width + ":0:" + height + ":wallgeneric");
+    lines.insert_last("safezone:0:" + width + ":0:" + height);
+    lines.insert_last("zone:0:" + width + ":0:" + height + ":" + map_name);
+
+    string content = linear(lines, "\r\n");
+    string new_map_path = builder_preferred_map_path(map_name);
+
+    file map_file;
+    if(!map_file.open(new_map_path, "w")) {
+        builder_send_error(p, "Erro ao criar arquivo do mapa.");
+        return false;
+    }
+    map_file.write(content);
+    map_file.close();
+
+    map new_map(map_name + ".map");
+    new_map.mapindex = int(server_maps.length());
+    server_maps.insert_last(new_map);
+
+    builder_send_success(p, "Mapa '" + map_name + "' criado com sucesso!");
+    debug_log("BUILDER CREATE MAP: " + p.charname + " criou " + map_name);
+    log_to_database("INFO", "BUILDER", "Novo mapa criado: " + map_name, get_player_index_from(p.charname), p.charname);
+    return true;
+}
+
+bool builder_delete_map(player@ p, string map_name) {
+    if(!builder_check_permission(p)) {
+        builder_send_error(p, "Permissão negada.");
+        return false;
+    }
+
+    map_name = builder_trim(map_name);
+    if(!builder_is_valid_map_name(map_name)) {
+        builder_send_error(p, "Nome de mapa inválido.");
+        return false;
+    }
+
+    if(map_name == mapainicial) {
+        builder_send_error(p, "Não é permitido deletar o mapa inicial.");
+        return false;
+    }
+
+    int map_index = get_map_index_from(map_name);
+    if(map_index >= 0) {
+        for(uint i = 0; i < players.length(); i++) {
+            if((players[i].map_name == map_name || players[i].map == map_name) && players[i].is_logged_in) {
+                int pindex = get_player_index_from(players[i].charname);
+                if(pindex >= 0) changemap(mapainicial, pindex, 1, 0);
+            }
+        }
+
+        server_maps.remove_at(map_index);
+        for(uint i = map_index; i < server_maps.length(); i++) {
+            server_maps[i].mapindex = int(i);
+        }
+    }
+
+    bool removed_file = false;
+    string local_path = "maps/" + map_name + ".map";
+    if(file_exists(local_path)) {
+        file_delete(local_path);
+        removed_file = true;
+    }
+    string server_path = "server/maps/" + map_name + ".map";
+    if(file_exists(server_path)) {
+        file_delete(server_path);
+        removed_file = true;
+    }
+
+    if(map_index < 0 && !removed_file) {
+        builder_send_error(p, "Mapa '" + map_name + "' não encontrado.");
+        return false;
+    }
+
+    builder_send_success(p, "Mapa '" + map_name + "' deletado com sucesso.");
+    debug_log("BUILDER DELETE MAP: " + p.charname + " deletou " + map_name);
+    log_to_database("INFO", "BUILDER", "Mapa deletado: " + map_name, get_player_index_from(p.charname), p.charname);
+    return true;
+}
+

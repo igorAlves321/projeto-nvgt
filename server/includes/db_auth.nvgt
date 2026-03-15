@@ -1,0 +1,268 @@
+// db_auth.nvgt - Funções de banco de dados para autenticação
+// Sistema de contas com hash SHA-256 + Salt (Task 1.2.2)
+
+// ============================================
+// ✅ Task 1.2.2: Constantes de Segurança
+// ============================================
+const int SALT_LENGTH = 16;
+const bool HASH_RETURN_HEX = false; // Retornar hash em formato hexadecimal
+
+// ============================================
+// ✅ Task 1.2.2: Funções de Hashing com Salt
+// ============================================
+
+// Gerar salt aleatório
+string generate_salt() {
+	// Usar caracteres alfanuméricos para o salt
+	return generate_token(SALT_LENGTH, token_gen_flag_characters | token_gen_flag_numbers);
+}
+
+// Criar hash com salt (SHA-256 de "salt::password")
+string hash_password_with_salt(string password, string salt) {
+	string payload = salt + "::" + password;
+	return hash_password(payload);
+}
+
+// ============================================
+// Funções de banco de dados
+// ============================================
+
+// Verificar se jogador existe no banco
+bool player_exists_in_database(string username) {
+    if(!database_initialized) return false;
+
+    string query = "SELECT COUNT(*) FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query player_exists: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() == SQLITE_ROW) {
+        int count = stmt.column_int(0);
+        return (count > 0);
+    }
+
+    return false;
+}
+
+// Obter hash de senha do jogador
+string get_player_password_hash(string username) {
+    if(!database_initialized) return "";
+
+    string query = "SELECT password_hash FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query get_password_hash: " + bancoJogo.get_last_error_text());
+        return "";
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0);
+    }
+
+    return "";
+}
+
+// ✅ Task 1.2.2: Obter salt de senha do jogador
+string get_player_password_salt(string username) {
+    if(!database_initialized) return "";
+
+    string query = "SELECT password_salt FROM players WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query get_password_salt: " + bancoJogo.get_last_error_text());
+        return "";
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0);
+    }
+
+    return "";
+}
+
+// Criar nova conta de jogadornta de jogador COM SALT
+// IMPORTANTE: password_raw é a senha em texto plano (ou hash do cliente)
+// O salt é gerado aqui no servidor e o hash final é calculado
+bool create_player_account(string username, string password_raw, string email, int gender) {
+    if(!database_initialized) {
+        debug_log("ERRO: Database não inicializado ao tentar criar conta");
+        return false;
+    }
+
+    debug_log("Tentando criar conta: user=" + username + ", email=" + email + ", gender=" + gender);
+
+    // ✅ Task 1.2.2: Gerar salt único para esta conta
+    string new_salt = generate_salt();
+    
+    // ✅ Task 1.2.2: Calcular hash final (salt + password)
+    string final_hash = hash_password_with_salt(password_raw, new_salt);
+    
+    debug_log("Salt gerado: " + new_salt.substr(0, 4) + "... (truncado por segurança)");
+
+    // Gerar inventário padrão
+    string default_inventory = get_default_inventory_json();
+
+    string query = """
+        INSERT INTO players (username, password_hash, password_salt, email, gender, level, experience, gold,
+                           hp, max_hp, mp, max_mp, race, map_name, x, y, z, is_admin, inventory, title)
+        VALUES (?, ?, ?, ?, ?, 1, 0, 100, 100, 100, 50, 50, 'humano', ?, 1, 0, 0, 0, ?, 'Iniciante');
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query create_account: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("Query preparada, fazendo bind dos parâmetros...");
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, final_hash);    // ✅ Hash final com salt
+    stmt.bind_text(3, new_salt);      // ✅ Salt único
+    stmt.bind_text(4, email);
+    stmt.bind_int(5, gender);
+    stmt.bind_text(6, mapainicial);   // Mapa inicial do servidor
+    stmt.bind_text(7, default_inventory);  // Inventário padrão
+    
+    debug_log("Parâmetros bound, executando INSERT...");
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao criar conta: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("Conta criada no banco com inventário padrão e título Iniciante: " + username);
+    return true;
+}
+
+// Gera o JSON do inventário padrão baseado no inv.inv
+// Gera o JSON do inventário padrão baseado no banco de dados
+string get_default_inventory_json() {
+    if(!database_initialized) return "{}";
+    
+    // Tenta ler da tabela initial_inventory
+    string query = "SELECT item_name, quantity FROM initial_inventory;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    
+    if(@stmt == null) {
+        debug_log("AVISO: Tabela initial_inventory não encontrada ou erro. Usando fallback.");
+        // Fallback hardcoded caso a tabela ainda não exista ou falhe
+        string json = "{";
+        json += "\"reais\":1000,"; // Fallback básico
+        json += "\"euro\":500";
+        json += "}";
+        return json;
+    }
+    
+    string json = "{";
+    bool first = true;
+    
+    while(stmt.step() == SQLITE_ROW) {
+        string name = stmt.column_text(0);
+        int qty = stmt.column_int(1);
+        
+        if(!first) json += ",";
+        json += "\"" + name + "\":" + qty;
+        first = false;
+    }
+    
+    json += "}";
+    return json;
+}
+
+// Carregar dados do jogador do banco
+bool load_player_from_database(player@ p) {
+    if(!database_initialized || p is null) return false;
+
+    string query = """
+        SELECT level, experience, gold, hp, max_hp, mp, max_mp, race,
+               map_name, x, y, z, is_admin, gender
+        FROM players WHERE username = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query load_player: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, p.charname);
+
+    if(stmt.step() == SQLITE_ROW) {
+        p.player_level = stmt.column_int(0);
+        p.exp = stmt.column_int(1);
+        p.gold = stmt.column_int(2);
+        p.hp = stmt.column_int(3);
+        p.max_hp = stmt.column_int(4);
+        p.mp = stmt.column_int(5);
+        p.max_mp = stmt.column_int(6);
+        p.race = stmt.column_text(7);
+        p.map = stmt.column_text(8);
+        p.map_name = stmt.column_text(8);
+        p.x = stmt.column_int(9);
+        p.y = stmt.column_int(10);
+        p.z = stmt.column_int(11);
+        p.admin_status = (stmt.column_int(12) == 1);
+        p.is_admin = p.admin_status;
+        p.admin = p.admin_status;
+        p.sexo = stmt.column_int(13);
+
+        // Configurar valores derivados
+        p.health = p.hp;
+        p.maxhealth = p.max_hp;
+
+        debug_log("Dados carregados do banco para " + p.charname);
+        return true;
+    }
+
+    debug_log("ERRO: Jogador não encontrado no banco - " + p.charname);
+    return false;
+}
+
+// ============================================
+// ✅ Task 1.2.2: Funções de Migração de Senhas
+// ============================================
+
+// Migrar conta existente para sistema com salt (para uso em login legado)
+bool migrate_account_to_salt(string username, string current_password) {
+    if(!database_initialized) return false;
+    
+    // Gerar novo salt
+    string new_salt = generate_salt();
+    
+    // Criar novo hash com salt
+    string new_hash = hash_password_with_salt(current_password, new_salt);
+    
+    // Atualizar no banco
+    string query = "UPDATE players SET password_hash = ?, password_salt = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query migrate_account: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    stmt.bind_text(1, new_hash);
+    stmt.bind_text(2, new_salt);
+    stmt.bind_text(3, username);
+    
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao migrar conta " + username + ": " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    
+    debug_log("✅ Conta " + username + " migrada para sistema com salt");
+    return true;
+}
+
+// Verificar se conta precisa de migração (não tem salt)
+bool account_needs_migration(string username) {
+    string salt = get_player_password_salt(username);
+    return (salt == "" || salt.length() == 0);
+}

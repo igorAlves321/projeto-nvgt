@@ -1,0 +1,775 @@
+// Sistema de itens do servidor NVGT
+// Usando banco de dados SQLite para persistência
+
+#include "globals.nvgt"
+#include "network.nvgt"
+#include "shared_globals.nvgt"
+// items.nvgt - Sistema de Itens do EVM Server (convertido de BGT)
+// Conversão completa: BGT → NVGT
+
+// Estrutura de item
+class GameItem {
+    int id;
+    string name;
+    // Campos legados BGT (fonte de verdade no banco)
+    string items_to_give;
+    string audio;
+    string msg;
+    string map;
+    int newx;
+    int newy;
+    float xp;
+    float health;
+    float thirst;
+    float fill_thirst;
+    float hunger;
+    float fill_hunger;
+    float degradation;
+
+    // Campos de compatibilidade (mantidos para código atual)
+    string display_name;
+    string description;
+    string item_type;      // weapon, armor, consumable, misc
+    string category;       // sword, bow, potion, etc.
+    
+    // Estatísticas
+    int damage;
+    int defense;
+    int heal_amount;
+    int mp_restore;
+    
+    // Propriedades
+    bool stackable;
+    int max_stack;
+    float weight;
+    int value;             // preço base
+    
+    // Raridade
+    string rarity;         // common, uncommon, rare, epic, legendary
+    float drop_rate;
+    bool craftable;
+    bool sellable;
+    bool tradeable;
+    
+    // Som
+    string sound_file;
+    string use_sound;
+    
+    GameItem() {
+        id = 0;
+        name = "";
+        items_to_give = "none";
+        audio = "none";
+        msg = "";
+        map = "none";
+        newx = 0;
+        newy = 0;
+        xp = 0;
+        health = 0;
+        thirst = 0;
+        fill_thirst = 0;
+        hunger = 0;
+        fill_hunger = 0;
+        degradation = 0;
+        display_name = "";
+        description = "";
+        item_type = "legacy";
+        category = "";
+        
+        damage = 0;
+        defense = 0;
+        heal_amount = 0;
+        mp_restore = 0;
+        
+        stackable = true;
+        max_stack = 99;
+        weight = 1.0;
+        value = 1;
+        
+        rarity = "common";
+        drop_rate = 1.0;
+        craftable = false;
+        sellable = true;
+        tradeable = true;
+        
+        sound_file = "";
+        use_sound = "";
+    }
+}
+
+// Item no mundo
+class WorldItem {
+    int id;
+    int item_id;
+    string map_name;
+    int x, y, z;
+    int quantity;
+    string spawned_by;
+    bool is_active;
+    int respawn_time;
+    timer spawn_timer;
+    
+    WorldItem() {
+        id = 0;
+        item_id = 0;
+        map_name = "";
+        x = 0; y = 0; z = 0;
+        quantity = 1;
+        spawned_by = "system";
+        is_active = true;
+        respawn_time = 0;
+        spawn_timer.restart();
+    }
+}
+
+// Sistema global de itens
+dictionary items_database;        // id -> GameItem
+dictionary items_by_name;         // name -> GameItem
+WorldItem@[] world_items;         // Itens no mundo
+dictionary world_items_by_map;    // map_name -> WorldItem[]
+
+// Referência ao banco de dados - declaração global
+// Estas variáveis são definidas em server.nvgt
+
+bool items_table_has_column(const string&in table_name, const string&in column_name) {
+    sqlite3statement@ stmt = bancoJogo.prepare("PRAGMA table_info(" + table_name + ");");
+    if(@stmt == null) return false;
+    while(stmt.step() == SQLITE_ROW) {
+        if(stmt.column_text(1) == column_name) return true;
+    }
+    return false;
+}
+
+void migrate_items_table_to_bgt_if_needed() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    sqlite3statement@ table_stmt = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='items' LIMIT 1;");
+    if(@table_stmt == null) return;
+    if(table_stmt.step() != SQLITE_ROW) return;
+
+    bool has_items_to_give = items_table_has_column("items", "items_to_give");
+    bool has_display_name = items_table_has_column("items", "display_name");
+    if(has_items_to_give && !has_display_name) return;
+
+    debug_log("MIGRATION: convertendo tabela items para schema legado BGT...");
+
+    if(bancoJogo.execute("ALTER TABLE items RENAME TO items_old;") != SQLITE_OK) {
+        debug_log("ERRO migration items: rename falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    string create_items_legacy = """
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            items_to_give TEXT DEFAULT 'none',
+            audio TEXT DEFAULT 'none',
+            msg TEXT DEFAULT '',
+            map TEXT DEFAULT 'none',
+            newx INTEGER DEFAULT 0,
+            newy INTEGER DEFAULT 0,
+            xp REAL DEFAULT 0,
+            health REAL DEFAULT 0,
+            thirst REAL DEFAULT 0,
+            fill_thirst REAL DEFAULT 0,
+            hunger REAL DEFAULT 0,
+            fill_hunger REAL DEFAULT 0,
+            degradation REAL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    if(bancoJogo.execute(create_items_legacy) != SQLITE_OK) {
+        debug_log("ERRO migration items: criar tabela nova falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    string migrate_sql = """
+        INSERT INTO items (
+            id, name, items_to_give, audio, msg, map, newx, newy,
+            xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation,
+            created_at, updated_at
+        )
+        SELECT
+            id,
+            name,
+            'none',
+            CASE WHEN sound_file IS NULL OR sound_file = '' THEN 'none' ELSE sound_file END,
+            CASE
+                WHEN description IS NOT NULL AND description != '' THEN description
+                WHEN display_name IS NOT NULL AND display_name != '' THEN display_name
+                ELSE name
+            END,
+            'none',
+            0, 0,
+            0,
+            CASE WHEN heal_amount IS NULL THEN 0 ELSE heal_amount END,
+            0, 0, 0, 0,
+            0,
+            COALESCE(created_at, CURRENT_TIMESTAMP),
+            COALESCE(updated_at, CURRENT_TIMESTAMP)
+        FROM items_old;
+    """;
+    if(bancoJogo.execute(migrate_sql) != SQLITE_OK) {
+        debug_log("ERRO migration items: copiar dados falhou: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    bancoJogo.execute("DROP TABLE IF EXISTS items_old;");
+    debug_log("MIGRATION: tabela items convertida para schema legado BGT.");
+}
+
+// Criar tabelas de itens no banco
+void create_items_tables() {
+    if(!database_initialized) return;
+    
+    // Tabela de definicoes de itens (schema legado BGT)
+    string create_items = """
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            items_to_give TEXT DEFAULT 'none',
+            audio TEXT DEFAULT 'none',
+            msg TEXT DEFAULT '',
+            map TEXT DEFAULT 'none',
+            newx INTEGER DEFAULT 0,
+            newy INTEGER DEFAULT 0,
+            xp REAL DEFAULT 0,
+            health REAL DEFAULT 0,
+            thirst REAL DEFAULT 0,
+            fill_thirst REAL DEFAULT 0,
+            hunger REAL DEFAULT 0,
+            fill_hunger REAL DEFAULT 0,
+            degradation REAL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+    
+    // Tabela de itens no mundo
+    string create_world_items = """
+        CREATE TABLE IF NOT EXISTS world_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            map_name TEXT NOT NULL,
+            x INTEGER NOT NULL,
+            y INTEGER NOT NULL,
+            z INTEGER DEFAULT 0,
+            quantity INTEGER DEFAULT 1,
+            
+            -- Spawn info
+            spawned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME,
+            spawned_by TEXT DEFAULT 'system',
+            
+            -- Estado
+            is_active BOOLEAN DEFAULT TRUE,
+            respawn_time INTEGER DEFAULT 0,
+            
+            FOREIGN KEY (item_id) REFERENCES items(id)
+        );
+    """;
+    
+    // Tabela de inventarios de jogadores
+    string create_inventories = """
+        CREATE TABLE IF NOT EXISTS player_inventories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            quantity INTEGER DEFAULT 1,
+            
+            -- Localizacao no inventario
+            slot_type TEXT DEFAULT 'inventory',
+            slot_position INTEGER,
+            
+            -- Propriedades do item especifico
+            durability REAL DEFAULT 100.0,
+            enchantments TEXT,
+            custom_name TEXT,
+            
+            -- Historico
+            acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            acquired_from TEXT DEFAULT 'unknown',
+            
+            UNIQUE(player_id, slot_type, slot_position),
+            FOREIGN KEY (player_id) REFERENCES players(id),
+            FOREIGN KEY (item_id) REFERENCES items(id)
+        );
+    """;
+    
+    // Executar criacao
+    if(bancoJogo.execute(create_items) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela items: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_world_items) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela world_items: " + bancoJogo.get_last_error_text());
+    }
+    
+    if(bancoJogo.execute(create_inventories) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela player_inventories: " + bancoJogo.get_last_error_text());
+    }
+
+    migrate_items_table_to_bgt_if_needed();
+    
+    debug_log("Tabelas de itens criadas com sucesso");
+}
+
+// Carregar itens do banco de dados
+void load_items_from_database() {
+    if(!database_initialized) return;
+
+    string query = "SELECT id, name, items_to_give, audio, msg, map, newx, newy, xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation FROM items ORDER BY id;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de itens: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    // Recarrega caches
+    items_database.delete_all();
+    items_by_name.delete_all();
+
+    int count = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        GameItem@ item = GameItem();
+
+        item.id = stmt.column_int(0);
+        item.name = stmt.column_text(1);
+        item.items_to_give = stmt.column_text(2);
+        item.audio = stmt.column_text(3);
+        item.msg = stmt.column_text(4);
+        item.map = stmt.column_text(5);
+        item.newx = stmt.column_int(6);
+        item.newy = stmt.column_int(7);
+        item.xp = stmt.column_double(8);
+        item.health = stmt.column_double(9);
+        item.thirst = stmt.column_double(10);
+        item.fill_thirst = stmt.column_double(11);
+        item.hunger = stmt.column_double(12);
+        item.fill_hunger = stmt.column_double(13);
+        item.degradation = stmt.column_double(14);
+
+        // Compatibilidade com chamadas antigas
+        item.display_name = item.name;
+        item.description = item.msg;
+        item.item_type = "legacy";
+        item.category = "legacy";
+        item.damage = 0;
+        item.defense = 0;
+        item.heal_amount = int(item.health);
+        item.mp_restore = 0;
+        item.stackable = true;
+        item.max_stack = 999;
+        item.weight = 1.0;
+        item.value = 0;
+        item.rarity = "common";
+        item.drop_rate = 1.0;
+        item.craftable = false;
+        item.sellable = true;
+        item.tradeable = true;
+        item.sound_file = (item.audio == "none" ? "" : item.audio);
+        item.use_sound = item.sound_file;
+
+        items_database["" + item.id] = item;
+        items_by_name[item.name] = item;
+        count++;
+    }
+
+    debug_log("Carregados " + count + " itens do banco de dados");
+}
+
+bool item_exists_in_database(string name) {
+    if(!database_initialized) return false;
+
+    string query = "SELECT id FROM items WHERE name = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, name);
+    return stmt.step() == SQLITE_ROW;
+}
+
+void import_legacy_weapons_catalog() {
+    if(!database_initialized) return;
+    if(!file_exists("weapons_list.db")) return;
+
+    file f;
+    if(!f.open("weapons_list.db", "r")) {
+        debug_log("AVISO: Nao foi possivel abrir weapons_list.db para migracao de catalogo.");
+        return;
+    }
+
+    string content = f.read();
+    f.close();
+
+    string[] lines = content.split("\r\n");
+    int imported = 0;
+
+    for(uint i = 0; i < lines.length(); i++) {
+        string line = lines[i].trim_whitespace();
+        if(line == "" || line[0] == '/' || line.find("=") < 0) continue;
+
+        string[] parts = line.split("=");
+        if(parts.length() < 8) continue;
+
+        string weapon_name = parts[0].trim_whitespace();
+        if(weapon_name == "") continue;
+        if(item_exists_in_database(weapon_name)) continue;
+
+        string ammo_name = parts[1].trim_whitespace();
+        string shoot_sound = parts[2].trim_whitespace();
+        int damage = string_to_number(parts[6]);
+        int distance = string_to_number(parts[7]);
+        if(damage < 1) damage = 1;
+        if(distance < 1) distance = 1;
+
+        string display_name = string_replace(weapon_name, "_", " ", true);
+        string description = "Arma de fogo importada do legado. Municao: " + ammo_name + ". Alcance: " + distance + ".";
+        int value = damage * 8;
+        if(value < 20) value = 20;
+
+        if(create_item(
+            weapon_name, display_name, description, "weapon", "firearm",
+            damage, 0, 0, 0,
+            false, 1, 2.0, value,
+            "common", 0.0, false, true, true,
+            shoot_sound, shoot_sound
+        )) {
+            imported++;
+        }
+    }
+
+    if(imported > 0) {
+        debug_log("Catalogo legado de armas importado para SQLite: " + imported + " novas armas.");
+    }
+}
+
+// Inserir itens padrao no banco (alinhado ao schema legado BGT)
+void seed_default_items() {
+    if(!database_initialized) return;
+    
+    // Verificar se ja existem itens
+    string check_query = "SELECT COUNT(*) FROM items;";
+    sqlite3statement@ check_stmt = bancoJogo.prepare(check_query);
+    
+    if(@check_stmt != null && check_stmt.step() == SQLITE_ROW) {
+        int existing_count = check_stmt.column_int(0);
+        if(existing_count > 0) {
+            debug_log("Itens ja existem no banco (" + existing_count + "), ignorando seed");
+            return;
+        }
+    }
+    
+    debug_log("Inserindo itens padrao no banco de dados (schema legado)...");
+    
+    // Itens focados no que o schema legado usa: name, msg, audio, health
+    create_item("potion", "Pocao de Vida", "Recupera 50 de vida", "consumable", "legacy",
+                0, 0, 50, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "potion_use.wav", "");
+
+    create_item("bread", "Pao", "Comida simples. Recupera 20 de vida", "consumable", "legacy",
+                0, 0, 20, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "eat.wav", "");
+
+    create_item("mana_potion", "Pocao de Mana", "Item legado. Uso geral", "consumable", "legacy",
+                0, 0, 0, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "potion_use.wav", "");
+
+    create_item("wood", "Madeira", "Material basico", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "", "");
+
+    create_item("iron_ore", "Minerio de Ferro", "Material para forja", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "", "");
+
+    create_item("gold_coin", "Moeda de Ouro", "Moeda padrao", "misc", "legacy",
+                0, 0, 0, 0, true, 999, 1.0, 0, "common", 1.0, false, true, true, "coin.wav", "");
+
+    create_item("wooden_sword", "Espada de Madeira", "Arma legado. Dano tratado por outros sistemas", "weapon", "legacy",
+                0, 0, 0, 0, false, 1, 1.0, 0, "common", 1.0, false, true, true, "sword_swing.wav", "");
+
+    create_item("wooden_bow", "Arco de Madeira", "Arma legado. Alcance tratado por outros sistemas", "weapon", "legacy",
+                0, 0, 0, 0, false, 1, 1.0, 0, "common", 1.0, false, true, true, "bow_shoot.wav", "");
+    
+    debug_log("Itens padrao inseridos no banco de dados (schema legado)");
+}
+
+// Criar novo item no banco
+bool create_item(string name, string display_name, string description, string item_type, string category,
+                 int damage, int defense, int heal_amount, int mp_restore,
+                 bool stackable, int max_stack, float weight, int value,
+                 string rarity, float drop_rate, bool craftable, bool sellable, bool tradeable,
+                 string sound_file, string use_sound) {
+    if(!database_initialized) return false;
+
+    // Compatibilidade: mant�m assinatura nova, mas persiste no formato legado BGT.
+    string audio_value = sound_file;
+    if(audio_value == "") audio_value = use_sound;
+    if(audio_value == "") audio_value = "none";
+
+    string msg_value = description;
+    if(msg_value == "") msg_value = display_name;
+    if(msg_value == "") msg_value = name;
+
+    double health_value = 0;
+    if(heal_amount > 0) health_value = heal_amount;
+
+    string query = """
+        INSERT INTO items (
+            name, items_to_give, audio, msg, map, newx, newy,
+            xp, health, thirst, fill_thirst, hunger, fill_hunger, degradation
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar insercao de item: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, name);
+    stmt.bind_text(2, "none");
+    stmt.bind_text(3, audio_value);
+    stmt.bind_text(4, msg_value);
+    stmt.bind_text(5, "none");
+    stmt.bind_int(6, 0);
+    stmt.bind_int(7, 0);
+    stmt.bind_double(8, 0);
+    stmt.bind_double(9, health_value);
+    stmt.bind_double(10, 0);
+    stmt.bind_double(11, 0);
+    stmt.bind_double(12, 0);
+    stmt.bind_double(13, 0);
+    stmt.bind_double(14, 0);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao inserir item " + name + ": " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("Item " + name + " criado com sucesso (schema legado BGT)");
+    return true;
+}
+
+// Buscar item por nome
+GameItem@ get_item_by_name(string name) {
+    if(items_by_name.exists(name)) {
+        GameItem@ item;
+        items_by_name.get(name, @item);
+        return item;
+    }
+    return null;
+}
+
+// Buscar item por ID
+GameItem@ get_item_by_id(int id) {
+    string id_str = "" + id;
+    if(items_database.exists(id_str)) {
+        GameItem@ item;
+        items_database.get(id_str, @item);
+        return item;
+    }
+    return null;
+}
+
+// Spawnar item no mundo
+bool spawn_item_at(string item_name, string map_name, int x, int y, int z, int quantity = 1, string spawned_by = "system") {
+    GameItem@ item = get_item_by_name(item_name);
+    if(item is null) {
+        debug_log("ERRO: Item " + item_name + " não encontrado para spawn");
+        return false;
+    }
+
+    uint64 owner_id = 0;
+    string source = spawned_by.trim_whitespace();
+    if(source.find("player:") == 0) {
+        source = source.substr(7);
+    }
+    int owner_index = get_player_index_from(source);
+    if(owner_index >= 0 && owner_index < int(players.length())) {
+        owner_id = players[owner_index].peer_id;
+    }
+
+    string drop_id = spawn_drop(item_name, quantity, map_name, x, y, owner_id);
+    if(drop_id == "") {
+        debug_log("ERRO ao spawnar drop para item " + item_name + " em " + map_name + " (" + x + "," + y + ")");
+        return false;
+    }
+
+    debug_log("Item " + item_name + " (x" + quantity + ") spawnado em " + map_name + " (" + x + "," + y + "," + z + ") via drop_id=" + drop_id);
+    return true;
+}
+
+// Pegar item do mundo
+bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
+    int player_index = get_player_index_from(player_name);
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    player@ p = players[player_index];
+    if(p is null) return false;
+
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != x || d.y != y) continue;
+        return pickup_drop(p, d.drop_id);
+    }
+    return false;
+}
+
+// Carregar itens do mundo do banco
+void migrate_legacy_world_items_to_drops() {
+    if(!database_initialized) return;
+
+    string query = "SELECT id, item_id, map_name, x, y, z, quantity, spawned_by, is_active FROM world_items WHERE is_active = 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("LEGACY MIGRATION: falha ao preparar query world_items: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    int migrated = 0;
+    int failed = 0;
+
+    while(stmt.step() == SQLITE_ROW) {
+        int legacy_id = stmt.column_int(0);
+        int legacy_item_id = stmt.column_int(1);
+        string map_name = stmt.column_text(2);
+        int x = stmt.column_int(3);
+        int y = stmt.column_int(4);
+        int z = stmt.column_int(5);
+        int qty = stmt.column_int(6);
+        string spawned_by = stmt.column_text(7);
+
+        GameItem@ gi = get_item_by_id(legacy_item_id);
+        if(gi is null || qty <= 0) {
+            failed++;
+            bancoJogo.execute("DELETE FROM world_items WHERE id = " + legacy_id + ";");
+            continue;
+        }
+
+        uint64 owner_id = 0;
+        string source = spawned_by.trim_whitespace();
+        if(source.find("player:") == 0) source = source.substr(7);
+        int owner_index = get_player_index_from(source);
+        if(owner_index >= 0 && owner_index < int(players.length())) {
+            owner_id = players[owner_index].peer_id;
+        }
+
+        string drop_id = spawn_drop(gi.name, qty, map_name, x, y, owner_id);
+        if(drop_id == "") {
+            failed++;
+            continue;
+        }
+
+        migrated++;
+        bancoJogo.execute("DELETE FROM world_items WHERE id = " + legacy_id + ";");
+    }
+
+    world_items.resize(0);
+    debug_log("LEGACY MIGRATION: world_items -> drops. Migrados=" + migrated + ", falhas=" + failed);
+}
+
+void load_world_items_from_database() {
+    // Mantido apenas por compatibilidade de chamadas legadas
+    migrate_legacy_world_items_to_drops();
+}
+
+// Obter itens em um mapa específico
+WorldItem@[] get_items_in_map(string map_name) {
+    WorldItem@[] items_here;
+
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+
+        GameItem@ gi = get_item_by_name(d.item_id);
+        if(gi is null) continue;
+
+        WorldItem@ projected = WorldItem();
+        projected.id = -1;
+        projected.item_id = gi.id;
+        projected.map_name = map_name;
+        projected.x = d.x;
+        projected.y = d.y;
+        projected.z = 0;
+        projected.quantity = d.quantity;
+        projected.is_active = true;
+        items_here.push_back(projected);
+    }
+
+    return items_here;
+}
+
+// Obter item na posição específica
+WorldItem@ get_item_at_position(string map_name, int x, int y, int z) {
+    // Compatibilidade: projetar um drop moderno como WorldItem para códigos legados
+    string[] map_drops = get_drops_in_map(map_name);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != x || d.y != y) continue;
+
+        GameItem@ gi = get_item_by_name(d.item_id);
+        if(gi is null) continue;
+
+        WorldItem@ projected = WorldItem();
+        projected.id = -1;
+        projected.item_id = gi.id;
+        projected.map_name = map_name;
+        projected.x = x;
+        projected.y = y;
+        projected.z = z;
+        projected.quantity = d.quantity;
+        projected.is_active = true;
+        return projected;
+    }
+    return null;
+}
+
+// Inicializar sistema de itens
+void init_items_system() {
+    debug_log("Inicializando sistema de itens...");
+    
+    // Criar tabelas
+    create_items_tables();
+    
+    // Inserir itens padrão se necessário
+    seed_default_items();
+
+    import_legacy_weapons_catalog();
+
+    // Carregar itens do banco
+    load_items_from_database();
+    
+    // Carregar itens do mundo
+    migrate_legacy_world_items_to_drops();
+
+    int active_drops = int(global_drops.get_size());
+    debug_log("Sistema de itens inicializado com " + items_database.get_size() + " tipos de itens e " + active_drops + " drops ativos");
+}
+
+// Limpar itens expirados (executar periodicamente)
+// 🆕 Task 1.1.2: Atualizado para processar banco de dados E memória
+void cleanup_expired_items() {
+    if(!database_initialized) return;
+
+    // Compatibilidade legado: limpa residuos na tabela antiga
+    string cleanup_query = "DELETE FROM world_items WHERE expires_at IS NOT NULL AND expires_at < DATETIME('now');";
+    bancoJogo.execute(cleanup_query);
+
+    // Fluxo moderno: limpeza real dos drops ativos
+    cleanup_expired_drops();
+}
+
+
+
+
+
+

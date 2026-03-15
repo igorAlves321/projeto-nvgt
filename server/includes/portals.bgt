@@ -1,0 +1,111 @@
+class portal {
+	string owner, map, destination, portaldesc, sound_spawn, sound_transport, sound_explosion, sound_final, sound_appears;
+	int mapindex, mapindex2, x, y, destination_x, destination_y, damage, health, damage_range, sound_loop,  time_wait;
+	dictionary portalplayers;
+	string[] sounds_impact ={"rico2metal1.ogg", "rico2metal2.ogg", "rico2metal3.ogg", "rico2metal4.ogg", "rico2metal5.ogg", "rico2metal6.ogg"};
+	timer portaltimer;
+	portal(int x, int y, string owner, string map, string destination, int destination_x, int destination_y){
+		this.x=x;
+		this.y=y;
+		this.damage_range=30;
+		this.health=1000000000;
+		this.damage=100000;
+		this.time_wait=15;
+		this.owner=owner;
+		this.map=map;
+		this.destination=destination;
+		this.destination_x=destination_x;
+		this.destination_y=destination_y;
+		this.mapindex =get_map_index_from(this.map);
+		this.mapindex2 =get_map_index_from(this.destination);
+		this.sound_spawn="ma142.ogg";
+		this.sound_transport="ma199.ogg";
+		this.sound_explosion="explosion.ogg";
+		this.sound_final ="ma148.ogg";
+		this.sound_appears="ma238.ogg";
+		server_maps[mapindex].send_packet(0, "play "+this.sound_spawn, this.x, this.y);
+		sound_loop =spawn_moving_sound("ma201.ogg", this.x, this.y, this.map);
+	}
+
+	bool add_player(string playername, int portalhealth) {
+		if(!portalplayers.exists(playername)) {
+			portalplayers.set(playername, portalhealth);
+			health+=portalhealth;
+			return true;
+		}
+		return false;
+	}
+
+	string getdesc() {
+		portaldesc=";Un gran portal de luz abierto por;"+" "+this.owner+" "+";con destino final"+"; ;"+server_maps[mapindex2].get_locate_at()+";, ;"+"con;"+" "+this.health+" ;"+"de vida.";
+		return portaldesc;
+	}
+
+	int get_damage(int distance) {
+		int total_damage;
+		int final_damage;
+		if(distance>0) {
+			total_damage =damage/damage_range;
+			total_damage =round(total_damage, 0);
+			final_damage =damage-(total_damage*distance);
+			return final_damage;
+		}
+		return damage;
+	}
+}
+
+void add_portal_destination(int index, string portaldata) {
+	file portalmaps;
+	if(file_exists("maps_of_portal.txt")) {
+		portalmaps.open("maps_of_portal.txt", "a");
+		if(portaldata!="") {
+			portalmaps.write(portaldata);
+			portalmaps.close();
+			eadm(players[index].charname+" "+"añadió un destino a los portales.");
+		}
+	}
+}
+
+void getportal(int index) {
+	file portalmaps;
+	if(file_exists("maps_of_portal.txt")) {
+		portalmaps.open("maps_of_portal.txt", "r");
+		string content;
+		content =portalmaps.read();
+		portalmaps.close();
+		send_reliable(players[index].peer_id, "dataportal "+content, 0);
+	}
+	else {
+		send_reliable(players[index].peer_id, "msg2 ;no es posible obtener el contenido del archivo de portales.;", 0);
+	}
+}
+
+void updateportal(int index, string portaldata) {
+	file portalmaps;
+	if(file_exists("maps_of_portal.txt")) {
+		portalmaps.open("maps_of_portal.txt", "w");
+		if(portaldata!="") {
+			portalmaps.write(portaldata);
+			portalmaps.close();
+			send_reliable(players[index].peer_id, "msg2 ;done;", 0);
+			eadm(players[index].charname+" "+"actualizó los portales de luz.");
+		}
+	}
+}
+
+void spawn_portal(int index, int x, int y, string map, string destination, int destination_x=1, int destination_y=0) {
+	if(map==destination) return;
+	int mapindex =get_map_index_from(map);
+	if(mapindex>-1) {
+		int portalindex;
+		if(!server_maps[mapindex].have_portal(players[index].x, players[index].y, portalindex) && portalindex<0) {
+			portal pt(x, y, players[index].charname, map, destination, destination_x, destination_y);
+			server_maps[mapindex].portals.insert_last(pt);
+			players[index].inv_add_item("portal_de_luz",-1);
+			send_reliable(players[index].peer_id, "msg2 ;Al activar un botón una luz multicolor se divisa frente a ti. Grandes destellos salen del fascinante portal que has activado, invitándote a viajar en él hacia tu nuevo destino.", 0);
+		}
+		else {
+			send_reliable(players[index].peer_id, "msg2 Ya existe un portal en este sitio, ¡uno más sería la destrucción total!", 0);
+		}
+	}
+} // end spawn portal

@@ -1,0 +1,564 @@
+﻿// Globals para servidor NVGT - UtilitÃ¡rios base
+// Convertido para usar APIs nativas NVGT
+
+#include "file_contents.nvgt"
+#include "../../config.nvgt"
+
+// ðŸ†• FUNÃ‡Ã•ES AUXILIARES DE COMPATIBILIDADE
+
+// FunÃ§Ã£o para mover jogador de mapa (wrapper de changemap)
+void move_player_to_map(int player_index, string destination_map, int dest_x, int dest_y) {
+    changemap(destination_map, player_index, dest_x, dest_y);
+}
+
+// FunÃ§Ã£o para obter timestamp atual em segundos desde epoch
+uint64 time_stamp() {
+    datetime dt;
+    return dt.timestamp;
+}
+
+// ComparaÃ§Ã£o de strings case-insensitive (retorna true se iguais)
+bool string_compare_insensitive(const string& in str1, const string& in str2) {
+    return str1.lower() == str2.lower();
+}
+
+// ===== Compatibilidade BGT (funções ausentes sem bgt_compat) =====
+string string_replace(const string& in str, const string& in search, const string& in repl, bool replace_all = true) {
+    return str.replace(search, repl, replace_all);
+}
+
+string string_trim_left(const string& in str, uint count) {
+    if(str == "") return str;
+    return str.substr(count);
+}
+
+string string_to_lower_case(const string& in str) {
+    return str.lower();
+}
+
+string[] string_split(const string& in str, const string& in delim, bool full = true) {
+    return str.split(delim, full);
+}
+
+bool string_is_alphanumeric(const string& in str) {
+    return str.is_alphanumeric();
+}
+
+double absolute(double x) {
+    return abs(x);
+}
+
+int absolute(int x) {
+    return abs(x);
+}
+
+string string_hash(const string& in data, int algorithm, bool binary) {
+    if(algorithm == 1) return string_hash_sha256(data, binary);
+    if(algorithm == 2) return string_hash_sha512(data, binary);
+    return "";
+}
+
+// FunÃ§Ã£o parse_uint - converte string para uint
+uint parse_uint(const string& in str) {
+    return string_to_number(str);
+}
+
+// FunÃ§Ã£o min - retorna o menor valor entre dois nÃºmeros
+int min(int a, int b) {
+    return a < b ? a : b;
+}
+
+double min(double a, double b) {
+    return a < b ? a : b;
+}
+
+// FunÃ§Ã£o para gerar strings aleatÃ³rias (compatibilidade BGTâ†’NVGT)
+string randomstring(int length = 16) {
+    string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    string result = "";
+    for (int i = 0; i < length; i++) {
+        result += chars[random(0, chars.length() - 1)];
+    }
+    return result;
+}
+
+// Constantes de direÃ§Ã£o (usando prefixo DIR_ para evitar conflitos)
+const int DIR_Left = 1;
+const int DIR_Right = 2;
+const int DIR_Forward = 3;
+const int DIR_Back = 4;
+
+// VariÃ¡veis globais do servidor
+bool pvp = true;
+string mapainicial = "test"; // Mapa inicial do servidor (mudado para test durante desenvolvimento)
+int doublegold = 0;
+int doublexp = 0;
+int AUTOSAVE_INTERVAL = 300000; // Intervalo de auto-save em ms (5 minutos)
+
+// Arrays de sistema
+string[] what;
+timer ondatempo;
+timer tovo;
+
+// Arrays de NPCs e entidades (declarados aqui para uso global)
+class wall_entity {
+    int x, y;
+    string map;
+    string name;
+    int vida;
+    wall_entity(int wx, int wy, string wmap, int wvida) {
+        x = wx; y = wy; map = wmap; vida = wvida;
+    }
+}
+
+class projetei_entity {
+    int x, y;
+    string map;
+    string somprojetei;
+    projetei_entity(int px, int py, string pmap, string psom) {
+        x = px; y = py; map = pmap; somprojetei = psom;
+    }
+}
+
+class fogoqueimar_entity {
+    int x, y;
+    string map;
+    string somfogo;
+    fogoqueimar_entity(int fx, int fy, string fmap, string fsom) {
+        x = fx; y = fy; map = fmap; somfogo = fsom;
+    }
+}
+
+class npc_entity {
+    int x, y;
+    string map, mapa;
+    int vida;
+    string golpeado;
+    bool morreu = false, morrendo = false, nasceu = true;
+    // Propriedades para sons e movimento
+    timer tsom, tandar, tatirar, tmorreu;
+    int nsom = 1000;
+    int natirar = 2000;
+    string njogador = "";
+    npc_entity(int nx, int ny, string nmap, int nvida) {
+        x = nx; y = ny; map = nmap; mapa = nmap; vida = nvida; golpeado = "";
+        tsom.restart(); tandar.restart(); tatirar.restart(); tmorreu.restart();
+    }
+}
+
+// Arrays globais de entidades
+wall_entity@[] walls;
+projetei_entity@[] projeteis;
+fogoqueimar_entity@[] fogoqueimars;
+
+// FunÃ§Ãµes de compatibilidade BGT para sons
+// FunÃ§Ãµes auxiliares para NPCs
+// Nota: Esta funÃ§Ã£o serÃ¡ redefinida em player.nvgt onde o array players existe
+void colocar_fogoqueimar(int x, int y, int duracao, string mapname) {
+    // FIXME: spawn_moving_sound serÃ¡ definido em msound.nvgt
+    fogoqueimar_entity@ fogo = fogoqueimar_entity(x, y, mapname, ""); // spawn_moving_sound("fire.wav", x, y, mapname)
+    fogoqueimars.push_back(fogo);
+}
+
+// FunÃ§Ã£o write_to para salvar dados de jogador
+void write_to(string playername, string filename, string content) {
+    string filepath = "server/players/" + playername + "_" + filename;
+    file f;
+    if (f.open(filepath, "w")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// FunÃ§Ãµes utilitÃ¡rias usando NVGT nativo
+string[] nvgt_split(string str, string delimiter) {
+    return str.split(delimiter);
+}
+
+// delinear() movido para server_map.nvgt (versÃ£o mais completa com parÃ¢metro opcional)
+
+uint64 get_time_stamp() {
+    // NVGT equivalent to get_ticks() ou timestamp
+    return ticks();
+}
+
+void debug_log(string message) {
+    datetime dt;
+    string time_str = "[" + dt.format("%Y-%m-%d %H:%M:%S") + "] ";
+    
+    // Garante que a pasta debug existe
+    directory_create("debug");
+    
+    // Salva no arquivo de log
+    file f;
+    if (f.open("debug/server_log.txt", "a")) {
+        f.write(time_str + message + "\n");
+        f.close();
+    }
+    
+    // TambÃ©m mantÃ©m log em log.md para compatibilidade
+    file f2;
+    if (f2.open("log.md", "a")) {
+        f2.write(time_str + message + "\n");
+        f2.close();
+    }
+}
+
+// FunÃ§Ãµes de compatibilidade BGTâ†’NVGT
+// @deprecated Use parse_int() diretamente. Esta funÃ§Ã£o serÃ¡ removida em versÃµes futuras.
+int string_to_number(string str) {
+    return parse_int(str);
+}
+
+double string_to_float(string str) {
+    return parse_float(str);
+}
+
+string number_to_string(int num) {
+    return "" + num;
+}
+
+int string_contains(const string& in text, const string& in search, int occurance = 1) {
+    uint c = 0;
+    int pos = -1;
+    while(c < occurance) {
+        pos = text.find(search, pos + 1);
+        if(pos > -1) c++;
+        else break;
+    }
+    return c == occurance ? pos : -1;
+}
+
+string normalize_legacy_text(string text) {
+    text = text.replace("ÃƒÆ’Ã‚Â£", "ã");
+    text = text.replace("ÃƒÆ’Ã‚Â¡", "á");
+    text = text.replace("ÃƒÆ’Ã‚Â©", "é");
+    text = text.replace("ÃƒÆ’Ã‚Â­", "í");
+    text = text.replace("ÃƒÆ’Ã‚Â³", "ó");
+    text = text.replace("ÃƒÆ’Ã‚Âº", "ú");
+    text = text.replace("ÃƒÆ’Ã‚Â§", "ç");
+    text = text.replace("ÃƒÆ’Ã‚Âª", "ê");
+    text = text.replace("ÃƒÆ’Ã‚Â´", "ô");
+    text = text.replace("ÃƒÂ£", "ã");
+    text = text.replace("ÃƒÂ¡", "á");
+    text = text.replace("ÃƒÂ©", "é");
+    text = text.replace("ÃƒÂ­", "í");
+    text = text.replace("ÃƒÂ³", "ó");
+    text = text.replace("ÃƒÂº", "ú");
+    text = text.replace("ÃƒÂ§", "ç");
+    text = text.replace("Ã£", "ã");
+    text = text.replace("Ã¡", "á");
+    text = text.replace("Ã©", "é");
+    text = text.replace("Ã­", "í");
+    text = text.replace("Ã³", "ó");
+    text = text.replace("Ãº", "ú");
+    text = text.replace("Ã§", "ç");
+    text = text.replace("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ ", "");
+    text = text.replace("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ", "");
+    text = text.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â° ", "");
+    text = text.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ ", "");
+    text = text.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â£ ", "");
+    return text;
+}
+
+string normalize_network_packet_text(string packet) {
+    string[] text_prefixes = {"say", "msg", "msg2", "msg3", "msg4", "msgnormal", "announce"};
+    for(uint i = 0; i < text_prefixes.length(); i++) {
+        string pref = text_prefixes[i] + " ";
+        if(packet.find(pref) == 0) {
+            string payload = packet.substr(pref.length());
+            return pref + normalize_legacy_text(payload);
+        }
+    }
+    return packet;
+}
+
+void send_reliable(uint64 peer_id, string message) {
+    send_reliable_text(peer_id, normalize_network_packet_text(message), 0);
+}
+
+void send_reliable(uint64 peer_id, string message, int channel) {
+    send_reliable_text(peer_id, normalize_network_packet_text(message), channel);
+}
+
+// Timer wrapper para compatibilidade
+class game_timer {
+    timer t;
+    void restart() { t.restart(); }
+    uint64 elapsed() { return t.elapsed; }
+    void force(uint64 time) { t.force(time); }
+    void pause() { t.pause(); }
+}
+
+// FunÃ§Ãµes de arquivo usando NVGT nativo
+string file_read_all(string filename) {
+    file f;
+    string content = "";
+    if (f.open(filename, "r")) {
+        content = f.read();
+        f.close();
+    }
+    return content;
+}
+
+void file_write_all(string filename, string content) {
+    file f;
+    if (f.open(filename, "w")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// FunÃ§Ã£o para gerar strings aleatÃ³rias
+string generate_random_string(int length) {
+    string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    string result = "";
+    for(int i = 0; i < length; i++) {
+        result += chars[random(0, int(chars.length()) - 1)];
+    }
+    return result;
+}
+
+// FunÃ§Ã£o de sleep compatÃ­vel
+void server_wait(int milliseconds) {
+    wait(milliseconds);
+}
+
+// VariÃ¡veis globais do servidor (compatibilidade BGT)
+const string bell = ascii_to_character(7);
+const string bell2 = ascii_to_character(9);
+
+// Arrays para compatibilidade
+string[] weapons(39);
+string[] weapons2(39);
+
+// FunÃ§Ã£o join para arrays de strings (compatibilidade BGT)
+string join(string[] array, string delimiter) {
+    if(array.length() == 0) return "";
+
+    string result = array[0];
+    for(uint i = 1; i < array.length(); i++) {
+        result += delimiter + array[i];
+    }
+    return result;
+}
+
+// FunÃ§Ã£o datetime_now para timestamps
+string datetime_now() {
+    datetime dt;
+    return dt.format("%Y-%m-%d %H:%M:%S");
+}
+
+// ===== FUNÃ‡Ã•ES DE AUTENTICAÃ‡ÃƒO COM HASH SHA-256 =====
+
+// Hash de senha usando SHA-256
+string hash_password(string password) {
+    if(password == "") return "";
+    // Retorna hash SHA-256 em formato hexadecimal
+    return string_hash(password, 1, false);
+}
+
+// Verificar senha contra hash
+bool verify_password_hash(string password, string stored_hash) {
+    if(password == "" || stored_hash == "") return false;
+    string computed_hash = hash_password(password);
+    return (computed_hash == stored_hash);
+}
+
+// Validar username (alfanumÃ©rico, 3-20 caracteres)
+bool is_valid_username(string username) {
+    if(username.length() < 3 || username.length() > 20) return false;
+    return string_is_alphanumeric(username);
+}
+
+// Validar email (verificaÃ§Ã£o bÃ¡sica)
+bool is_valid_email(string email) {
+    if(email.length() < 5) return false;
+    if(email.find("@") == -1) return false;
+    if(email.find(".") == -1) return false;
+    return true;
+}
+
+// VariÃ¡vel global para controle de jogo pausado
+bool gamestopped = false;
+
+// FunÃ§Ã£o para trocar jogador de mapa
+void changemap(string destination_map, int player_index, int dest_x, int dest_y) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    
+    // Obter Ã­ndice do mapa antigo
+    string old_map = players[player_index].map;
+    int old_map_index = get_map_index_from(old_map);
+    
+    // Notificar outros jogadores do mapa antigo que o jogador saiu
+    if(old_map_index >= 0 && old_map_index < int(server_maps.length())) {
+        server_maps[old_map_index].send_to_others(players[player_index].peer_id, 0, 
+            "remove_player_from_map " + players[player_index].charname, true);
+    }
+    
+    // Atualizar posiÃ§Ã£o e mapa do jogador
+    players[player_index].map = destination_map;
+    players[player_index].x = dest_x;
+    players[player_index].y = dest_y;
+    
+    // Obter Ã­ndice do novo mapa
+    int new_map_index = get_map_index_from(destination_map);
+    if(new_map_index >= 0) {
+        players[player_index].mapindex = new_map_index;
+    }
+    
+    // Atualizar lista de jogadores nos mapas
+    if(old_map_index >= 0 && old_map_index < int(server_maps.length())) {
+        server_maps[old_map_index].update_players_on_map(false);
+    }
+    if(new_map_index >= 0 && new_map_index < int(server_maps.length())) {
+        server_maps[new_map_index].update_players_on_map(false);
+    }
+    
+    // CORREÃ‡ÃƒO: Carregar dados do mapa e enviar para o cliente
+    file f;
+    string map_file = "maps/" + destination_map + ".map";
+    if(!file_exists(map_file)) {
+        string alt_map_file = "server/maps/" + destination_map + ".map";
+        if(file_exists(alt_map_file)) map_file = alt_map_file;
+    }
+    string map_data = "";
+    
+    if(f.open(map_file, "rb")) {
+        map_data = f.read();
+        f.close();
+        // Enviar com formato BGT (dados do mapa + coordenadas)
+        send_reliable(players[player_index].peer_id, "changemap " + map_data + "\r\nx:" + dest_x + "\r\ny:" + dest_y + "\r\n", 0);
+        debug_log("ðŸ“¤ Enviado changemap para " + players[player_index].charname + ": " + destination_map + " (" + dest_x + "," + dest_y + ")");
+    } else {
+        // Se nÃ£o conseguir ler o arquivo, enviar formato simplificado (fallback)
+        send_reliable(players[player_index].peer_id, "changemap " + destination_map + " " + dest_x + " " + dest_y, 0);
+        debug_log("âš ï¸ Arquivo de mapa nÃ£o encontrado: " + map_file + " - enviando formato simples");
+    }
+    
+    // Enviar lista de jogadores do novo mapa para o jogador
+    if(new_map_index >= 0 && new_map_index < int(server_maps.length())) {
+        // Construir lista de jogadores no mapa
+        string final = "set_map_players ";
+        int count = 0;
+        
+        for(uint x = 0; x < server_maps[new_map_index].mapplayers.length(); x++) {
+            int pindex = server_maps[new_map_index].mapplayers[x];
+            if(pindex >= 0 && pindex < int(players.length())) {
+                final += players[pindex].charname + " ";
+                final += players[pindex].x + " ";
+                final += players[pindex].y + " ";
+                final += players[pindex].bipar + " ";
+                final += players[pindex].pacifico + " ";
+                final += players[pindex].peer_id + "\r\n";
+                count++;
+            }
+        }
+        
+        // Se nÃ£o hÃ¡ jogadores, enviar "none"
+        if(count == 0) {
+            final = "set_map_players none";
+        }
+        
+        send_reliable(players[player_index].peer_id, final, 6);
+        
+        // Notificar outros jogadores do novo mapa
+        string add_packet = "add_player_to_map " + players[player_index].charname + " " + 
+            players[player_index].x + " " + players[player_index].y + " " + 
+            players[player_index].bipar + " " + players[player_index].pacifico + " " + 
+            players[player_index].peer_id;
+        server_maps[new_map_index].send_to_others(players[player_index].peer_id, 6, add_packet, true);
+        
+        debug_log("ðŸ“¤ Lista de jogadores enviada e notificados (" + count + " no mapa)");
+    }
+}
+
+// FunÃ§Ã£o para escrever arquivo (wrapper)
+void file_write(string filename, string content) {
+    file f;
+    if(f.open(filename, "wb")) {
+        f.write(content);
+        f.close();
+    }
+}
+
+// FunÃ§Ã£o para verificar se jogo estÃ¡ desabilitado em coordenadas especÃ­ficas
+bool is_game_disabled(int x, int y, string map) {
+    if(map == "") return false;
+    for(uint i = 0; i < game_disabled_zones.length(); i++) {
+        if(game_disabled_zones[i] is null) continue;
+        if(game_disabled_zones[i].is_inside(x, y, map)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// FunÃ§Ã£o para verificar se uma posiÃ§Ã£o Ã© caminhÃ¡vel (Task 4 - movimento_jogador.md)
+// Valida: limites do mapa, paredes, obstÃ¡culos
+bool is_walkable(int x, int y, string mapname) {
+    int mapindex = get_map_index_from(mapname);
+    
+    // Se o mapa nÃ£o foi carregado ainda, permitir movimento (confiar no cliente)
+    if(mapindex < 0 || mapindex >= int(server_maps.length())) return true;
+    
+    // Verificar limites do mapa
+    if(x < 0 || x > server_maps[mapindex].max_x) return false;
+    if(y < 0 || y > server_maps[mapindex].max_y) return false;
+    
+    // Obter tile na posiÃ§Ã£o
+    string tile = server_maps[mapindex].get_tile_at(x, y);
+    
+    // NOTA: Tiles vazios agora sÃ£o permitidos (mapas podem nÃ£o ter tile em toda Ã¡rea)
+    // Apenas bloquear tiles explicitamente marcados como parede
+    if(tile.find("wall") >= 0 || tile == "blocked" || tile == "obstacle") return false;
+    
+    return true;
+}
+
+// FunÃ§Ã£o para verificar se movimento Ã© vÃ¡lido (distÃ¢ncia mÃ¡xima, anti-teleport)
+bool is_valid_movement(int old_x, int old_y, int new_x, int new_y, int max_distance = 5) {
+    int dx = abs(new_x - old_x);
+    int dy = abs(new_y - old_y);
+    
+    // Verificar se movimento nÃ£o Ã© muito grande (anti-cheat bÃ¡sico)
+    if(dx > max_distance || dy > max_distance) return false;
+    
+    return true;
+}
+
+// FunÃ§Ã£o ar() - parece ser relacionada a arredondamento
+int ar(double value) {
+    return int(value + 0.5);
+}
+
+// Arrays globais de entidades (placeholders atÃ© serem implementadas)
+class jaula_placeholder {
+    int x, y;
+    string map;
+}
+jaula_placeholder@[] jaulas;
+
+class cachorromascota_placeholder {
+    int x, y;
+    string map, nome;
+}
+cachorromascota_placeholder@[] cachorromascotas;
+
+class monstruo_placeholder {
+    int x, y;
+    string map;
+    string nome;
+}
+monstruo_placeholder@[] monstruos;
+
+// FunÃ§Ã£o send_packet10 - envia pacote para todos no mapa exceto remetente
+void send_packet10(int channel, string sender, string sender2, string packet, string mapname) {
+    int mapindex = get_map_index_from(mapname);
+    if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+        server_maps[mapindex].send_packet(channel, packet, true);
+    }
+}
+
+
+

@@ -1,0 +1,406 @@
+enum MenuEvents {
+    NoAction,
+    MoveUp,
+    MoveDown,
+    MoveRight,
+    MoveLeft,
+    Select,
+    MainMenuState,
+    SubMenuState,
+    CloseMenu
+}
+
+class Submenu {
+    Menu@[] menuList;
+    int currentMenuIndex = 0;
+    int lastShortcutIndex = -1;
+    int menuState = MainMenuState;
+    string menuTitle;
+    bool isActive = false;
+    int lastMenuPressed = -1;
+    Submenu() {
+        reset();
+    }
+
+    void reset() {
+        menuList.resize(0);
+        menuTitle = "";
+        currentMenuIndex = 0;
+        isActive = false;
+        menuState = MainMenuState;
+        lastShortcutIndex = -1;
+        lastMenuPressed = -1;
+    }
+
+    int addMenu(const string &in menuName) {
+        Menu newMenu;
+        newMenu.name = menuName;
+        newMenu.hotkey = shortcut(menuName);
+        newMenu.hotkeyLetter = shortcut_letter(menuName);
+        newMenu.name = newMenu.name.replace("&", "");
+        menuList.insert_last(newMenu);
+        return menuList.length() - 1;
+    }
+    
+    bool removeMenu(const int &in menuIndex) {
+        if (menuIndex < 0 || menuIndex >= menuList.length()) return false;
+        menuList.remove_at(menuIndex);
+        if (currentMenuIndex >= menuList.length()) {
+            currentMenuIndex = menuList.length() - 1;
+        }
+        return true;
+    }
+
+    bool addItem(const int &in menuIndex, const string &in itemName, const string &in itemId, bool isInteractable = true, Submenu@ submenu = null) {
+        if (menuIndex < 0 || menuIndex >= menuList.length()) return false;
+        return menuList[menuIndex].addItem(itemName, itemId, isInteractable, submenu);
+    }
+
+    bool removeItem(const int &in menuIndex, const string &in itemId) {
+        if (menuIndex < 0 || menuIndex >= menuList.length()) return false;
+        return menuList[menuIndex].removeItem(itemId);
+    }
+
+    string getSpeechOutput() {
+        if (menuList.length() == 0 || currentMenuIndex >= menuList.length()) return "No menu available.";
+        string speech = menuList[currentMenuIndex].name;
+        if (menuList[currentMenuIndex].hotkeyLetter != "") 
+            speech += " (Alt+" + menuList[currentMenuIndex].hotkeyLetter + ")";
+        speech += " " + (currentMenuIndex + 1) + " of " + menuList.length();
+        if (menuList[currentMenuIndex].isActive && menuList[currentMenuIndex].itemList.length() > 0) {
+            speech += " - " + menuList[currentMenuIndex].getSpeechOutput();
+        }
+        return speech;
+    }
+    bool isItemSelected(int menuIndex, const string &in itemId) {
+        if (menuIndex < 0 || menuIndex >= menuList.length()) return false;
+        return menuList[menuIndex].isItemSelected(itemId);
+    }
+    string getSelectedItemId(){
+        if (menuList.length() == 0) return "";
+        for (uint i = 0; i < menuList.length(); i++) {
+            string itemId = menuList[i].getSelectedItemId();
+            if (itemId.is_empty()) continue;
+            lastMenuPressed = i;
+            return itemId;
+        }
+        return "";
+    }
+    int monitorInput() {
+        if (menuList.length() == 0) return NoAction;
+        if (key_pressed(KEY_RIGHT)) {
+            return navigateMenu(1);
+        } else if (key_pressed(KEY_LEFT)) {
+            return navigateMenu(-1);
+        } else if (key_pressed(KEY_DOWN)) {
+            return navigateMenu(1); // Navegar para baixo
+        } else if (key_pressed(KEY_UP)) {
+            return navigateMenu(-1); // Navegar para cima
+        }
+        if (menuState == MainMenuState) {
+            if (checkShortcuts()) return NoAction;
+            else if (key_pressed(KEY_RETURN)) {
+                menuState = SubMenuState;
+                menuList[currentMenuIndex].openMenu();
+                return Select;
+            } else if (key_pressed(KEY_ESCAPE)) {
+                isActive = false;
+                speak("Menu closed.");
+                return CloseMenu;
+            }
+        } else if (menuState == SubMenuState) {
+            int result = menuList[currentMenuIndex].processInput();
+            if (result == SubMenuState) {
+                menuState = MainMenuState;
+                menuList[currentMenuIndex].isActive = false;
+                speak(getSpeechOutput());
+            }
+            return result;
+        }
+        return NoAction;
+    }
+    int navigateMenu(int direction) {
+        if (menuList.length() == 0) return NoAction;
+        menuList[currentMenuIndex].isActive = false;
+        currentMenuIndex = (currentMenuIndex + direction + menuList.length()) % menuList.length();
+        speak(getSpeechOutput());
+        if (menuState == SubMenuState && menuList[currentMenuIndex].itemList.length() > 0) {
+            speak(menuList[currentMenuIndex].getSpeechOutput());
+        }
+        return (direction > 0) ? MoveDown : MoveUp; // Ajustado para MoveDown e MoveUp
+    }
+
+    bool checkShortcuts() {
+        if (menuList.length() == 0) return false;
+        if (keyboard_modifiers & KEYMOD_ALT > 0) {
+            for (uint i = 0; i < menuList.length(); i++) {
+                uint index = (i + lastShortcutIndex + 1) % menuList.length(); // Continue procurando a partir do último índice
+                if (menuList[index].hotkey < 0) continue;
+                if (!key_pressed(menuList[index].hotkey)) continue;
+                menuList[currentMenuIndex].isActive = false;
+                currentMenuIndex = index;
+                speak(getSpeechOutput());
+                lastShortcutIndex = index; // Atualize o último índice
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void display(const string &in newTitle) {
+        if (menuList.length() == 0) return;
+
+        menuTitle = newTitle;
+        speak(menuTitle);
+        isActive = true;
+        speak(getSpeechOutput());
+    }
+}
+
+class Menu {
+    MenuItem@[] itemList;
+    int currentItemIndex = 0;
+    string name;
+    string hotkeyLetter;
+    int hotkey;
+    bool isActive = false;
+    int lastShortcutIndex = -1; // Adicione esta variável
+    dictionary submenus; // Dicionário para armazenar submenus
+
+    bool removeItem(const string &in itemId) {
+        for (uint i = 0; i < itemList.length(); i++) {
+            if (itemList[i].id == itemId) {
+                itemList.remove_at(i);
+                if (currentItemIndex >= itemList.length()) {
+                    currentItemIndex = itemList.length() - 1;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    string getSpeechOutput() {
+        if (itemList.length() == 0 || currentItemIndex >= itemList.length()) return "No items available.";
+        string speech = itemList[currentItemIndex].name;
+        if (itemList[currentItemIndex].hotkeyLetter != "")
+            speech += " (" + itemList[currentItemIndex].hotkeyLetter + ")";
+        if (!itemList[currentItemIndex].isInteractable) speech += " - unavailable";
+        speech += " " + (currentItemIndex + 1) + " of " + itemList.length();
+        return speech;
+    }
+    void openMenu() {
+        isActive = true;
+        currentItemIndex = 0;
+        speak(getSpeechOutput());
+    }
+    bool addItem(const string &in itemName, const string &in itemId, bool isInteractable = true, Submenu@ submenu = null) {
+        MenuItem newItem;
+        newItem.name = itemName;
+        newItem.hotkey = shortcut(itemName);
+        newItem.hotkeyLetter = shortcut_letter(itemName);
+        newItem.name = newItem.name.replace("&", "");
+        newItem.id = itemId;
+        newItem.isInteractable = isInteractable;
+        itemList.insert_last(newItem);
+        if (submenu !is null) {
+            submenus[itemId] = submenu; // Adiciona o submenu ao dicionário
+        }
+        return true;
+    }
+
+    private bool checkShortcuts() {
+        if (itemList.length() == 0) return false;
+        for (uint i = 0; i < itemList.length(); i++) {
+            uint index = (i + lastShortcutIndex + 1) % itemList.length(); // Continue procurando a partir do último índice
+            if (itemList[index].hotkey < 0) continue;
+            if (!key_pressed(itemList[index].hotkey)) continue;
+            currentItemIndex = index;
+            lastShortcutIndex = index; // Atualize o último índice
+            speak(getSpeechOutput());
+            return true;
+        }
+        return false;
+    }
+
+    int processInput() {
+        if (itemList.length() == 0) return NoAction;
+        if (checkShortcuts()) return NoAction;
+        else if (key_pressed(KEY_DOWN)) {
+            return navigateItems(1);
+        } else if (key_pressed(KEY_UP)) {
+            return navigateItems(-1);
+        } else if (key_pressed(KEY_RETURN)) {
+            return handleEnterKey();
+        } else if (key_pressed(KEY_ESCAPE)) {
+            isActive = false;
+            return SubMenuState;
+        } else if (key_pressed(KEY_HOME)) {
+            return navegateHomeOrEnd(-1);
+        } else if (key_pressed(KEY_END)) {
+            return navegateHomeOrEnd(1);
+        }
+        return NoAction;
+    }
+
+    int navigateItems(int direction) {
+        currentItemIndex = (currentItemIndex + direction + itemList.length()) % itemList.length();
+        speak(getSpeechOutput());
+        return (direction > 0) ? MoveDown : MoveUp;
+    }
+
+    int navegateHomeOrEnd(int direction) {
+        currentItemIndex = (direction > 0) ? itemList.length() - 1 : 0;
+        speak(getSpeechOutput());
+        return (direction > 0) ? MoveDown : MoveUp;
+    }
+    int handleEnterKey() {
+        if (!itemList[currentItemIndex].isInteractable) {
+            speak("Option not available");
+            return NoAction;
+        }
+        itemList[currentItemIndex].isSelected = true;
+        if (submenus.exists(itemList[currentItemIndex].id)) {
+            Submenu@ submenu = cast<Submenu@>(submenus[itemList[currentItemIndex].id]);
+            submenu.display(itemList[currentItemIndex].name);
+            submenu.monitorInput();
+            return SubMenuState;
+        }
+        return Select;
+    }
+    bool isItemSelected(const string &in itemId) {
+        bool isSelected = false;
+        for (uint i = 0; i < itemList.length(); i++) {
+            if (itemList[i].id == itemId) {
+                isSelected = itemList[i].isSelected;
+                itemList[i].isSelected = false;
+                break;
+            }
+        }
+        return isSelected;
+    }
+    string getSelectedItemId() {
+        if (itemList.length() == 0) return "";
+        for (uint i = 0; i < itemList.length(); i++) {
+            if (itemList[i].isSelected) {
+                itemList[i].isSelected = false;
+                return itemList[i].id;
+            }
+        }
+        return "";
+    }
+}
+
+class MenuItem {
+    string name;
+    string id;
+    int hotkey;
+    string hotkeyLetter;
+    bool isInteractable;
+    bool isSelected;
+}
+
+int shortcut(string caption_text) {
+    for (int counter = 0; counter < caption_text.length(); counter++) {
+        if (caption_text[counter] != "&")
+            continue;
+        if (counter == caption_text.length() - 1)
+            return -1;
+        else
+            return letter_to_key(caption_text[counter + 1]);
+    }
+    return -1;
+}
+
+string shortcut_letter(string caption_text) {
+    for (int counter = 0; counter < caption_text.length(); counter++) {
+        if (caption_text[counter] != "&")
+            continue;
+        if (counter == caption_text.length() - 1)
+            return "";
+        else
+            return caption_text[counter + 1];
+    }
+    return "";
+}
+
+int letter_to_key(string char) {
+    if (char.length() != 1)
+        char = char.substr(0, 1);
+    if (!char.is_alphanumeric())
+        return -1;
+    char = char.lower();
+    if (char == "a")
+        return KEY_A;
+    if (char == "b")
+        return KEY_B;
+    if (char == "c")
+        return KEY_C;
+    if (char == "d")
+        return KEY_D;
+    if (char == "e")
+        return KEY_E;
+    if (char == "f")
+        return KEY_F;
+    if (char == "g")
+        return KEY_G;
+    if (char == "h")
+        return KEY_H;
+    if (char == "i")
+        return KEY_I;
+    if (char == "j")
+        return KEY_J;
+    if (char == "k")
+        return KEY_K;
+    if (char == "l")
+        return KEY_L;
+    if (char == "m")
+        return KEY_M;
+    if (char == "n")
+        return KEY_N;
+    if (char == "o")
+        return KEY_O;
+    if (char == "p")
+        return KEY_P;
+    if (char == "q")
+        return KEY_Q;
+    if (char == "r")
+        return KEY_R;
+    if (char == "s")
+        return KEY_S;
+    if (char == "t")
+        return KEY_T;
+    if (char == "u")
+        return KEY_U;
+    if (char == "v")
+        return KEY_V;
+    if (char == "w")
+        return KEY_W;
+    if (char == "x")
+        return KEY_X;
+    if (char == "y")
+        return KEY_Y;
+    if (char == "z")
+        return KEY_Z;
+    if (char == "0")
+        return KEY_0;
+    if (char == "1")
+        return KEY_1;
+    if (char == "2")
+        return KEY_2;
+    if (char == "3")
+        return KEY_3;
+    if (char == "4")
+        return KEY_4;
+    if (char == "5")
+        return KEY_5;
+    if (char == "6")
+        return KEY_6;
+    if (char == "7")
+        return KEY_7;
+    if (char == "8")
+        return KEY_8;
+    if (char == "9")
+        return KEY_9;
+    return -1;
+}

@@ -1,0 +1,823 @@
+// stubs.nvgt - Funções temporárias/stub para compilação
+// NOTA: Este arquivo foi limpo em 24/01/2026
+// Funções duplicadas foram removidas pois já existem implementações reais
+// Mantidas apenas funções que AINDA NÃO foram implementadas em outros arquivos
+
+// ==================== FUNÇÕES DE UPTIME (Únicas aqui) ====================
+// Funções de sistema temporal (uptime do servidor)
+// Baseado no timer global server_uptime (server.nvgt:99)
+int ups() { return int(server_uptime.elapsed / 1000); }  // Segundos
+int upm() { return ups() / 60; }                         // Minutos
+int uph() { return upm() / 60; }                         // Horas
+int upd() { return uph() / 24; }                         // Dias
+int upw() { return upd() / 7; }                          // Semanas
+
+// ==================== FUNÇÕES DE OBJETOS (Únicas aqui) ====================
+// Classe para objetos placeholder
+class obj_placeholder {
+    string map;
+    bool obtainable = true;
+    bool delete = false;
+}
+obj_placeholder@[] objs_placeholder;
+
+// Função de evento de mensagem
+string get_event_message() {
+    return "";
+}
+
+// Timer para objetos
+timer tmina2;
+
+// Funções de update para objetos magnéticos
+void update() {
+    omloop();
+}
+
+void update(string map) {
+    omloop();
+}
+
+void update2() {
+    omloop();
+}
+
+void update2(string map) {
+    omloop();
+}
+
+// ==================== FUNÇÕES DE REDE (Únicas aqui) ====================
+// Função de loop de rede para objetos
+void netloop() {
+    // Wrapper legado: mantém compatibilidade com módulos antigos.
+    network_loop();
+}
+
+// send_unreliable wrapper (NVGT pode usar apenas reliable)
+void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
+    send_reliable_text(peer_id, packet, channel);
+}
+
+// ==================== FUNÇÕES ADMINISTRATIVAS (Únicas aqui) ====================
+// Array para mensagens administrativas
+string[] msgadm_array;
+
+// Função de mensagem administrativa
+void msgadm(string message) {
+    msgadm_array.push_back(message);
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].admin_status) {
+            send_reliable_text(players[i].peer_id, "msg [ADM] " + message);
+        }
+    }
+}
+
+// Função de administração
+void eadm(string admin_name, string message, int level) {
+    debug_log("EADM: [" + admin_name + "] " + message);
+}
+
+// Função de log geral (sobrecarga)
+void log(string category, string message) {
+    debug_log(category + ": " + message);
+}
+
+// ==================== FUNÇÕES DE XP (Wrappers para string -> int) ====================
+// NOTA: A implementação principal está em systems_advanced.nvgt (ganhaxp com int)
+// Estas são apenas wrappers para chamadas com nome de jogador (string)
+void ganhaxp(string player_name, int exp_amount, int gold_amount) {
+    int index = get_player_index_from(player_name);
+    if(index >= 0) ganhaxp(index, exp_amount, gold_amount);
+}
+
+void ganhaxp(string player_name, int exp_amount) {
+    ganhaxp(player_name, exp_amount, 0);
+}
+
+// XP dobrado
+void apply_doublexp(string player_name, int amount) {
+    int index = get_player_index_from(player_name);
+    if(index < 0) return;
+    players[index].exp += amount * 2;
+    players[index].xp += amount * 2;
+    check_level_up(index);
+    send_reliable_text(players[index].peer_id,
+        "msg2 Você ganhou +" + (amount * 2) + " XP (Dobrado)!", 0);
+    debug_log("DOUBLEXP: " + player_name + " ganhou " + (amount * 2) + " XP");
+}
+
+// ==================== FUNÇÕES DE CRÉDITOS/MOEDAS (Únicas aqui) ====================
+// ge() - "give emeralds/credits" - dar créditos ao jogador
+void ge(string playername, double amount) {
+    int index = get_player_index_from(playername);
+    if (index > -1) {
+        players[index].creditos += amount;
+        send_reliable_text(players[index].peer_id, "msg2 Você recebeu " + amount + " créditos!", 0);
+        debug_log("GE: " + playername + " recebeu " + amount + " créditos");
+    }
+}
+
+// gc() - "give coins/gold" - dar moedas/gold ao jogador
+void gc(string playername, double amount) {
+    int index = get_player_index_from(playername);
+    if (index > -1) {
+        players[index].inv_add_item("coins", int(amount));
+        send_reliable_text(players[index].peer_id, "msg2 Você recebeu " + amount + " moedas!", 0);
+        debug_log("GC: " + playername + " recebeu " + amount + " moedas");
+    }
+}
+
+// save_transfer() - salvar transferência de itens/moeda
+void save_transfer(string origin, string destination, string itemname, string info, double amount) {
+    debug_log("Transfer: " + origin + " -> " + destination + " | " + itemname + " | " + info + " | Amount: " + amount);
+}
+
+// ==================== FUNÇÕES DE NPC (Únicas aqui) ====================
+void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
+void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
+void move(int npc_index, int direction) {}
+bool exists_player_in_my_map(int npc_index) {
+    // Compatibilidade BGT->NVGT:
+    // em NVGT os NPCs ficam dentro de cada mapa (server_maps[i].npcs),
+    // não em um array global `npcs`.
+    if(npc_index < 0) return false;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            return exists_player_in_my_map(server_maps[m].name);
+        }
+        flat_index += npc_count;
+    }
+
+    return false;
+}
+int select_player_to_attack(int npc_index) {
+    if(npc_index < 0) return -1;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            if(server_maps[m].mapplayers.length() == 0) return -1;
+            int pick = random(0, server_maps[m].mapplayers.length() - 1);
+            int player_index = server_maps[m].mapplayers[pick];
+            if(player_index < 0 || player_index >= int(players.length())) return -1;
+            return player_index;
+        }
+        flat_index += npc_count;
+    }
+    return -1;
+}
+
+int change_player(int npc_index, int exclude = -1) {
+    if(npc_index < 0) return -1;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            for(uint i = 0; i < server_maps[m].mapplayers.length(); i++) {
+                int candidate = server_maps[m].mapplayers[i];
+                if(candidate == exclude) continue;
+                if(candidate < 0 || candidate >= int(players.length())) continue;
+                if(players[candidate].health <= 0 || players[candidate].afk || players[candidate].pacifico == 1 || players[candidate].newbie) continue;
+                return candidate;
+            }
+            return -1;
+        }
+        flat_index += npc_count;
+    }
+    return -1;
+}
+
+void change_player(int npc_index) {
+    change_player(npc_index, -1);
+}
+
+bool exists_player_in_my_map(string map_name) {
+    if(map_name == "") return false;
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map != map_name) continue;
+        if(players[i].afk) continue;
+        if(players[i].pacifico == 1) continue;
+        if(players[i].newbie) continue;
+        if(players[i].health <= 0) continue;
+        return true;
+    }
+    return false;
+}
+
+// ==================== FUNÇÕES MATEMÁTICAS (Únicas aqui) ====================
+// Função de arredondamento
+double round(double value) {
+    return double(int(value + 0.5));
+}
+
+// Função de split customizada
+string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
+    string[] result;
+
+    if(delimiter == "") {
+        result.insert_last(str);
+        return result;
+    }
+
+    if(max_parts <= 0) {
+        return str.split(delimiter);
+    }
+
+    int start = 0;
+    int pieces = 0;
+
+    while(pieces < max_parts - 1) {
+        int pos = str.find(delimiter, start);
+        if(pos < 0) break;
+
+        result.insert_last(str.substr(start, pos - start));
+        start = pos + delimiter.length();
+        pieces++;
+    }
+
+    result.insert_last(str.substr(start));
+    return result;
+}
+
+// ==================== FUNÇÕES DE STRING (Únicas aqui) ====================
+// Função trim - remover espaços em branco do início e fim
+string trim(string str) {
+    if(str.length() == 0) return "";
+
+    uint start = 0;
+    while(start < str.length() && (str[start] == ' ' || str[start] == '\t' || str[start] == '\r' || str[start] == '\n')) {
+        start++;
+    }
+
+    if(start == str.length()) return "";
+
+    uint end = str.length() - 1;
+    while(end > start && (str[end] == ' ' || str[end] == '\t' || str[end] == '\r' || str[end] == '\n')) {
+        end--;
+    }
+
+    return str.substr(start, (end - start) + 1);
+}
+
+// ==================== FUNÇÕES DE BOMBA (Únicas aqui) ====================
+// Calcular distância de uma bomba até um jogador
+int get_bomba_distance(maxbomba@ bomb, player@ p) {
+    if(bomb.map != p.map) return -1;
+    int dx = abs(bomb.x - p.x);
+    int dy = abs(bomb.y - p.y);
+    return int(sqrt(double(dx*dx + dy*dy)));
+}
+
+// ==================== FUNÇÕES DE INVENTÁRIO (Únicas aqui) ====================
+// Remover item do inventário do jogador
+bool item_take(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    int current_quantity = players[player_index].inv_item_number(item_name);
+    if(current_quantity < quantity) {
+        debug_log("ITEM_TAKE FALHOU: " + players[player_index].charname + " não tem " + quantity + "x " + item_name + " (tem apenas " + current_quantity + ")");
+        return false;
+    }
+
+    players[player_index].inv_remove_item(item_name, quantity);
+    debug_log("ITEM_TAKE: " + players[player_index].charname + " removeu " + quantity + "x " + item_name);
+    return true;
+}
+
+// Dar item ao jogador
+bool item_give(int player_index, string item_name, int quantity) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+
+    players[player_index].inv_add_item(item_name, quantity);
+    debug_log("ITEM_GIVE: " + players[player_index].charname + " recebeu " + quantity + "x " + item_name);
+    return true;
+}
+
+// ==================== FUNÇÕES DE DESCRIÇÕES (Únicas aqui) ====================
+dictionary location_descriptions;
+dictionary item_descriptions;
+
+void init_descriptions() {
+    item_descriptions.set("soco", "Seus punhos. Dano básico corpo a corpo.");
+    item_descriptions.set("pistola", "Arma de fogo leve. Alcance médio, dano moderado.");
+    item_descriptions.set("m4a1", "Rifle de assalto militar. Alta cadência de tiro.");
+    item_descriptions.set("galil", "Rifle de assalto. Boa precisão e alcance.");
+    item_descriptions.set("mp7", "Submetralhadora compacta. Alta taxa de disparo.");
+    item_descriptions.set("bazuca", "Lançador de mísseis. Dano em área devastador.");
+    item_descriptions.set("espada", "Arma branca corpo a corpo. Dano elevado.");
+    item_descriptions.set("escudo", "Escudo de proteção. Reduz dano recebido.");
+    item_descriptions.set("coins", "Moeda do servidor. Use para comprar itens.");
+    item_descriptions.set("reais", "Moeda alternativa. Valor comercial.");
+    item_descriptions.set("colete_aprova_de_balas", "Colete balístico militar. Proteção: 40%");
+    item_descriptions.set("colete_militar", "Colete tático. Proteção: 35%");
+    item_descriptions.set("capacete_policia", "Capacete policial. Proteção de cabeça: 15%");
+    item_descriptions.set("coturno_militar", "Botas militares reforçadas. Proteção: 20%");
+    item_descriptions.set("kit_medico", "Kit de primeiros socorros. Restaura saúde.");
+    item_descriptions.set("comida", "Alimento básico. Restaura fome.");
+    item_descriptions.set("agua", "Água potável. Restaura sede.");
+    item_descriptions.set("ferro", "Barra de ferro. Material de construção.");
+    item_descriptions.set("madeira", "Tábua de madeira. Material básico.");
+    item_descriptions.set("ouro", "Lingote de ouro. Material valioso.");
+    debug_log("Sistema de descrições inicializado com " + item_descriptions.get_size() + " itens");
+}
+
+string getdesc(string map, int x, int y) {
+    string key = map + "_" + x + "_" + y;
+    string desc = "";
+    if(location_descriptions.get(key, desc)) {
+        return desc;
+    }
+    return "Localização: " + map + " (" + x + ", " + y + ")";
+}
+
+string getdesc(string item_name) {
+    string desc = "";
+    if(item_descriptions.get(item_name, desc)) {
+        return desc;
+    }
+    return "Item: " + item_name;
+}
+
+// ==================== FUNÇÕES DE MODERADOR (Únicas aqui) ====================
+bool is_mod(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) {
+        return false;
+    }
+    return players[player_index].moderador;
+}
+
+// ==================== CLASSES AUXILIARES (Únicas aqui) ====================
+// Classe para zonas de jogo desabilitado
+class game_disabled {
+    int min_x;
+    int max_x;
+    int min_y;
+    int max_y;
+
+    game_disabled(int minx, int maxx, int miny, int maxy) {
+        this.min_x = minx;
+        this.max_x = maxx;
+        this.min_y = miny;
+        this.max_y = maxy;
+    }
+}
+
+class game_disabled_data {
+    bool disabled = false;
+    string reason = "";
+}
+game_disabled_data global_game_disabled;
+
+// Funções de configuração do servidor
+class sconfigs_placeholder {
+    int max_players = 100;
+    string server_name = "EVM Server";
+}
+sconfigs_placeholder sconfigs;
+
+// ==================== VARIÁVEIS GLOBAIS (Únicas aqui) ====================
+timer savetimer;
+int enable_double_emeralds = 0;
+int MAX_PLAYERS = 100;
+
+// Função de mudança de nome (placeholder)
+void changename(int player_index, string new_name) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+
+    player@ p = players[player_index];
+    if(p is null) return;
+
+    string old_name = p.charname;
+    string target_name = new_name.trim_whitespace();
+
+    // Limpar flags para evitar loop infinito no playerloop
+    p.needs_to_change = false;
+    p.validated_name = "";
+
+    if(old_name == "" || target_name == "") {
+        send_reliable_text(p.peer_id, "msg2 Nao foi possivel alterar nome: dados invalidos.", 0);
+        return;
+    }
+
+    if(target_name == old_name) {
+        send_reliable_text(p.peer_id, "msg2 Seu nome ja estava atualizado.", 0);
+        return;
+    }
+
+    if(!is_valid_username(target_name)) {
+        send_reliable_text(p.peer_id, "msg2 Nome invalido. Use apenas letras/numeros (3 a 20).", 0);
+        return;
+    }
+
+    int conflict_online = get_player_index_from(target_name);
+    if(conflict_online >= 0 && conflict_online != player_index) {
+        send_reliable_text(p.peer_id, "msg2 Ja existe um jogador online com esse nome.", 0);
+        return;
+    }
+
+    if(player_exists_in_database(target_name)) {
+        send_reliable_text(p.peer_id, "msg2 Esse nome ja esta em uso.", 0);
+        return;
+    }
+
+    // Atualizar nome principal na tabela players
+    {
+        string q = "UPDATE players SET username = ? WHERE username = ?;";
+        sqlite3statement@ stmt = bancoJogo.prepare(q);
+        if(stmt is null) {
+            send_reliable_text(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+            debug_log("CHANGENAME: falha prepare players update: " + bancoJogo.get_last_error_text());
+            return;
+        }
+        stmt.bind_text(1, target_name);
+        stmt.bind_text(2, old_name);
+        if(stmt.step() != SQLITE_DONE) {
+            send_reliable_text(p.peer_id, "msg2 Erro ao atualizar nome no banco.", 0);
+            debug_log("CHANGENAME: falha step players update: " + bancoJogo.get_last_error_text());
+            return;
+        }
+    }
+
+    // Atualizacoes auxiliares em tabelas relacionadas
+    {
+        sqlite3statement@ stmt_roles = bancoJogo.prepare("UPDATE player_roles SET username = ? WHERE username = ?;");
+        if(stmt_roles !is null) {
+            stmt_roles.bind_text(1, target_name);
+            stmt_roles.bind_text(2, old_name);
+            stmt_roles.step();
+        }
+
+        sqlite3statement@ stmt_sessions = bancoJogo.prepare("UPDATE player_sessions SET username = ? WHERE username = ?;");
+        if(stmt_sessions !is null) {
+            stmt_sessions.bind_text(1, target_name);
+            stmt_sessions.bind_text(2, old_name);
+            stmt_sessions.step();
+        }
+
+        sqlite3statement@ stmt_bans1 = bancoJogo.prepare("UPDATE server_bans SET banned_username = ? WHERE banned_username = ?;");
+        if(stmt_bans1 !is null) {
+            stmt_bans1.bind_text(1, target_name);
+            stmt_bans1.bind_text(2, old_name);
+            stmt_bans1.step();
+        }
+
+        sqlite3statement@ stmt_bans2 = bancoJogo.prepare("UPDATE server_bans SET admin_username = ? WHERE admin_username = ?;");
+        if(stmt_bans2 !is null) {
+            stmt_bans2.bind_text(1, target_name);
+            stmt_bans2.bind_text(2, old_name);
+            stmt_bans2.step();
+        }
+    }
+
+    // Atualizar objeto do jogador em memoria
+    p.charname = target_name;
+    p.name = target_name;
+    set_peer_name(p.peer_id, target_name);
+
+    // Atualizar referencias em outros jogadores online (respostas, observacao, equipe, bounty)
+    for(uint oi = 0; oi < players.length(); oi++) {
+        if(players[oi] is null) continue;
+
+        if(players[oi].replyname == old_name) {
+            players[oi].replyname = target_name;
+        }
+        if(players[oi].w_name == old_name) {
+            players[oi].w_name = target_name;
+        }
+        if(players[oi].bounty_owner == old_name) {
+            players[oi].bounty_owner = target_name;
+        }
+
+        for(uint ni = 0; ni < players[oi].nomesequipe.length(); ni++) {
+            if(players[oi].nomesequipe[ni] == old_name) {
+                players[oi].nomesequipe[ni] = target_name;
+            }
+        }
+        for(uint wi = 0; wi < players[oi].watcher_list.length(); wi++) {
+            if(players[oi].watcher_list[wi] == old_name) {
+                players[oi].watcher_list[wi] = target_name;
+            }
+        }
+    }
+
+    // Atualizar guilds ativas + indice player_guilds
+    for(uint gi = 0; gi < active_guilds.length(); gi++) {
+        if(active_guilds[gi] is null) continue;
+
+        if(active_guilds[gi].leader == old_name) {
+            active_guilds[gi].leader = target_name;
+        }
+
+        for(uint i = 0; i < active_guilds[gi].officers.length(); i++) {
+            if(active_guilds[gi].officers[i] == old_name) {
+                active_guilds[gi].officers[i] = target_name;
+            }
+        }
+        for(uint i = 0; i < active_guilds[gi].members.length(); i++) {
+            if(active_guilds[gi].members[i] == old_name) {
+                active_guilds[gi].members[i] = target_name;
+            }
+        }
+
+        if(active_guilds[gi].pending_invites.exists(old_name)) {
+            string invite_ts = "";
+            active_guilds[gi].pending_invites.get(old_name, invite_ts);
+            active_guilds[gi].pending_invites.set(target_name, invite_ts);
+            active_guilds[gi].pending_invites.delete(old_name);
+        }
+    }
+    if(player_guilds.exists(old_name)) {
+        string gname = string(player_guilds[old_name]);
+        player_guilds.set(target_name, gname);
+        player_guilds.delete(old_name);
+    }
+    save_guilds();
+
+    // Atualizar parties ativas
+    for(uint pi = 0; pi < active_parties.length(); pi++) {
+        if(active_parties[pi] is null) continue;
+
+        if(active_parties[pi].leader == old_name) {
+            active_parties[pi].leader = target_name;
+        }
+        for(uint i = 0; i < active_parties[pi].members.length(); i++) {
+            if(active_parties[pi].members[i] == old_name) {
+                active_parties[pi].members[i] = target_name;
+            }
+        }
+        if(active_parties[pi].pending_invites.exists(old_name)) {
+            string invite_ts = "";
+            active_parties[pi].pending_invites.get(old_name, invite_ts);
+            active_parties[pi].pending_invites.set(target_name, invite_ts);
+            active_parties[pi].pending_invites.delete(old_name);
+        }
+    }
+
+    // Atualizar listas de amigos carregadas em memoria
+    if(player_friends.exists(old_name)) {
+        friend_list@ own_fl = cast<friend_list@>(player_friends[old_name]);
+        if(own_fl !is null) {
+            own_fl.owner = target_name;
+            @player_friends[target_name] = @own_fl;
+            player_friends.delete(old_name);
+        }
+    }
+    string[] friend_keys = player_friends.get_keys();
+    for(uint i = 0; i < friend_keys.length(); i++) {
+        friend_list@ fl = cast<friend_list@>(player_friends[friend_keys[i]]);
+        if(fl is null) continue;
+        bool changed = false;
+        for(uint f = 0; f < fl.friends.length(); f++) {
+            if(fl.friends[f] == old_name) {
+                fl.friends[f] = target_name;
+                changed = true;
+            }
+        }
+        if(changed) fl.save();
+    }
+    if(player_friends.exists(target_name)) {
+        friend_list@ own_fl2 = cast<friend_list@>(player_friends[target_name]);
+        if(own_fl2 !is null) own_fl2.save();
+    }
+
+    // Atualizar mailboxes carregadas em memoria
+    if(player_mailboxes.exists(old_name)) {
+        mailbox@ own_mb = cast<mailbox@>(player_mailboxes[old_name]);
+        if(own_mb !is null) {
+            own_mb.owner = target_name;
+            @player_mailboxes[target_name] = @own_mb;
+            player_mailboxes.delete(old_name);
+        }
+    }
+    string[] mb_keys = player_mailboxes.get_keys();
+    for(uint i = 0; i < mb_keys.length(); i++) {
+        mailbox@ mb = cast<mailbox@>(player_mailboxes[mb_keys[i]]);
+        if(mb is null) continue;
+        bool changed = false;
+        for(uint m = 0; m < mb.messages.length(); m++) {
+            if(mb.messages[m].sender == old_name) {
+                mb.messages[m].sender = target_name;
+                changed = true;
+            }
+            if(mb.messages[m].recipient == old_name) {
+                mb.messages[m].recipient = target_name;
+                changed = true;
+            }
+        }
+        if(changed) mb.save();
+    }
+    if(player_mailboxes.exists(target_name)) {
+        mailbox@ own_mb2 = cast<mailbox@>(player_mailboxes[target_name]);
+        if(own_mb2 !is null) own_mb2.save();
+    }
+
+    // Migrar pasta de dados legados do jogador
+    string old_dir = "players/" + old_name;
+    string new_dir = "players/" + target_name;
+    if(directory_exists(old_dir) && !directory_exists(new_dir)) {
+        debug_log("CHANGENAME: migracao automatica de pasta legada nao suportada por este runtime (" + old_dir + " -> " + new_dir + ").");
+    }
+
+    // Persistir estado atual completo do jogador com o novo username
+    save_player_to_database(p);
+
+    send_reliable_text(p.peer_id, "msg2 Nome alterado com sucesso para " + target_name + ".", 0);
+    debug_log("CHANGENAME: " + old_name + " -> " + target_name);
+}
+
+// Função de informações do servidor
+bool cmd_server_info(player@ player, string[] args) {
+    string info = "=== SERVIDOR EVM ===\\r\\n";
+    info += "Versão: NVGT Alpha\\r\\n";
+    info += "Jogadores Online: " + connected_count + "/" + MAX_PLAYERS + "\\r\\n";
+    info += "Uptime: " + (server_uptime.elapsed / 1000) + " segundos\\r\\n";
+    send_reliable_text(player.peer_id, "say " + info);
+    return true;
+}
+
+// Função de helper para propriedade status
+void player_add_status_property() {}
+
+// Função de spawn de fogo do jogador (versão alternativa)
+void spawn_playerfire(int x, int y, string map_name, string owner = "") {
+    if(map_name == "") return;
+
+    string fire_owner = owner.trim_whitespace();
+    if(fire_owner == "") fire_owner = "ambiente";
+
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i] is null) continue;
+        if(!players[i].is_logged_in) continue;
+        if(players[i].map != map_name) continue;
+        if(players[i].health <= 0) continue;
+        if(players[i].x != x || players[i].y != y) continue;
+        if(owner != "" && players[i].charname == owner) continue;
+
+        players[i].spawn_playerfire(fire_owner);
+    }
+}
+
+// ==================== FUNÇÕES DE HISTORY (Log e Estatísticas) ====================
+// Estas funções complementam ou substituem history.nvgt quando não incluído
+
+// Estatísticas em memória
+int stats_total_logins = 0;
+int stats_total_registrations = 0;
+int stats_total_combats = 0;
+int stats_items_spawned = 0;
+int stats_items_collected = 0;
+int stats_messages_sent = 0;
+int stats_database_queries = 0;
+int stats_backup_count = 0;
+const int ACTION_HISTORY_MAX = 500;
+string[] action_history_lines;
+string[] action_history_players;
+string[] action_history_types;
+
+void log_action(string player_name, string action_type, string action_details,
+                string map_name = "", int x = 0, int y = 0, int z = 0,
+                string additional_data = "", string affected_player = "", string item_name = "") {
+    // Criar mensagem de log formatada
+    string log_msg = "ACTION: [" + player_name + "] " + action_type + " - " + action_details;
+    if(map_name != "") {
+        log_msg += " @ " + map_name + " (" + x + "," + y + "," + z + ")";
+    }
+    if(affected_player != "") {
+        log_msg += " [Target: " + affected_player + "]";
+    }
+    if(item_name != "") {
+        log_msg += " [Item: " + item_name + "]";
+    }
+    if(additional_data != "") {
+        log_msg += " [Extra: " + additional_data + "]";
+    }
+    debug_log(log_msg);
+    action_history_lines.insert_last(log_msg);
+    action_history_players.insert_last(player_name);
+    action_history_types.insert_last(action_type);
+    while(action_history_lines.length() > ACTION_HISTORY_MAX) {
+        action_history_lines.remove_at(0);
+        action_history_players.remove_at(0);
+        action_history_types.remove_at(0);
+    }
+}
+
+void update_statistics(string stat_type, int increment = 1) {
+    if(stat_type == "login") {
+        stats_total_logins += increment;
+    }
+    else if(stat_type == "registration") {
+        stats_total_registrations += increment;
+    }
+    else if(stat_type == "combat") {
+        stats_total_combats += increment;
+    }
+    else if(stat_type == "item_spawn") {
+        stats_items_spawned += increment;
+    }
+    else if(stat_type == "item_collect") {
+        stats_items_collected += increment;
+    }
+    else if(stat_type == "message") {
+        stats_messages_sent += increment;
+    }
+    else if(stat_type == "database_query") {
+        stats_database_queries += increment;
+    }
+    else if(stat_type == "backup") {
+        stats_backup_count += increment;
+    }
+    debug_log("STATS: " + stat_type + " +" + increment);
+}
+
+string get_current_statistics_report() {
+    string report = "=== ESTATÍSTICAS DO SERVIDOR ===\n";
+    report += "Logins: " + stats_total_logins + "\n";
+    report += "Registros: " + stats_total_registrations + "\n";
+    report += "Combates: " + stats_total_combats + "\n";
+    report += "Itens spawnados: " + stats_items_spawned + "\n";
+    report += "Itens coletados: " + stats_items_collected + "\n";
+    report += "Mensagens: " + stats_messages_sent + "\n";
+    report += "Queries DB: " + stats_database_queries + "\n";
+    report += "Backups: " + stats_backup_count + "\n";
+    return report;
+}
+
+string[] get_recent_actions(int limit = 50, string action_type = "", string player_name = "") {
+    string[] results;
+    if(limit <= 0) limit = 1;
+    string type_filter = action_type.trim_whitespace();
+    string player_filter = player_name.trim_whitespace();
+
+    for(int i = int(action_history_lines.length()) - 1; i >= 0; i--) {
+        if(player_filter != "" && action_history_players[i] != player_filter) continue;
+        if(type_filter != "" && action_history_types[i] != type_filter) continue;
+        results.insert_last(action_history_lines[i]);
+        if(int(results.length()) >= limit) break;
+    }
+
+    if(results.length() == 0) {
+        results.insert_last("Nenhuma acao registrada com os filtros informados.");
+    }
+    return results;
+}
+
+// ==================== FUNÇÕES DE EQUIPE E SELEÇÃO ====================
+// Estas funções são usadas por NPCs e sistemas de combate
+
+string selecionar_jogador(string mapa) {
+    string[] nomes;
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map == mapa && !players[i].afk && players[i].pacifico != 1) {
+            nomes.insert_last(players[i].charname);
+        }
+    }
+    if(nomes.length() == 0) return "";
+    return nomes[random(0, nomes.length() - 1)];
+}
+
+bool emequipe(string nome, string alvo) {
+    int n = get_player_index_from(nome);
+    int nb = get_player_index_from(alvo);
+    if(n < 0 || nb < 0) return true;
+    
+    if(players[n].nomesequipe.find(alvo) > -1 || 
+       players[nb].afk == true || 
+       players[nb].pacifico == 1 || 
+       get_safezone_at(players[nb].x, players[nb].y, players[nb].map) == true) {
+        return true;
+    }
+    return false;
+}
+
+// ==================== SISTEMA DE ARENA (Placeholder) ====================
+class arena_placeholder {
+    int counter_deaths = 0;
+    
+    void remove_player_from(int player_index) {
+        debug_log("ARENA: Chamada legada remove_player_from");
+    }
+    
+    void reset() {
+        counter_deaths = 0;
+        debug_log("ARENA: Arena resetada (placeholder)");
+    }
+}
+arena_placeholder arena_global;
+
+// ==================== SISTEMA DE ROUPAS (Placeholder) ====================
+class clothes_data {
+    string name = "";
+    int protection = 0;
+    bool enable_degradation = false;
+    int degradation = 0;
+}
+clothes_data@[] clothes;
+
+// ==================== FIM DO ARQUIVO ====================
+

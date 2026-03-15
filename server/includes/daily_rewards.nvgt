@@ -1,0 +1,433 @@
+// daily_rewards.nvgt - Sistema de Recompensas Diárias
+// Conversão: Novo sistema para NVGT
+// Fase 5: Conteúdo Avançado
+
+// Tracker de recompensas diárias do jogador
+class daily_reward_tracker {
+	string player_name;
+	int current_streak;
+	int total_days;
+	timer last_claim;
+	bool claimed_today;
+	bool spin_available;
+	bool box_available;
+	timer last_reset;
+	
+	daily_reward_tracker(string pname) {
+		this.player_name = pname;
+		this.current_streak = 0;
+		this.total_days = 0;
+		this.claimed_today = false;
+		this.spin_available = true;
+		this.box_available = true;
+		last_claim.restart();
+		last_reset.restart();
+	}
+	
+	bool can_claim() {
+		// Verificar se já passou 24 horas
+		if(last_claim.elapsed >= 86400000) {  // 24 horas em ms
+			return true;
+		}
+		return !claimed_today;
+	}
+	
+	void claim_reward() {
+		claimed_today = true;
+		current_streak++;
+		total_days++;
+		last_claim.restart();
+	}
+	
+	void reset_streak() {
+		current_streak = 0;
+	}
+	
+	void reset_daily() {
+		claimed_today = false;
+		spin_available = true;
+		box_available = true;
+		last_reset.restart();
+	}
+	
+	dictionary get_reward_for_streak() {
+		dictionary reward;
+		
+		if(current_streak == 1) {
+			reward.set("gold", "100");
+			reward.set("xp", "50");
+		} else if(current_streak == 3) {
+			reward.set("gold", "300");
+			reward.set("xp", "150");
+			reward.set("poção de vida", "1");
+		} else if(current_streak == 7) {
+			reward.set("gold", "1000");
+			reward.set("xp", "500");
+			reward.set("poção de vida", "3");
+			reward.set("poção de mana", "3");
+		} else if(current_streak == 14) {
+			reward.set("gold", "2500");
+			reward.set("xp", "1000");
+			reward.set("espada de aço", "1");
+		} else if(current_streak == 30) {
+			reward.set("gold", "10000");
+			reward.set("xp", "5000");
+			reward.set("item lendário", "1");
+		} else {
+			// Recompensa padrão
+			int gold_base = 100 + (current_streak * 10);
+			int xp_base = 50 + (current_streak * 5);
+			reward.set("gold", "" + gold_base);
+			reward.set("xp", "" + xp_base);
+		}
+		
+		return reward;
+	}
+	
+	void save() {
+		string path = "players/" + player_name + "/daily.dat";
+		
+		file f;
+		if(!f.open(path, "wb")) {
+			debug_log("DAILY: Erro ao salvar daily tracker de " + player_name);
+			return;
+		}
+		
+		f.write("" + current_streak + "\n");
+		f.write("" + total_days + "\n");
+		f.write("" + (claimed_today ? "1" : "0") + "\n");
+		f.write("" + (spin_available ? "1" : "0") + "\n");
+		f.write("" + (box_available ? "1" : "0") + "\n");
+		f.write("" + time_stamp() + "\n");
+		
+		f.close();
+		debug_log("DAILY: Tracker de " + player_name + " salvo");
+	}
+	
+	void load() {
+		string path = "players/" + player_name + "/daily.dat";
+		
+		file f;
+		if(!f.open(path, "rb")) {
+			return;  // Arquivo não existe
+		}
+		
+		string content = f.read();
+		f.close();
+		
+		string[] lines = content.split("\n");
+		if(lines.length() < 6) return;
+		
+		current_streak = parse_int(lines[0]);
+		total_days = parse_int(lines[1]);
+		claimed_today = (parse_int(lines[2]) == 1);
+		spin_available = (parse_int(lines[3]) == 1);
+		box_available = (parse_int(lines[4]) == 1);
+		
+		// Verificar se precisa resetar (passou 1 dia)
+		uint64 last_time = parse_uint(lines[5]);
+		uint64 now = time_stamp();
+		
+		// Se passou mais de 24h desde o último claim e não foi reclamado hoje
+		if((now - last_time) >= 86400 && !claimed_today) {
+			// Verificar se passou mais de 48h (quebrou o streak)
+			if((now - last_time) >= 172800) {
+				reset_streak();
+			}
+			reset_daily();
+		}
+		
+		debug_log("DAILY: Tracker de " + player_name + " carregado (streak: " + current_streak + ")");
+	}
+}
+
+// Dictionary de trackers diários
+dictionary player_daily_trackers;
+
+// Obter tracker do jogador
+daily_reward_tracker@ get_daily_tracker(string player_name) {
+	if(!player_daily_trackers.exists(player_name)) {
+		daily_reward_tracker dt(player_name);
+		dt.load();
+		player_daily_trackers.set(player_name, @dt);
+		return dt;
+	}
+	
+	return cast<daily_reward_tracker@>(player_daily_trackers[player_name]);
+}
+
+// Comando: Coletar recompensa diária
+void cmd_dailyreward(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	if(!dt.can_claim()) {
+		send_reliable(players[player_index].peer_id, "msg2 Você já coletou sua recompensa diária hoje!", 0);
+		
+		// Calcular tempo restante
+		uint64 time_left = 86400000 - dt.last_claim.elapsed;
+		int hours = int(time_left / 3600000);
+		int minutes = int((time_left % 3600000) / 60000);
+		
+		send_reliable(players[player_index].peer_id, "msg2 Próxima recompensa em: " + hours + "h " + minutes + "m", 0);
+		return;
+	}
+	
+	// Coletar recompensa
+	dictionary reward = dt.get_reward_for_streak();
+	dt.claim_reward();
+	dt.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 =============================", 0);
+	send_reliable(players[player_index].peer_id, "msg2 🎁 RECOMPENSA DIÁRIA 🎁", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Dia consecutivo: " + dt.current_streak, 0);
+	send_reliable(players[player_index].peer_id, "msg2 Total de dias: " + dt.total_days, 0);
+	send_reliable(players[player_index].peer_id, "msg2 --- Recompensas ---", 0);
+	
+	string[] reward_keys = reward.get_keys();
+	for(uint i = 0; i < reward_keys.length(); i++) {
+		int amount = int(reward[reward_keys[i]]);
+		
+		if(reward_keys[i] == "gold") {
+			players[player_index].gold += amount;
+			send_reliable(players[player_index].peer_id, "msg2 +" + amount + " Gold", 0);
+		} else if(reward_keys[i] == "xp") {
+			players[player_index].xp += amount;
+			send_reliable(players[player_index].peer_id, "msg2 +" + amount + " XP", 0);
+		} else {
+			// Item
+			if(players[player_index].inv.exists(reward_keys[i])) {
+				double current = 0;
+				players[player_index].inv.get(reward_keys[i], current);
+				players[player_index].inv.set(reward_keys[i], current + amount);
+			} else {
+				players[player_index].inv.set(reward_keys[i], amount);
+			}
+			send_reliable(players[player_index].peer_id, "msg2 +" + reward_keys[i] + " x" + amount, 0);
+		}	}
+	save_player_inventory_to_db(players[player_index]);
+	
+	send_reliable(players[player_index].peer_id, "msg2 =============================", 0);
+	
+	// Bônus de milestone
+	if(dt.current_streak == 7) {
+		send_reliable(players[player_index].peer_id, "msg2 🏆 BÔNUS DE 7 DIAS! 🏆", 0);
+	} else if(dt.current_streak == 30) {
+		send_reliable(players[player_index].peer_id, "msg2 🏆 BÔNUS DE 30 DIAS! 🏆", 0);
+	}
+		save_player_inventory_to_db(players[player_index]);
+	
+	debug_log("DAILY: " + players[player_index].charname + " coletou recompensa diária (streak: " + dt.current_streak + ")");
+}
+
+// Comando: Ver streak atual
+void cmd_dailystreak(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	send_reliable(players[player_index].peer_id, "msg2 === Streak de Login Diário ===", 0);
+	send_reliable(players[player_index].peer_id, "msg2 Dias consecutivos: " + dt.current_streak, 0);
+	send_reliable(players[player_index].peer_id, "msg2 Total de dias jogados: " + dt.total_days, 0);
+	
+	if(dt.claimed_today) {
+		send_reliable(players[player_index].peer_id, "msg2 Status: ✅ Coletado hoje", 0);
+	} else {
+		send_reliable(players[player_index].peer_id, "msg2 Status: Disponível!", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Use /dailyreward para coletar", 0);
+	}
+	
+	// Próximos milestones
+	send_reliable(players[player_index].peer_id, "msg2 --- Próximos Bônus ---", 0);
+	if(dt.current_streak < 3) {
+		send_reliable(players[player_index].peer_id, "msg2 Dia 3: 300 gold + poção", 0);
+	}
+	if(dt.current_streak < 7) {
+		send_reliable(players[player_index].peer_id, "msg2 Dia 7: 1000 gold + poções", 0);
+	}
+	if(dt.current_streak < 14) {
+		send_reliable(players[player_index].peer_id, "msg2 Dia 14: 2500 gold + espada de aço", 0);
+	}
+	if(dt.current_streak < 30) {
+		send_reliable(players[player_index].peer_id, "msg2 Dia 30: 10000 gold + item lendário!", 0);
+	}
+}
+
+// Comando: Roda da sorte
+void cmd_luckywheel(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	if(!dt.spin_available) {
+		send_reliable(players[player_index].peer_id, "msg2 Você já girou a roda da sorte hoje!", 0);
+		return;
+	}
+	
+	// Custo: 100 gold
+	int cost = 100;
+	if(players[player_index].gold < cost) {
+		send_reliable(players[player_index].peer_id, "msg2 A roda da sorte custa " + cost + " gold!", 0);
+		return;
+	}
+	
+	players[player_index].gold -= cost;
+	dt.spin_available = false;
+	dt.save();
+	
+	// Sortear recompensa
+	int roll = random(1, 100);
+	
+	send_reliable(players[player_index].peer_id, "msg2 🎰 GIRANDO A RODA DA SORTE... 🎰", 0);
+	
+	if(roll <= 5) {
+		// 5% - Jackpot!
+		int gold_prize = 5000;
+		players[player_index].gold += gold_prize;
+		send_reliable(players[player_index].peer_id, "msg2 🎉 JACKPOT! 🎉", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Você ganhou " + gold_prize + " gold!", 0);
+	} else if(roll <= 20) {
+		// 15% - Prêmio alto
+		int gold_prize = 1000;
+		players[player_index].gold += gold_prize;
+		send_reliable(players[player_index].peer_id, "msg2 Prêmio alto: " + gold_prize + " gold!", 0);
+	} else if(roll <= 50) {
+		// 30% - Prêmio médio
+		int gold_prize = 500;
+		players[player_index].gold += gold_prize;
+		send_reliable(players[player_index].peer_id, "msg2 Prêmio médio: " + gold_prize + " gold", 0);
+	} else if(roll <= 80) {
+		// 30% - Prêmio baixo
+		int gold_prize = 200;
+		players[player_index].gold += gold_prize;
+		send_reliable(players[player_index].peer_id, "msg2 Prêmio baixo: " + gold_prize + " gold", 0);
+	} else {
+		// 20% - Sem sorte
+		send_reliable(players[player_index].peer_id, "msg2 Que pena! Tente novamente amanhã!", 0);
+	}
+		save_player_inventory_to_db(players[player_index]);
+	
+	debug_log("DAILY: " + players[player_index].charname + " girou a roda da sorte (roll: " + roll + ")");
+}
+
+// Comando: Caixa misteriosa
+void cmd_mysterybox(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	if(!dt.box_available) {
+		send_reliable(players[player_index].peer_id, "msg2 Você já abriu sua caixa misteriosa hoje!", 0);
+		return;
+	}
+	
+	// Custo: 500 gold
+	int cost = 500;
+	if(players[player_index].gold < cost) {
+		send_reliable(players[player_index].peer_id, "msg2 A caixa misteriosa custa " + cost + " gold!", 0);
+		return;
+	}
+	
+	players[player_index].gold -= cost;
+	dt.box_available = false;
+	dt.save();
+	
+	send_reliable(players[player_index].peer_id, "msg2 📦 ABRINDO CAIXA MISTERIOSA... 📦", 0);
+	
+	// Sortear recompensa
+	int roll = random(1, 100);
+	
+	if(roll <= 1) {
+		// 1% - Item lendário
+		string item = "espada lendária";
+		players[player_index].inv.set(item, 1);
+		send_reliable(players[player_index].peer_id, "msg2 ⭐ LENDÁRIO! ⭐", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu: " + item + "!", 0);
+	} else if(roll <= 10) {
+		// 9% - Item épico
+		string item = "armadura épica";
+		players[player_index].inv.set(item, 1);
+		send_reliable(players[player_index].peer_id, "msg2 💜 ÉPICO! 💜", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu: " + item + "!", 0);
+	} else if(roll <= 35) {
+		// 25% - Item raro
+		string item = "elmo raro";
+		players[player_index].inv.set(item, 1);
+		send_reliable(players[player_index].peer_id, "msg2 💙 RARO! 💙", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu: " + item + "!", 0);
+	} else {
+		// 65% - Itens comuns múltiplos
+		int potion_count = random(3, 10);
+		if(players[player_index].inv.exists("poção de vida")) {
+			double current = 0;
+			players[player_index].inv.get("poção de vida", current);
+			players[player_index].inv.set("poção de vida", current + potion_count);
+		} else {
+			players[player_index].inv.set("poção de vida", potion_count);
+		}
+		send_reliable(players[player_index].peer_id, "msg2 Você recebeu: " + potion_count + " poções de vida", 0);
+	}
+		save_player_inventory_to_db(players[player_index]);
+	
+	debug_log("DAILY: " + players[player_index].charname + " abriu caixa misteriosa (roll: " + roll + ")");
+}
+
+// Loop de reset diário
+void daily_rewards_loop() {
+	// Verificar reset diário (00:00)
+	// Esta função pode ser chamada periodicamente para garantir resets
+	
+	string[] player_keys = player_daily_trackers.get_keys();
+	for(uint i = 0; i < player_keys.length(); i++) {
+		daily_reward_tracker@ dt = cast<daily_reward_tracker@>(player_daily_trackers[player_keys[i]]);
+		
+		// Se passou 24h desde o último reset, resetar
+		if(dt.last_reset.elapsed >= 86400000) {
+			dt.reset_daily();
+			dt.save();
+		}
+	}
+}
+
+// ============================================================================
+// ALIASES DE COMANDOS (para compatibilidade com server.nvgt)
+// ============================================================================
+
+// Alias: /daily - Status das recompensas diárias
+void cmd_daily_status(int player_index) {
+	cmd_dailystreak(player_index);
+}
+
+// Alias: /claimdaily - Coletar recompensa diária
+void cmd_claim_daily(int player_index) {
+	cmd_dailyreward(player_index);
+}
+
+// Alias: /spin - Girar roda da sorte
+void cmd_spin_wheel(int player_index) {
+	cmd_luckywheel(player_index);
+}
+
+// Alias: /box - Abrir caixa misteriosa
+void cmd_mystery_box(int player_index) {
+	cmd_mysterybox(player_index);
+}
+
+// ============================================================================
+// INTEGRAÇÃO: Verificar daily no login do jogador
+// ============================================================================
+
+void check_daily_on_login(int player_index) {
+	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
+	
+	// Verificar se precisa resetar
+	if(dt.last_reset.elapsed >= 86400000) {
+		// Verificar se quebrou o streak (passou mais de 48h)
+		if(dt.last_claim.elapsed >= 172800000) {
+			dt.reset_streak();
+			send_reliable(players[player_index].peer_id, "msg2 Seu streak de login foi reiniciado por inatividade!", 0);
+		}
+		dt.reset_daily();
+		dt.save();
+	}
+	
+	// Notificar sobre recompensa disponível
+	if(dt.can_claim()) {
+		send_reliable(players[player_index].peer_id, "msg2 🎁 Sua recompensa diária está disponível!", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Use /claimdaily ou /coletardiario para coletar.", 0);
+		send_reliable(players[player_index].peer_id, "msg2 Streak atual: " + dt.current_streak + " dia(s) consecutivo(s)", 0);
+	}
+}

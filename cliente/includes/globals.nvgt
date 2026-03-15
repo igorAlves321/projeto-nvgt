@@ -1,0 +1,830 @@
+﻿// Variáveis globais e utilitários para NVGT
+// Usando funcionalidades 100% nativas NVGT
+
+#include "audio.nvgt"
+#include "game_client.nvgt"               // ✅ Classe GameClient encapsulada (refatoração de rede)
+#include "../../docks/include/bgt_compat.nvgt"  // Funções de compatibilidade BGT (string_hash, etc)
+
+// ============================================================================
+// CLASSE DE CÂMERA DE EXPLORAÇÃO (Task 2.3)
+// ============================================================================
+// Declarada aqui para estar disponível antes de map.nvgt
+class exploration_camera {
+	int x = 0;
+	int y = 0;
+	bool active = false;
+}
+exploration_camera camera;
+
+// Função para acessar código ASCII de caracteres (conversa de ascii_to_character)
+int get_char_code(string text, int index) {
+	if(index < 0 || index >= int(text.length())) return 0;
+	// NVGT: usar substr para obter 1 char e converter para código ASCII
+	string char_str = text.substr(index, 1);
+	if(char_str.length() == 0) return 0;
+	// Loop para encontrar o código ASCII correspondente (0-255)
+	for(int i = 0; i < 256; i++) {
+		if(ascii_to_character(i) == char_str) {
+			return i;
+		}
+	}
+	return 0; // fallback se não encontrar
+}
+
+// Função para aparar espaços em branco
+string trim_string(const string &in text) {
+	string result = text;
+	while(result.length() > 0) {
+		uint8 ch = get_char_code(result, 0);
+		if(ch == 32 || ch == 9) {
+			result = result.substr(1);
+			continue;
+		}
+		break;
+	}
+	while(result.length() > 0) {
+		uint8 ch = get_char_code(result, result.length() - 1);
+		if(ch == 32 || ch == 9) {
+			result = result.substr(0, result.length() - 1);
+			continue;
+		}
+		break;
+	}
+	return result;
+}
+
+// Função para traduzir caracteres especiais em strings
+// Substitui um caractere por outro (ex: ";" por "\n")
+string translate_with_char(const string &in text, const string &in char_to_replace) {
+	string result = text;
+	// Substituir o caractere especial por nova linha
+	if(char_to_replace == ";") {
+		result = result.replace(";", "\n");
+	}
+	return result;
+}
+
+// Variáveis globais do jogo
+string un = "";          // nome do usuário
+string pw = "";          // senha do usuário (armazenamento local)
+string gender = "";      // gênero do jogador
+string nolhar = "";      // controle de olhar
+
+// Preferências e configurações persistentes
+string mainlang = "pt";
+string idiomaorigem = "es";
+string idiomachat = "pt";
+int tradutorativo = 0;
+int atu = 0;
+int ouvirmortes = 1;
+int rcontrol = 0;
+int voice = 1;
+double volumejogo = 0;
+int ttsrate = 0;
+string cmfinal = "";
+int avisadesconectou = 0;
+int ouvirhits = 1;
+int primeiravez = 0;
+int numero_dispositivo = 0;
+int usalogo = 0;
+int atualizar = 0;
+int ouvirpassos = 1;
+int ouviremoutrasjanelas = 1;
+double musicamenu = 30;
+int beaconing = 0;
+int interrupt = 0;
+
+// Sistema de rastreamento de jogadores (F4)
+bool looping = false;       // Se está rastreando um jogador
+int looptime = 1500;        // Intervalo entre beeps do rastreador (ms)
+timer looptimer;            // Timer para rastreamento
+int asktoexit = 0;
+int avisanivel = 1;
+int f0 = 0, f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0, f6 = 0, f7 = 0, f8 = 0, f9 = 0;
+int falarteclas = 0;
+double bicicletaveloc = 400.0;
+bool outras = true;
+bool bazuca = true;
+int dcoordenadas = 0;
+int dcamera = 0;
+int dinventario = 0;
+int dvarinha = 0;
+int bicicletaativa = 1;
+int bicicleta = 0;
+int dauto = 0;
+int dhelicoptero = 0;
+int davion = 0;
+int dtanque = 0;
+int dmoto = 0;
+int darmas = 0;
+int dbaculo = 0;
+int dbazuca = 0;
+int camion = 0;
+int camionativo = 1;
+double camionveloc = 400.0;  // Velocidade do caminhão (mesma da bicicleta)
+string somchuva = "rain4.ogg";
+bool centado = false;
+bool comurl = false;
+int numerochuva = 0;
+
+timer tenter;
+timer exittimer;
+
+// ðŸŒ SISTEMA DE REDE
+network con;                    // Conexão ativa com o servidor
+bool is_connected = false;      // Flag de conexão ativa (renamed para evitar conflito com propriedade nativa)
+
+// Variáveis globais adicionais
+string temporal_pwh = "";       // Password hash temporário
+string pwh = "";                // Password hash permanente
+string[] team_members;          // Membros da equipe
+string[] items_for_translate;  // Itens para tradução
+string[] items_selected;        // Itens selecionados (array)
+int peer_id = 0;                // ID do peer de rede
+int selected = 0;               // Arma/item selecionado atualmente
+int crouched = 0;               // Jogador agachado (0 = não, 1 = sim)
+bool relogin_flag = false;      // Flag para indicar necessidade de relogin
+
+// ===== SISTEMA DE RECONEXÃO COM BACKOFF EXPONENCIAL =====
+int reconnect_attempts = 0;           // Contador de tentativas de reconexão
+int reconnect_delay = 1000;           // Delay atual em ms (dobra a cada falha)
+const int MIN_RECONNECT_DELAY = 1000; // 1 segundo inicial
+const int MAX_RECONNECT_DELAY = 30000; // 30 segundos máximo
+timer reconnect_timer;                 // Timer para controlar intervalo
+bool waiting_to_reconnect = false;     // Flag de espera ativa
+
+// ===== HEARTBEAT AUTOMÁTICO =====
+timer heartbeat_timer;
+const int HEARTBEAT_INTERVAL = 5000;  // 5 segundos entre heartbeats
+
+// ===== ESTADO DE REQUISIÇÃO: LISTA DE ITENS (Item Builder) =====
+bool item_list_request_pending = false;
+bool item_list_response_ready = false;
+string item_list_response_payload = "";
+
+// ===== ESTADO DE REQUISIÇÃO: METADADOS DO ITEM BUILDER =====
+bool item_builder_meta_request_pending = false;
+bool item_builder_meta_response_ready = false;
+string item_builder_meta_response_payload = "";
+bool item_builder_meta_loaded = false;
+string item_builder_types_csv = "";
+string item_builder_rarities_csv = "";
+string item_builder_categories_weapon_csv = "";
+string item_builder_categories_armor_csv = "";
+string item_builder_categories_consumable_csv = "";
+string item_builder_categories_misc_csv = "";
+
+// ===== SEQUENCE NUMBERS (ORDENAÇÃO DE PACOTES) =====
+// Evita glitches de áudio quando pacotes chegam fora de ordem
+uint16 movement_seq = 0;  // Sequência para pacotes de movimento/rotação
+
+// Variáveis de estado admin/features
+int construye = 0;              // Modo construtor ativado
+int enabletranslate = 0;        // Tradução ativada
+int enablechatadm = 0;          // Chat admin ativado
+int voicechat = 0;              // Voice chat ativado
+int logaudio = 0;               // Log de áudio ativado
+sound_pool audio;               // Sound pool para áudio de voz
+string vc = "";                 // Variável para voz atual
+// desenvolvedordm e modera já declarados abaixo na linha 441
+
+// Constantes de configuração
+const string MAPS_STORAGE = "sounds.dat";  // Arquivo pack de mapas
+const string MAPS_ENCRYPTION_KEY = "";     // Chave de encriptação (vazia = sem criptografia)
+
+// Variáveis de configuração do jogo
+int sidescrolling = 0;  // Modo sidescrolling ativado/desativado
+int autosave = 1;       // Autosave ativado/desativado
+int fps = 60;           // FPS do jogo
+int married = 0;        // Status de casamento
+int parabatyed = 0;     // Sistema de parabatyed
+int logpermanents = 0;  // Log de mensagens permanentes
+sound stream2;          // Stream de áudio secundário
+
+// Sistema de localização usando recursos NVGT nativos
+class properties_util {
+	dictionary data;
+	string current_file = "";
+
+	string get_value(const string &in key) {
+		string result;
+		if(data.get(key, result)) {
+			return result;
+		}
+		return key; // Retorna a própria chave se não encontrar tradução
+	}
+
+	void set_value(const string &in key, const string &in value) {
+		data.set(key, value);
+	}
+
+	void load(const string &in filename) {
+		data.delete_all();
+		current_file = filename;
+		string path = filename;
+		if(!file_exists(path)) {
+			string alt = "client/" + filename;
+			if(file_exists(alt)) {
+				path = alt;
+			}
+			else {
+				return;
+			}
+		}
+
+		file lang_file;
+		if(!lang_file.open(path, "rb")) {
+			return;
+		}
+		string content = lang_file.read();
+		lang_file.close();
+		if(content == "") {
+			return;
+		}
+
+		if(content.length() >= 3 && get_char_code(content, 0) == 0xEF && get_char_code(content, 1) == 0xBB && get_char_code(content, 2) == 0xBF) {
+			content = content.substr(3);
+		}
+		content = content.replace("\r\n", "\n");
+		content = content.replace("\r", "\n");
+		string[] lines = content.split("\n");
+		for(uint i = 0; i < lines.length(); i++) {
+			string line = trim_string(lines[i]);
+			if(line == "" || line.substr(0, 1) == "#" || line.substr(0, 2) == "//") continue;
+			int eq = line.find("=");
+			if(eq <= 0) continue;
+			string key = trim_string(line.substr(0, eq));
+			string value = trim_string(line.substr(eq + 1));
+			if(key == "") continue;
+			set_value(key, value);
+		}
+	}
+
+	void set_arquivo(const string &in filename) {
+		load(filename);
+	}
+
+	string get_arquivo() {
+		return current_file;
+	}
+}
+properties_util pu;
+
+// Função para conversão de string para número (usando parse_int/parse_float nativos NVGT)
+int string_to_number(string str) {
+	return parse_int(str);
+}
+
+// BGT compatibility layer já inclui clipboard functions
+
+// ========== SISTEMA DE INVENTÁRIO ==========
+dictionary player_inv;              // Inventário principal do jogador
+// Variáveis de inventário (algumas podem estar em client.nvgt)
+string[] inv_items_selected;        // Items selecionados para múltiplas ações
+string item_to_move = "";           // Item sendo movido entre posições
+int item_to_move_index = -1;        // Índice do item sendo movido
+int cindex = 0;                     // Índice de categoria atual
+string soundinv = "invclick.ogg";   // Som padrão de inventário
+string copiaragora = "";            // Variável para armazenar item sendo copiado
+// NOTA: inv_categories array é declarado em inv.nvgt após a classe inv_category
+// NOTA: droptimer, droptime, cavando já estão definidos em client.nvgt
+
+// Definições de variáveis globais necessárias (algumas podem estar declaradas em client.nvgt)
+// Remover aquelas que causam conflito
+string net_un = "", net_pw = "";
+bool account_creating = false;
+bool connected = false;
+string username = "";
+double gversion = 1.0;
+int game_serverport = port;  // Herdado de ../config.nvgt
+string game_serveraddress = serveraddress;
+
+// Variáveis adicionais necessárias para compilação
+file pf;
+sound_pool stream_pool_main;
+string banned = "";
+string ver = "1.0";
+string mapname = "";
+string current_location = ""; // Descrição da localização atual (where command)
+int wineask = 0;
+
+// Pools de som principais
+sound_pool p;
+sound_pool p2;
+sound_pool pobjs;
+sound_pool pcomputador;
+
+// Outros pools auxiliares
+sound_pool spool;
+sound_pool steps;      // Sons de passos
+sound_pool shoot;      // Sons de tiros
+sound_pool bodys;      // Sons de impacto em corpo
+sound_pool walls;      // Sons de impacto em parede
+sound_pool doors_sound; // Sons de portas
+sound_pool npcs;       // Sons de NPCs
+sound_pool pl;         // Sons de players
+
+// Função para configurar todos os sound_pools com o pack (igual Batalha Constante)
+// Deve ser chamada após sound_default_pack ser configurado
+void configure_sound_pools() {
+	// Os sound_pools usam sound_default_pack automaticamente quando pack_file é null
+	// Mas para garantir, podemos configurar explicitamente:
+	@p.pack_file = @sound_default_pack;
+	@p2.pack_file = @sound_default_pack;
+	@pobjs.pack_file = @sound_default_pack;
+	@pcomputador.pack_file = @sound_default_pack;
+	@spool.pack_file = @sound_default_pack;
+	@steps.pack_file = @sound_default_pack;
+	@shoot.pack_file = @sound_default_pack;
+	@bodys.pack_file = @sound_default_pack;
+	@walls.pack_file = @sound_default_pack;
+	@doors_sound.pack_file = @sound_default_pack;
+	@npcs.pack_file = @sound_default_pack;
+	@pl.pack_file = @sound_default_pack;
+	@game_p.pack_file = @sound_default_pack;
+	@audio.pack_file = @sound_default_pack;        // Voice chat (sistema legado)
+	// Nota: ambientepool é declarado em ambiente.nvgt, mas configuramos aqui também
+	@ambientepool.pack_file = @sound_default_pack; // Ambiente (clima, etc)
+}
+
+// Arrays de elementos desabilitados
+string[] disableds;
+
+// Outros estados auxiliares
+int salvavida = 0;
+
+// Arrays e objetos necessários
+class obj_class {
+	int x = 0;
+	int y = 0;
+	string item = "";
+	string map = "";
+	int amount = 1;
+	timer looptimer;
+	int loop_interval = 1500;
+};
+obj_class[] objs;
+
+// REMOVIDO: ambiente_class e game_ambientes - não eram usados
+// O sistema de ambientes real usa 'ambientes' e 'ambientepool' de ambiente.nvgt
+
+class staircase_class {
+	string name;
+	int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+	int minx = 0, maxx = 0, miny = 0, maxy = 0;
+	string tile = "";
+	bool abletojump = false;
+};
+staircase_class[] staircases;
+
+class door_class {
+	string name;
+	int dx = 0, dy = 0;
+	int finishx = 0, finishy = 0;
+	int doorsound = -1;  // slot do sound_pool
+	int doorsound2 = -1; // slot do sound_pool
+	string ds2 = "";
+	string ds3 = "";
+	string ds4 = "";
+	bool moving = false;
+	timer movetimer;
+};
+door_class[] doors;
+
+class travel_point_class {
+	int zone_x1 = 0, zone_y1 = 0, zone_x2 = 0, zone_y2 = 0; // Zona de ativação
+	int dest_x = 0, dest_y = 0; // Posição de destino
+	string dest_map = ""; // Mapa de destino
+	string message = ""; // Mensagem ao teleportar
+	bool activated = false; // Flag para controlar se foi ativado
+	timer activation_timer; // Timer para evitar múltiplas ativações
+};
+travel_point_class[] travel_points;
+
+class elevador_class {
+	string name;
+	int x = 0, y = 0;
+	int fx = 0, fy = 0;
+	int s = -1;  // slot do sound_pool
+	bool moving = false;
+	timer movetimer;
+};
+elevador_class[] elevadors;
+
+class maquinatempo_class {
+	string name;
+};
+maquinatempo_class[] game_maquinatempos;
+
+class areia_movedissa_class {
+	string name;
+};
+areia_movedissa_class[] game_areia_movedissas;
+
+string[] game_map;
+
+void exitgame() {
+	if(exiting) return;
+	exiting = true;
+	game_exiting = true;
+	speak(pu.get_value("Saindo do jogo..."));
+	writeprefs();
+	if(connected) {
+		game_net.send(net_peer_id, "close", 0, true);
+	}
+	exittimer.restart();
+	connected = false;
+	connect = false;
+}
+
+void sair() {
+	exitgame();
+	sound door;
+	door.load(get_sound_path("door1close.ogg"));
+	door.play_wait();
+	exit();
+}
+
+// Função de log para debug do cliente
+void debug_log(string message) {
+	datetime dt;
+	string time_str = "[" + dt.format("%Y-%m-%d %H:%M:%S") + "] ";
+	
+	// Garante que a pasta debug existe
+	directory_create("debug");
+	
+	// Salva no arquivo de log
+	file f;
+	if (f.open("debug/client_log.txt", "a")) {
+		f.write(time_str + message + "\n");
+		f.close();
+	}
+}
+
+// Classes LAN
+class lancha_class {
+	int nalancha = 0;
+	int saindo = 0;  // Flag de saída da lancha
+	void sair() {
+		nalancha = 0;
+		saindo = 0;
+	}
+	void loop() {
+		// TODO: implementar loop da lancha
+	}
+};
+lancha_class game_lan;
+lancha_class@ lan = @game_lan;
+
+// Declarações de variáveis para o sistema
+
+// Variáveis de ping e timing
+bool forcepinging = false;
+timer pingtimer;
+timer walktimer;
+
+// Outras variáveis necessárias
+bool ausente = false;
+bool emchat = false;
+// Note: portable, prefsdir, PREFSFILE are already defined in config.nvgt
+int game_peer_id = 0;
+uint64 net_peer_id = 0; // Para compatibilidade com sistema de rede
+uint64 server_peer_id = 0; // ID do peer do servidor
+network_event game_event;
+network game_net;
+network game_network;
+
+// Classes de jogador (declaração básica)
+class player_class {
+    string charname;
+    int x, y;
+    string mapname;
+    int pacifico;
+    int beeping;
+};
+player_class[] game_players;
+
+// Classe me (jogador principal)
+class me_class {
+    int x = 0, y = 0;
+};
+me_class game_me;
+
+// Outras variáveis essenciais
+string currentloc = "";
+int zonestatus = 1;
+string godir = "", godir2 = "";
+int go = 0, go2 = 0;
+bool jumping = false;
+int pulou = 0;
+bool falling = false;
+bool connect = false;
+bool floating = false;
+bool floating2 = false;
+bool ascending = false;
+bool cloaked = false;
+int jumpheight = 5;
+int abletojump2 = 0;
+bool dmoving = false;
+int ty1 = 0, ty2 = 0;
+timer jumptimer;
+timer canijumptimer;
+
+// Variáveis de física do salto (do BGT original)
+bool atapex = false;        // Está no ápice do salto
+int apextime = 100;         // Tempo no ápice (ms)
+int jumptime = 50;          // Tempo entre incrementos subindo (ms)
+int jumptime2 = 50;         // Tempo entre incrementos descendo (ms)
+
+bool star = false;
+bool moveable = true;
+string inv = "";
+string apartamentoinv = "";
+bool game_term = false;
+bool game_exiting = false;
+bool exiting = false;
+bool game_dcheck = false;
+bool game_echeck = false;
+class tracker_class { int x, y; };
+tracker_class tracker;
+
+// Variáveis adicionais para compatibilidade (renomeadas para evitar conflitos)
+bool dcheck_flag = false;
+bool echeck_flag = false;
+bool game_echo = false;
+timer game_echotimer;
+sound_pool game_p; // Alias para compatibilidade BGT
+int game_falhou = 0;
+int game_desenvolvedordm = 0;
+int game_modera = 0;
+int game_dveloz = 0;
+int game_falarteclas = 1;
+
+// Flags de permissão admin/dev
+bool is_dev = false;        // Usuário é desenvolvedor
+bool is_admin = false;      // Usuário é admin
+bool is_moderator = false;  // Usuário é moderador
+bool is_builder = false;    // Usuário é construtor
+
+// Sistema TTS usando recursos nativos NVGT
+tts_voice game_tts;
+
+// NVGT já possui função speak() nativa - não redefinir
+
+// Funções auxiliares usando recursos NVGT nativos
+void open_sound_device(int device_id = -1) {
+	// NVGT gerencia dispositivos automaticamente
+}
+
+// Funções básicas usando UI nativa NVGT
+void dlg(string text) {
+	speak(text);
+	// Opcional: usar alert() para diálogos visuais também
+}
+
+// Input usando recursos NVGT nativos
+string input_text(string prompt) {
+	return input_box("", prompt);
+}
+
+void writeprefs() {
+	string path;
+	if(portable) {
+		path = PREFSFILE;
+	}
+	else {
+		if(!directory_exists(prefsdir)) directory_create(prefsdir);
+		path = prefsdir + "\\" + PREFSFILE;
+	}
+
+	// Evita concorrência deixando a instância global pronta para reuso
+	pf.close();
+	pf.open(path, "wb");
+
+	string s =
+"mlang=" + mainlang + "\r\n"
+"tradutorativo=" + tradutorativo + "\r\n"
+"idiomaorigem=" + idiomaorigem + "\r\n"
+"idiomachat=" + idiomachat + "\r\n"
+"atu=" + atu + "\r\n"
+"ouvirmortes=" + ouvirmortes + "\r\n"
+"rcontrol=" + rcontrol + "\r\n"
+"nalancha=" + game_lan.nalancha + "\r\n"
+"un=" + un + "\r\n"
+"pw=" + pw + "\r\n"
+"voice=" + voice + "\r\n"
+"volumejogo=" + volumejogo + "\r\n"
+"ttsrate=" + ttsrate + "\r\n"
+"cmfinal=" + cmfinal + "\r\n"
+"avisadesconectou=" + avisadesconectou + "\r\n"
+"ouvirhits=" + ouvirhits + "\r\n"
+"primeiravez=" + primeiravez + "\r\n"
+"numero_dispositivo=" + numero_dispositivo + "\r\n"
+"usalogo=" + usalogo + "\r\n"
+"atualizar=" + atualizar + "\r\n"
+"ouvirpassos=" + ouvirpassos + "\r\n"
+"ouviremoutrasjanelas=" + ouviremoutrasjanelas + "\r\n"
+"musicamenu=" + musicamenu + "\r\n"
+"beaconing=" + beaconing + "\r\n"
+"wineask=" + wineask + "\r\n"
+"interrupt=" + interrupt + "\r\n"
+"falarteclas=" + falarteclas + "\r\n"
+"asktoexit=" + asktoexit + "\r\n"
+"avisanivel=" + avisanivel + "\r\n"
+"sidescrolling=" + sidescrolling + "\r\n"
+"autosave=" + autosave + "\r\n"
+"fps=" + fps + "\r\n"
+"f1=" + f1 + "\r\n"
+"f2=" + f2 + "\r\n"
+"f3=" + f3 + "\r\n"
+"f4=" + f4 + "\r\n"
+"f5=" + f5 + "\r\n"
+"f6=" + f6 + "\r\n"
+"f7=" + f7 + "\r\n"
+"f8=" + f8 + "\r\n"
+"f9=" + f9 + "\r\n"
+"f0=" + f0 + "\r\n";
+
+	s = string_encrypt(s, PREFS_ENCRYPTION_KEY);
+	pf.write(s);
+	pf.close();
+}
+
+void dlgplay(string filename, bool flag = false, int volume = 0) {
+	// TODO: implementar reprodução de diálogo
+}
+
+bool msginvalida(string msg) {
+	return (msg == "" || msg.find(" ") >= 0);
+}
+
+// Input helper - classe virtualizer para entrada de texto acessível
+// NOTA: A virtualizer NÃO usa input_box nativo para evitar que leitores de tela
+// falem "painel/edição" durante a digitação. Isso melhora a experiência para
+// usuários de NVDA/JAWS. Migração para input_form requer testes de acessibilidade.
+// @see eplano.txt Task 2.2 para plano de migração futura
+virtualizer v;
+
+// Sistema de menus usando classe menu nativa NVGT
+menu client_menu;
+
+// Função para configurar client_menu com pack de sons
+void setup_client_menu() {
+	client_menu.reset(true);
+	@client_menu.pack_file = @sound_default_pack;
+	client_menu.click_sound = "menumove.ogg";
+	client_menu.select_sound = "menuenter.ogg";
+	client_menu.close_sound = "menuvolta.ogg";
+	client_menu.wrap = false;
+}
+
+class m_helper {
+	void add_item_tts(string text, string value) {
+		client_menu.add_item(text, value);
+	}
+	int run(string title, bool flag) {
+		// Configurar pack antes de rodar
+		@client_menu.pack_file = @sound_default_pack;
+		client_menu.intro_text = title;
+		return client_menu.run();
+	}
+	string get_item_name(int index) {
+		// Fallback: retorna o ID do item já que get_item_text não existe
+		return client_menu.get_item_id(index);
+	}
+}
+m_helper m;
+
+// Sistema TTS usando tts_voice nativo NVGT
+string[] game_wslist;
+int game_wsindex = 0;
+int game_wsv = 0;
+
+void refresh_voice_list() {
+	game_tts.refresh();
+	game_wslist = game_tts.list_voices();
+}
+
+string[] get_voice_names() {
+	return game_wslist;
+}
+
+// Gerenciamento de streams de áudio (substitui bass.bgt)
+audio_stream_manager audio_stream_primary;
+audio_stream_manager audio_stream_secondary;
+int streamvolume = 0; // valor em dB para streams
+int streamurl = -1;
+int streamurl2 = -1;
+
+void init_audio_system() {
+	audio_stream_primary.init(streamvolume);
+	audio_stream_secondary.init(streamvolume);
+}
+
+// Mantém assinatura original para compatibilidade
+// init_bass() removido - NVGT inicializa audio automaticamente
+
+// String to number conversion extension for compatibility
+int to_number(string str) {
+	return parse_int(str);
+}
+
+// Funções de rede usando NVGT nativo (sem wrappers BGT)
+// Use diretamente: game_net.send(peer, message, channel, reliable)
+
+// NOTA: clipboard_copy_text e clipboard_read_text agora vêm do bgt_compat.nvgt
+
+// Wrapper para screen_reader_is_running sem parâmetro (detectar qualquer leitor)
+bool screen_reader_is_running() {
+	return screen_reader_detect() != "";
+}
+
+// Sistema de armazenamento de sons  
+// Não usar pack@ global porque será destruído! Usar pack direto (igual Batalha Constante)
+pack global_sound_pack;
+string global_sound_pack_path = "";
+string global_sound_key = "";
+
+// FUNÇÃO ANTIGA REMOVIDA - usamos o método do Batalha Constante agora
+// FUNÇÃO ANTIGA REMOVIDA - usamos o método do Batalha Constante agora
+// (abrir pack diretamente no client.nvgt)
+
+// Função helper para obter caminho completo do som
+// Com pack: retorna apenas filename (sound_default_pack cuida do resto)
+// Com pasta: retorna "sounds/filename"
+string get_sound_path(string filename) {
+	// Se SOUND_STORAGE é uma pasta (não termina em .dat), adiciona prefixo
+	if(SOUND_STORAGE.find(".dat") < 0 && directory_exists(SOUND_STORAGE)) {
+		return SOUND_STORAGE + "/" + filename;
+	}
+	// Se é pack, retorna apenas o filename (sound_default_pack já está configurado)
+	return filename;
+}
+
+void show_game_window(string title) {
+	show_window(title);
+}
+
+// NOTA: generate_computer_id agora vem do bgt_compat.nvgt
+
+// void install_keyhook() {
+//	// TODO: implementar keyhook se necessário - comentado por conflito
+// }
+
+// NOTA: string_encrypt e string_decrypt agora vêm do bgt_compat.nvgt
+
+// ===== FUNÇÕES DE AUTENTICAÇÃO COM HASH SHA-256 =====
+
+// Função helper para hash de senhas usando SHA-256
+string hash_password(string password) {
+	if(password == "") return "";
+	// Retorna hash SHA-256 em formato hexadecimal
+	return string_hash(password, 1, false);
+}
+
+// ===== FUNÇÕES DE REDE NATIVAS NVGT =====
+
+// Forward declaration removida - causava conflito com função global
+// encrypt_packet() definida em net.nvgt
+
+// ===== WRAPPERS DE COMPATIBILIDADE (usam GameClient internamente) =====
+// Estas funções mantêm compatibilidade com código existente
+// Internamente delegam para game_client (classe encapsulada)
+
+// Função para enviar mensagem confiável (reliable) ao servidor
+// Wrapper de compatibilidade - usa game_client internamente
+void send_reliable(uint64 peer_id, string message, int channel = 0) {
+	// Delega para game_client (classe encapsulada)
+	game_client.send_reliable(message, channel);
+}
+
+// Função para enviar mensagem não-confiável (unreliable/UDP) ao servidor  
+// Wrapper de compatibilidade - usa game_client internamente
+void send_unreliable(uint64 peer_id, string message, int channel = 0) {
+	// Delega para game_client (classe encapsulada)
+	game_client.send_unreliable(message, channel);
+}
+
+// ===== ENVIO COM SEQUENCE NUMBER =====
+// Usado para pacotes de movimento/rotação que precisam chegar em ordem
+// Formato: "seq:NNNN comando args..."
+void send_movement(uint64 peer_id, string message, int channel = 0) {
+	// Incrementar sequência (wrap around em 65535)
+	movement_seq++;
+	if(movement_seq > 65535) movement_seq = 1;
+	
+	// Prefixar mensagem com seq number
+	string seq_message = "seq:" + movement_seq + " " + message;
+	game_client.send_unreliable(seq_message, channel);
+}
+
+// Função helper para verificar senha contra hash
+bool verify_password(string password, string hash) {
+	if(password == "" || hash == "") return false;
+	return (hash_password(password) == hash);
+}
+
+// ====== SISTEMA DE NPCs ======
+// Array global para armazenar NPCs visíveis no cliente
+npc_client_class@[] npc_objects;
+

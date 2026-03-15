@@ -1,0 +1,1096 @@
+int escucharteclas=0;
+vector user;
+editor v;
+class editor {
+	vector text;
+	sound_pool keysound;
+	string [][] texto;//armazena todo o texto digitado.
+	int start_x, end_x, start_y, end_y;
+	bool selected;
+	bool writing;
+	timer presstimer;
+	editor() {
+		user.x=0;
+		user.y=0;
+		text.x=1500;
+		text.y=1;
+		start_x=-1;
+		end_x=-1;
+		start_y=-1;
+		end_y=-1;
+		selected=false;
+		writing =false;
+		resize();
+	}
+
+	void resize() {
+		texto.resize(0);
+		texto.resize(1500);// cada linha pode ter até 1500 caracteres.
+		for(int i=0; i<1500; i++) {
+			texto[i].resize(1); // pra conseguir usar a linha a segunda dimensão tem que estar com um de tamanho.
+			for(int i1=0; i1<1; i1++) {
+				texto[i][i1]="\r";//São marcadores de fim da linha.
+			}
+		}
+		user.x=0;
+		user.y=0;
+		text.x=1;
+		text.y=1;
+		texto[user.x][user.y]="\n";
+	}
+
+	int cont_linha(int pos_y=user.y) {
+		if(texto.length==0)
+		return 0;
+		for(int i=0; i<1500; i++) {
+			if(pos_y>texto[0].length-1)
+			break;
+			if((texto[i][pos_y]=="\r")||(texto[i][pos_y]=="\n")) {
+				return i;
+			}
+		}
+		return 0;
+	}
+
+	string get_linha_text(int str_x, int f_x, int str_y=user.y) {
+		string final;
+		for(int i=str_x; i<=f_x; i++) {
+			final+=texto[i][str_y];
+		}
+		return final;
+	}
+
+	string get_multiline_text(int str_y, int s_y) {
+		string final;
+		for(int i=str_y; i<s_y; i++) {
+			string linha=get_linha_text(0, cont_linha(i), i);
+			int position=linha.length()-1;
+			if((linha[position]=="\r")||(linha[position]=="\n")) {
+				linha.resize(position);
+				final+=linha+"\r\n";
+			}
+			else if(linha[position]=="\n") {
+				linha.resize(position);
+				final+=linha+"\r\n";
+			}
+		}
+		final.resize(final.length()-2);
+		return final;
+	}
+
+	void reset_select() {
+		start_x=-1;
+		end_x=-1;
+		start_y=-1;
+		end_y=-1;
+		selected=false;
+	}
+
+	void move(string dir) {
+		if(dir=="cima") {
+			if(user.y==0) {
+				speak_linha();
+				return;
+			}
+			else if(user.y>0) {
+				user.y--;
+				speak_linha(true);
+			}
+		}
+		else if(dir=="baixo") {
+			if(user.y==text.y-1) {
+				speak_linha();
+				return;
+			}
+			else if(user.y<text.y-1) {
+				user.y++;
+				speak_linha(true);
+			}
+		}
+		else if(dir=="left") {
+			if(user.x==0) {
+				speak_character(texto[user.x][user.y]);
+			}
+			else if(user.x>0) {
+				user.x--;
+				speak_character(texto[user.x][user.y]);
+			}
+		}
+		else if(dir=="right") {
+			if((texto[user.x][user.y]=="\r")||(texto[user.x][user.y]=="\n")) {
+				speak(pu.get_value("retorno"));
+			}
+			else {
+				user.x++;
+				speak_character(texto[user.x][user.y]);
+			}
+		}
+		if(selected==true) {
+			speak(pu.get_value("seleção eliminada"));
+			reset_select();
+		}
+	}
+	void speak_linha(bool reset_x=false) { //função que fala todo o texto encontrado na linha;
+		if(reset_x) user.x=0;
+		if(texto[user.x][user.y]=="\n")
+		speak(pu.get_value("em branco"));
+		if(texto[user.x][user.y]!="\n") {
+			speak(get_linha_text(0, cont_linha()));
+			text.x=cont_linha();
+		}
+	}
+
+	void new_linha(bool muted=false) { // da uma nova linha em branco.
+		text.y++;
+		if((user.x==0)&&(user.y==0)) {
+			texto[1499].insert_at(0, "\n");
+			text.x=1;
+			for(int i=0; i<1500; i++) {
+				texto[i].insert_at(user.y, "\r");
+			}
+			user.y--;
+			if(user.y<0)
+			user.y=0;
+		}
+		else if(user.x>=0) {
+			text.x=1;
+			user.x=0;
+			texto[1499].insert_at(user.y, "\n");
+			user.y++;
+			for(int i=0; i<1500; i++) {
+				texto[i].insert_at(user.y, "\r");
+			}
+		}
+		if(muted==false)
+		speak(pu.get_value("Nova linha."));
+		texto[0][user.y]="\n";
+	}
+
+	void keys() {
+		if((key_up(KEY_LCONTROL))&&(key_up(KEY_RCONTROL))&&(key_up(KEY_LSHIFT))&&(key_up(KEY_RSHIFT))) {
+			if(left.pressing()) {
+				move("left");
+			}
+			else if(right.pressing()) {
+				move("right");
+			}
+			else if(up.pressing()) {
+				move("cima");
+			}
+			else if(down.pressing()) {
+				move("baixo");
+			}
+			else if(back.pressing()) {
+				delete_backspace();
+			}
+			else if(key_pressed(KEY_DELETE)) {
+				delete_dell();
+			}
+			else if(key_pressed(KEY_HOME)) {
+				home();
+			}
+			else if(key_pressed(KEY_END)) {
+				end();
+			}
+		}
+		if((key_down(KEY_LCONTROL)||key_down(KEY_RCONTROL))&&(key_down(KEY_LSHIFT)||key_down(KEY_RSHIFT))){
+			if(key_pressed(KEY_END)&&selected==false){
+				start_x=user.x;
+				end_x=text.x;
+				start_y=user.y;
+				end_y=text.y;
+				selected=true;
+				string final=get_multiline_text(start_y, end_y);
+				if(final.length()<512) speak(final+" "+pu.get_value("selecionado."));
+				else speak(final.length()+" "+pu.get_value("caracteres selecionados."));
+			}
+		}
+		else if((key_down(KEY_LSHIFT))||(key_down(KEY_RSHIFT))) {
+			if(left.pressing()) {
+				select_char(false);
+			}
+			else if(right.pressing()) {
+				select_char();
+			}
+			else if(up.pressing()) {
+				select_multiline(false);
+			}
+			else if(down.pressing()) {
+				select_multiline();
+			}
+			else if(key_pressed(KEY_HOME)) {
+				reset_select();
+			}
+			else if(key_pressed(KEY_END)) {
+				select_char(true, true);
+			}
+		}
+		else if((key_down(KEY_LCONTROL))||(key_down(KEY_RCONTROL))) {
+			if(left.pressing()) {
+				speak_word("left");
+			}
+			else if(right.pressing()) {
+				speak_word("right");
+			}
+			else if(key_pressed(KEY_HOME)) {
+				home(true);
+			}
+			else if(key_pressed(KEY_END)) {
+				end(true);
+			}
+			else if(key_pressed(KEY_A)) {
+				start_y=0;
+				end_y=text.y;
+				selected=true;
+				string final=get_multiline_text(start_y, end_y);
+				if(final.length()<512) speak(final+" "+pu.get_value("selecionado."));
+				else speak(final.length()+" "+pu.get_value("caracteres selecionados."));
+			}
+			else if(key_pressed(KEY_X)) {
+				cut();
+			}
+			else if(key_pressed(KEY_C)) {
+				copy();
+			}
+			else if(key_pressed(KEY_V)) {
+				paste();
+			}
+		}
+	}
+
+	string	input(string msg, string optionaltext="") {
+		user.x=0;
+		user.y=0;
+		reset_select();
+		emchat =true;
+		speak(pu.get_value(msg));
+		get_characters();
+		if(optionaltext!="") update_data(optionaltext, true);
+		while(emchat) {
+			wait(5);
+			mainloop();
+			if(ausente){
+				emchat=false;
+				break;
+			}
+			string temp=get_characters();
+			if(temp.length()>0) {
+				update_data(temp);
+				writing=true;
+				presstimer.restart();
+			}
+			if(writing==false)
+			keys();
+			if((presstimer.elapsed>=10)&&(writing==true)) {
+				writing=false;
+				presstimer.restart();
+			}
+			if(key_pressed(KEY_TAB)){
+				speak(pu.get_value(msg));
+			}
+			if(key_pressed(KEY_F1)) {
+				if(escucharteclas==1) {
+					escucharteclas=0;
+					speak(pu.get_value("Não reproduzir sons ao escrever."));
+					writeprefs();
+				}
+				else if(escucharteclas==0) {
+					escucharteclas=1;
+					speak(pu.get_value("Reproduzir sons ao escrever."));
+					writeprefs();
+				}
+			}
+			if(key_pressed(KEY_F2)) {
+				if(falarteclas==1) {
+					falarteclas=0;
+					speak(pu.get_value("Não falar ao escrever."));
+					writeprefs();
+				}
+				else if(falarteclas==0) {
+					falarteclas=1;
+					speak(pu.get_value("Falar ao escrever."));
+					writeprefs();
+				}
+			}
+			if((key_down(KEY_LSHIFT)||key_down(KEY_RSHIFT))&&(key_pressed(KEY_RETURN)||key_pressed(KEY_NUMPADENTER))) {
+				if(escucharteclas==1) keysound.play_stationary("keyreturn.ogg", false);
+				new_linha();
+			}
+			if((key_pressed(KEY_RETURN))||(key_pressed(KEY_NUMPADENTER))){
+				if(escucharteclas==1) keysound.play_stationary("keyreturn.ogg", false);
+				emchat=false;
+				string content=get_multiline_text(0, text.y);
+				resize();
+				return content;
+			}
+			if(key_pressed(KEY_ESCAPE)) {
+				speak(pu.get_value("Cancelado."));
+				resize();
+				emchat =false;
+				return "";
+			}
+		}
+		emchat =false;
+		return get_multiline_text(0, text.y);
+	}
+	void speak_word(string direction) { //isso fala uma palavra teclando control setas.
+		string palavra;
+		if(direction=="right") { // fala uma palavra teclando control seta direita.
+			for(int i=user.x; i<1500; i++) {
+				if(texto[i][user.y]=="\r")
+				break; // para se bateu no fim da linha.
+				else if(texto[i][user.y]!="\r")
+				palavra+=texto[i][user.y];
+				if((texto[i][user.y]==" ")&&(palavra.length()>1)) {
+					user.x=i;
+					break;// para se achar um espaço que indica o fim de uma palavra e move o cursor até lá.
+				}
+			}
+		}
+		if(direction=="left") { //mesma coisa que antes, mas agora com control esquerda.
+			for(int i=user.x; i>=0; i--) {
+				if(texto[i][user.y]=="\0")
+				break;
+				else if(texto[i][user.y]!="\0")
+				palavra+=texto[i][user.y];
+				if((texto[i][user.y]==" ")&&(palavra.length()>1)) {
+					user.x=i;
+					break;
+				}
+			}
+			palavra=string_reverse(palavra);
+		}
+		speak(palavra);
+		if(selected==true) {
+			speak(pu.get_value("Seleção eliminada."));
+			reset_select();
+		}
+	}
+
+	void home(bool start_texto=false) { // move pro início da linha, ou do texto.
+		if(start_texto==false) {
+			user.x=0;
+			move("left");
+		}
+		else if(start_texto==true) {
+			user.x=0;
+			user.y=0;
+			move("cima");
+		}
+		if(selected==true) {
+			speak(pu.get_value("Seleção eliminada."));
+			reset_select();
+		}
+	}
+
+	void end(bool end_texto=false) { // vai pro fim da linha ou texto.
+		if(end_texto==false) {
+			user.x=text.x;
+			if(user.x==0)
+			speak(pu.get_value("Em branco."));
+			else if(texto[user.x][user.y]=="\r")
+			move("right");
+		}
+		if(end_texto==true) {
+			user.y=text.y-1;
+			text.x=cont_linha();
+		user.x=0;
+			move("baixo");
+		}
+		if(selected==true) {
+			speak(pu.get_value("Seleção eliminada."));
+			reset_select();
+		}
+	}
+
+	void add_text(string text) {
+		update_data(text, true, true);
+	}
+
+	void update_data(string temp, bool paste=false, bool muted=false) { // recupera o que foi digitado e adiciona no resto do texto.
+		bool before_text=false;
+		double user_cursor;
+		if(temp=="") return;
+		vector m(user.x, user.y, 0);
+		presstimer.restart();
+		if(paste==false) {
+			if(falarteclas==1) speak_character(temp);
+			if(temp==" "){
+				if(escucharteclas==1) keysound.play_stationary("keyspace.ogg", false);
+			}
+			else{
+				if(escucharteclas==1) keysound.play_stationary("key"+random(1,5)+".ogg", false);
+			}
+		}
+		if((paste==true)&&(muted==false)) speak(temp+" "+pu.get_value("colado."));
+		if((text.x==0)&&(user.x==0)) { //se estiver no início da linha...
+			for(int i=0; i<temp.length(); i++) {
+				if((temp[i]!="\r")&&(temp[i]!="\n")) {
+					texto[user.x][user.y]=temp[i];
+					user.x++;
+					text.x++;
+				}
+				if(i<temp.length()-1) {
+					if((temp[i]=="\r")&&(temp[i+1]=="\n")) {
+						new_linha(paste);
+						i++;
+					}
+				}
+				if((text.x>=1450)&&(temp[i]==" ")) new_linha(paste);
+				else if(text.x>=1499) new_linha(paste);
+			}
+		}
+		else if((text.x>0)&&(user.x==text.x)) { // escreve a partir do último caractere digitado.
+			for(int i=0; i<temp.length(); i++) {
+				if((temp[i]!="\r")&&(temp[i]!="\n")) {
+					texto[user.x][user.y]=temp[i];
+					user.x++;
+					text.x++;
+				}
+				if(i<temp.length()-1) {
+					if((temp[i]=="\r")&&(temp[i+1]=="\n")) {
+						new_linha(paste);
+						i++;
+					}
+				}
+				if((text.x>=1450)&&(temp[i]==" ")) new_linha(paste);
+				else if(text.x>=1499) new_linha(paste);
+			}
+		}
+		else if((text.x>0)&&(user.x<text.x)) {
+			user_cursor=user.x+temp.length();
+			if(user.x==0) {
+			for(int i=0; i<=text.x; i++) {
+					temp+=texto[i][user.y];
+					texto[i][user.y]="\r";
+				}
+				text.x=0;
+				user.x=0;
+				for(int i=0; i<temp.length(); i++) {
+					if((temp[i]!="\r")&&(temp[i]!="\n")) {
+						texto[user.x][user.y]=temp[i];
+						user.x++;
+						text.x++;
+					}
+					if(i<temp.length()-1) {
+						if((temp[i]=="\r")&&(temp[i+1]=="\n")) {
+							new_linha(paste);
+							i++;
+						}
+					}
+					if((text.x>=1450)&&(temp[i]==" ")) new_linha(paste);
+					else if(text.x>=1499) new_linha(paste);
+				}
+				before_text=true;
+			}
+			else if(user.x>=1) { // aqui outra coisa complicada. Se estiver no meio da linha, ou se tiver texto à direita e à esquerda.
+				for(int i=user.x; i<=text.x; i++) {
+					temp+=texto[i][user.y];
+					texto[i][user.y]="\r";
+				} // note que aqui ele não salvou a linha inteira, mas só de user.x pra direita.
+				text.x=user.x;
+				for(int i=0; i<temp.length(); i++) {
+					if((temp[i]!="\r")&&(temp[i]!="\n")) {
+						texto[user.x][user.y]=temp[i];
+						user.x++;
+						text.x++;
+					}
+					if(i<temp.length()-1) {
+						if((temp[i]=="\r")&&(temp[i+1]=="\n")) {
+							new_linha(paste);
+							i++;
+						}
+					}
+					if((text.x>=1450)&&(temp[i]==" ")) new_linha(paste);
+					else if(text.x>=1499) new_linha(paste);
+				}
+				before_text=true;
+			}
+		}
+		if(before_text) user.x=user_cursor;
+		if(paste==true) {
+			user.x=m.x;
+			user.y=m.y;
+		}
+		if(paste==false&&before_text==false) texto[user.x][user.y]="\r";
+	}
+
+	void delete_backspace(bool cortar=false) {
+		if(user.x==0) {
+			if(user.x==0&&user.y==0) return;
+			if((texto[0][user.y]=="\r")||(texto[0][user.y]=="\n")) {
+				remove_linha(user.y);
+				if(user.y<0)
+				user.y=0;
+				user.y--;
+				text.x=cont_linha();
+				user.x=text.x;
+				speak(pu.get_value("Linha em branco eliminada."));
+				return;
+			}
+		}
+		if((user.x==0)&&(selected==false))
+		return;
+		if(user.x>0&&escucharteclas==1) keysound.play_stationary("keydelete.ogg", false);
+		if((user.x>=text.x)&&(selected==false)) {
+			user.x--;
+			if(cortar==false)
+			speak_character(texto[user.x][user.y]);
+			texto[user.x][user.y]="\r";
+			text.x=user.x;
+		}
+		else if((user.x<text.x)&&(selected==false)) {
+			if(user.x==0)
+			return;
+			user.x--;
+			if(cortar==false)
+			speak_character(texto[user.x][user.y]);
+			for(int i=user.x+1; i<=text.x; i++) {
+				texto[i-1][user.y]=texto[i][user.y];
+			}
+			text.x--;
+		}
+		else if((start_x>-1)&&(end_x>=start_x)&&(selected==true)) {
+			user.x=start_x;
+			if(cortar==false)
+			speak(get_linha_text(start_x, end_x-1)+" "+pu.get_value("eliminado."));
+			for(int i=end_x; i<=text.x; i++) {
+				texto[start_x][user.y]=texto[i][user.y];
+				texto[i][user.y]="\r";
+				start_x++;
+			}
+			reset_select();
+		}
+	}
+
+	void select_char(bool select=true, bool complete_linha=false) {
+		if(selected==false) {
+			selected=true;
+			start_x=user.x;
+			if(complete_linha==true) {
+				end_x=cont_linha();
+				speak(get_linha_text(user.x, end_x)+" "+pu.get_value("selecionado."));
+				return;
+			}
+			else if(complete_linha==false) {
+				end_x=user.x+1;
+				string content=pu.get_value(get_character(texto[user.x][user.y]));
+				speak(content+" "+pu.get_value("selecionado."));
+				return;
+			}
+		}
+		if(select==true) {
+			if(user.x==text.x) {
+				speak(pu.get_value("Fim de linha."));
+				return;
+			}
+		user.x++;
+			end_x++;
+			string content=pu.get_value(get_character(texto[user.x][user.y]));
+			speak(content+" "+pu.get_value("selecionado."));
+		}
+		else if(select==false) {
+			user.x--;
+			end_x--;
+			string content=pu.get_value(get_character(texto[user.x+1][user.y]));
+			speak(content+" "+pu.get_value("selecionado."));
+			if(start_x>=end_x)
+			reset_select();
+		}
+	}
+
+	void select_multiline(bool selecionar=true) {
+		if(selected==false) {
+			selected=true;
+			start_y=user.y;
+			end_y=user.y+1;
+			start_x=0;
+			end_x=cont_linha();
+			speak(get_linha_text(0, cont_linha(user.y), user.y)+" "+pu.get_value("selecionado."));
+			return;
+		}
+		else if(selecionar==true) {
+			if(user.y==text.y-1) {
+				speak(pu.get_value("Fim do texto."));
+				return;
+			}
+			user.y++;
+			end_x=cont_linha();
+			end_y++;
+			speak(get_linha_text(0, cont_linha(user.y))+" "+pu.get_value("selecionado."));
+		}
+		else if(selecionar==false) {
+			if(user.y==0) {
+				reset_select();
+				speak(pu.get_value("Seleção eliminada."));
+				return;
+			}
+			user.y--;
+			end_y--;
+			end_x=cont_linha();
+			if(end_y<=start_y) {
+				speak(pu.get_value("Seleção eliminada."));
+				reset_select();
+				return;
+			}
+			speak(get_linha_text(0, cont_linha(user.y+1), user.y+1)+" "+pu.get_value("desmarcado."));
+		}
+	}
+
+	void delete_dell(bool cortar=false) {
+		if((start_x==-1)&&(start_y==-1))
+		return;
+		if((start_y==-1)&&(start_x>-1)) {
+			delete_backspace();
+			return;
+		}
+		string excluir=get_multiline_text(start_y, end_y);
+		for(int i=start_y; i<end_y; i++) {
+			remove_linha(start_y);
+			user.y--;
+			if(user.y<0) {
+				user.y=0;
+				resize();
+				break;
+			}
+		}
+		user.x=0;
+		text.x=cont_linha();
+		if(cortar==false)
+		speak(excluir+" "+pu.get_value("eliminado."));
+		reset_select();
+	}
+
+	void remove_linha(int str_y) {
+		for(int i=0; i<1500; i++) {
+			texto[i].remove_at(str_y);
+		}
+		text.y--;
+	}
+
+	string organizar_texto(int str_y, int fn_y) {
+		string [] lines;
+		string final="";
+		for(int i=str_y; i<fn_y; i++) {
+			string linha;
+			for(int i1=0; i1<cont_linha(i); i1++) {
+				if(texto[i1][i]=="\r")
+				break;
+				else if(texto[i1][i]=="\n")
+				break;
+				else
+				linha+=texto[i1][i];
+			}
+			lines.insert_last(linha);
+		}
+		for(int i=0; i<lines.length; i++) {
+			string linha=lines[i];
+			if(linha=="\n")
+			final+="\r\n";
+			else
+			final+=linha+"\r";
+		}
+		return final;
+	}
+
+	void copy() {
+		if((start_x==-1)&&(start_y==-1)) {
+			speak(pu.get_value("Sem seleção."));
+			return;
+		}
+		else if((start_x>-1)&&(start_y==-1)) {
+			string linha=get_linha_text(start_x, end_x, user.y);
+			clipboard_copy_text(linha);
+			if(linha.length()<1024) speak(linha+" "+pu.get_value("copiado para área de transferência."));
+			else speak(linha.length()+" "+pu.get_value("caracteres copiados para área de transferência."));
+		}
+		else if(start_y>-1) {
+			string final=get_multiline_text(start_y, end_y);
+			clipboard_copy_text(final);
+			if(final.length()<1024) speak(final+" "+pu.get_value("copiado para área de transferência."));
+			else speak(final.length()+" "+pu.get_value("caracteres copiados para área de transferência."));
+		}
+	}
+
+	void cut() {
+		if((start_x==-1)&&(start_y==-1) ){
+			speak(pu.get_value("Sem seleção."));
+			return;
+		}
+		else if((start_x>-1)&&(start_y==-1)) {
+			string linha=get_linha_text(start_x, end_x);
+			linha.resize(linha.length()-1);
+			if(linha.length()<1024) speak(linha+" "+pu.get_value("cortado."));
+			else speak(linha.length()+" "+pu.get_value("caracteres cortados para área de transferência."));
+			clipboard_copy_text(linha);
+			delete_backspace(true);
+			return;
+		}
+		else if(start_y>-1) {
+			string content=get_multiline_text(start_y, end_y);
+			if(content.length()<1024) speak(content+" "+pu.get_value("cortado."));
+			else speak(content.length()+" "+pu.get_value("caracteres cortados para área de transferência."));
+			clipboard_copy_text(content);
+			delete_dell(true);
+		}
+		reset_select();
+	}
+
+	void paste() {
+		string content=clipboard_read_text();
+		update_data(content, true);
+		string linha=get_linha_text(0, cont_linha());
+		user.x=linha.length()-1;
+	}
+
+void speak_character(string letra, string msg="") {
+if(letra==" ")
+speak(pu.get_value("Espaço"));
+else if(letra=="\r")
+speak(pu.get_value("retorno"));
+else if(letra=="\n")
+speak(pu.get_value("nova linha"));
+else if(letra=="~")
+speak(pu.get_value("til"));
+else if(letra=="^")
+speak(pu.get_value("circunflexo"));
+else if(letra=="´")
+speak(pu.get_value("agudo"));
+else if(letra=="`")
+speak(pu.get_value("crase"));
+else if(letra=="¨")
+speak(pu.get_value("trema"));
+else if(letra=="-")
+speak(pu.get_value("hífen"));
+else if(letra==".")
+speak(pu.get_value("Ponto"));
+else if(letra==",")
+speak(pu.get_value("Vírgula"));
+else if(letra=="@")
+speak(pu.get_value("Arroba"));
+else if(letra==">")
+speak(pu.get_value("Maior que"));
+else if(letra==";")
+speak(pu.get_value("Ponto e vírgula"));
+else if(letra==":")
+speak(pu.get_value("Dois pontos"));
+else if(letra=="'")
+speak(pu.get_value("Apóstrofo"));
+else if(letra=="<")
+speak(pu.get_value("Menor que"));
+else if(letra=="_")
+speak(pu.get_value("Sublinhado"));
+else if(letra=="+")
+speak(pu.get_value("Mais"));
+else if(letra=="=")
+speak(pu.get_value("Igual"));
+else if(letra=="!")
+speak(pu.get_value("Exclamação"));
+else if(letra=="\"")
+speak(pu.get_value("aspas"));
+else if(letra=="|")
+speak(pu.get_value("Barra invertida"));
+else if(letra=="/")
+speak(pu.get_value("Barra"));
+else if(letra=="£")
+speak(pu.get_value("Libras"));
+else if(letra=="$")
+speak(pu.get_value("Cifrão"));
+else if(letra=="%")
+speak(pu.get_value("Porcento"));
+else if(letra=="&")
+speak(pu.get_value("e comercial"));
+else if(letra=="*")
+speak(pu.get_value("Asterisco"));
+else if(letra=="(")
+speak(pu.get_value("Abre parênteses"));
+else if(letra==")")
+speak(pu.get_value("Fecha parênteses"));
+else if(letra=="[")
+speak(pu.get_value("Abre colchete"));
+else if(letra=="]")
+speak(pu.get_value("Fecha colchete"));
+else if(letra=="{")
+speak(pu.get_value("Abre chave"));
+else if(letra=="}")
+speak(pu.get_value("fecha chave"));
+else if(letra=="?")
+speak(pu.get_value("Interrogação"));
+else if(letra=="¬")
+speak(pu.get_value("Negação"));
+else if(letra=="#")
+speak(pu.get_value("Sustenido"));
+else if(letra=="ç")
+speak(pu.get_value("Cê cedilha"));
+else if(letra=="Ç")
+speak(pu.get_value("Cê cedilha maiúsculo"));
+else if(letra=="ã")
+speak(pu.get_value("a til"));
+else if(letra=="õ")
+speak(pu.get_value("o til"));
+else if(letra=="á")
+speak(pu.get_value("a agudo"));
+else if(letra=="é")
+speak(pu.get_value("e agudo"));
+else if(letra=="í")
+speak(pu.get_value("i agudo"));
+else if(letra=="ó")
+speak(pu.get_value("o agudo"));
+else if(letra=="ú")
+speak(pu.get_value("u agudo"));
+else if(letra=="â")
+speak(pu.get_value("a circunflexo"));
+else if(letra=="ê")
+speak(pu.get_value("e circunflexo"));
+else if(letra=="î")
+speak(pu.get_value("i circunflexo"));
+else if(letra=="ô")
+speak(pu.get_value("o circunflexo"));
+else if(letra=="û")
+speak(pu.get_value("u circunflexo"));
+else if(letra=="à")
+speak(pu.get_value("a crase"));
+else if(letra=="è")
+speak(pu.get_value("e crase"));
+else if(letra=="ì")
+speak(pu.get_value("i crase"));
+else if(letra=="ò")
+speak(pu.get_value("o crase"));
+else if(letra=="ù")
+speak(pu.get_value("u crase"));
+else if(letra=="ä")
+speak(pu.get_value("a trema"));
+else if(letra=="ë")
+speak(pu.get_value("e trema"));
+else if(letra=="ï")
+speak(pu.get_value("i trema"));
+else if(letra=="ö")
+speak(pu.get_value("o trema"));
+else if(letra=="ü")
+speak(pu.get_value("u trema"));
+else if(letra=="Ã")
+speak(pu.get_value("a til maiúsculo"));
+else if(letra=="Õ")
+speak(pu.get_value("o til maiúsculo"));
+else if(letra=="Á")
+speak(pu.get_value("a agudo maiúsculo"));
+else if(letra=="É")
+speak(pu.get_value("e agudo maiúsculo"));
+else if(letra=="Í")
+speak(pu.get_value("i agudo maiúsculo"));
+else if(letra=="Ó")
+speak(pu.get_value("o agudo maiúsculo"));
+else if(letra=="Ú")
+speak(pu.get_value("u agudo maiúsculo"));
+else if(letra=="Â")
+speak(pu.get_value("a circunflexo maiúsculo"));
+else if(letra=="Ê")
+speak(pu.get_value("e circunflexo maiúsculo"));
+else if(letra=="Î")
+speak(pu.get_value("i circunflexo maiúsculo"));
+else if(letra=="Ô")
+speak(pu.get_value("o circunflexo maiúsculo"));
+else if(letra=="Û")
+speak(pu.get_value("u circunflexo maiúsculo"));
+else if(letra=="À")
+speak(pu.get_value("a crase maiúsculo"));
+else if(letra=="È")
+speak(pu.get_value("e crase maiúsculo"));
+else if(letra=="Ì")
+speak(pu.get_value("i crase maiúsculo"));
+else if(letra=="Ò")
+speak(pu.get_value("o crase maiúsculo"));
+else if(letra=="Ù")
+speak(pu.get_value("u crase maiúsculo"));
+else if(letra=="Ä")
+speak(pu.get_value("a trema maiúsculo"));
+else if(letra=="Ë")
+speak(pu.get_value("e trema maiúsculo"));
+else if(letra=="Ï")
+speak(pu.get_value("i trema maiúsculo"));
+else if(letra=="Ö")
+speak(pu.get_value("o trema maiúsculo"));
+else if(letra=="Ü")
+speak(pu.get_value("u trema maiúsculo"));
+ else if(string_is_upper_case(letra))
+speak(letra+" "+pu.get_value("maiúsculo"));
+else
+speak(letra);
+if(msg!="")
+speak(pu.get_value(msg));
+}
+string get_character(string letra) {
+if(letra==" ")
+return "Espaço";
+else if(letra=="\r")
+return "retorno de carro";
+else if(letra=="\n")
+return "nova linha";
+else if(letra=="~")
+return "til";
+else if(letra=="^")
+return "circunflexo";
+else if(letra=="´")
+return "agudo";
+else if(letra=="`")
+return "crase";
+else if(letra=="¨")
+return "trema";
+else if(letra=="-")
+return "hífen";
+else if(letra==".")
+return "Ponto";
+else if(letra==",")
+return "Vírgula";
+else if(letra=="@")
+return "Arroba";
+else if(letra==">")
+return "Maior que";
+else if(letra==";")
+return "Ponto e vírgula";
+else if(letra==":")
+return "Dois pontos";
+else if(letra=="'")
+return "Apóstrofo";
+else if(letra=="<")
+return "Menor que";
+else if(letra=="_")
+return "Sublinhado";
+else if(letra=="+")
+return "Mais";
+else if(letra=="=")
+return "Igual";
+else if(letra=="!")
+return "Exclamação";
+else if(letra=="\"")
+return "aspas";
+else if(letra=="|")
+return "Barra invertida";
+else if(letra=="/")
+return "Barra";
+else if(letra=="£")
+return "Libras";
+else if(letra=="$")
+return "Cifrão";
+else if(letra=="%")
+return "Porcento";
+else if(letra=="&")
+return "e comercial";
+else if(letra=="*")
+return "Asterisco";
+else if(letra=="(")
+return "Abre parênteses";
+else if(letra==")")
+return "Fecha parênteses";
+else if(letra=="[")
+return "Abre colchete";
+else if(letra=="]")
+return "Fecha colchete";
+else if(letra=="{")
+return "Abre chave";
+else if(letra=="}")
+return "fecha chave";
+else if(letra=="?")
+return "Interrogação";
+else if(letra=="¬")
+return "Negação";
+else if(letra=="#")
+return "Sustenido";
+else if(letra=="ç")
+return "Cê cedilha";
+else if(letra=="Ç")
+return "Cê cedilha maiúsculo";
+else if(letra=="ã")
+return "a til";
+else if(letra=="õ")
+return "o til";
+else if(letra=="á")
+return "a agudo";
+else if(letra=="é")
+return "e agudo";
+else if(letra=="í")
+return "i agudo";
+else if(letra=="ó")
+return "o agudo";
+else if(letra=="ú")
+return "u agudo";
+else if(letra=="â")
+return "a circunflexo";
+else if(letra=="ê")
+return "e circunflexo";
+else if(letra=="î")
+return "i circunflexo";
+else if(letra=="ô")
+return "o circunflexo";
+else if(letra=="û")
+return "u circunflexo";
+else if(letra=="à")
+return "a crase";
+else if(letra=="è")
+return "e crase";
+else if(letra=="ì")
+return "i crase";
+else if(letra=="ò")
+return "o crase";
+else if(letra=="ù")
+return "u crase";
+else if(letra=="ä")
+return "a trema";
+else if(letra=="ë")
+return "e trema";
+else if(letra=="ï")
+return "i trema";
+else if(letra=="ö")
+return "o trema";
+else if(letra=="ü")
+return "u trema";
+else if(letra=="Ã")
+return "a til maiúsculo";
+else if(letra=="Õ")
+return "o til maiúsculo";
+else if(letra=="Á")
+return "a agudo maiúsculo";
+else if(letra=="É")
+return "e agudo maiúsculo";
+else if(letra=="Í")
+return "i agudo maiúsculo";
+else if(letra=="Ó")
+return "o agudo maiúsculo";
+else if(letra=="Ú")
+return "u agudo maiúsculo";
+else if(letra=="Â")
+return "a circunflexo maiúsculo";
+else if(letra=="Ê")
+return "e circunflexo maiúsculo";
+else if(letra=="Î")
+return "i circunflexo maiúsculo";
+else if(letra=="Ô")
+return "o circunflexo maiúsculo";
+else if(letra=="Û")
+return "u circunflexo maiúsculo";
+else if(letra=="À")
+return "a crase maiúsculo";
+else if(letra=="È")
+return "e crase maiúsculo";
+else if(letra=="Ì")
+return "i crase maiúsculo";
+else if(letra=="Ò")
+return "o crase maiúsculo";
+else if(letra=="Ù")
+return "u crase maiúsculo";
+else if(letra=="Ä")
+return "a trema maiúsculo";
+else if(letra=="Ë")
+return "e trema maiúsculo";
+else if(letra=="Ï")
+return "i trema maiúsculo";
+else if(letra=="Ö")
+return "o trema maiúsculo";
+else if(letra=="Ü")
+return "u trema maiúsculo";
+ else if(string_is_upper_case(letra))
+return letra+" "+pu.get_value("maiúsculo");
+else
+return letra;
+}
+}

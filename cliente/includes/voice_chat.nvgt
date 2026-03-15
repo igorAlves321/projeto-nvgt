@@ -1,0 +1,344 @@
+// ============================================================
+// 🎤 VOICE CHAT SYSTEM - Cliente
+// ============================================================
+// Implementa sistema de mensagens de voz com posicionamento 3D HRTF
+// Usa Push-to-Talk (PTT) com gravação local e transmissão de arquivos
+//
+// Abordagem: Audio Messages (implementável agora com APIs NVGT disponíveis)
+// - PTT com KEY_V para gravar
+// - Grava áudio localmente (até 5 segundos)
+// - Envia arquivo via rede unreliable
+// - Receptor reproduz com HRTF 3D
+//
+// Status: ✅ Implementável com APIs atuais do NVGT
+
+// Constantes de configuração
+const int VOICE_CHANNEL = 7;              // Canal de rede dedicado para voz (canal 7 = áudio)
+const int MAX_RECORD_TIME = 5000;         // Tempo máximo de gravação (5 seg)
+const float VOICE_RANGE = 50.0;           // Alcance de voz em metros
+const string VOICE_TEMP_DIR = "temp/";    // Diretório para arquivos temporários
+
+// ============================================================
+// CLASSE: voice_message_recorder
+// ============================================================
+// Gerencia gravação PTT e envio de mensagens de voz
+
+class voice_message_recorder {
+	bool is_recording = false;
+	timer record_timer;
+	int max_record_time = MAX_RECORD_TIME;
+	string temp_file = VOICE_TEMP_DIR + "recording.ogg";
+
+	// Instância de gravação (placeholder até API NVGT estar disponível)
+	// NOTA: NVGT ainda não tem API pública de gravação de microfone
+	// Esta implementação prepara a estrutura para quando a API estiver disponível
+	// sound_recorder@ recorder = null;  // PLACEHOLDER: Comentado até API estar disponível
+
+	// Construtor
+	voice_message_recorder() {
+		// Garantir que diretório temp existe
+		if(!directory_exists(VOICE_TEMP_DIR)) {
+			directory_create(VOICE_TEMP_DIR);
+		}
+	}
+
+	// Atualizar estado do gravador (chamar no game loop)
+	void update() {
+		// PTT: Z para gravar (pressionar e segurar)
+		if(key_down(KEY_Z) && !is_recording) {
+			start_recording();
+		}
+
+		// Soltar Z para enviar
+		if(!key_down(KEY_Z) && is_recording) {
+			stop_and_send();
+		}
+
+		// Auto-stop após tempo máximo
+		if(is_recording && record_timer.elapsed >= max_record_time) {
+			stop_and_send();
+		}
+	}
+
+	// Iniciar gravação
+	void start_recording() {
+		is_recording = true;
+		record_timer.restart();
+
+		// PLACEHOLDER: Iniciar gravação quando API NVGT estiver disponível
+		// @recorder = sound_recorder();
+		// recorder.start(temp_file);
+
+		// Feedback para o jogador
+		screen_reader_speak("Gravando mensagem de voz", true);
+
+		debug_log("🎤 Iniciando gravação de voz");
+	}
+
+	// Parar gravação e enviar
+	void stop_and_send() {
+		if(!is_recording) return;
+
+		is_recording = false;
+		uint64 duration = record_timer.elapsed;
+
+		// PLACEHOLDER: Parar gravação quando API NVGT estiver disponível
+		// if(@recorder != null) {
+		//     recorder.stop();
+		// }
+
+		debug_log("🎤 Finalizando gravação (" + duration + "ms)");
+
+		// Verificar se gravação foi muito curta (menos de 200ms)
+		if(duration < 200) {
+			screen_reader_speak("Mensagem muito curta", true);
+			return;
+		}
+
+		// Enviar arquivo via rede
+		send_voice_message();
+
+		// Feedback
+		screen_reader_speak("Mensagem enviada", true);
+	}
+
+	// Enviar mensagem de voz pela rede
+	void send_voice_message() {
+		// NOTA: Esta versão envia um placeholder
+		// Quando a API de gravação estiver disponível, lerá o arquivo gravado
+
+		// Ler arquivo gravado (quando disponível)
+		file f;
+		string audio_data = "";
+
+		// PLACEHOLDER: Ler arquivo real quando API estiver disponível
+		// if(f.open(temp_file, "rb")) {
+		//     audio_data = f.read();
+		//     f.close();
+		// }
+
+		// Por enquanto, enviar mensagem de placeholder
+		audio_data = "[VOICE_PLACEHOLDER_" + record_timer.elapsed + "ms]";
+
+		// Obter posição atual do jogador
+		int pos_x = game_me.x;
+		int pos_y = game_me.y;
+		int pos_z = 0; // Z será implementado quando houver sistema de altura
+
+		// Montar pacote: VOICE_MSG|player_id|x|y|z|audio_data
+		string packet = "VOICE_MSG|" + un + "|" +
+		               pos_x + "|" + pos_y + "|" + pos_z + "|" +
+		               audio_data;
+
+		// Enviar via unreliable (canal 5) para baixa latência
+		if(@con != null && is_connected) {
+			string encrypted = encrypt_packet(packet);
+			con.send(peer_id, encrypted, VOICE_CHANNEL, false); // unreliable=false
+
+			debug_log("📤 Enviado voice_msg: " + un + " em (" + pos_x + "," + pos_y + ")");
+		}
+	}
+}
+
+// ============================================================
+// CLASSE: voice_message_player
+// ============================================================
+// Gerencia reprodução de mensagens de voz com posicionamento 3D HRTF
+
+class voice_message_player {
+	// Mapa de vozes ativas: sender_id → sound@
+	dictionary active_voices;
+
+	// Mapa de timers de limpeza: sender_id → timer
+	dictionary cleanup_timers;
+
+	// Construtor
+	voice_message_player() {
+		// Garantir que HRTF está ativado
+		sound_global_hrtf = true;
+
+		debug_log("🔊 Voice message player inicializado (HRTF ativado)");
+	}
+
+	// Atualizar estado (chamar no game loop)
+	void update() {
+		// Limpar sons que terminaram de tocar
+		cleanup_finished_voices();
+	}
+
+	// Processar mensagem de voz recebida
+	void handle_voice_message(string message) {
+		// Parse: VOICE_PLAY|sender_id|x|y|z|audio_data
+		string[] parts = message.split("|");
+
+		if(parts.length() < 6) {
+			debug_log("⚠️ Voice message inválida: " + parts.length() + " partes");
+			return;
+		}
+
+		string sender_id = parts[1];
+		int sender_x = parse_int(parts[2]);
+		int sender_y = parse_int(parts[3]);
+		int sender_z = parse_int(parts[4]);
+		string audio_data = parts[5];
+
+		debug_log("📥 Recebido voice de " + sender_id + " em (" + sender_x + "," + sender_y + "," + sender_z + ")");
+
+		// PLACEHOLDER: Por enquanto, apenas toca um som de notificação
+		// Quando API de gravação estiver disponível, reproduzirá o áudio real
+		play_voice_message(sender_id, sender_x, sender_y, sender_z, audio_data);
+	}
+
+	// Reproduzir mensagem de voz com posicionamento 3D
+	void play_voice_message(string sender_id, int sender_x, int sender_y, int sender_z, string audio_data) {
+		// Parar voz anterior deste sender (se existir)
+		stop_voice(sender_id);
+
+		// PLACEHOLDER: Usar som de notificação até API estar disponível
+		// Quando implementado, salvará audio_data em arquivo temporário e carregará
+
+		string temp_voice_file = VOICE_TEMP_DIR + "voice_" + sender_id + ".ogg";
+
+		// PLACEHOLDER: Salvar audio_data em arquivo (quando não for placeholder)
+		// if(!audio_data.find("[VOICE_PLACEHOLDER") >= 0) {
+		//     file f;
+		//     if(f.open(temp_voice_file, "wb")) {
+		//         f.write(audio_data);
+		//         f.close();
+		//     }
+		// }
+
+		// Criar som 3D com HRTF
+		sound@ voice = sound();
+
+		// PLACEHOLDER: Usar som de notificação
+		// Quando implementado: voice.load(temp_voice_file);
+		if(voice.load(get_sound_path("message.ogg"))) { // Som de notificação de mensagem
+
+			// Calcular posição relativa ao jogador (para HRTF)
+			float relative_x = sender_x - game_me.x;
+			float relative_y = sender_y - game_me.y;
+			float relative_z = sender_z - 0; // Z será implementado
+
+			// Posicionar som no mundo 3D (Steam Audio HRTF)
+			// Assinatura: set_position(listener_x, listener_y, listener_z, sound_x, sound_y, sound_z, rotation, pan_step, volume_step)
+			voice.set_position(
+				0, 0, 0,           // Listener position (player = 0,0,0 no sistema relativo)
+				relative_x,        // Sound X relativo
+				relative_y,        // Sound Y relativo
+				relative_z,        // Sound Z relativo
+				0,                 // Rotation
+				0.01,              // Pan step (panning suave)
+				0.1                // Volume step (atenuação por distância)
+			);
+
+			// Reproduzir
+			voice.play();
+
+			// Armazenar referência para cleanup
+			@active_voices[sender_id] = @voice;
+
+			// Criar timer de cleanup
+			timer@ cleanup_timer = timer();
+			@cleanup_timers[sender_id] = @cleanup_timer;
+
+			debug_log("🔊 Reproduzindo voice de " + sender_id + " em posição relativa (" + relative_x + "," + relative_y + "," + relative_z + ")");
+
+			// Feedback TTS (opcional)
+			if(sender_id != un) { // Não falar se for própria voz
+				screen_reader_speak("Mensagem de " + sender_id, true);
+			}
+		}
+		else {
+			debug_log("⚠️ Falha ao carregar som de notificação para voice message");
+		}
+	}
+
+	// Parar voz específica
+	void stop_voice(string sender_id) {
+		sound@ voice;
+		if(active_voices.get(sender_id, @voice)) {
+			if(@voice != null) {
+				voice.close();
+			}
+			active_voices.delete(sender_id);
+			cleanup_timers.delete(sender_id);
+		}
+	}
+
+	// Limpar vozes que terminaram
+	void cleanup_finished_voices() {
+		string[] keys = active_voices.get_keys();
+
+		for(uint i = 0; i < keys.length(); i++) {
+			string sender_id = keys[i];
+			sound@ voice;
+			timer@ cleanup_timer;
+
+			if(active_voices.get(sender_id, @voice) &&
+			   cleanup_timers.get(sender_id, @cleanup_timer)) {
+
+				// Verificar se som terminou (após 10 segundos ou se não está tocando)
+				if(@cleanup_timer != null && cleanup_timer.elapsed >= 10000) {
+					stop_voice(sender_id);
+					debug_log("🧹 Limpeza de voice: " + sender_id);
+				}
+				else if(@voice != null && !voice.playing) {
+					stop_voice(sender_id);
+				}
+			}
+		}
+	}
+
+	// Parar todas as vozes
+	void stop_all_voices() {
+		string[] keys = active_voices.get_keys();
+		for(uint i = 0; i < keys.length(); i++) {
+			stop_voice(keys[i]);
+		}
+		debug_log("🛑 Todas as vozes paradas");
+	}
+}
+
+// ============================================================
+// INSTÂNCIAS GLOBAIS
+// ============================================================
+
+voice_message_recorder voice_recorder;
+voice_message_player voice_player;
+
+// ============================================================
+// FUNÇÕES AUXILIARES
+// ============================================================
+
+// Inicializar sistema de voice chat
+void init_voice_chat() {
+	// Garantir que HRTF está ativado globalmente
+	sound_global_hrtf = true;
+
+	// Criar diretório temp se não existir
+	if(!directory_exists(VOICE_TEMP_DIR)) {
+		directory_create(VOICE_TEMP_DIR);
+	}
+
+	debug_log("✅ Sistema de voice chat inicializado (HRTF: ON)");
+}
+
+// Atualizar sistema de voice chat (chamar no game loop)
+void update_voice_chat() {
+	// Atualizar gravador (verifica PTT)
+	voice_recorder.update();
+
+	// Atualizar player (limpeza de sons finalizados)
+	voice_player.update();
+}
+
+// Handler para processar pacotes de voz recebidos
+void handle_voice_packet(string message) {
+	// Mensagens começam com "VOICE_PLAY|"
+	if(message.find("VOICE_PLAY|") == 0) {
+		string data = message.substr(11); // Remove "VOICE_PLAY|"
+		voice_player.handle_voice_message(data);
+	}
+}
+

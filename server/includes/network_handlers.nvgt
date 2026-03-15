@@ -1,0 +1,1306 @@
+﻿// network_handlers.nvgt - Sistema Completo de Handlers de Rede
+// âœ… Epic 1 Task 3: Sistema de Rede e Handlers (NVGT / ENet)
+//
+// Este mÃ³dulo implementa o sistema completo de handlers de mensagens de rede
+// usando a API NVGT/ENet, com dispatcher manual e protocolo bem definido.
+//
+// Estrutura:
+// 1. DefiniÃ§Ã£o de protocolo (prefixos de mensagens)
+// 2. Dispatcher manual (roteador de mensagens)
+// 3. Handlers por categoria:
+//    - Combate (ataques, habilidades)
+//    - InventÃ¡rio (usar items, equipar, dropar)
+//    - Mapa (movimento, teleporte, interaÃ§Ãµes)
+//    - Social (chat, party, guild, trade)
+//    - Admin (comandos administrativos)
+//    - Habilidades (magias, skills)
+
+// ============================================================
+// 1. DEFINIÃ‡ÃƒO DE PROTOCOLO - PREFIXOS DE MENSAGENS
+// ============================================================
+
+// Protocolo baseado em prefixos para organizaÃ§Ã£o clara das mensagens
+// Formato: PREFIXO:dados|separados|por|pipe
+// Exemplo: CHAT:OlÃ¡ a todos!
+// Exemplo: COMBAT:attack|goblin_1|espada_ferro
+// Exemplo: INV:use|pocao_vida
+
+// === COMBATE ===
+const string MSG_COMBAT = "COMBAT:";        // Ataques e combate
+const string MSG_SKILL = "SKILL:";          // Uso de habilidades
+const string MSG_MAGIC = "MAGIC:";          // Uso de magias
+const string MSG_DAMAGE = "DAMAGE:";        // Aplicar dano (servidor â†’ cliente)
+
+// === INVENTÃRIO ===
+const string MSG_INV = "INV:";              // Comandos de inventÃ¡rio
+const string MSG_USE = "USE:";              // Usar item
+const string MSG_EQUIP = "EQUIP:";          // Equipar item
+const string MSG_DROP = "DROP:";            // Dropar item
+const string MSG_PICKUP = "PICKUP:";        // Pegar item do chÃ£o
+
+// === MAPA ===
+const string MSG_MOVE = "MOVE:";            // Movimento do jogador
+const string MSG_TELEPORT = "TELEPORT:";    // Teleporte
+const string MSG_INTERACT = "INTERACT:";    // Interagir com objeto
+const string MSG_DOOR = "DOOR:";            // Abrir/fechar porta
+const string MSG_ELEVATOR = "ELEVATOR:";    // Usar elevador
+
+// === SOCIAL ===
+const string MSG_CHAT = "CHAT:";            // Chat global
+const string MSG_WHISPER = "WHISPER:";      // Mensagem privada
+const string MSG_PARTY = "PARTY:";          // Comandos de party
+const string MSG_GUILD = "GUILD:";          // Comandos de guild
+const string MSG_TRADE = "TRADE:";          // ComÃ©rcio entre jogadores
+const string MSG_FRIEND = "FRIEND:";        // Sistema de amigos
+
+// === ADMIN ===
+const string MSG_ADMIN = "ADMIN:";          // Comandos administrativos
+const string MSG_BUILDER = "BUILDER:";      // Modo construtor
+const string MSG_KICK = "KICK:";            // Expulsar jogador
+const string MSG_BAN = "BAN:";              // Banir jogador
+
+// === VOICE CHAT ===
+const string MSG_VOICE = "VOICE_MSG|";      // Mensagem de voz (Ã¡udio)
+
+// === SISTEMA ===
+const string MSG_PING = "PING";             // Ping
+const string MSG_PONG = "PONG";             // Pong (resposta)
+const string MSG_UPDATE = "UPDATE:";        // AtualizaÃ§Ã£o de estado
+
+const uint NETWORK_HANDLER_MAX_MESSAGE_CHARS = 8192;
+
+string network_safe_preview(const string&in message, uint max_len = 80) {
+    if(message.length() <= max_len) return message;
+    return message.substr(0, max_len) + "...";
+}
+
+void network_log_invalid_payload(player@ p, const string&in handler_name, const string&in reason, const string&in data) {
+    string who = p is null ? "null_player" : p.name;
+    debug_log("Payload invÃ¡lido [" + handler_name + "] de " + who + ": " + reason + " | dados=" + network_safe_preview(data));
+}
+
+bool network_require_non_empty(player@ p, const string&in handler_name, const string&in data) {
+    if(data.trim_whitespace() == "") {
+        network_log_invalid_payload(p, handler_name, "payload vazio", data);
+        return false;
+    }
+    return true;
+}
+
+string[] split_pipe_trimmed(const string&in data) {
+    string[] parts = data.split("|");
+    for(uint i = 0; i < parts.length(); i++) {
+        parts[i] = parts[i].trim_whitespace();
+    }
+    return parts;
+}
+
+string join_parts_from(const string[]&in parts, uint start_index, const string&in separator = " ") {
+    string out_text = "";
+    if(start_index >= parts.length()) return out_text;
+    for(uint i = start_index; i < parts.length(); i++) {
+        if(i > start_index) out_text += separator;
+        out_text += parts[i];
+    }
+    return out_text;
+}
+
+bool is_unsigned_integer_string(const string&in value) {
+    string v = value.trim_whitespace();
+    if(v == "") return false;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        if(ch < "0" || ch > "9") return false;
+    }
+    return true;
+}
+
+bool network_try_parse_int(const string&in token, int &out value) {
+    string t = token.trim_whitespace();
+    if(t == "") return false;
+
+    uint start = 0;
+    if(t[0] == '-' || t[0] == '+') {
+        if(t.length() == 1) return false;
+        start = 1;
+    }
+    for(uint i = start; i < t.length(); i++) {
+        if(t[i] < '0' || t[i] > '9') return false;
+    }
+    value = parse_int(t);
+    return true;
+}
+
+bool network_is_valid_action_token(const string&in value) {
+    string v = value.trim_whitespace();
+    if(v == "") return false;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        bool is_digit = (ch >= "0" && ch <= "9");
+        bool is_upper = (ch >= "A" && ch <= "Z");
+        bool is_lower = (ch >= "a" && ch <= "z");
+        if(!(is_digit || is_upper || is_lower || ch == "_" || ch == "-")) return false;
+    }
+    return true;
+}
+
+bool network_can_use_admin_channel(player@ p) {
+    if(p is null) return false;
+    return has_role(p.charname, "admin") || has_role(p.charname, "dev");
+}
+
+bool network_can_use_builder_channel(player@ p) {
+    if(p is null) return false;
+    return has_role(p.charname, "builder") || has_role(p.charname, "admin") || has_role(p.charname, "dev");
+}
+
+void network_send_action_error(player@ p, const string&in scope, const string&in action) {
+    if(p is null) return;
+    send_reliable_text(p.peer_id, "say " + scope + ": aÃ§Ã£o desconhecida '" + action + "'.", 0);
+}
+
+// ============================================================
+// 2. DISPATCHER MANUAL - ROTEADOR DE MENSAGENS
+// ============================================================
+
+// FunÃ§Ã£o principal de dispatch que roteia mensagens para handlers especÃ­ficos
+void dispatch_network_message(player@ p, string message) {
+    if(p is null) return;
+    if(message.trim_whitespace() == "") return;
+    if(message.length() > NETWORK_HANDLER_MAX_MESSAGE_CHARS) {
+        network_log_invalid_payload(p, "dispatch_network_message", "mensagem acima do limite", message);
+        return;
+    }
+
+    debug_log("ðŸ“¨ Dispatch: " + p.name + " â†’ " + message.substr(0, min(50, message.length())));
+
+    // ============================================================
+    // PROTOCOLO JSON - Sistema de InventÃ¡rio Sincronizado
+    // ============================================================
+    // Detectar mensagens JSON (comeÃ§am com '{' e contÃªm "type")
+    if(message.length() > 0 && message.substr(0, 1) == "{" && message.find("\"type\"") >= 0) {
+        string json_type = json_get_type(message);
+
+        // Mensagens de inventÃ¡rio JSON
+        if(json_type.find("inv_") == 0) {
+            dispatch_inventory_json(p, message);
+            return;
+        }
+
+        // Mensagens de equipamentos JSON
+        if(json_type == "equip" || json_type == "unequip" || json_type == "get_equipment") {
+            dispatch_equipment_json(p, message);
+            return;
+        }
+
+        // Mensagens de drops/loot JSON
+        if(json_type == "pickup" || json_type == "drop_request_list") {
+            dispatch_drop_json(p, message);
+            return;
+        }
+
+        // Outros tipos de mensagens JSON podem ser adicionados aqui
+        debug_log("âš ï¸ Mensagem JSON nÃ£o reconhecida: " + json_type);
+        return;
+    }
+
+    // === COMBATE ===
+    if(message.find(MSG_COMBAT) == 0) {
+        handle_combat(p, message.substr(MSG_COMBAT.length()));
+        return;
+    }
+
+    if(message.find(MSG_SKILL) == 0) {
+        handle_skill(p, message.substr(MSG_SKILL.length()));
+        return;
+    }
+
+    if(message.find(MSG_MAGIC) == 0) {
+        handle_magic(p, message.substr(MSG_MAGIC.length()));
+        return;
+    }
+
+    // === INVENTÃRIO ===
+    if(message.find(MSG_INV) == 0) {
+        handle_inventory(p, message.substr(MSG_INV.length()));
+        return;
+    }
+
+    if(message.find(MSG_USE) == 0) {
+        handle_use_item(p, message.substr(MSG_USE.length()));
+        return;
+    }
+
+    if(message.find(MSG_EQUIP) == 0) {
+        handle_equip_item(p, message.substr(MSG_EQUIP.length()));
+        return;
+    }
+
+    if(message.find(MSG_DROP) == 0) {
+        handle_drop_item(p, message.substr(MSG_DROP.length()));
+        return;
+    }
+
+    if(message.find(MSG_PICKUP) == 0) {
+        handle_pickup_item(p, message.substr(MSG_PICKUP.length()));
+        return;
+    }
+
+    // === MAPA ===
+    if(message.find(MSG_MOVE) == 0) {
+        handle_move(p, message.substr(MSG_MOVE.length()));
+        return;
+    }
+
+    if(message.find(MSG_TELEPORT) == 0) {
+        handle_teleport(p, message.substr(MSG_TELEPORT.length()));
+        return;
+    }
+
+    if(message.find(MSG_INTERACT) == 0) {
+        handle_interact(p, message.substr(MSG_INTERACT.length()));
+        return;
+    }
+
+    if(message.find(MSG_DOOR) == 0) {
+        handle_door(p, message.substr(MSG_DOOR.length()));
+        return;
+    }
+
+    if(message.find(MSG_ELEVATOR) == 0) {
+        handle_elevator(p, message.substr(MSG_ELEVATOR.length()));
+        return;
+    }
+
+    // === SOCIAL ===
+    if(message.find(MSG_CHAT) == 0) {
+        handle_chat(p, message.substr(MSG_CHAT.length()));
+        return;
+    }
+
+    if(message.find(MSG_WHISPER) == 0) {
+        handle_whisper(p, message.substr(MSG_WHISPER.length()));
+        return;
+    }
+
+    if(message.find(MSG_PARTY) == 0) {
+        handle_party(p, message.substr(MSG_PARTY.length()));
+        return;
+    }
+
+    if(message.find(MSG_GUILD) == 0) {
+        handle_guild(p, message.substr(MSG_GUILD.length()));
+        return;
+    }
+
+    if(message.find(MSG_TRADE) == 0) {
+        handle_trade(p, message.substr(MSG_TRADE.length()));
+        return;
+    }
+
+    if(message.find(MSG_FRIEND) == 0) {
+        handle_friend(p, message.substr(MSG_FRIEND.length()));
+        return;
+    }
+
+    // === VOICE CHAT ===
+    if(message.find(MSG_VOICE) == 0) {
+        handle_voice_message(p, message);
+        return;
+    }
+
+    // === ADMIN ===
+    if(message.find(MSG_ADMIN) == 0) {
+        if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
+            send_reliable_text(p.peer_id, "say Acesso negado: vocÃª nÃ£o Ã© administrador.", 0);
+            return;
+        }
+        handle_admin(p, message.substr(MSG_ADMIN.length()));
+        return;
+    }
+
+    if(message.find(MSG_BUILDER) == 0) {
+        if(!has_role(p.charname, "builder") && !has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
+            send_reliable_text(p.peer_id, "say Acesso negado: vocÃª nÃ£o Ã© construtor.", 0);
+            return;
+        }
+        handle_builder(p, message.substr(MSG_BUILDER.length()));
+        return;
+    }
+
+    // === SISTEMA ===
+    if(message == MSG_PING) {
+        handle_ping(p);
+        return;
+    }
+
+    if(message.find(MSG_UPDATE) == 0) {
+        handle_update(p, message.substr(MSG_UPDATE.length()));
+        return;
+    }
+
+    // === FALLBACK: Comando desconhecido ===
+    debug_log("âš ï¸ Mensagem desconhecida de " + p.name + ": " + message);
+    send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+}
+
+// ============================================================
+// 3. HANDLERS DE COMBATE
+// ============================================================
+
+void handle_combat(player@ p, string data) {
+    // Formato: attack|target_name|weapon
+    // Exemplo: COMBAT:attack|goblin_1|espada_ferro
+
+    if(!network_require_non_empty(p, "handle_combat", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_combat", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    if(action == "attack" && parts.length() >= 3) {
+        string target = parts[1];
+        string weapon = parts[2];
+
+        debug_log("âš”ï¸ " + p.name + " atacando " + target + " com " + weapon);
+
+        int player_index = get_player_index_from(p.charname);
+        if(player_index >= 0) {
+            string[] args;
+            args.insert_last(target);
+            args.insert_last(weapon);
+            cmd_attack(p, args);
+        } else {
+            send_reliable_text(p.peer_id, "say Erro interno: jogador nÃ£o encontrado.", 0);
+        }
+    }
+    else if(action == "defend") {
+        p.crouched = true; // Agachar como defesa
+        debug_log("ðŸ›¡ï¸ " + p.name + " defendendo");
+        send_reliable_text(p.peer_id, "say VocÃª estÃ¡ defendendo", 0);
+    }
+}
+
+void handle_skill(player@ p, string data) {
+    // Formato: skill_name|target
+    // Exemplo: SKILL:rajada|goblin_1
+
+    if(!network_require_non_empty(p, "handle_skill", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_skill", "habilidade ausente", data);
+        return;
+    }
+
+    string skill_name = parts[0];
+    string target = parts.length() >= 2 ? parts[1] : "";
+
+    debug_log("âœ¨ " + p.name + " usando habilidade: " + skill_name);
+
+    string msg = "VocÃª usou " + skill_name;
+    if(target != "") msg += " em " + target;
+    send_reliable_text(p.peer_id, "say " + msg, 0);
+}
+
+void handle_magic(player@ p, string data) {
+    // Formato: magic_name|target|mana_cost
+    // Exemplo: MAGIC:bola_de_fogo|goblin_1|20
+
+    if(!network_require_non_empty(p, "handle_magic", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 2 || parts[0] == "" || parts[1] == "") {
+        network_log_invalid_payload(p, "handle_magic", "dados insuficientes (magia|alvo|mana)", data);
+        return;
+    }
+
+    string magic_name = parts[0];
+    string target = parts[1];
+    int mana_cost = parts.length() >= 3 && parts[2] != "" ? parse_int(parts[2]) : 0;
+
+    debug_log("ðŸ”® " + p.name + " conjurando: " + magic_name);
+
+    // Verificar mana
+    if(p.mp < mana_cost) {
+        send_reliable_text(p.peer_id, "say Mana insuficiente", 0);
+        return;
+    }
+
+    // Consumir mana
+    p.mp -= mana_cost;
+
+    string cast_msg = "VocÃª conjurou " + magic_name;
+    if(target != "") cast_msg += " em " + target;
+    cast_msg += " (custo: " + mana_cost + " MP)";
+    send_reliable_text(p.peer_id, "say " + cast_msg, 0);
+}
+
+// ============================================================
+// 4. HANDLERS DE INVENTÃRIO
+// ============================================================
+
+void handle_inventory(player@ p, string data) {
+    // Comandos gerais de inventÃ¡rio
+    // Formato: action|params
+    // Exemplo: INV:list
+    // Exemplo: INV:info|espada_ferro
+
+    if(!network_require_non_empty(p, "handle_inventory", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_inventory", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    if(action == "list") {
+        string[] items = p.inv.get_keys();
+        int valid_count = 0;
+        for(uint i = 0; i < items.length(); i++) {
+            int q = 0;
+            p.inv.get(items[i], q);
+            if(q > 0) valid_count++;
+        }
+
+        if(valid_count == 0) {
+            send_reliable_text(p.peer_id, "say InventÃ¡rio vazio.", 0);
+            return;
+        }
+
+        send_reliable_text(p.peer_id, "say InventÃ¡rio: " + valid_count + " item(ns).", 0);
+        for(uint i = 0; i < items.length(); i++) {
+            int quantity = 0;
+            p.inv.get(items[i], quantity);
+            if(quantity <= 0) continue;
+            send_reliable_text(p.peer_id, "say - " + items[i] + " x" + quantity, 0);
+        }
+    }
+    else if(action == "info" && parts.length() >= 2) {
+        string item_name = parts[1];
+        GameItem@ item = get_item_by_name(item_name);
+        if(item is null) {
+            send_reliable_text(p.peer_id, "say Item nÃ£o encontrado: " + item_name, 0);
+            return;
+        }
+
+        int quantity = 0;
+        p.inv.get(item_name, quantity);
+        send_reliable_text(p.peer_id, "say " + item.display_name + " (" + item.item_type + "/" + item.category + "), qtd: " + quantity, 0);
+        if(item.description != "") send_reliable_text(p.peer_id, "say " + item.description, 0);
+    }
+}
+
+void handle_use_item(player@ p, string data) {
+    // Formato: item_name
+    // Exemplo: USE:pocao_vida
+
+    string item_name = data.trim_whitespace();
+    if(item_name == "") {
+        network_log_invalid_payload(p, "handle_use_item", "item vazio", data);
+        send_reliable_text(p.peer_id, "say Item invÃ¡lido.", 0);
+        return;
+    }
+
+    debug_log("ðŸ’Š " + p.name + " usando: " + item_name);
+
+    // Obter Ã­ndice do jogador
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) {
+        send_reliable_text(p.peer_id, "say Erro: Jogador nÃ£o encontrado.", 0);
+        return;
+    }
+
+    // Delegar ao sistema de consumÃ­veis (que jÃ¡ faz verificaÃ§Ãµes e remove item)
+    // O sistema de consumables.nvgt verifica inventÃ¡rio, aplica efeitos e remove item
+    use_item(player_index, item_name);
+    // Mensagens de erro/sucesso jÃ¡ sÃ£o enviadas pelo sistema de consumables
+}
+
+void handle_equip_item(player@ p, string data) {
+    // Formato: item_name|slot
+    // Exemplo: EQUIP:espada_ferro|weapon
+    // Exemplo: EQUIP:colete_kevlar|armor
+
+    if(!network_require_non_empty(p, "handle_equip_item", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 2 || parts[0] == "" || parts[1] == "") {
+        network_log_invalid_payload(p, "handle_equip_item", "dados insuficientes (item|slot)", data);
+        return;
+    }
+
+    string item_name = parts[0];
+    string slot = parts[1];
+
+    debug_log("ðŸŽ½ " + p.name + " equipando: " + item_name + " em " + slot);
+
+    bool equipped = equip_item(p, item_name);
+    if(!equipped) {
+        send_reliable_text(p.peer_id, "say NÃ£o foi possÃ­vel equipar " + item_name + ".", 0);
+        return;
+    }
+    send_reliable_text(p.peer_id, "say Equipado: " + item_name + " em " + slot, 0);
+}
+
+void handle_drop_item(player@ p, string data) {
+    // Formato: item_name|quantidade
+    // Exemplo: DROP:pocao_vida|5
+
+    if(!network_require_non_empty(p, "handle_drop_item", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_drop_item", "item ausente", data);
+        return;
+    }
+
+    string item_name = parts[0];
+    int quantidade = 1;
+    if(parts.length() >= 2 && parts[1] != "") {
+        if(!is_unsigned_integer_string(parts[1])) {
+            send_reliable_text(p.peer_id, "say Quantidade invalida", 0);
+            return;
+        }
+        quantidade = parse_int(parts[1]);
+    }
+    if(quantidade <= 0) {
+        send_reliable_text(p.peer_id, "say Quantidade invÃ¡lida", 0);
+        return;
+    }
+
+    debug_log("ðŸ“¦ " + p.name + " dropando: " + item_name + " x" + quantidade);
+
+    // Verificar se tem o item
+    if(!p.inv.exists(item_name)) {
+        send_reliable_text(p.peer_id, "say VocÃª nÃ£o tem este item", 0);
+        return;
+    }
+
+    int current = 0;
+    p.inv.get(item_name, current);
+    if(current < quantidade) {
+        send_reliable_text(p.peer_id, "say Quantidade insuficiente", 0);
+        return;
+    }
+
+    // Remover do inventÃ¡rio e criar item no mundo
+    p.inv.set(item_name, current - quantidade);
+    if(!spawn_item_at(item_name, p.map_name, p.x, p.y, p.z, quantidade, p.charname)) {
+        // rollback em caso de falha ao persistir no mundo
+        p.inv.set(item_name, current);
+        send_reliable_text(p.peer_id, "say Falha ao dropar item no mapa.", 0);
+        return;
+    }
+    send_reliable_text(p.peer_id, "say VocÃª dropou " + quantidade + "x " + item_name, 0);
+}
+
+void handle_pickup_item(player@ p, string data) {
+    // Formato: item_id
+    // Exemplo: PICKUP:obj_123
+
+    string item_id = data.trim_whitespace();
+    if(item_id == "") {
+        network_log_invalid_payload(p, "handle_pickup_item", "item_id vazio", data);
+        return;
+    }
+
+    debug_log("ðŸ¤ " + p.name + " pegando: " + item_id);
+
+    // Novo fluxo de drops UUID (loot_drops.nvgt)
+    if(item_id.find("drop_") == 0) {
+        handle_pickup_drop(p, item_id);
+        return;
+    }
+
+    // Fluxo unificado: pickup sempre pela posicao atual do jogador
+    bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
+    if(!ok) {
+        send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
+    }
+}
+
+// ============================================================
+// 5. HANDLERS DE MAPA
+// ============================================================
+
+void handle_move(player@ p, string data) {
+    // Formato aceito:
+    //   x|y           - posiÃ§Ã£o simples
+    //   x=10;y=20     - formato chave=valor
+    //   step_sound|x|y - com som de passo (3 partes)
+    // Exemplo: MOVE:40|12
+    // Exemplo: MOVE:x=40;y=12
+    // Exemplo: MOVE:grassstep1.ogg|40|12
+
+    if(!network_require_non_empty(p, "handle_move", data)) return;
+
+    int new_x = p.x;
+    int new_y = p.y;
+    string step_sound = "";
+
+    // Suportar todos os formatos
+    if(data.find(";") >= 0) {
+        // Formato x=10;y=20
+        string[] parts = data.split(";");
+        for(uint i = 0; i < parts.length(); i++) {
+            string[] kv = parts[i].split("=");
+            if(kv.length() >= 2) {
+                string key = kv[0].trim_whitespace().lower();
+                string value = kv[1].trim_whitespace();
+                if(key == "x" && value != "") {
+                    if(!network_try_parse_int(value, new_x)) {
+                        network_log_invalid_payload(p, "handle_move", "x invalido no formato chave=valor", data);
+                        return;
+                    }
+                }
+                else if(key == "y" && value != "") {
+                    if(!network_try_parse_int(value, new_y)) {
+                        network_log_invalid_payload(p, "handle_move", "y invalido no formato chave=valor", data);
+                        return;
+                    }
+                }
+                else if(key == "step") step_sound = value;
+            }
+        }
+    } else {
+        // Formato com | (pipe)
+        string[] parts = split_pipe_trimmed(data);
+        if(parts.length() == 2) {
+            // Formato: x|y
+            if(parts[0] == "" || parts[1] == "") {
+                network_log_invalid_payload(p, "handle_move", "x ou y vazio", data);
+                return;
+            }
+            if(!network_try_parse_int(parts[0], new_x) || !network_try_parse_int(parts[1], new_y)) {
+                network_log_invalid_payload(p, "handle_move", "x ou y invalido", data);
+                return;
+            }
+        } else if(parts.length() >= 3) {
+            // Formato: step_sound|x|y
+            step_sound = parts[0];
+            if(parts[1] == "" || parts[2] == "") {
+                network_log_invalid_payload(p, "handle_move", "x ou y vazio no formato com step", data);
+                return;
+            }
+            if(!network_try_parse_int(parts[1], new_x) || !network_try_parse_int(parts[2], new_y)) {
+                network_log_invalid_payload(p, "handle_move", "x ou y invalido no formato com step", data);
+                return;
+            }
+        } else {
+            network_log_invalid_payload(p, "handle_move", "formato invÃ¡lido", data);
+            return;
+        }
+    }
+
+    // ===== VALIDAÃ‡Ã•ES (Task 4 - movimento_jogador.md) =====
+    
+    // Validar jogador nÃ£o estÃ¡ paralisado ou AFK
+    if(p.paralisado || p.paralisado2 || p.afk) {
+        send_reliable_text(p.peer_id, "msg2 ;VocÃª nÃ£o pode se mover agora.;", 0);
+        return;
+    }
+    
+    // Validar movimento nÃ£o Ã© muito grande (anti-cheat)
+    if(!is_valid_movement(p.x, p.y, new_x, new_y, 10)) {
+        debug_log("âš ï¸ Movimento invÃ¡lido (MOVE:) " + p.name + ": (" + p.x + "," + p.y + ") â†’ (" + new_x + "," + new_y + ")");
+        send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
+        return;
+    }
+    
+    // Verificar se a posiÃ§Ã£o Ã© caminhÃ¡vel
+    if(!is_walkable(new_x, new_y, p.map_name)) {
+        send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
+        return;
+    }
+    
+    // Obter tipo do tile para sons de passos (usa o enviado ou detecta)
+    string tile_type = step_sound != "" ? step_sound : get_tile_at(new_x, new_y, p.map_name);
+    
+    // Usar a funÃ§Ã£o move() da classe player (inclui minas, zonas de morte, etc.)
+    p.move(tile_type, new_x, new_y, 0);
+    
+    debug_log("ðŸš¶ " + p.name + " â†’ (" + new_x + ", " + new_y + ") [" + tile_type + "]");
+}
+
+void handle_teleport(player@ p, string data) {
+    // Formato: map_name|x|y
+    // Exemplo: TELEPORT:cidade|100|50
+
+    if(!network_require_non_empty(p, "handle_teleport", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "") {
+        network_log_invalid_payload(p, "handle_teleport", "dados insuficientes (mapa|x|y)", data);
+        return;
+    }
+
+    string map_name = parts[0];
+    int x = 0;
+    int y = 0;
+    if(!network_try_parse_int(parts[1], x) || !network_try_parse_int(parts[2], y)) {
+        network_log_invalid_payload(p, "handle_teleport", "coordenadas invalidas", data);
+        return;
+    }
+
+    debug_log("ðŸŒ€ " + p.name + " teleportando para " + map_name + " (" + x + "," + y + ")");
+
+    // SeguranÃ§a: teleporte por pacote sÃ³ para admin/dev
+    if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
+        send_reliable_text(p.peer_id, "say Acesso negado para teleporte.", 0);
+        return;
+    }
+
+    if(!builder_is_valid_map_name(map_name)) {
+        send_reliable_text(p.peer_id, "say Mapa invÃ¡lido: " + map_name, 0);
+        return;
+    }
+
+    int map_index = get_map_index_from(map_name);
+    if(map_index < 0 || map_index >= int(server_maps.length())) {
+        send_reliable_text(p.peer_id, "say Mapa nÃ£o encontrado: " + map_name, 0);
+        return;
+    }
+
+    if(x < 0 || y < 0 || x > server_maps[map_index].max_x || y > server_maps[map_index].max_y) {
+        send_reliable_text(p.peer_id, "say Coordenadas invÃ¡lidas para o mapa " + map_name + ".", 0);
+        return;
+    }
+
+    if(!is_walkable(x, y, map_name)) {
+        send_reliable_text(p.peer_id, "say Destino bloqueado no mapa " + map_name + ".", 0);
+        return;
+    }
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index >= 0) {
+        changemap(map_name, player_index, x, y);
+    }
+}
+
+void handle_interact(player@ p, string data) {
+    // Formato: object_id|action
+    // Exemplo: INTERACT:door_123|open
+    // Exemplo: INTERACT:npc_merchant|talk
+
+    if(!network_require_non_empty(p, "handle_interact", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_interact", "object_id ausente", data);
+        return;
+    }
+
+    string object_id = parts[0];
+    string action = parts.length() >= 2 ? parts[1] : "use";
+
+    debug_log("ðŸ‘† " + p.name + " interagindo com " + object_id + " (" + action + ")");
+
+    // IntegraÃ§Ãµes rÃ¡pidas com fluxos existentes
+    if(object_id == "pickup" || action == "pickup") {
+        bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
+        if(!ok) send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
+        return;
+    }
+    send_reliable_text(p.peer_id, "say InteraÃ§Ã£o registrada: " + object_id + " (" + action + ")", 0);
+}
+
+void handle_door(player@ p, string data) {
+    // Formato: door_id|action
+    // Exemplo: DOOR:123|open
+
+    if(!network_require_non_empty(p, "handle_door", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 2 || parts[0] == "" || parts[1] == "") {
+        network_log_invalid_payload(p, "handle_door", "dados insuficientes (door|action)", data);
+        return;
+    }
+
+    string door_id = parts[0];
+    string action = parts[1];
+
+    debug_log("ðŸšª " + p.name + " - porta " + door_id + " â†’ " + action);
+
+    send_reliable_text(p.peer_id, "say Porta " + door_id + " " + action + ".", 0);
+}
+
+void handle_elevator(player@ p, string data) {
+    // Formato: elevator_id|floor
+    // Exemplo: ELEVATOR:lobby|3
+
+    if(!network_require_non_empty(p, "handle_elevator", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 2 || parts[0] == "" || parts[1] == "") {
+        network_log_invalid_payload(p, "handle_elevator", "dados insuficientes (elevator|floor)", data);
+        return;
+    }
+
+    string elevator_id = parts[0];
+    int floor = 0;
+    if(!network_try_parse_int(parts[1], floor)) {
+        network_log_invalid_payload(p, "handle_elevator", "andar invalido", data);
+        return;
+    }
+
+    debug_log("ðŸ›— " + p.name + " - elevador " + elevator_id + " â†’ andar " + floor);
+
+    send_reliable_text(p.peer_id, "say Elevador " + elevator_id + " indo para o andar " + floor + ".", 0);
+}
+
+void handle_whisper(player@ p, string data) {
+    // Formato: target_name|message
+    // Exemplo: WHISPER:JoÃ£o|OlÃ¡, tudo bem?
+
+    if(!network_require_non_empty(p, "handle_whisper", data)) return;
+    string[] parts = data.split("|");
+    if(parts.length() < 2) {
+        network_log_invalid_payload(p, "handle_whisper", "dados insuficientes (alvo|mensagem)", data);
+        return;
+    }
+
+    string target_name = parts[0].trim_whitespace();
+    if(target_name == "") {
+        network_log_invalid_payload(p, "handle_whisper", "alvo vazio", data);
+        return;
+    }
+
+    string message = "";
+    for(uint i = 1; i < parts.length(); i++) {
+        if(i > 1) message += "|";
+        message += parts[i];
+    }
+    message = message.trim_whitespace();
+    if(message == "") {
+        network_log_invalid_payload(p, "handle_whisper", "mensagem vazia", data);
+        return;
+    }
+
+    debug_log("ðŸ¤« " + p.name + " â†’ " + target_name + ": " + message);
+
+    // Encontrar jogador alvo
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        send_reliable_text(p.peer_id, "say Jogador nÃ£o encontrado: " + target_name, 0);
+        return;
+    }
+
+    int sender_index = get_player_index_from(p.charname);
+    if(sender_index < 0) {
+        send_reliable_text(p.peer_id, "say Erro interno ao enviar mensagem privada.", 0);
+        return;
+    }
+    send_pm(sender_index, target_name, message);
+}
+
+// ============================================================
+// 6. HANDLERS SOCIAIS
+// ============================================================
+
+void handle_chat(player@ p, string data) {
+    // Formato: mensagem
+    // Exemplo: CHAT:OlÃ¡ a todos!
+    
+    string message = data.trim_whitespace();
+    if(message.length() == 0) return;
+
+    debug_log("ðŸ’¬ " + p.name + ": " + message);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index >= 0) {
+        telllocal(player_index, message);
+    }
+}
+
+void handle_party(player@ p, string data) {
+    // Formato: action|params
+    // Exemplo: PARTY:invite|JoÃ£o
+    // Exemplo: PARTY:accept
+    // Exemplo: PARTY:leave
+
+    if(!network_require_non_empty(p, "handle_party", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_party", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    debug_log("ðŸ‘¥ " + p.name + " - party: " + action);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) return;
+
+    if(action == "create") {
+        cmd_createparty(player_index);
+    } else if(action == "invite" && parts.length() >= 2) {
+        cmd_invite(player_index, parts[1]);
+    } else if(action == "join" || action == "accept") {
+        cmd_joinparty(player_index);
+    } else if(action == "leave") {
+        cmd_leaveparty(player_index);
+    } else if(action == "kick" && parts.length() >= 2) {
+        cmd_kickparty(player_index, parts[1]);
+    } else if(action == "disband") {
+        cmd_disbandparty(player_index);
+    } else if(action == "chat") {
+        cmd_partychat(player_index, join_parts_from(parts, 1, "|"));
+    } else if(action == "info" || action == "list") {
+        cmd_partyinfo(player_index);
+    } else {
+        network_send_action_error(p, "Party", action);
+    }
+}
+
+void handle_guild(player@ p, string data) {
+    // Formato: action|params
+    // Exemplo: GUILD:create|MinhaGuild
+    // Exemplo: GUILD:invite|JoÃ£o
+    // Exemplo: GUILD:leave
+
+    if(!network_require_non_empty(p, "handle_guild", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_guild", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    debug_log("ðŸ° " + p.name + " - guild: " + action);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) return;
+
+    if(action == "create" && parts.length() >= 2) {
+        string guild_name = parts[1];
+        string guild_tag = parts.length() >= 3 ? parts[2] : "";
+        cmd_createguild(player_index, guild_name, guild_tag);
+    } else if(action == "invite" && parts.length() >= 2) {
+        cmd_inviteguild(player_index, parts[1]);
+    } else if(action == "join" || action == "accept") {
+        cmd_joinguild(player_index);
+    } else if(action == "leave") {
+        cmd_leaveguild(player_index);
+    } else if(action == "kick" && parts.length() >= 2) {
+        cmd_kickguild(player_index, parts[1]);
+    } else if(action == "disband") {
+        cmd_disbandguild(player_index);
+    } else if(action == "chat") {
+        cmd_guildchat(player_index, join_parts_from(parts, 1, "|"));
+    } else if(action == "info" || action == "list") {
+        cmd_guildinfo(player_index);
+    } else if(action == "promote" && parts.length() >= 2) {
+        cmd_promoteguild(player_index, parts[1]);
+    } else if(action == "demote" && parts.length() >= 2) {
+        cmd_demoteguild(player_index, parts[1]);
+    } else if(action == "donate" && parts.length() >= 2) {
+        cmd_donateguild(player_index, parse_int(parts[1]));
+    } else {
+        network_send_action_error(p, "Guild", action);
+    }
+}
+
+void handle_trade(player@ p, string data) {
+    // Formato: action|params
+    // Exemplo: TRADE:request|JoÃ£o
+    // Exemplo: TRADE:offer|espada_ferro|1
+    // Exemplo: TRADE:accept
+
+    if(!network_require_non_empty(p, "handle_trade", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_trade", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    debug_log("ðŸ¤ " + p.name + " - trade: " + action);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) return;
+
+    if((action == "request" || action == "invite") && parts.length() >= 2) {
+        cmd_trade(player_index, parts[1]);
+    } else if((action == "additem" || action == "offer") && parts.length() >= 2) {
+        int qty = parts.length() >= 3 ? parse_int(parts[2]) : 1;
+        cmd_additem(player_index, parts[1], qty);
+    } else if(action == "addgold" && parts.length() >= 2) {
+        cmd_addgold(player_index, parse_int(parts[1]));
+    } else if((action == "removeitem" || action == "remove") && parts.length() >= 2) {
+        cmd_removeitem(player_index, parts[1]);
+    } else if(action == "accept" || action == "ready") {
+        cmd_accept(player_index);
+    } else if(action == "cancel" || action == "decline") {
+        cmd_canceltrade(player_index);
+    } else {
+        network_send_action_error(p, "Trade", action);
+    }
+}
+
+void handle_friend(player@ p, string data) {
+    // Formato: action|player_name
+    // Exemplo: FRIEND:add|JoÃ£o
+    // Exemplo: FRIEND:remove|Maria
+    // Exemplo: FRIEND:list
+
+    if(!network_require_non_empty(p, "handle_friend", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_friend", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    debug_log("ðŸ‘‹ " + p.name + " - friend: " + action);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) return;
+
+    if(action == "add" && parts.length() >= 2) {
+        cmd_addfriend(player_index, parts[1]);
+    } else if(action == "remove" && parts.length() >= 2) {
+        cmd_removefriend(player_index, parts[1]);
+    } else if(action == "list" || action == "info") {
+        cmd_friends(player_index);
+    } else if(action == "status" && parts.length() >= 2) {
+        cmd_friendstatus(player_index, parts[1]);
+    } else if(action == "pm" && parts.length() >= 3) {
+        cmd_pm(player_index, parts[1], join_parts_from(parts, 2, "|"));
+    } else if((action == "tp" || action == "tpfriend") && parts.length() >= 2) {
+        cmd_tpfriend(player_index, parts[1]);
+    } else {
+        network_send_action_error(p, "Friend", action);
+    }
+}
+
+// ============================================================
+// 7. HANDLERS DE ADMIN
+// ============================================================
+
+void handle_admin(player@ p, string data) {
+    // Formato: command|params
+    // Exemplo: ADMIN:teleport|JoÃ£o|cidade|100|50
+    // Exemplo: ADMIN:give|JoÃ£o|pocao_vida|10
+    // Exemplo: ADMIN:freeze|Maria
+
+    if(!network_can_use_admin_channel(p)) {
+        send_reliable_text(p.peer_id, "say Acesso negado: voce nao e administrador.", 0);
+        return;
+    }
+
+    if(!network_require_non_empty(p, "handle_admin", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_admin", "comando ausente", data);
+        return;
+    }
+
+    string command = parts[0].trim_whitespace();
+    if(!network_is_valid_action_token(command)) {
+        network_log_invalid_payload(p, "handle_admin", "comando invalido", data);
+        send_reliable_text(p.peer_id, "say Comando admin invalido.", 0);
+        return;
+    }
+
+    debug_log("ðŸ‘‘ ADMIN " + p.name + ": " + command);
+
+    string command_line = "/" + command;
+    if(parts.length() > 1) {
+        command_line += " " + join_parts_from(parts, 1, " ");
+    }
+
+    if(!process_command(p, command_line)) network_send_action_error(p, "Admin", command);
+}
+
+void handle_builder(player@ p, string data) {
+    // Formato: action|params
+    // Exemplo: BUILDER:create|wall|100|50
+    // Exemplo: BUILDER:delete|obj_123
+
+    if(!network_can_use_builder_channel(p)) {
+        send_reliable_text(p.peer_id, "say Acesso negado: voce nao e construtor.", 0);
+        return;
+    }
+
+    if(!network_require_non_empty(p, "handle_builder", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_builder", "aÃ§Ã£o ausente", data);
+        return;
+    }
+
+    string action = parts[0].trim_whitespace();
+    if(!network_is_valid_action_token(action)) {
+        network_log_invalid_payload(p, "handle_builder", "acao invalida", data);
+        send_reliable_text(p.peer_id, "say Acao de builder invalida.", 0);
+        return;
+    }
+
+    debug_log("ðŸ—ï¸ BUILDER " + p.name + ": " + action);
+
+    if(action == "add_line" && parts.length() >= 2) {
+        req_builder_create_element(p, parts[1]);
+        return;
+    }
+    if((action == "undo_last" || action == "undo") && parts.length() >= 2) {
+        builder_undo_last_element(p, parts[1]);
+        return;
+    }
+    if(action == "savemap" || action == "save") {
+        map@ current_map = builder_get_player_map(p);
+        builder_save_map(p, current_map);
+        return;
+    }
+    if(action == "mapupdate" || action == "update" || action == "rawdata") {
+        if(parts.length() >= 2) builder_update_map(p, parts[1]);
+        else builder_update_map(p);
+        return;
+    }
+    if(action == "newmap" && parts.length() >= 4) {
+        if(!is_unsigned_integer_string(parts[2]) || !is_unsigned_integer_string(parts[3])) {
+            network_log_invalid_payload(p, "handle_builder", "dimensoes invalidas em newmap", data);
+            send_reliable_text(p.peer_id, "say Builder: largura e altura devem ser numeros inteiros.", 0);
+            return;
+        }
+        string map_name = parts[1];
+        int map_width = parse_int(parts[2]);
+        int map_height = parse_int(parts[3]);
+        string floor_sound = parts.length() >= 5 ? parts[4] : "1";
+        builder_create_new_map(p, map_name, map_width, map_height, floor_sound);
+        return;
+    }
+    if(action == "delmap" && parts.length() >= 2) {
+        builder_delete_map(p, parts[1]);
+        return;
+    }
+
+    // fallback: rota para o parser principal de comandos
+    string fallback_cmd = "/" + action;
+    if(parts.length() > 1) fallback_cmd += " " + join_parts_from(parts, 1, " ");
+    if(!process_command(p, fallback_cmd)) {
+        network_send_action_error(p, "Builder", action);
+    }
+}
+
+// ============================================================
+// 8. HANDLERS DE SISTEMA
+// ============================================================
+
+void handle_ping(player@ p) {
+    // Responder com PONG
+    send_reliable_text(p.peer_id, MSG_PONG, 0);
+}
+
+void handle_update(player@ p, string data) {
+    // AtualizaÃ§Ã£o de estado do cliente
+    // Formato: stat_name|value
+    // Exemplo: UPDATE:health|80
+
+    if(!network_require_non_empty(p, "handle_update", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 2 || parts[0] == "" || parts[1] == "") {
+        network_log_invalid_payload(p, "handle_update", "dados insuficientes (stat|valor)", data);
+        return;
+    }
+
+    string stat_name = parts[0];
+    string value = parts[1];
+
+    if(stat_name == "status") {
+        string status_value = value.trim_whitespace();
+        if(status_value == "" || status_value.length() > 24 || status_value.find("|") >= 0) {
+            network_log_invalid_payload(p, "handle_update", "status invalido", data);
+            send_reliable_text(p.peer_id, "say Update invalido para status.", 0);
+            return;
+        }
+        p.status = status_value;
+        return;
+    }
+
+    if(stat_name == "voice") {
+        if(!is_unsigned_integer_string(value)) {
+            network_log_invalid_payload(p, "handle_update", "voice invalido", data);
+            send_reliable_text(p.peer_id, "say Update invalido para voice.", 0);
+            return;
+        }
+        int voice_value = parse_int(value);
+        if(voice_value < 0 || voice_value > 10) {
+            network_log_invalid_payload(p, "handle_update", "voice fora de faixa", data);
+            send_reliable_text(p.peer_id, "say Update invalido para voice.", 0);
+            return;
+        }
+        p.voice = voice_value;
+        return;
+    }
+
+    if(stat_name == "version") {
+        string version_value = value.trim_whitespace();
+        if(version_value == "" || version_value.length() > 32 || version_value.find("|") >= 0) {
+            network_log_invalid_payload(p, "handle_update", "version invalida", data);
+            send_reliable_text(p.peer_id, "say Update invalido para version.", 0);
+            return;
+        }
+        p.version = version_value;
+        return;
+    }
+
+    network_log_invalid_payload(p, "handle_update", "stat nao permitido: " + stat_name, data);
+    send_reliable_text(p.peer_id, "say Campo de update nao permitido: " + stat_name, 0);
+}
+
+// ============================================================
+// FUNÃ‡ÃƒO PRINCIPAL DE PROCESSAMENTO
+// ============================================================
+
+// Esta funÃ§Ã£o substitui/complementa o process_player_command() existente
+// Ela verifica se a mensagem usa o novo protocolo, senÃ£o usa fallback
+void process_network_message(uint64 peer_id, string message) {
+    if(message.trim_whitespace() == "") return;
+    if(message.length() > NETWORK_HANDLER_MAX_MESSAGE_CHARS) {
+        debug_log("Mensagem descartada (grande demais) peer=" + peer_id + " len=" + message.length());
+        return;
+    }
+
+    player@ p = get_player_by_peer(peer_id);
+    if(p is null) {
+        debug_log("âš ï¸ Mensagem de peer nÃ£o autenticado: " + peer_id);
+        return;
+    }
+
+    // Verificar se usa novo protocolo (tem dois pontos no inÃ­cio)
+    if(message.find(":") > 0 && message.find(":") < 15) {
+        // Usa novo protocolo, dispatch
+        dispatch_network_message(p, message);
+    } else {
+        // Usa protocolo antigo, fallback para process_player_command
+        process_player_command(peer_id, message);
+    }
+}
+
+// ============================================================
+// RESULTADO ESPERADO
+// ============================================================
+//
+// Com este mÃ³dulo implementado:
+// âœ… Protocolo de mensagens bem definido com prefixos
+// âœ… Dispatcher manual organizado por categoria
+// âœ… Handlers separados para:
+//    - Combate (ataque, skills, magia)
+//    - InventÃ¡rio (usar, equipar, dropar, pegar)
+//    - Mapa (movimento, teleporte, interaÃ§Ãµes)
+//    - Social (chat, whisper, party, guild, trade, friends)
+//    - Admin (comandos administrativos e builder)
+//    - Sistema (ping/pong, updates)
+// âœ… FÃ¡cil expansÃ£o para novos comandos
+// âœ… Logs detalhados de todas as aÃ§Ãµes
+// âœ… Compatibilidade com cÃ³digo existente via fallback
+//
+// Este Ã© o sistema de rede moderno e organizado do NVGT!
+// ============================================================
+
+
+
+
+
+

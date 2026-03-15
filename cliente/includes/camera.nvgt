@@ -1,0 +1,208 @@
+// camera.nvgt - Sistema de Câmera de Exploração do Cliente EVM
+// Convertido de Projeto Ig.bgt para NVGT
+// Task 2.3: Implementar Câmera de Exploração (G+Teclas)
+
+// ============================================================================
+// FUNÇÕES DA CÂMERA DE EXPLORAÇÃO
+// A classe exploration_camera está declarada em globals.nvgt
+// ============================================================================
+
+// Reseta a câmera para a posição do jogador
+void camera_reset() {
+	camera.x = me.x;
+	camera.y = me.y;
+}
+
+// Ativa o modo de exploração
+void camera_activate() {
+	camera_reset();
+	camera.active = true;
+}
+
+// Desativa o modo de exploração
+void camera_deactivate() {
+	camera.active = false;
+	camera_reset();
+}
+
+// ============================================================================
+// FUNÇÕES DE ÁUDIO DA CÂMERA
+// ============================================================================
+
+/**
+ * Obtém o tipo de tile na posição da câmera
+ * @return string Tipo de tile na posição da câmera
+ */
+string get_camera_tile() {
+	return get_tile_at(camera.x, camera.y);
+}
+
+/**
+ * Toca o som da câmera baseado no tile atual
+ * Reproduz sons diferentes para ar, hazard, paredes e tiles normais
+ */
+void playcamera() {
+	// Verificar se há jogadores com beacon na posição da câmera
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].x == camera.x && players[i].y == camera.y && players[i].beeping == 1) {
+			p.play_extended_2d("beacon.ogg", me.x, me.y, camera.x, camera.y, 0, 0, 0, 0, false, 0.0, 0.0, 0.0, 200.0);
+		}
+	}
+	
+	string tile = get_camera_tile();
+	
+	if(tile == "") {
+		// Ar (sem tile)
+		p.play_2d("cameraair.ogg", me.x, me.y, camera.x, camera.y, false);
+	}
+	else if(tile == "hazard") {
+		// Área perigosa
+		p.play_2d("camerahazard.ogg", me.x, me.y, camera.x, camera.y, false);
+	}
+	else if(string_contains(tile, "wall", 1) > -1) {
+		// Parede
+		p.play_extended_2d(tile + ".ogg", me.x, me.y, camera.x, camera.y, 0, 0, 0, 0, false, 0.0, 0.0, 0.0, 200.0);
+	}
+	else {
+		// Tile normal - toca som de passo
+		p.play_extended_2d(tile + "step" + random(1, 5) + ".ogg", me.x, me.y, camera.x, camera.y, 0, 0, 0, 0, false, 0.0, 0.0, 0.0, 200.0);
+	}
+}
+
+/**
+ * Toca som de câmera em posição customizada
+ * Usado quando o servidor envia comando de câmera
+ * @param x Coordenada X
+ * @param y Coordenada Y
+ */
+void playcameracustom(int x, int y) {
+	string gt = get_tile_at(x, y);
+	
+	if(gt == "") {
+		p.play_2d("cameraair.ogg", me.x, me.y, x, y, false);
+	}
+	else if(gt == "hazard") {
+		p.play_2d("camerahazard.ogg", me.x, me.y, x, y, false);
+	}
+	else if(gt == "wall" || string_contains(gt, "wall", 1) > -1) {
+		p.play_2d("camerawall.ogg", me.x, me.y, x, y, false);
+	}
+	else {
+		p.play_2d("cameratile.ogg", me.x, me.y, x, y, false);
+	}
+}
+
+// ============================================================================
+// LOOP DE EXPLORAÇÃO DA CÂMERA
+// ============================================================================
+
+/**
+ * Processa o loop de exploração da câmera
+ * Chamado a cada frame quando G está pressionado
+ * Movimenta a câmera com as setas e toca sons
+ */
+void camera_exploration_loop() {
+	// Só processa se a tecla G estiver pressionada e dcamera desativado
+	if(!key_down(KEY_G) || ausente || dcamera == 1 || !moveable) {
+		return;
+	}
+	
+	// Ativa câmera se ainda não está ativa
+	if(!camera.active) {
+		camera_activate();
+	}
+	
+	// G+C - Falar coordenadas da câmera
+	if(key_pressed(KEY_C) && dcoordenadas == 0) {
+		speak(camera.x + ", " + camera.y);
+	}
+	
+	// G+R - Reportar tile na posição da câmera
+	if(key_pressed(KEY_R)) {
+		playcamera();
+		string tile = get_camera_tile();
+		string what = get_zone_at(camera.x, camera.y);
+		
+		// Verifica se há jogadores na posição
+		for(uint i = 0; i < players.length(); i++) {
+			if(players[i].x == camera.x && players[i].y == camera.y && players[i].beeping == 1) {
+				what = players[i].charname;
+				break;
+			}
+		}
+		
+		// Fala a informação
+		if(tile != "") {
+			if(dcoordenadas == 0) speak(what + ", " + camera.x + ", " + camera.y);
+			else speak(what);
+		}
+		else {
+			if(dcoordenadas == 0) speak(pu.get_value("ar") + " " + what + ", " + camera.x + ", " + camera.y);
+			else speak(pu.get_value("ar") + " " + what);
+		}
+	}
+	
+	// Movimento da câmera com setas (usando key_hold)
+	// Esquerda
+	if(!key_pressed(KEY_LEFT) && kleft.pressing() && camera.x > 0) {
+		camera.x -= 1;
+		playcamera();
+		// Reverter se bateu em parede
+		if(string_contains(get_camera_tile(), "wall", 1) > -1) {
+			camera.x += 1;
+		}
+	}
+	
+	// Direita
+	if(!key_pressed(KEY_RIGHT) && kright.pressing() && camera.x < max.x) {
+		camera.x += 1;
+		playcamera();
+		// Reverter se bateu em parede
+		if(string_contains(get_camera_tile(), "wall", 1) > -1) {
+			camera.x -= 1;
+		}
+	}
+	
+	// Baixo
+	if(!key_pressed(KEY_DOWN) && kdown.pressing() && camera.y > 0) {
+		camera.y -= 1;
+		playcamera();
+		// Reverter se bateu em parede
+		if(string_contains(get_camera_tile(), "wall", 1) > -1) {
+			camera.y += 1;
+		}
+	}
+	
+	// Cima
+	if(!key_pressed(KEY_UP) && kup.pressing() && camera.y < max.y) {
+		camera.y += 1;
+		playcamera();
+		// Reverter se bateu em parede
+		if(string_contains(get_camera_tile(), "wall", 1) > -1) {
+			camera.y -= 1;
+		}
+	}
+}
+
+/**
+ * Reseta a câmera quando G é solto
+ * Deve ser chamado no loop principal
+ */
+void camera_check_release() {
+	if(key_up(KEY_G) && dcamera == 0 && moveable) {
+		if(camera.active) {
+			camera_deactivate();
+		}
+		camera.x = me.x;
+		camera.y = me.y;
+	}
+}
+
+/**
+ * Verifica se a câmera de exploração está ativa
+ * Útil para bloquear outros comandos durante exploração
+ * @return bool True se a câmera está ativa
+ */
+bool is_camera_exploring() {
+	return camera.active && key_down(KEY_G);
+}

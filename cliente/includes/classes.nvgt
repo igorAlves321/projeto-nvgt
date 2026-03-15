@@ -1,0 +1,408 @@
+// Declarações globais necessárias (devem estar definidas em outros arquivos)
+// network net; // REMOVIDO: Conflito com game_net em globals.nvgt - usar game_net em vez de net
+// NVGT: extern não é suportado - game_net e server_peer_id já estão definidos em globals.nvgt
+int facing = 0;
+// mapname removido - já definido em globals.nvgt
+// timer tenter; // removido - conflito global
+
+// me agora está definido em player.nvgt
+
+// Variáveis globais do jogo
+bool player_moveable = true;
+
+// Estrutura temporária para msounds
+class msound_item {
+	string id;
+	int loopint;
+}
+msound_item@[] msounds;
+
+// speak() já existe no speech.nvgt
+
+// get_tile_at() agora está implementado em platforms.nvgt
+
+// get_characters() já existe no form.nvgt
+
+// pu agora está definido em player.nvgt
+
+class lancha{
+	int x, y, saindo=0;
+	int nalancha=0;
+	timer tligando, tandar;
+	sound liga, loops, desliga;
+	string id;
+	int andando=0;
+	bool ligando=false, desligando=false, ligou=false;
+	void sair(){
+		// Convertido: send_reliable para network.send com reliable=true
+		// Assumindo que 'net' é a instância de network e 'server_peer_id' é o peer do servidor
+		game_net.send(server_peer_id, "lancha d", 0, true);
+		desliga.play();
+		while(desliga.playing){
+			wait(5);
+			// Removido mainloop() - não existe em NVGT, wait() já atualiza a janela
+		}
+	}
+	void loop(){
+		nalancha=1;
+		liga.load(get_sound_path("lanchal.ogg"));
+		desliga.load(get_sound_path("lanchad.ogg"));
+		loops.load(get_sound_path("lanchaloop.ogg"));
+		liga.volume=-100;
+		andando=0;
+		game_net.send(server_peer_id, "lancha n", 0, true);
+		while(true){
+			wait(5);
+			if(saindo==1){
+				saindo=0;
+				nalancha=0;
+				break;
+			}
+			// Removido mainloop() e secundario() - assumindo que secundario() será convertido separadamente
+			if(key_pressed(KEY_ESCAPE)&&!desligando&&!ligou){
+				nalancha=0;
+				saindo=1;
+				break;
+			}
+			if(key_pressed(KEY_S))game_net.send(server_peer_id, "lancha s", 0, true);
+			if(key_pressed(KEY_H))game_net.send(server_peer_id, "uitem r2", 0, true);
+			if(key_down(KEY_RIGHT))facing=Right;
+			if(key_down(KEY_LEFT))facing=Left;
+			if(key_pressed(KEY_E)&&get_tile_at(me.x, me.y)!="water2"){
+				if(tenter.elapsed>=2500||mapname=="mina_de_ouro"&&tenter.elapsed>=410||mapname=="pesqueiro"&&tenter.elapsed>=1000){
+					tenter.restart();
+					game_net.send(server_peer_id, "imenu", 0, true);
+				}
+			}
+			for(uint i=0;i<msounds.length();i++){
+				if(msounds[i].id==id){
+					p.update_sound_2d(msounds[i].loopint,me.x,me.y);
+				}
+			}
+			if(key_pressed(KEY_UP)&&!desligando){
+				if(!ligou){
+					game_net.send(server_peer_id, "lancha l", 0, true);
+					liga.play();
+					tligando.restart();
+					ligando=true;
+					desligando=false;
+					while(liga.playing){
+						wait(5);
+						if(tligando.elapsed>=7184){
+							game_net.send(server_peer_id, "lancha ll", 0, true);
+							tligando.force(0);
+							tligando.pause();
+						}
+						// Removido mainloop()
+					}
+					ligou=true;
+				}
+				else if(andando==0)andando=1;
+			}
+			if(key_pressed(KEY_DOWN)&&!liga.playing){
+				if(andando==1)andando=0;
+				else if(ligou){
+					game_net.send(server_peer_id, "lancha d", 0, true);
+					desliga.play();
+					while(desliga.playing){
+						wait(5);
+						// Removido mainloop()
+					}
+					ligou=false;
+				}
+			}
+			if(ligou){
+				if(tandar.elapsed>=150&&andando==1){
+					if(facing==Right){
+						string d=get_tile_at(me.x+1, me.y);
+						// Convertido string_contains para método nativo .contains()
+						if(d!=""&&d.find("mud")==-1){
+							tandar.restart();
+							me.x++;
+							game_net.send(server_peer_id, "move3 "+me.x+" "+me.y, 0, true);
+						}
+					}
+					else if(facing==Left){
+						string d=get_tile_at(me.x-1, me.y);
+						if(d!=""&&d.find("mud")==-1){
+							tandar.restart();
+							me.x--;
+							game_net.send(server_peer_id, "move3 "+me.x+" "+me.y, 0, true);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+class telefone{
+	string input(string text){
+		int cursor;
+		bool caiu;
+		string message;
+		// Assumindo que speak() será convertido para o sistema de speech do NVGT
+		if(text!="")speak(pu.get_value(text));
+		cursor=0;
+		caiu=false;
+		string[] ms;
+		get_characters();
+		sound telefonecaiu;
+		telefonecaiu.load(get_sound_path("telefone2.ogg"));
+		game_net.send(server_peer_id, "playsocial telefonetirandogancho.ogg", 0, true);
+		while(true){
+			// Removido mainloop()
+			if(caiu==true){
+				telefonecaiu.play_looped();
+			}
+			string char=get_characters();
+			for (uint i=0; i<char.length(); i++) {
+				string chars=char[i];
+				if(chars!=""&&chars!="1"&&chars!="2"&&chars!="3"&&chars!="4"&&chars!="5"&&chars!="6"&&chars!="7"&&chars!="8"&&chars!="9"&&chars!="0"&&chars!="-"&&chars!="#"&&chars!="*"&&caiu==false){
+					caiu=true;
+				}
+				else if(caiu==false){
+					if(chars=="1")
+					p.play_stationary("1.ogg", false);
+					if(chars=="2")
+					p.play_stationary("2.ogg", false);
+					if(chars=="3")
+					p.play_stationary("3.ogg", false);
+					if(chars=="4")
+					p.play_stationary("4.ogg", false);
+					if(chars=="5")
+					p.play_stationary("5.ogg", false);
+					if(chars=="6")
+					p.play_stationary("6.ogg", false);
+					if(chars=="7")
+					p.play_stationary("7.ogg", false);
+					if(chars=="8")
+					p.play_stationary("8.ogg", false);
+					if(chars=="9")
+					p.play_stationary("9.ogg", false);
+					if(chars=="0")
+					p.play_stationary("0.ogg", false);
+					if(chars=="*")
+					p.play_stationary("asterisco.ogg", false);
+					if(chars=="#")
+					p.play_stationary("#.ogg", false);
+					ms.insert_at(cursor,char);
+					cursor+=1;
+				}
+			}
+			if(key_pressed(KEY_ESCAPE)){
+				game_net.send(server_peer_id, "playsocial telefonecolocandogancho.ogg", 0, true);
+				return "";
+			}
+			else if(key_pressed(KEY_RETURN)){
+				if (ms.length() > 0){
+					sound s;
+					for (uint i=0; i<ms.length(); i++){
+						message+=ms[i];
+						s.load(get_sound_path(ms[i] + ".ogg"));
+						s.play_wait();
+					}
+					return message;
+				}
+				else if (ms.length()==0){
+					game_net.send(server_peer_id, "playsocial telefonecolocandogancho.ogg", 0, true);
+					return "";
+				}
+			}
+		}
+		return "";
+	}
+}
+
+areia_movedissa@[] areia_movedissas;
+class areia_movedissa{
+	int x, y, som;
+	string mapa;
+	bool foi=false;
+	areia_movedissa(int cx, int cy, string cmapa){
+		x=cx;
+		y=cy;
+		mapa=cmapa;
+		som=p.play_2d("areia_movedissaloop.ogg", me.x, me.y, x, y, true);
+	}
+}
+
+void colocar_areia_movedissa(int x, int y, string mapa){
+	areia_movedissa c(x, y, mapa);
+	areia_movedissas.insert_last(c);
+}
+
+void destruir_areias_movedissas(){
+	for(uint i=0;i<areia_movedissas.length();i++){
+		p.destroy_sound(areia_movedissas[i].som);
+		areia_movedissas.remove_at(i);
+	}
+}
+
+void areia_movedissaloop(){
+	for(uint i=0;i<areia_movedissas.length();i++){
+		if(me.x==areia_movedissas[i].x&&me.y==areia_movedissas[i].y&&areia_movedissas[i].mapa==mapname&&areia_movedissas[i].foi==false){
+			sound s;
+			player_moveable=false;
+			s.load(get_sound_path("morrendo_areia.ogg"));
+			game_net.send(server_peer_id, "draw morrendo_areia.ogg", 0, true);
+			s.play_wait();
+			while(s.playing){
+				wait(5);
+				// Removido mainloop()
+			}
+			game_net.send(server_peer_id, "morreu na areia movedissa!", 0, true);
+			areia_movedissas[i].foi=true;
+			break;
+		}
+	}
+}
+
+computador@[] computadors;
+class computador{
+	int x,y, som;
+	string id,map;
+	int ligada=0;
+	computador(string mid, int mx, int my,string mm, int cligada){
+		id=mid;
+		x=mx;
+		y=my;
+		map=mm;
+		ligada=cligada;
+		if(cligada==1&&mapname==map) som=pcomputador.play_2d("desktop1.ogg", me.x, me.y, mx, my, true);
+	}
+}
+
+void colocar_computador(string id, int x, int y,string map, int ligada) {
+	computador m1(id,x,y,map, ligada);
+	computadors.insert_last(m1);
+}
+
+void destruir_computadores(){
+	for(uint i=0;i<computadors.length();i++){
+		pcomputador.destroy_sound(computadors[i].som);
+		computadors.remove_at(i);
+	}
+}
+
+class maquinatempo{
+	int x,y, som;
+	string id,map;
+	int ligada=0;
+	timer tligar;
+	sound sligada, sdesligada;
+	maquinatempo(string mid, int mx, int my,string mm, int cligada){
+		id=mid;
+		x=mx;
+		y=my;
+		map=mm;
+		ligada=cligada;
+	}
+}
+
+maquinatempo@[] maquinatempos;
+void spawnmaquinatempo(string id, int x, int y,string map, int ligada) {
+	maquinatempo m1(id,x,y,map, ligada);
+	maquinatempos.insert_last(m1);
+	if(ligada==1&&mapname==map){
+		maquinatempos[maquinatempos.length()-1].som=pobjs.play_2d("geradorloop.ogg", me.x, me.y, x, y, true);
+	}
+}
+
+void destroyallmaquinatempos(){
+	for(uint i=0; i<maquinatempos.length(); i++){
+		// Limpar sons se necessário
+	}
+	maquinatempos.resize(0);
+	pobjs.destroy_all();
+}
+
+void maquinatempoloop(){
+	for(uint i=0;i<maquinatempos.length();i++){
+		if(maquinatempos[i].tligar.elapsed>=3900&&maquinatempos[i].ligada==1&&maquinatempos[i].map==mapname){
+			maquinatempos[i].tligar.force(0);
+			maquinatempos[i].tligar.pause();
+			maquinatempos[i].som=pobjs.play_2d("geradorloop.ogg", me.x, me.y, maquinatempos[i].x, maquinatempos[i].y, true);
+		}
+	}
+}
+
+// NPC CLIENT CLASS - Sistema de inimigos/NPCs no cliente
+class npc_client_class {
+	int x, y;              // Posição atual
+	int x_inicial, y_inicial;  // Posição inicial para respawn
+	int id;                // ID único do NPC
+	int hp, max_hp;        // Vida atual e máxima
+	string name;           // Nome do NPC
+	string map;            // Mapa onde está
+	timer last_seen;       // Quando foi visto pela última vez
+	int left_range, right_range; // Ranges de movimento
+	
+	npc_client_class() {
+		x = 0;
+		y = 0;
+		x_inicial = 0;
+		y_inicial = 0;
+		id = 0;
+		hp = 100;
+		max_hp = 100;
+		name = "";
+		map = "";
+		left_range = 0;
+		right_range = 0;
+	}
+};
+
+// NPC SPAWN DATA CLASS - Dados completos de NPC para criação
+class npc_spawn_data_class {
+	// Posição
+	int x, y;
+	int x_inicial, y_inicial;
+	int left_range, right_range;
+	
+	// Vida e Dano
+	double hp;
+	double max_hp;
+	double dano_recibido;
+	double dano_causado;
+	double dano_espejo;
+	double degradation;
+	
+	// Comportamento
+	int intervalo_ataque;
+	int intervalo_movimento;
+	int intervalo_som;
+	int tiempo_aparicion;
+	int enable_respawn;
+	int enable_bomba;
+	
+	// Identidade
+	string nombre;
+	int id;
+	double xp;
+	
+	// Items e Sons
+	string items;
+	string som_ataque;
+	string som_calmo;
+	string som_muerte;
+	string msg_muerte;
+	
+	// Combate
+	double distancia_ataque;
+	
+	npc_spawn_data_class() {
+		x = 0;
+		y = 0;
+		x_inicial = 0;
+		y_inicial = 0;
+		hp = 100;
+		max_hp = 100;
+		nombre = "";
+		id = 0;
+		xp = 0;
+		left_range = 0;
+		right_range = 0;
+	}
+};
+

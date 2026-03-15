@@ -1,0 +1,256 @@
+// clothing.nvgt - Sistema Avançado de Vestimentas
+// Convertido para NVGT
+// Gerencia roupas, proteção e efeitos visuais
+
+// Classe de roupa
+class clothing_item {
+	string name;              // Nome da roupa
+	double protection;        // Proteção oferecida (0-100%)
+	string body_part;         // Parte do corpo (cabeça, torso, pernas, pés, mãos)
+	int durability;          // Durabilidade atual (0-100)
+	int max_durability;      // Durabilidade máxima
+	
+	clothing_item(string n, double prot, string body, int dur = 100) {
+		name = n;
+		protection = prot;
+		body_part = body;
+		durability = dur;
+		max_durability = 100;
+	}
+}
+
+// Arrays globais de roupas disponíveis
+clothing_item@[] available_clothing;
+
+// Inicializar roupas disponíveis
+void init_clothing_system() {
+	// Cabeças
+	available_clothing.insert_last(clothing_item("capacete_policia", 15.0, "head"));
+	available_clothing.insert_last(clothing_item("chapeu_panama", 5.0, "head"));
+	available_clothing.insert_last(clothing_item("bone_mizuno", 3.0, "head"));
+	
+	// Torso
+	available_clothing.insert_last(clothing_item("colete_aprova_de_balas", 40.0, "torso"));
+	available_clothing.insert_last(clothing_item("colete_militar", 35.0, "torso"));
+	available_clothing.insert_last(clothing_item("colete_camuflado", 30.0, "torso"));
+	available_clothing.insert_last(clothing_item("colete_mizuno", 20.0, "torso"));
+	available_clothing.insert_last(clothing_item("casaco_peles", 15.0, "torso"));
+	available_clothing.insert_last(clothing_item("jaqueta_couro", 10.0, "torso"));
+	available_clothing.insert_last(clothing_item("camisa_malha", 5.0, "torso"));
+	
+	// Pernas
+	available_clothing.insert_last(clothing_item("calca_camuflada", 15.0, "legs"));
+	available_clothing.insert_last(clothing_item("calca_jeans", 10.0, "legs"));
+	available_clothing.insert_last(clothing_item("calca_legging", 5.0, "legs"));
+	available_clothing.insert_last(clothing_item("calca_mizuno", 8.0, "legs"));
+	
+	// Pés
+	available_clothing.insert_last(clothing_item("coturno_militar", 20.0, "feet"));
+	available_clothing.insert_last(clothing_item("bota_mizuno", 15.0, "feet"));
+	available_clothing.insert_last(clothing_item("tenis_nike", 10.0, "feet"));
+	available_clothing.insert_last(clothing_item("tenis_adidas", 10.0, "feet"));
+	available_clothing.insert_last(clothing_item("sapato_carpin", 8.0, "feet"));
+	available_clothing.insert_last(clothing_item("sapato_magnetico", 12.0, "feet"));
+	
+	// Mãos
+	available_clothing.insert_last(clothing_item("luvas", 5.0, "hands"));
+	
+	// Pernas (proteção)
+	available_clothing.insert_last(clothing_item("caneleira_metal", 25.0, "shins"));
+	available_clothing.insert_last(clothing_item("caneleira_madeira", 15.0, "shins"));
+	
+	// Outros
+	available_clothing.insert_last(clothing_item("escudo", 30.0, "shield"));
+	available_clothing.insert_last(clothing_item("anel", 2.0, "ring"));
+	available_clothing.insert_last(clothing_item("pulseira", 2.0, "wrist"));
+	available_clothing.insert_last(clothing_item("bracadeira", 5.0, "arm"));
+}
+
+// Calcular proteção total do jogador
+double calculate_player_protection(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return 0;
+	}
+	
+	double total_protection = 0;
+	
+	// Somar proteção de cada item equipado
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		string item_name = players[player_index].clothing[i];
+		
+		// Buscar item na lista de roupas
+		for(uint j = 0; j < available_clothing.length(); j++) {
+			if(available_clothing[j].name == item_name) {
+				total_protection += available_clothing[j].protection;
+				break;
+			}
+		}
+	}
+	
+	// Limitar a 90% (nunca 100% de proteção)
+	if(total_protection > 90) {
+		total_protection = 90;
+	}
+	
+	return total_protection;
+}
+
+// Equipar roupa
+bool equip_clothing(int player_index, string clothing_name) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se jogador tem o item no inventário
+	if(!players[player_index].inv_item_exists(clothing_name)) {
+		send_reliable_text(players[player_index].peer_id, 
+			"msg2 Você não tem este item!", 0);
+		return false;
+	}
+	
+	// Verificar se já está equipado
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		if(players[player_index].clothing[i] == clothing_name) {
+			send_reliable_text(players[player_index].peer_id, 
+				"msg2 Você já está usando isto!", 0);
+			return false;
+		}
+	}
+	
+	// Buscar informações da roupa
+	string body_part = "";
+	for(uint i = 0; i < available_clothing.length(); i++) {
+		if(available_clothing[i].name == clothing_name) {
+			body_part = available_clothing[i].body_part;
+			break;
+		}
+	}
+	
+	if(body_part == "") {
+		return false; // Roupa não encontrada
+	}
+	
+	// Remover roupa antiga da mesma parte do corpo
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		for(uint j = 0; j < available_clothing.length(); j++) {
+			if(available_clothing[j].name == players[player_index].clothing[i] &&
+			   available_clothing[j].body_part == body_part) {
+				// Desequipar roupa antiga
+				players[player_index].clothing.remove_at(i);
+				break;
+			}
+		}
+	}
+	
+	// Equipar nova roupa
+	players[player_index].clothing.insert_last(clothing_name);
+	players[player_index].body_parts.insert_last(body_part);
+	
+	// Atualizar proteção
+	players[player_index].clothing_protection = calculate_player_protection(player_index);
+	
+	send_reliable_text(players[player_index].peer_id, 
+		"msg2 Você equipou: " + clothing_name, 0);
+	send_reliable_text(players[player_index].peer_id, 
+		"msg2 Proteção total: " + players[player_index].clothing_protection + "%", 0);
+	
+	return true;
+}
+
+// Desequipar roupa
+bool unequip_clothing(int player_index, string clothing_name) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Buscar e remover
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		if(players[player_index].clothing[i] == clothing_name) {
+			players[player_index].clothing.remove_at(i);
+			if(i < players[player_index].body_parts.length()) {
+				players[player_index].body_parts.remove_at(i);
+			}
+			
+			// Atualizar proteção
+			players[player_index].clothing_protection = calculate_player_protection(player_index);
+			
+			send_reliable_text(players[player_index].peer_id, 
+				"msg2 Você desequipou: " + clothing_name, 0);
+			send_reliable_text(players[player_index].peer_id, 
+				"msg2 Proteção total: " + players[player_index].clothing_protection + "%", 0);
+			
+			return true;
+		}
+	}
+	
+	send_reliable_text(players[player_index].peer_id, 
+		"msg2 Você não está usando isto!", 0);
+	
+	return false;
+}
+
+// Aplicar dano com proteção de roupa
+double apply_damage_with_protection(int player_index, double raw_damage) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return raw_damage;
+	}
+	
+	double protection = players[player_index].clothing_protection;
+	double damage_reduction = (protection / 100.0);
+	double final_damage = raw_damage * (1.0 - damage_reduction);
+	
+	// Degradar roupas levemente quando absorvem dano
+	double damage_absorbed = raw_damage - final_damage;
+	if(damage_absorbed > 0) {
+		// Degradar cada peça de roupa proporcionalmente
+		for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+			players[player_index].manage_degradation(
+				players[player_index].clothing[i], 
+				0.5  // 0.5% de degradação por hit
+			);
+		}
+	}
+	
+	return final_damage;
+}
+
+// Listar roupas equipadas
+string list_equipped_clothing(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return "Jogador inválido";
+	}
+	
+	if(players[player_index].clothing.length() == 0) {
+		return "Você não está usando nenhuma roupa.";
+	}
+	
+	string list = "Roupas equipadas:\n";
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		list += "- " + players[player_index].clothing[i];
+		if(i < players[player_index].body_parts.length()) {
+			list += " (" + players[player_index].body_parts[i] + ")";
+		}
+		list += "\n";
+	}
+	
+	list += "Proteção total: " + players[player_index].clothing_protection + "%";
+
+	return list;
+}
+
+// ✅ IMPLEMENTADO: Verificar se jogador está vestindo uma roupa específica
+bool has_clothe(int player_index, string clothe_name) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+
+	// Verificar se o item está na lista de roupas do jogador
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		if(players[player_index].clothing[i] == clothe_name) {
+			return true;
+		}
+	}
+
+	return false;
+}
+

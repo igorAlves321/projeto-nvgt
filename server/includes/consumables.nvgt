@@ -1,0 +1,708 @@
+// consumables.nvgt - Sistema de Itens Consumíveis do EVM Server
+// Conversão: BGT → NVGT
+// Gerencia efeitos de poções, comida, joias e buffs temporários
+
+// =====================================================
+// CLASSE DE EFEITO CONSUMÍVEL
+// =====================================================
+
+class consumable_effect {
+	string item_name;
+	string effect_type;  // "health", "sanity", "food", "buff", "xp", "gold", "cure", "teleport", "give_items", "thirst", "complete"
+	int value;           // Valor do efeito (HP, sanity, etc)
+	int duration_ms;     // Duração do buff em milissegundos (0 = instantâneo)
+	string buff_name;    // Nome da variável de buff (ex: "antimina")
+	string sound;        // Som ao usar
+	string message;      // Mensagem ao jogador
+	
+	// 🆕 Campos adicionais (migrados de item_in_inv.bgt)
+	string teleport_map;     // Mapa destino ("" = sem teletransporte)
+	int teleport_x;          // Coordenada X destino
+	int teleport_y;          // Coordenada Y destino
+	string items_to_give;    // Itens a dar (formato: "item1.qtd,item2.qtd")
+	double thirst_reduce;    // Sede a reduzir (nsede -= valor)
+	double thirst_fill;      // Urina a aumentar (nurina += valor)
+	double hunger_reduce;    // Fome a reduzir (nfome -= valor)
+	double hunger_fill;      // Coco a aumentar (ncoco += valor)
+	double degradation;      // Degradação do item ao usar (0-100)
+	
+	// Construtor básico (compatibilidade com código existente)
+	consumable_effect(string name, string type, int val, int dur = 0, string buff = "", string snd = "", string msg = "") {
+		item_name = name;
+		effect_type = type;
+		value = val;
+		duration_ms = dur;
+		buff_name = buff;
+		sound = snd;
+		message = msg;
+		// Campos adicionais zerados
+		teleport_map = "";
+		teleport_x = 0;
+		teleport_y = 0;
+		items_to_give = "";
+		thirst_reduce = 0;
+		thirst_fill = 0;
+		hunger_reduce = 0;
+		hunger_fill = 0;
+		degradation = 0;
+	}
+	
+	// 🆕 Construtor completo (para itens com todos os efeitos)
+	consumable_effect(string name, string type, int val, int dur, string buff, string snd, string msg,
+	                   string tele_map, int tele_x, int tele_y, string give_items,
+	                   double th_reduce, double th_fill, double hu_reduce, double hu_fill, double degrad) {
+		item_name = name;
+		effect_type = type;
+		value = val;
+		duration_ms = dur;
+		buff_name = buff;
+		sound = snd;
+		message = msg;
+		teleport_map = tele_map;
+		teleport_x = tele_x;
+		teleport_y = tele_y;
+		items_to_give = give_items;
+		thirst_reduce = th_reduce;
+		thirst_fill = th_fill;
+		hunger_reduce = hu_reduce;
+		hunger_fill = hu_fill;
+		degradation = degrad;
+	}
+}
+
+// =====================================================
+// ESTRUTURA DE BUFF ATIVO
+// =====================================================
+
+class active_buff {
+	string player_name;
+	string buff_name;
+	int value;
+	timer duration_timer;
+	int duration_ms;
+	
+	active_buff(string p, string b, int v, int d) {
+		player_name = p;
+		buff_name = b;
+		value = v;
+		duration_ms = d;
+		duration_timer.restart();
+	}
+	
+	bool is_expired() {
+		return duration_timer.elapsed >= duration_ms;
+	}
+}
+
+// =====================================================
+// ARRAYS GLOBAIS
+// =====================================================
+
+dictionary consumables;           // item_name => consumable_effect
+active_buff@[] active_buffs;      // Lista de buffs ativos
+
+// =====================================================
+// INICIALIZAÇÃO DO SISTEMA
+// =====================================================
+
+void init_consumables_system() {
+	// POÇÕES DE SAÚDE
+	consumable_effect@ pocao_vida = consumable_effect(
+		"pocao_vida", "health", 50, 0, "", "drink.ogg",
+		"Você bebeu uma poção de vida! +50 HP"
+	);
+	consumables.set("pocao_vida", @pocao_vida);
+	
+	consumable_effect@ pocao_vida_maior = consumable_effect(
+		"pocao_vida_maior", "health", 100, 0, "", "drink.ogg",
+		"Você bebeu uma poção de vida maior! +100 HP"
+	);
+	consumables.set("pocao_vida_maior", @pocao_vida_maior);
+	
+	consumable_effect@ pocao_vida_total = consumable_effect(
+		"pocao_vida_total", "health", 9999, 0, "", "drink.ogg",
+		"Você bebeu uma poção de vida total! HP restaurado completamente!"
+	);
+	consumables.set("pocao_vida_total", @pocao_vida_total);
+	
+	// POÇÕES DE SANIDADE
+	consumable_effect@ pocao_sanidade = consumable_effect(
+		"pocao_sanidade", "sanity", 30, 0, "", "drink.ogg",
+		"Você bebeu uma poção de sanidade! +30 Sanity"
+	);
+	consumables.set("pocao_sanidade", @pocao_sanidade);
+	
+	// COMIDAS
+	consumable_effect@ pao = consumable_effect(
+		"pao", "food", 20, 0, "", "eat.ogg",
+		"Você comeu pão! -20 Fome, +10 Sanity"
+	);
+	consumables.set("pao", @pao);
+	
+	consumable_effect@ carne_assada = consumable_effect(
+		"carne_assada", "food", 50, 0, "", "eat.ogg",
+		"Você comeu carne assada! -50 Fome, +20 HP"
+	);
+	consumables.set("carne_assada", @carne_assada);
+	
+	consumable_effect@ bolo = consumable_effect(
+		"bolo", "food", 30, 0, "", "eat.ogg",
+		"Você comeu bolo! -30 Fome, +15 Sanity"
+	);
+	consumables.set("bolo", @bolo);
+	
+	// JOIAS (XP E GOLD)
+	consumable_effect@ diamante = consumable_effect(
+		"diamante", "xp", 100, 0, "", "gem.ogg",
+		"Você absorveu a energia do diamante! +100 XP"
+	);
+	consumables.set("diamante", @diamante);
+	
+	consumable_effect@ esmeralda = consumable_effect(
+		"esmeralda", "xp", 150, 0, "", "gem.ogg",
+		"Você absorveu a energia da esmeralda! +150 XP"
+	);
+	consumables.set("esmeralda", @esmeralda);
+	
+	consumable_effect@ rubi = consumable_effect(
+		"rubi", "gold", 500, 0, "", "gem.ogg",
+		"Você vendeu o rubi! +500 Gold"
+	);
+	consumables.set("rubi", @rubi);
+	
+	// BUFFS TEMPORÁRIOS
+	consumable_effect@ pocin_antiminas = consumable_effect(
+		"pocin_antiminas", "buff", 1, 60000, "antimina", "drink.ogg",
+		"Você bebeu poção anti-minas! Imune a minas por 60 segundos"
+	);
+	consumables.set("pocin_antiminas", @pocin_antiminas);
+	
+	consumable_effect@ pocao_velocidade = consumable_effect(
+		"pocao_velocidade", "buff", 2, 30000, "speed_boost", "drink.ogg",
+		"Você bebeu poção de velocidade! Velocidade x2 por 30 segundos"
+	);
+	consumables.set("pocao_velocidade", @pocao_velocidade);
+	
+	consumable_effect@ pocao_forca = consumable_effect(
+		"pocao_forca", "buff", 2, 45000, "damage_boost", "drink.ogg",
+		"Você bebeu poção de força! Dano x2 por 45 segundos"
+	);
+	consumables.set("pocao_forca", @pocao_forca);
+	
+	consumable_effect@ pocao_invisibilidade = consumable_effect(
+		"pocao_invisibilidade", "buff", 1, 20000, "invisible", "drink.ogg",
+		"Você bebeu poção de invisibilidade! Invisível por 20 segundos"
+	);
+	consumables.set("pocao_invisibilidade", @pocao_invisibilidade);
+	
+	// ANTÍDOTOS E CURAS
+	consumable_effect@ antidoto = consumable_effect(
+		"antidoto", "cure", 0, 0, "poison", "drink.ogg",
+		"Você bebeu um antídoto! Veneno curado"
+	);
+	consumables.set("antidoto", @antidoto);
+	
+	consumable_effect@ antidoto_radiacao = consumable_effect(
+		"antidoto_radiacao", "cure", 0, 0, "radiation", "drink.ogg",
+		"Você usou antídoto de radiação! Radiação curada"
+	);
+	consumables.set("antidoto_radiacao", @antidoto_radiacao);
+	
+	// ITENS ESPECIAIS
+	consumable_effect@ cerveja = consumable_effect(
+		"cerveja", "buff", -10, 15000, "drunk", "drink.ogg",
+		"Você bebeu cerveja! -10 Sanity, você está bêbado por 15 segundos"
+	);
+	consumables.set("cerveja", @cerveja);
+	
+	consumable_effect@ energia_drink = consumable_effect(
+		"energia_drink", "buff", 3, 20000, "energy_boost", "drink.ogg",
+		"Você bebeu energético! +20 Stamina, velocidade x1.5 por 20 segundos"
+	);
+	consumables.set("energia_drink", @energia_drink);
+	
+	// =====================================================
+	// 🆕 ITENS COM NOVAS FUNCIONALIDADES (teletransporte, dar itens, sede/fome)
+	// =====================================================
+	
+	// BEBIDAS (afetam sede/urina)
+	consumable_effect@ agua = consumable_effect(
+		"agua", "thirst", 0, 0, "", "drink.ogg", "Você bebeu água refrescante!",
+		"", 0, 0, "",  // sem teletransporte, sem dar itens
+		40.0, 30.0, 0.0, 0.0, 0.0  // -40 sede, +30 urina
+	);
+	consumables.set("agua", @agua);
+	
+	consumable_effect@ suco = consumable_effect(
+		"suco", "thirst", 5, 0, "", "drink.ogg", "Você bebeu suco refrescante! +5 HP",
+		"", 0, 0, "",
+		50.0, 35.0, 5.0, 0.0, 0.0  // -50 sede, +35 urina, -5 fome
+	);
+	consumables.set("suco", @suco);
+	
+	consumable_effect@ leite = consumable_effect(
+		"leite", "health", 5, 0, "", "drink.ogg", "Você bebeu leite nutritivo!",
+		"", 0, 0, "",
+		30.0, 25.0, 10.0, 5.0, 0.0  // -30 sede, +25 urina, -10 fome, +5 coco
+	);
+	consumables.set("leite", @leite);
+	
+	// COMIDAS (afetam fome/coco)
+	consumable_effect@ maca = consumable_effect(
+		"maca", "health", 5, 0, "", "eat.ogg", "Você comeu uma maçã!",
+		"", 0, 0, "",
+		10.0, 5.0, 15.0, 5.0, 0.0  // -10 sede, +5 urina, -15 fome, +5 coco
+	);
+	consumables.set("maca", @maca);
+	
+	consumable_effect@ peixe_assado = consumable_effect(
+		"peixe_assado", "health", 20, 0, "", "eat.ogg", "Você comeu peixe assado! +20 HP",
+		"", 0, 0, "",
+		0.0, 0.0, 40.0, 15.0, 0.0  // -40 fome, +15 coco
+	);
+	consumables.set("peixe_assado", @peixe_assado);
+	
+	// PERGAMINHOS DE TELETRANSPORTE
+	consumable_effect@ pergaminho_cidade = consumable_effect(
+		"pergaminho_cidade", "teleport", 0, 0, "", "teleport.ogg", "Você foi teletransportado para a cidade!",
+		"cidade", 50, 25, "",  // mapa, x, y
+		0.0, 0.0, 0.0, 0.0, 100.0  // 100% degradação (item consumido)
+	);
+	consumables.set("pergaminho_cidade", @pergaminho_cidade);
+	
+	consumable_effect@ pergaminho_floresta = consumable_effect(
+		"pergaminho_floresta", "teleport", 0, 0, "", "teleport.ogg", "Você foi teletransportado para a floresta!",
+		"floresta", 10, 10, "",
+		0.0, 0.0, 0.0, 0.0, 100.0
+	);
+	consumables.set("pergaminho_floresta", @pergaminho_floresta);
+	
+	// CAIXAS/BAÚS (dão outros itens)
+	consumable_effect@ caixa_suprimentos = consumable_effect(
+		"caixa_de_suprimentos", "give_items", 10, 0, "", "open_box.ogg", "Você abriu a caixa e encontrou suprimentos!",
+		"", 0, 0, "pao.5,agua.3,bandagem.2",  // itens a dar
+		0.0, 0.0, 0.0, 0.0, 100.0  // consome o item
+	);
+	consumables.set("caixa_de_suprimentos", @caixa_suprimentos);
+	
+	consumable_effect@ bau_tesouro = consumable_effect(
+		"bau_de_tesouro", "give_items", 50, 0, "", "treasure.ogg", "Você abriu o baú de tesouro! +50 XP",
+		"", 0, 0, "coins.100,diamante.1",
+		0.0, 0.0, 0.0, 0.0, 100.0
+	);
+	consumables.set("bau_de_tesouro", @bau_tesouro);
+	
+	// ITEM COMPLETO (múltiplos efeitos)
+	consumable_effect@ elixir_supremo = consumable_effect(
+		"elixir_supremo", "complete", 100, 60000, "all_boost", "magic.ogg", "Você consumiu o Elixir Supremo! Todos os stats restaurados!",
+		"", 0, 0, "diamante.1",  // bônus: ganha 1 diamante
+		100.0, 0.0, 100.0, 0.0, 0.0  // zera sede e fome
+	);
+	consumables.set("elixir_supremo", @elixir_supremo);
+	
+	debug_log("CONSUMABLES: Sistema inicializado com " + consumables.get_size() + " itens consumíveis");
+}
+
+// =====================================================
+// FUNÇÃO PRINCIPAL DE USO DE ITEM
+// =====================================================
+
+bool use_item(int player_index, string item_name) {
+	if (player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se item existe no inventário
+	if (!players[player_index].inv_item_exists(item_name)) {
+		send_reliable_text(players[player_index].peer_id, "msg Você não possui este item!", 0);
+		return false;
+	}
+	
+	// Verificar se item é consumível
+	if (!consumables.exists(item_name)) {
+		send_reliable_text(players[player_index].peer_id, "msg Este item não pode ser usado.", 0);
+		return false;
+	}
+	
+	// Pegar efeito do item
+	consumable_effect@ effect;
+	consumables.get(item_name, @effect);
+	
+	// Aplicar efeito
+	apply_consumable_effect(player_index, effect);
+	
+	// Remover item do inventário
+	players[player_index].inv_add_item(item_name, -1);
+	
+	// Tocar som
+	if (effect.sound != "") {
+		server_broadcast("play " + effect.sound + " " + players[player_index].x + " " + players[player_index].y, players[player_index].map);
+	}
+	
+	// Enviar mensagem
+	if (effect.message != "") {
+		send_reliable_text(players[player_index].peer_id, "msg " + effect.message, 0);
+	}
+	
+	// Log
+	debug_log("CONSUMABLE: " + players[player_index].charname + " usou " + item_name + " (efeito: " + effect.effect_type + ")");
+	
+	return true;
+}
+
+// =====================================================
+// APLICAR EFEITO DE CONSUMÍVEL
+// =====================================================
+
+void apply_consumable_effect(int player_index, consumable_effect@ effect) {
+	if (effect.effect_type == "health") {
+		// Aumentar HP
+		players[player_index].hp += effect.value;
+		if (players[player_index].hp > players[player_index].max_hp) {
+			players[player_index].hp = players[player_index].max_hp;
+		}
+		send_reliable_text(players[player_index].peer_id, "health " + players[player_index].hp, 0);
+	}
+	else if (effect.effect_type == "sanity") {
+		// Aumentar sanidade
+		players[player_index].sanity += effect.value;
+		if (players[player_index].sanity > 100) {
+			players[player_index].sanity = 100;
+		}
+		send_reliable_text(players[player_index].peer_id, "sanity " + players[player_index].sanity, 0);
+	}
+	else if (effect.effect_type == "food") {
+		// Reduzir fome e aumentar sanidade/HP
+		if (players[player_index].fome > 0) {
+			players[player_index].fome -= effect.value;
+			if (players[player_index].fome < 0) players[player_index].fome = 0;
+		}
+		
+		// Bonus de comida: +HP e +sanity
+		if (effect.item_name == "carne_assada") {
+			players[player_index].hp += 20;
+			if (players[player_index].hp > players[player_index].max_hp) {
+				players[player_index].hp = players[player_index].max_hp;
+			}
+		}
+		
+		int sanity_bonus = effect.value / 2; // 50% do valor de comida vira sanity
+		players[player_index].sanity += sanity_bonus;
+		if (players[player_index].sanity > 100) {
+			players[player_index].sanity = 100;
+		}
+		
+		send_reliable_text(players[player_index].peer_id, "fome " + players[player_index].fome, 0);
+		send_reliable_text(players[player_index].peer_id, "sanity " + players[player_index].sanity, 0);
+	}
+	else if (effect.effect_type == "xp") {
+		// Dar XP
+		ganhaxp(players[player_index].charname, effect.value, 0);
+	}
+	else if (effect.effect_type == "gold") {
+		// Dar gold
+		players[player_index].gold += effect.value;
+		send_reliable_text(players[player_index].peer_id, "gold " + players[player_index].gold, 0);
+	}
+	else if (effect.effect_type == "buff") {
+		// Aplicar buff temporário
+		add_buff(player_index, effect.buff_name, effect.value, effect.duration_ms);
+	}
+	else if (effect.effect_type == "cure") {
+		// Curar status negativo
+		remove_debuff(player_index, effect.buff_name);
+	}
+	else if (effect.effect_type == "teleport") {
+		// Teletransportar jogador
+		if (effect.teleport_map != "") {
+			int mapindex = get_map_index_from(effect.teleport_map);
+			if (mapindex > -1) {
+				changemap(effect.teleport_map, player_index, effect.teleport_x, effect.teleport_y);
+			}
+		}
+	}
+	else if (effect.effect_type == "give_items") {
+		// Dar itens ao jogador
+		apply_give_items(player_index, effect.items_to_give);
+	}
+	else if (effect.effect_type == "thirst") {
+		// Afetar sede/urina
+		players[player_index].nsede -= effect.thirst_reduce;
+		if (players[player_index].nsede < 0) players[player_index].nsede = 0;
+		if (players[player_index].nsede > 100) players[player_index].nsede = 100;
+		
+		players[player_index].nurina += effect.thirst_fill;
+		if (players[player_index].nurina > 100) players[player_index].nurina = 100;
+	}
+	else if (effect.effect_type == "complete") {
+		// Efeito completo - aplica TODOS os efeitos configurados
+		apply_complete_effect(player_index, effect);
+	}
+	
+	// 🆕 Aplicar efeitos extras (sede, urina, fome, coco) para QUALQUER tipo de item
+	apply_extra_effects(player_index, effect);
+}
+
+// 🆕 Aplicar efeitos extras (sede, urina, fome, coco)
+void apply_extra_effects(int player_index, consumable_effect@ effect) {
+	// Sede (nsede)
+	if (effect.thirst_reduce != 0) {
+		players[player_index].nsede -= effect.thirst_reduce;
+		if (players[player_index].nsede < 0) players[player_index].nsede = 0;
+		if (players[player_index].nsede > 100) players[player_index].nsede = 100;
+	}
+	
+	// Urina (nurina)
+	if (effect.thirst_fill != 0) {
+		players[player_index].nurina += effect.thirst_fill;
+		if (players[player_index].nurina > 100) players[player_index].nurina = 100;
+	}
+	
+	// Fome (nfome) - já tratado no tipo "food", mas aqui também para consistência
+	if (effect.hunger_reduce != 0) {
+		players[player_index].nfome -= effect.hunger_reduce;
+		if (players[player_index].nfome < 0) players[player_index].nfome = 0;
+		if (players[player_index].nfome > 100) players[player_index].nfome = 100;
+	}
+	
+	// Coco (ncoco)
+	if (effect.hunger_fill != 0) {
+		players[player_index].ncoco += effect.hunger_fill;
+		if (players[player_index].ncoco > 100) players[player_index].ncoco = 100;
+	}
+	
+	// Degradação
+	if (effect.degradation > 0) {
+		players[player_index].manage_degradation(effect.item_name, effect.degradation);
+	}
+	
+	// Teletransporte (se configurado)
+	if (effect.teleport_map != "") {
+		int mapindex = get_map_index_from(effect.teleport_map);
+		if (mapindex > -1) {
+			changemap(effect.teleport_map, player_index, effect.teleport_x, effect.teleport_y);
+		}
+	}
+	
+	// Dar itens extras
+	if (effect.items_to_give != "") {
+		apply_give_items(player_index, effect.items_to_give);
+	}
+}
+
+// 🆕 Aplicar efeito completo (todos os campos)
+void apply_complete_effect(int player_index, consumable_effect@ effect) {
+	// Vida
+	if (effect.value > 0) {
+		players[player_index].hp += effect.value;
+		if (players[player_index].hp > players[player_index].max_hp) {
+			players[player_index].hp = players[player_index].max_hp;
+		}
+		send_reliable_text(players[player_index].peer_id, "health " + players[player_index].hp, 0);
+	}
+	
+	// Buff (se tiver)
+	if (effect.buff_name != "" && effect.duration_ms > 0) {
+		add_buff(player_index, effect.buff_name, effect.value, effect.duration_ms);
+	}
+}
+
+// 🆕 Dar itens ao jogador (formato: "item1.qtd,item2.qtd")
+void apply_give_items(int player_index, string items_string) {
+	if (items_string == "" || items_string == "none") return;
+	
+	string[] items = items_string.split(",");
+	for (uint i = 0; i < items.length(); i++) {
+		string[] data = items[i].split(".");
+		if (data.length() >= 2) {
+			string item_name = data[0].trim_whitespace();
+			int quantity = string_to_number(data[1]);
+			if (quantity > 0) {
+				players[player_index].inv_add_item(item_name, quantity);
+				debug_log("CONSUMABLE: Dado " + quantity + "x " + item_name + " para " + players[player_index].charname);
+			}
+		}
+	}
+}
+
+// =====================================================
+// SISTEMA DE BUFFS TEMPORÁRIOS
+// =====================================================
+
+void add_buff(int player_index, string buff_name, int value, int duration_ms) {
+	string player_name = players[player_index].charname;
+	
+	// Verificar se já tem esse buff ativo (renovar)
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].player_name == player_name && active_buffs[i].buff_name == buff_name) {
+			// Renovar buff
+			active_buffs[i].duration_timer.restart();
+			active_buffs[i].duration_ms = duration_ms;
+			active_buffs[i].value = value;
+			return;
+		}
+	}
+	
+	// Adicionar novo buff
+	active_buff@ new_buff = active_buff(player_name, buff_name, value, duration_ms);
+	active_buffs.insert_last(new_buff);
+	
+	// Aplicar efeito imediato do buff
+	if (buff_name == "antimina") {
+		players[player_index].antimina = value;
+	}
+	else if (buff_name == "speed_boost") {
+		// Multiplicador de velocidade (implementar em player movement)
+		players[player_index].speed_multiplier = value;
+	}
+	else if (buff_name == "damage_boost") {
+		// Multiplicador de dano (implementar em combat)
+		players[player_index].damage_multiplier = value;
+	}
+	else if (buff_name == "invisible") {
+		players[player_index].invisible = true;
+		server_broadcast("invisible " + players[player_index].charname + " 1", players[player_index].map);
+	}
+	else if (buff_name == "energy_boost") {
+		players[player_index].stamina += 20;
+		players[player_index].speed_multiplier = 1.5;
+	}
+	else if (buff_name == "drunk") {
+		// Efeito bêbado (inverter controles, reduzir precisão)
+		players[player_index].drunk = true;
+		players[player_index].sanity -= 10;
+		if (players[player_index].sanity < 0) players[player_index].sanity = 0;
+	}
+	
+	debug_log("BUFF: " + player_name + " ganhou buff " + buff_name + " por " + (duration_ms / 1000) + " segundos");
+}
+
+void remove_debuff(int player_index, string debuff_name) {
+	string player_name = players[player_index].charname;
+	
+	// Remover buff/debuff da lista
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].player_name == player_name && active_buffs[i].buff_name == debuff_name) {
+			active_buffs.remove_at(i);
+			break;
+		}
+	}
+	
+	// Remover efeito
+	if (debuff_name == "poison") {
+		players[player_index].poisoned = false;
+	}
+	else if (debuff_name == "radiation") {
+		players[player_index].radiation = 0;
+	}
+}
+
+// =====================================================
+// LOOP DE GERENCIAMENTO DE BUFFS
+// =====================================================
+
+void consumables_loop() {
+	// Verificar buffs expirados
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].is_expired()) {
+			// Remover efeito do buff
+			int player_index = get_player_index_from(active_buffs[i].player_name);
+			if (player_index >= 0) {
+				string buff_name = active_buffs[i].buff_name;
+				
+				if (buff_name == "antimina") {
+					players[player_index].antimina = 0;
+				}
+				else if (buff_name == "speed_boost" || buff_name == "energy_boost") {
+					players[player_index].speed_multiplier = 1.0;
+				}
+				else if (buff_name == "damage_boost") {
+					players[player_index].damage_multiplier = 1.0;
+				}
+				else if (buff_name == "invisible") {
+					players[player_index].invisible = false;
+					server_broadcast("invisible " + players[player_index].charname + " 0", players[player_index].map);
+				}
+				else if (buff_name == "drunk") {
+					players[player_index].drunk = false;
+				}
+				
+				send_reliable_text(players[player_index].peer_id, "msg O efeito de " + buff_name + " acabou.", 0);
+			}
+			
+			// Remover buff da lista
+			active_buffs.remove_at(i);
+			i--; // Ajustar índice
+		}
+	}
+}
+
+// =====================================================
+// FUNÇÕES AUXILIARES
+// =====================================================
+
+bool has_buff(int player_index, string buff_name) {
+	string player_name = players[player_index].charname;
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].player_name == player_name && active_buffs[i].buff_name == buff_name) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int get_buff_value(int player_index, string buff_name) {
+	string player_name = players[player_index].charname;
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].player_name == player_name && active_buffs[i].buff_name == buff_name) {
+			return active_buffs[i].value;
+		}
+	}
+	return 0;
+}
+
+string list_active_buffs(int player_index) {
+	string player_name = players[player_index].charname;
+	string result = "=== BUFFS ATIVOS ===\n";
+	int count = 0;
+	
+	for (uint i = 0; i < active_buffs.length(); i++) {
+		if (active_buffs[i].player_name == player_name) {
+			int time_left = (active_buffs[i].duration_ms - active_buffs[i].duration_timer.elapsed) / 1000;
+			result += active_buffs[i].buff_name + " (+" + active_buffs[i].value + ") - " + time_left + "s restantes\n";
+			count++;
+		}
+	}
+	
+	if (count == 0) {
+		result += "Nenhum buff ativo.\n";
+	}
+	
+	return result;
+}
+
+// =====================================================
+// COMANDOS DE DEBUG (ADMIN)
+// =====================================================
+
+void add_consumable(string item_name, string effect_type, int value, int duration = 0, string buff = "", string sound = "", string msg = "") {
+	consumables.set(item_name, consumable_effect(item_name, effect_type, value, duration, buff, sound, msg));
+	debug_log("CONSUMABLES: Adicionado novo consumível: " + item_name);
+}
+
+string list_all_consumables() {
+	string result = "=== ITENS CONSUMÍVEIS (" + consumables.get_size() + ") ===\n";
+	
+	string[]@ keys = consumables.get_keys();
+	for (uint i = 0; i < keys.length(); i++) {
+		consumable_effect@ effect;
+		consumables.get(keys[i], @effect);
+		result += keys[i] + " (" + effect.effect_type;
+		if (effect.value != 0) result += " +" + effect.value;
+		if (effect.duration_ms > 0) result += ", " + (effect.duration_ms / 1000) + "s";
+		result += ")\n";
+	}
+	
+	return result;
+}
+

@@ -1,0 +1,255 @@
+// ============================================================================
+// qol.nvgt - Quality of Life Features (Cliente)
+// Sistema de Frases Rápidas com Sons de Voz + Tradução
+// Baseado no sistema original do BGT
+// ============================================================================
+
+// =========== FRASES RÁPIDAS (VOICE PHRASES) ===========
+// Sistema baseado no BGT: Tecla F + outra tecla toca um som de voz
+// Os sons são arquivos como v1ayuda1.ogg, v2amenaza1.ogg, etc.
+// onde o número é a voz do personagem (voice)
+
+// Timer para cooldown de frases (evitar spam)
+timer tvoice;
+
+// Verificar teclas de frases rápidas (F + tecla)
+// Deve ser chamado no main loop
+void check_quick_phrase_keys() {
+	// Verificar se está em jogo e pode usar frases
+	if(!moveable || ausente) return;
+	
+	// Sistema de frases rápidas: F + tecla
+	// Cooldown de 1 segundo entre frases
+	if(key_down(KEY_F) && tvoice.elapsed >= 1000) {
+		
+		// F + 1 = Ajuda/Socorro
+		if(key_pressed(KEY_1)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "ayuda1.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 1 " + sound_file, 0);
+		}
+		
+		// F + 2 = Por favor
+		if(key_pressed(KEY_2)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "favor1.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 2 " + sound_file, 0);
+		}
+		
+		// F + Seta Cima = Ameaça 1
+		if(key_pressed(KEY_UP)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "amenaza1.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 3 " + sound_file, 0);
+		}
+		
+		// F + Seta Baixo = Ameaça 2
+		if(key_pressed(KEY_DOWN)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "amenaza2.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 4 " + sound_file, 0);
+		}
+		
+		// F + Seta Esquerda = Vitória 1
+		if(key_pressed(KEY_LEFT)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "victoria1.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 5 " + sound_file, 0);
+		}
+		
+		// F + Seta Direita = Vitória 2
+		if(key_pressed(KEY_RIGHT)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "victoria2.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 6 " + sound_file, 0);
+		}
+		
+		// F + S = Sim
+		if(key_pressed(KEY_S)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "si.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 7 " + sound_file, 0);
+		}
+		
+		// F + N = Não
+		if(key_pressed(KEY_N)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "no.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 8 " + sound_file, 0);
+		}
+		
+		// F + O = OK
+		if(key_pressed(KEY_O)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "ok.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 10 " + sound_file, 0);
+		}
+		
+		// F + 3 = Risada
+		if(key_pressed(KEY_3)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "risa.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 11 " + sound_file, 0);
+		}
+		
+		// F + 4 = Grito
+		if(key_pressed(KEY_4)) {
+			tvoice.restart();
+			string sound_file = "v" + voice + "grito.ogg";
+			p.play_stationary(sound_file, false);
+			send_unreliable(peer_id, "frasesbarra 12 " + sound_file, 0);
+		}
+	}
+	
+	// Ctrl+T para tradução (se habilitado)
+	bool ctrl_down = key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL);
+	if(ctrl_down && key_pressed(KEY_T) && enabletranslate == 1) {
+		translation_menu();
+	}
+}
+
+// =========== SISTEMA DE TRADUÇÃO ===========
+
+// Processar tradução recebida
+// Formato: "translated MSG_ID|ORIGINAL|TRANSLATED"
+void process_translated_message(string data) {
+	string[] parts = data.split("|");
+	if(parts.length() < 3) return;
+	
+	string msg_id = parts[0];
+	string original = parts[1];
+	string translated = parts[2];
+	
+	// Vocalizar tradução com interrupção
+	speak("Tradução: " + translated, true);
+	
+	// Tocar som de tradução completa
+	p.play_stationary("translate_done.ogg", false);
+	
+	// Adicionar ao histórico de traduções
+	add_translation_history(original, translated);
+}
+
+// Histórico de traduções
+string[] translation_history_original;
+string[] translation_history_translated;
+uint MAX_TRANSLATION_HISTORY = 50;
+
+void add_translation_history(string original, string translated) {
+	translation_history_original.insert_last(original);
+	translation_history_translated.insert_last(translated);
+	
+	// Limitar tamanho do histórico
+	while(translation_history_original.length() > MAX_TRANSLATION_HISTORY) {
+		translation_history_original.remove_at(0);
+		translation_history_translated.remove_at(0);
+	}
+}
+
+// Menu para solicitar tradução
+void translation_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Traduzir texto"), "translate");
+	game_menu.add_item(pu.get_value("Ver histórico de traduções"), "history");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Menu de tradução:");
+	int result = game_menu.run();
+	string selected = game_menu.get_item_id(result);
+	
+	if(selected == "translate") {
+		request_translation();
+	}
+	else if(selected == "history") {
+		show_translation_history();
+	}
+}
+
+// Solicitar tradução ao servidor
+void request_translation() {
+	// Selecionar idioma de destino
+	setupmenu();
+	game_menu.add_item(pu.get_value("Português"), "pt");
+	game_menu.add_item(pu.get_value("Inglês"), "en");
+	game_menu.add_item(pu.get_value("Espanhol"), "es");
+	game_menu.add_item(pu.get_value("Francês"), "fr");
+	game_menu.add_item(pu.get_value("Alemão"), "de");
+	game_menu.add_item(pu.get_value("Italiano"), "it");
+	
+	game_menu.intro_text = pu.get_value("Selecione o idioma de destino:");
+	int lang_result = game_menu.run();
+	
+	if(lang_result < 0) return;
+	
+	string target_lang = game_menu.get_item_id(lang_result);
+	
+	// Pedir texto para traduzir
+	string text = v.input(pu.get_value("Digite o texto para traduzir:"));
+	if(text == "") return;
+	
+	// Enviar ao servidor
+	send_reliable(peer_id, "translate " + target_lang + "|" + text, 0);
+	speak(pu.get_value("Solicitando tradução..."), true);
+}
+
+// Mostrar histórico de traduções
+void show_translation_history() {
+	if(translation_history_original.length() == 0) {
+		speak(pu.get_value("Nenhuma tradução no histórico."), true);
+		return;
+	}
+	
+	setupmenu();
+	
+	for(uint i = 0; i < translation_history_original.length(); i++) {
+		string item = translation_history_original[i] + " → " + translation_history_translated[i];
+		game_menu.add_item(item, "" + i);
+	}
+	
+	game_menu.intro_text = pu.get_value("Histórico de traduções (mais recente primeiro):");
+	int result = game_menu.run();
+	
+	if(result >= 0 && result < int(translation_history_original.length())) {
+		// Copiar para clipboard
+		string full_text = translation_history_original[result] + " = " + translation_history_translated[result];
+		clipboard_copy_text(full_text);
+		speak(pu.get_value("Tradução copiada para a área de transferência."), true);
+	}
+}
+
+// =========== HANDLERS DE ENABLE/DISABLE TRANSLATE ===========
+
+void process_enable_translate() {
+	enabletranslate = 1;
+	speak(pu.get_value("Você agora pode usar o sistema de tradução! Use Ctrl+T para acessar."), true);
+	p.play_stationary("notify7.ogg", false);
+}
+
+void process_disable_translate() {
+	enabletranslate = 0;
+	speak(pu.get_value("Seu acesso ao sistema de tradução foi removido."), true);
+	p.play_stationary("notify8.ogg", false);
+}
+
+// =========== INICIALIZAÇÃO ===========
+
+void init_qol_client() {
+	debug_log("🌐 Inicializando sistema QoL no cliente...");
+	tvoice.restart(); // Iniciar timer de cooldown
+	debug_log("✅ QoL cliente inicializado - Frases: F+tecla, Tradução: Ctrl+T");
+}
+
+// ============================================================================
+// FIM DO ARQUIVO qol.nvgt
+// ============================================================================

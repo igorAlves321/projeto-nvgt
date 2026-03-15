@@ -1,0 +1,117 @@
+// bombanuclear.nvgt - Sistema de Bomba Nuclear do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+
+#include "network.nvgt"
+
+bombanuclear@[] bombanucleares;
+
+class bombanuclear {
+	int x, y;
+	string map, nome;
+	timer bombaatomicatimer, tbipar1, tbipar2;
+	int bombaatomicatime = 60000;
+	
+	bombanuclear(int cx, int cy, string cmap, string cnome) {
+		x = cx;
+		y = cy;
+		map = cmap;
+		nome = cnome;
+	}
+}
+
+void bombanuclearloop() {
+	for (uint i = 0; i < bombanucleares.length(); i++) {
+		// Beeps de aviso
+		if (bombanucleares[i].tbipar1.elapsed >= 10000 && bombanucleares[i].bombaatomicatimer.elapsed < 50000) {
+			bombanucleares[i].tbipar1.restart();
+			bombanucleares[i].tbipar2.restart();
+			net.send_packet(0, "play timebombbeep.ogg " + bombanucleares[i].x + " " + bombanucleares[i].y + " " + bombanucleares[i].map, bombanucleares[i].map);
+		}
+
+		if (bombanucleares[i].tbipar2.elapsed >= 1000 && bombanucleares[i].bombaatomicatimer.elapsed >= 50000) {
+			net.send_packet(0, "play timebombbeep.ogg " + bombanucleares[i].x + " " + bombanucleares[i].y + " " + bombanucleares[i].map, bombanucleares[i].map);
+			bombanucleares[i].tbipar2.restart();
+		}
+		
+		// Explosão da bomba nuclear (mata TUDO no servidor)
+		if (bombanucleares[i].bombaatomicatimer.elapsed >= bombanucleares[i].bombaatomicatime) {
+			net.send_packet(0, "ps bombaatomicaexplode.ogg", "");
+			
+			// Matar todos os jogadores não-admin
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				if (players[i2].afk == false && players[i2].admin_status == false) {
+					players[i2].health = -1;
+					players[i2].lasthit = "bombanuclear_" + bombanucleares[i].nome;
+				}
+			}
+			
+			// ❌ REMOVIDO: NPCs antigos não mais disponíveis (usar npcs_global e monstruos_global)
+			// Tubarões
+			// if (tubaraos.length() > 0) {
+			// 	for (uint i2 = 0; i2 < tubaraos.length(); i2++) {
+			// 		int xx = get_player_index_from(bombanucleares[i].nome);
+			// 		if (xx > -1) ganhaxp(players[xx].charname, random(10, 20));
+			// 		tubaraos.remove_at(i2);
+			// 	}
+			// }
+			// 
+			// // Zumbis
+			// while (zumbis.length() > 0) {
+			// 	for (uint i2 = 0; i2 < zumbis.length(); i2++) {
+			// 		int xx = get_player_index_from(bombanucleares[i].nome);
+			// 		if (xx > -1) ganhaxp(players[xx].charname, random(50, 100));
+			// 		zumbis.remove_at(i2);
+			// 	}
+			// }
+			
+			// ✅ NOVO: Matar todos os NPCs e Monstros genéricos
+			// Limpar npcs_global
+			for (uint i2 = 0; i2 < npcs_global.length(); i2++) {
+				if (npcs_global[i2].map == bombanucleares[i].map) {
+					int xx = get_player_index_from(bombanucleares[i].nome);
+					if (xx > -1) ganhaxp(players[xx].charname, random(10, 30));
+					npcs_global[i2].vida = 0;
+					npcs_global[i2].morreu = true;
+				}
+			}
+			// Limpar monstruos_global
+			for (uint i2 = 0; i2 < monstruos_global.length(); i2++) {
+				if (monstruos_global[i2].map == bombanucleares[i].map) {
+					int xx = get_player_index_from(bombanucleares[i].nome);
+					if (xx > -1) ganhaxp(players[xx].charname, random(50, 150));
+					monstruos_global[i2].vida = 0;
+					monstruos_global[i2].morreu = true;
+				}
+			}
+			
+			// ❌ REMOVIDO: Arrays de NPCs antigos
+			// Cachorros (dogs já convertidos)
+			// for (uint i2 = 0; i2 < dogs.length(); i2++) {
+			// 	int xx = get_player_index_from(bombanucleares[i].nome);
+			// 	if (xx > -1) ganhaxp(players[xx].charname, random(10, 20));
+			// }
+			// dogs.resize(0);
+			
+			// Limpar outros NPCs que podem existir
+			// sequestradors.resize(0);
+			// bebesauros.resize(0);
+			// dragonsauros.resize(0);
+			// megadragonsauros.resize(0);
+			
+			// Destruir todos os objetos
+			for (uint i3 = 0; i3 < objs.length(); i3++) {
+				objs[i3].obtainable = false;
+				objs[i3].delete = true;
+			}
+			
+			bombanucleares.remove_at(i);
+		}
+	}
+}
+
+void spawn_bombanuclear(int x, int y, string map, string nome) {
+	bombanuclear c(x, y, map, nome);
+	bombanucleares.insert_last(c);
+	// net.send_reliable_text(0, "play atomicaativada.ogg " + x + " " + y);
+}
+

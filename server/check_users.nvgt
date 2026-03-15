@@ -1,0 +1,37 @@
+﻿#pragma plugin nvgt_sqlite
+#include "sqlite3constants.nvgt"
+
+void main() {
+    // Cria e abre o banco de dados no caminho correto (MESMO que o servidor usa)
+    sqlite3 db("database/ig.db");
+    
+    // Prepara a consulta SQL para contar os jogadores
+    sqlite3statement@ stmt = db.prepare("SELECT count(*) FROM players;");
+
+    if (@stmt == null) {
+        alert("Erro", "Falha ao preparar a consulta: " + db.get_last_error_text());
+        return;
+    }
+
+    // Executa a consulta
+    if (stmt.step() == SQLITE_ROW) {
+        // Pega o resultado da contagem da primeira coluna
+        int playerCount = stmt.column_int(0);
+        screen_reader_speak("Total de contas no servidor: " + playerCount, true);
+        alert("Jogadores Cadastrados", "Existem " + playerCount + " jogadores no banco de dados.");
+        
+        if (playerCount > 0) {
+            // Verificar detalhes do primeiro jogador para validar schema
+            sqlite3statement@ stmt2 = db.prepare("SELECT username, level, gold FROM players LIMIT 1;");
+            if (@stmt2 != null && stmt2.step() == SQLITE_ROW) {
+                 string name = stmt2.column_text(0);
+                 int lvl = stmt2.column_int(1);
+                 int gold = stmt2.column_int(2);
+                 alert("ValidaÃ§Ã£o de Schema", "Jogador Exemplo: " + name + " (Lvl " + lvl + ", Gold " + gold + ")");
+            }
+        }
+    } else {
+        alert("Erro", "NÃ£o foi possÃ­vel contar os jogadores: " + db.get_last_error_text());
+    }
+}
+

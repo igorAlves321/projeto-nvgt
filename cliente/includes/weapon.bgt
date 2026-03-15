@@ -1,0 +1,208 @@
+weapon@[] weapons;
+class weapon{
+double speed, speed_burst, speed_loading, ammo_cantity, ammo_cantity_descount;
+string sound_draw, sound_reload, sound_unload, sound_mode1, sound_mode2, ammo, name, sound_shoot;
+int require_ammo, enable_burst, mode, ammo_load, loading;
+timer tshoot, tspeed_reloading;
+weapon(double speed2, double speed_burst2, double speedreload2, double ammo_cantity2, double ammo_load2, int require_ammo2, int enable_burst2, string sound_draw2, string sound_reload2, string ammo2, string name2, string sound_unload2, string sound2_mode1, string sound2_mode2, double ammo_cantity_descount2, string sound_shoot2){
+this.speed=speed2;
+this.speed_burst=speed_burst2;
+this.speed_loading=speedreload2;
+this.ammo_cantity=ammo_cantity2;
+this.ammo_load=ammo_load2;
+this.require_ammo=require_ammo2;
+this.enable_burst=enable_burst2;
+this.sound_draw=sound_draw2;
+this.sound_reload=sound_reload2;
+this.ammo=ammo2;
+this.name=name2;
+this.sound_unload=sound_unload2;
+this.sound_mode1=sound2_mode1;
+this.sound_mode2=sound2_mode2;
+this.ammo_cantity_descount=ammo_cantity_descount2;
+this.sound_shoot=sound_shoot2;
+}
+void shoot(){
+if(this.tshoot.elapsed>=this.speed_burst&&this.mode==1){
+this.tshoot.restart();
+if(this.require_ammo==1&&this.ammo_load<this.ammo_cantity_descount){
+p.play_stationary(this.sound_unload+".ogg", false);
+send_reliable(peer_id, "draw "+this.sound_unload+".ogg", 0);
+return;
+}
+p.play_stationary(this.sound_shoot+".ogg", false);
+send_unreliable(peer_id, "a "+selected, 4);
+if(this.require_ammo==1) this.ammo_load-=this.ammo_cantity_descount;
+}
+else if(this.tshoot.elapsed>=this.speed&&this.mode==0){
+this.tshoot.restart();
+if(this.require_ammo==1&&this.ammo_load<this.ammo_cantity_descount){
+p.play_stationary(this.sound_unload+".ogg", false);
+send_reliable(peer_id, "draw "+this.sound_unload+".ogg", 0);
+return;
+}
+p.play_stationary(this.sound_shoot+".ogg", false);
+send_unreliable(peer_id, "a "+selected, 4);
+if(this.require_ammo==1) this.ammo_load-=this.ammo_cantity_descount;
+}
+}
+void reload(){
+switch(this.ammo_load){
+case 0:
+if(inv_item_number(this.ammo)>=this.ammo_cantity){
+this.tspeed_reloading.restart();
+this.loading=1;
+this.ammo_load=this.ammo_cantity;
+send_reliable(peer_id, "carregar "+this.sound_reload+".ogg "+this.ammo+" "+this.ammo_cantity+"", 0);
+}
+break;
+}
+}
+bool change_mode(){
+switch(this.mode){
+case 0:
+this.mode=1;
+p.play_stationary(this.sound_mode1+".ogg", false);
+send_reliable(peer_id, "draw "+this.sound_mode1+".ogg", 0);
+return true;
+case 1:
+this.mode=0;
+p.play_stationary(this.sound_mode2+".ogg", false);
+send_reliable(peer_id, "draw "+this.sound_mode2+".ogg", 0);
+return true;
+}
+return false;
+}
+string get_ammo(){
+return this.ammo_load+" "+pu.get_value("de")+" "+this.ammo_cantity+" "+pu.get_value(this.ammo)+" "+pu.get_value("en tu cargador.");
+}
+} // end class weapon
+
+int get_weapon_index(string name){
+for(int x=0; x<weapons.length(); x++){
+if(weapons[x].name==name){
+return x;
+}
+}
+return -1;
+}
+
+void select_favorite_weapon(string favorite) {
+if(favorite_weapons.exists(favorite)) {
+favorite_weapons.get(favorite, current_weapon);
+}
+else {
+speak(pu.get_value("Nenhuma arma favoritada nesse número."));
+return;
+}
+if(inv_item_exists(current_weapon) && get_weapon_index(current_weapon) >-1) {
+int weapon_index = get_weapon_index(current_weapon);
+// Verificar se a arma já está selecionada
+if(selected == weapon_index) {
+return;
+}
+selected = weapon_index;
+speak(weapons[selected].name);
+p.play_stationary(weapons[selected].sound_draw+".ogg", false);
+send_reliable(peer_id, "select_weapon "+selected, 0);
+send_reliable(peer_id, "draw "+weapons[selected].sound_draw+".ogg", 0);
+}
+else {
+speak("no es posible seleccionar el arma.");
+}
+}
+
+void create_weapon(double speed, double speed_burst, double speed_reload, double ammo_cantity, double ammo_load, int require_ammo, int enable_burst, string sound_draw, string sound_reload, string ammo, string name, string sound_unload, string sound_mode1, string sound_mode2, double ammo_cantity_descount, string sound_shoot){
+weapon w(speed, speed_burst, speed_reload, ammo_cantity, ammo_load, require_ammo, enable_burst, sound_draw, sound_reload, ammo, name, sound_unload, sound_mode1, sound_mode2, ammo_cantity_descount, sound_shoot);
+weapons.insert_last(w);
+}
+
+//loop
+void weaponloop(){
+if(inv.get_size()>0) {
+if(selected>0 && !inv.exists(weapons[selected].name)) {
+selected =0;
+current_weapon =weapons[selected].name;
+speak(weapons[selected].name);
+p.play_stationary(weapons[selected].sound_draw+".ogg", false);
+send_reliable(peer_id, "draw "+weapons[selected].sound_draw+".ogg", 0);
+}
+}
+if(selected>-1 && selected <weapons.length()) {
+if(weapons[selected].tspeed_reloading.elapsed>=weapons[selected].speed_loading){
+weapons[selected].loading=0;
+weapons[selected].tspeed_reloading.force(0);
+weapons[selected].tspeed_reloading.pause();
+}
+if(amisafe==false&& inansz==false&& star==false&& moveable==true&&weapons[selected].loading==0&&novato==0&&fail.exists(weapons[selected].name)==false && crouched==0){
+switch(weapons[selected].mode){
+case 0:
+if (key_pressed(KEY_LCONTROL) ||mouse_pressed(0)||key_pressed(KEY_RCONTROL) && rcontrol==1){
+weapons[selected].shoot();
+}
+break;
+case 1:
+if (key_down(KEY_LCONTROL) ||mouse_down(0)||key_down(KEY_RCONTROL) && rcontrol==1){
+weapons[selected].shoot();
+}
+break;
+}
+}
+}
+if(darmas==0 && moveable && !shift_pressionado() && weapons[selected].loading==0 && novato==0){
+if(key_pressed(KEY_GRAVE)) {
+selected =0;
+current_weapon =weapons[selected].name;
+speak(weapons[selected].name);
+p.play_stationary(weapons[selected].sound_draw+".ogg", false);
+send_reliable(peer_id, "draw "+weapons[selected].sound_draw+".ogg", 0);
+}
+if(key_pressed(KEY_0)) {
+select_favorite_weapon("f0");
+}
+if(key_pressed(KEY_1)) {
+select_favorite_weapon("f1");
+}
+if(key_pressed(KEY_2)) {
+select_favorite_weapon("f2");
+}
+if(key_pressed(KEY_3)) {
+select_favorite_weapon("f3");
+}
+if(key_pressed(KEY_4)) {
+select_favorite_weapon("f4");
+}
+if(key_pressed(KEY_5)) {
+select_favorite_weapon("f5");
+}
+if(key_pressed(KEY_6)) {
+select_favorite_weapon("f6");
+}
+if(key_pressed(KEY_7)) {
+select_favorite_weapon("f7");
+}
+if(key_pressed(KEY_8)) {
+select_favorite_weapon("f8");
+}
+if(key_pressed(KEY_9)) {
+select_favorite_weapon("f9");
+}
+}
+if(key_down(KEY_LCONTROL)==false&&key_pressed(KEY_T)&&moveable&&selected>-1&&novato==0){
+if(weapons[selected].enable_burst==1) weapons[selected].change_mode();
+}
+if(key_pressed(KEY_R) &&moveable&&!ausente||mouse_pressed(1)&&moveable&&!ausente){
+if(weapons[selected].loading==0&&weapons[selected].require_ammo==1&&novato==0){
+			if(selected>-1)weapons[selected].reload();
+}
+}
+}
+double get_distance(int x1, int x2, int y1, int y2){
+	int dx,dy;
+	if(x1<=x2) dx=x2-x1;
+	else dx=x1-x2;
+	if(y1<=y2) dy=y2-y1;
+	else dy=y1-y2;
+	return dx+dy;
+}
+

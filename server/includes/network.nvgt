@@ -1,0 +1,343 @@
+// Sistema de rede do servidor NVGT - CORRIGIDO
+// Usando APIs nativas NVGT para networking
+
+#include "client_tracker.nvgt"  // ✅ Sistema de Rate Limiting (Anti-Flood)
+
+// ============================================================================
+// CANAIS DE REDE (ENet Channels) - Deve ser igual ao cliente
+// ============================================================================
+enum NetChannel {
+    CH_DEFAULT = 0,     // Canal padrão para mensagens gerais
+    CH_CHAT = 1,        // Canal de chat (confiável)
+    CH_MOVE = 2,        // Canal de movimento (pode perder pacotes)
+    CH_SYSTEM = 3,      // Canal de sistema (login, logout, etc)
+    CH_ACTION = 4,      // Canal de ações (ataques, uso de itens)
+    CH_AUDIO = 5,       // Canal de áudio (sincronização de sons)
+    CH_ADMIN = 6,       // Canal administrativo
+    CH_SYNC = 7         // Canal de sincronização de estado
+}
+
+const int NET_CHANNEL_COUNT = 8;
+
+// Instância global do servidor de rede
+network server_net;
+uint64[] connected_peers;
+string[] peer_addresses;
+dictionary peer_names; // peer_id -> player_name
+
+// Chave de criptografia para pacotes
+const string PACKET_ENCRYPTION_KEY = "evm_server_key_2024";
+
+// Criptografia e descriptografia de pacotes usando AES
+string encrypt_packet(string message) {
+    return string_aes_encrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
+string decrypt_packet(string message) {
+    return string_aes_decrypt(message, PACKET_ENCRYPTION_KEY);
+}
+
+// Classe net global para compatibilidade BGT
+class net_handler {
+    void send_reliable_text(uint64 peer_id, string message, int channel = 0) {
+        message = normalize_network_packet_text(message);
+        if (peer_id == 0) {
+            // Broadcast para todos os peers conectados
+            for(uint i = 0; i < connected_peers.length(); i++) {
+                string encrypted = encrypt_packet(message);
+                server_net.send(connected_peers[i], encrypted, channel, true);
+            }
+        } else {
+            string encrypted = encrypt_packet(message);
+            server_net.send(peer_id, encrypted, channel, true);
+        }
+    }
+
+    void send_packet(uint64 peer_id, string message, string map_filter = "") {
+        send_reliable_text(peer_id, message, 0);
+    }
+}
+
+// Instância global net para compatibilidade BGT
+net_handler net;
+
+// Inicialização do servidor usando API NVGT nativa
+bool server_init(int port) {
+    debug_log("Inicializando servidor na porta " + port);
+    debug_log("MAX_PLAYERS: " + MAX_PLAYERS);
+    debug_log("MAX_CHANNELS: 20");
+
+    if(!server_net.setup_server(port, MAX_PLAYERS, 20)) { // port, max_peers, max_channels (0-16+ como no BGT)
+        debug_log("ERRO: Não foi possível inicializar servidor na porta " + port);
+        debug_log("POSSÍVEIS CAUSAS:");
+        debug_log("1. Outra instância do servidor já está rodando");
+        debug_log("2. Outro programa está usando a porta " + port);
+        debug_log("3. Firewall bloqueando a porta");
+        debug_log("");
+        debug_log("SOLUÇÕES:");
+        debug_log("- Feche outras instâncias do servidor (nvgtw.exe)");
+        debug_log("- Use o Gerenciador de Tarefas para encerrar processos nvgtw");
+        debug_log("- Ou altere a porta em server.nvgt (const int SERVER_PORT = 9317)");
+        return false;
+    }
+
+    debug_log("✅ Servidor iniciado com sucesso na porta " + port);
+    debug_log("✅ Servidor está ouvindo conexões...");
+    debug_log("✅ Aguardando clientes conectarem...");
+    return true;
+}
+
+// Envio de mensagens usando API NVGT nativa
+void send_reliable_text(uint64 peer_id, string message, int channel = 0) {
+    message = normalize_network_packet_text(message);
+    if (peer_id == 0) {
+        // Broadcast para todos
+        for(uint i = 0; i < connected_peers.length(); i++) {
+            string encrypted = encrypt_packet(message);
+            server_net.send(connected_peers[i], encrypted, channel, true);
+        }
+    } else {
+        string encrypted = encrypt_packet(message);
+        server_net.send(peer_id, encrypted, channel, true);
+    }
+}
+
+void send_packet(uint64 peer_id, string message, int channel = 0) {
+    if (peer_id == 0) {
+        // Broadcast para todos
+        for(uint i = 0; i < connected_peers.length(); i++) {
+            string encrypted = encrypt_packet(message);
+            server_net.send(connected_peers[i], encrypted, channel, true);
+        }
+    } else {
+        string encrypted = encrypt_packet(message);
+        server_net.send(peer_id, encrypted, channel, true);
+    }
+}
+
+// Broadcast para todos ou mapa específico
+void server_broadcast(string message, string target_map = "", string exclude_player = "") {
+    for(uint i = 0; i < connected_peers.length(); i++) {
+        uint64 peer_id = connected_peers[i];
+
+        player@ p = get_player_by_peer(peer_id);
+        if(target_map != "") {
+            if(p is null || p.map != target_map) continue;
+        }
+
+        // Verificar se deve excluir este jogador
+        if(exclude_player != "") {
+            if(p !is null && p.charname == exclude_player) continue;
+            if(get_peer_name(peer_id) == exclude_player) continue;
+        }
+
+        send_reliable_text(peer_id, message);
+    }
+}
+
+// Adicionar peer conectado
+void add_connected_peer(uint64 peer_id, string address) {
+    connected_peers.push_back(peer_id);
+    peer_addresses.push_back(address);
+    debug_log("Peer conectado: " + peer_id + " (" + address + ")");
+}
+
+// Remover peer desconectado  
+void remove_connected_peer(uint64 peer_id) {
+    for(uint i = 0; i < connected_peers.size(); i++) {
+        if(connected_peers[i] == peer_id) {
+            connected_peers.erase(i);
+            peer_addresses.erase(i);
+            break;
+        }
+    }
+    
+    // Remover do mapeamento de nomes
+    string peer_key = "" + peer_id;
+    if(peer_names.exists(peer_key)) {
+        peer_names.delete(peer_key);
+    }
+    
+    debug_log("Peer desconectado: " + peer_id);
+}
+
+// Desconecta (opcional) e limpa completamente o estado de sessao do peer
+void force_disconnect_and_cleanup(uint64 peer_id, bool disconnect_peer = true) {
+    if(disconnect_peer) {
+        server_net.disconnect_peer_forcefully(peer_id);
+    }
+
+    remove_player(peer_id);
+    remove_connected_peer(peer_id);
+    remove_tracker(peer_id);
+    connected_count = int(connected_peers.size());
+}
+
+// Loop de rede - processar eventos usando API NVGT nativa
+void network_loop() {
+    const network_event@ event;
+    while((@event = server_net.request()) !is null && event.type != event_none) {
+        debug_log("📥 Evento de rede recebido: tipo=" + event.type + ", peer=" + event.peer_id);
+        try {
+            server_handle_network_event_const(event);
+        }
+        catch {
+            string event_info = "type=" + event.type + " channel=" + event.channel;
+            string packet_info = event_info;
+            if(event.type == event_receive) {
+                packet_info += " raw=" + event.message;
+            }
+
+            log_network_exception_with_context(event.peer_id, packet_info, "network_loop:event_dispatch");
+            force_disconnect_and_cleanup(event.peer_id, true);
+        }
+    }
+}
+
+// Obter número de jogadores conectados usando NVGT nativo
+uint get_connected_count() {
+    return connected_peers.size();
+}
+
+// Verificar se peer está conectado
+bool is_peer_connected(uint64 peer_id) {
+    for(uint i = 0; i < connected_peers.size(); i++) {
+        if(connected_peers[i] == peer_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Associar nome do jogador ao peer
+void set_peer_name(uint64 peer_id, string player_name) {
+    peer_names["" + peer_id] = player_name;
+}
+
+// Obter nome do jogador pelo peer
+string get_peer_name(uint64 peer_id) {
+    string peer_key = "" + peer_id;
+    if(peer_names.exists(peer_key)) {
+        return string(peer_names[peer_key]);
+    }
+    return "";
+}
+
+// ===== SISTEMA DE DETECÇÃO DE JOGADORES FANTASMA =====
+// Detecta jogadores que perderam conexão mas não desconectaram corretamente
+const int GHOST_TIMEOUT = 180000;  // 180 segundos sem atividade = fantasma
+timer ghost_check_timer;
+
+// Função para verificar e remover jogadores fantasma
+// Deve ser chamada periodicamente no loop principal do servidor
+void check_ghost_players() {
+    // Verificar a cada 5 segundos (não precisa ser mais frequente)
+    if(ghost_check_timer.elapsed < 5000) return;
+    ghost_check_timer.restart();
+    
+    // Iterar players de trás pra frente (para permitir remoção segura)
+    for(int i = int(players.length()) - 1; i >= 0; i--) {
+        if(players[i].last_activity.elapsed > GHOST_TIMEOUT) {
+            uint64 ghost_peer = players[i].peer_id;
+            string ghost_name = players[i].charname;
+            int inactive_seconds = int(players[i].last_activity.elapsed / 1000);
+            debug_log("Jogador fantasma detectado: " + ghost_name +
+                      " (inativo ha " + inactive_seconds + "s, timeout=" + int(GHOST_TIMEOUT / 1000) + "s)");
+
+            // Enviar mensagem de kick (se ainda tiver conexao)
+            send_reliable_text(ghost_peer, "say Voce foi desconectado por inatividade.", 0);
+
+            // Desconectar e remover completamente das estruturas de sessao
+            force_disconnect_and_cleanup(ghost_peer, true);
+
+            debug_log("Jogador " + ghost_name + " removido (fantasma)");
+        }
+    }
+}
+
+// ===== ANTI-CHEAT: VALIDAÇÃO DE MOVIMENTO =====
+
+/**
+ * Valida movimento do jogador contra speed hack e teleporte
+ * @param p Referência ao jogador
+ * @param new_x Nova posição X
+ * @param new_y Nova posição Y
+ * @return true se movimento é válido, false se é suspeito
+ */
+bool validate_movement(player@ p, int new_x, int new_y) {
+    if(p is null) return false;
+    
+    // Primeira movimentação ou reset - aceitar e inicializar
+    if(p.last_move_time.elapsed == 0 || (p.last_valid_x == 0 && p.last_valid_y == 0)) {
+        p.last_valid_x = new_x;
+        p.last_valid_y = new_y;
+        p.last_move_time.restart();
+        return true;
+    }
+    
+    // Calcular distância (Manhattan para simplificar, ou Euclidiana)
+    int dx = absolute(new_x - p.last_valid_x);
+    int dy = absolute(new_y - p.last_valid_y);
+    double distance = sqrt(double(dx * dx + dy * dy));
+    
+    // HARD CAP: Teleporte instantâneo proibido
+    if(distance > p.HARD_CAP_DISTANCE) {
+        p.violation_count += 3;  // Violação grave
+        debug_log("🚨 TELEPORTE detectado! " + p.charname + ": " + 
+                  p.last_valid_x + "," + p.last_valid_y + " → " + new_x + "," + new_y + 
+                  " (dist=" + distance + ")");
+        
+        // Forçar correção imediata
+        return false;
+    }
+    
+    // Calcular velocidade: tiles por segundo
+    double time_diff = p.last_move_time.elapsed / 1000.0;  // Converter para segundos
+    if(time_diff <= 0.001) time_diff = 0.001;  // Evitar divisão por zero
+    
+    double speed = distance / time_diff;
+    double allowed_speed = p.MAX_WALK_SPEED * p.SPEED_TOLERANCE;
+    
+    // Verificar se velocidade excede o permitido (ignorar micro-movimentos)
+    if(speed > allowed_speed && distance > 2.0) {
+        p.violation_count++;
+        debug_log("⚠️ Speedhack? " + p.charname + ": vel=" + speed + 
+                  " tiles/s (max=" + allowed_speed + "), violações=" + p.violation_count);
+        
+        // Se atingiu max violações, rejeitar movimento
+        if(p.violation_count >= p.MAX_VIOLATIONS) {
+            debug_log("🚫 CHEAT confirmado! Corrigindo posição de " + p.charname);
+            return false;
+        }
+        
+        // Ainda abaixo do limite, aceitar mas monitorar
+    } else {
+        // Movimento válido - reduzir violações lentamente
+        if(p.violation_count > 0) {
+            p.violation_count--;
+        }
+    }
+    
+    // Atualizar última posição válida
+    p.last_valid_x = new_x;
+    p.last_valid_y = new_y;
+    p.last_move_time.restart();
+    
+    return true;
+}
+
+/**
+ * Envia correção de posição para o cliente
+ * Usado quando movimento inválido é detectado
+ */
+void send_position_correction(player@ p) {
+    if(p is null) return;
+    
+    // Forçar cliente a voltar para posição válida
+    send_reliable_text(p.peer_id, "teleport " + p.last_valid_x + " " + p.last_valid_y, 0);
+    debug_log("📍 Correção enviada para " + p.charname + ": " + p.last_valid_x + "," + p.last_valid_y);
+    
+    // Resetar contador após correção
+    p.violation_count = 0;
+}
+

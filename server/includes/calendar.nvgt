@@ -1,0 +1,286 @@
+// calendar.nvgt - Sistema de Calendário e Tempo do Jogo
+// Convertido para NVGT
+// Gerencia tempo do jogo, dia/noite, estações, etc.
+
+// Classe de calendário do jogo (renomeada para evitar conflito com tipo calendar do NVGT)
+class game_calendar {
+	int year;           // Ano
+	int month;          // Mês (1-12)
+	int day;            // Dia (1-31)
+	int hour;           // Hora (0-23)
+	int minute;         // Minuto (0-59)
+	int second;         // Segundo (0-59)
+	string season;      // Estação (primavera, verão, outono, inverno)
+	int day_of_week;    // Dia da semana (0=domingo, 6=sábado)
+	bool is_day;        // Se é dia (true) ou noite (false)
+	timer time_ticker;  // Timer para avançar o tempo
+	int time_speed;     // Velocidade do tempo (1 seg real = X segs no jogo)
+	
+	game_calendar() {
+		year = 1;
+		month = 1;
+		day = 1;
+		hour = 12;
+		minute = 0;
+		second = 0;
+		season = "primavera";
+		day_of_week = 0;
+		is_day = true;
+		time_speed = 60; // 1 minuto real = 1 hora no jogo
+		time_ticker.restart();
+	}
+	
+	game_calendar(int y, int m, int d, int h, int min, int s) {
+		year = y;
+		month = m;
+		day = d;
+		hour = h;
+		minute = min;
+		second = s;
+		update_season();
+		calculate_day_of_week();
+		update_day_night();
+		time_speed = 60;
+		time_ticker.restart();
+	}
+	
+	void update_season() {
+		if(month >= 3 && month <= 5) {
+			season = "primavera";
+		} else if(month >= 6 && month <= 8) {
+			season = "verão";
+		} else if(month >= 9 && month <= 11) {
+			season = "outono";
+		} else {
+			season = "inverno";
+		}
+	}
+	
+	void calculate_day_of_week() {
+		// Algoritmo simples (Zeller's congruence simplificado)
+		int total_days = (year * 365) + (month * 30) + day;
+		day_of_week = total_days % 7;
+	}
+	
+	void update_day_night() {
+		// Dia: 6h-18h, Noite: 18h-6h
+		if(hour >= 6 && hour < 18) {
+			is_day = true;
+		} else {
+			is_day = false;
+		}
+	}
+	
+	void advance_time(int seconds_to_add) {
+		second += seconds_to_add;
+		
+		// Minutos
+		while(second >= 60) {
+			second -= 60;
+			minute++;
+		}
+		
+		// Horas
+		while(minute >= 60) {
+			minute -= 60;
+			hour++;
+		}
+		
+		// Dias
+		while(hour >= 24) {
+			hour -= 24;
+			day++;
+			day_of_week = (day_of_week + 1) % 7;
+		}
+		
+		// Meses
+		int days_in_month = get_days_in_month(month);
+		while(day > days_in_month) {
+			day -= days_in_month;
+			month++;
+			
+			if(month > 12) {
+				month = 1;
+				year++;
+			}
+			
+			days_in_month = get_days_in_month(month);
+			update_season();
+		}
+		
+		update_day_night();
+	}
+	
+	int get_days_in_month(int m) {
+		switch(m) {
+			case 2: return 28; // Simplificado, sem ano bissexto
+			case 4:
+			case 6:
+			case 9:
+			case 11:
+				return 30;
+			default:
+				return 31;
+		}
+	}
+	
+	string get_time_string() {
+		string h = hour < 10 ? "0" + hour : "" + hour;
+		string m = minute < 10 ? "0" + minute : "" + minute;
+		string s = second < 10 ? "0" + second : "" + second;
+		return h + ":" + m + ":" + s;
+	}
+	
+	string get_date_string() {
+		string d = day < 10 ? "0" + day : "" + day;
+		string m = month < 10 ? "0" + month : "" + month;
+		return d + "/" + m + "/" + year;
+	}
+	
+	string get_day_name() {
+		switch(day_of_week) {
+			case 0: return "Domingo";
+			case 1: return "Segunda-feira";
+			case 2: return "Terça-feira";
+			case 3: return "Quarta-feira";
+			case 4: return "Quinta-feira";
+			case 5: return "Sexta-feira";
+			case 6: return "Sábado";
+			default: return "Desconhecido";
+		}
+	}
+	
+	string get_full_info() {
+		return get_day_name() + ", " + get_date_string() + " " + 
+			get_time_string() + " (" + season + ", " + 
+			(is_day ? "dia" : "noite") + ")";
+	}
+	
+	void tick() {
+		// Avançar tempo baseado no time_speed
+		if(time_ticker.elapsed >= 1000) { // A cada 1 segundo real
+			time_ticker.restart();
+			advance_time(time_speed);
+		}
+	}
+}
+
+// Calendário global do servidor
+game_calendar server_calendar;
+
+// Inicializar calendário do servidor
+void init_calendar(int year = 1, int month = 1, int day = 1, int hour = 12) {
+	server_calendar = game_calendar(year, month, day, hour, 0, 0);
+}
+
+// Loop do calendário (chamar no loop principal)
+void calendar_loop() {
+	server_calendar.tick();
+}
+
+// Obter hora atual
+int get_current_hour() {
+	return server_calendar.hour;
+}
+
+// Obter minuto atual
+int get_current_minute() {
+	return server_calendar.minute;
+}
+
+// Verificar se é dia
+bool is_daytime() {
+	return server_calendar.is_day;
+}
+
+// Verificar se é noite
+bool is_nighttime() {
+	return !server_calendar.is_day;
+}
+
+// Obter estação atual
+string get_current_season() {
+	return server_calendar.season;
+}
+
+// Enviar tempo para jogador
+void send_time_to_player(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+	
+	send_reliable_text(players[player_index].peer_id, 
+		"msg2 " + server_calendar.get_full_info(), 0);
+}
+
+// Enviar tempo para todos
+void broadcast_time() {
+	for(uint i = 0; i < players.length(); i++) {
+		send_time_to_player(i);
+	}
+}
+
+// Definir velocidade do tempo
+void set_time_speed(int speed) {
+	server_calendar.time_speed = speed;
+}
+
+// Avançar tempo manualmente
+void skip_time(int hours) {
+	server_calendar.advance_time(hours * 3600);
+}
+
+// Callbacks para eventos de tempo
+funcdef void time_event_callback();
+
+time_event_callback@ on_dawn_callback;    // Quando amanhece (6h)
+time_event_callback@ on_noon_callback;    // Meio-dia (12h)
+time_event_callback@ on_dusk_callback;    // Quando anoitece (18h)
+time_event_callback@ on_midnight_callback; // Meia-noite (0h)
+
+int last_hour_checked = -1;
+
+// Verificar eventos de tempo
+void check_time_events() {
+	if(server_calendar.hour != last_hour_checked) {
+		last_hour_checked = server_calendar.hour;
+		
+		// Dawn (6h)
+		if(server_calendar.hour == 6 && @on_dawn_callback != null) {
+			on_dawn_callback();
+		}
+		
+		// Noon (12h)
+		if(server_calendar.hour == 12 && @on_noon_callback != null) {
+			on_noon_callback();
+		}
+		
+		// Dusk (18h)
+		if(server_calendar.hour == 18 && @on_dusk_callback != null) {
+			on_dusk_callback();
+		}
+		
+		// Midnight (0h)
+		if(server_calendar.hour == 0 && @on_midnight_callback != null) {
+			on_midnight_callback();
+		}
+	}
+}
+
+// Registrar callback de evento
+void register_dawn_event(time_event_callback@ callback) {
+	@on_dawn_callback = callback;
+}
+
+void register_noon_event(time_event_callback@ callback) {
+	@on_noon_callback = callback;
+}
+
+void register_dusk_event(time_event_callback@ callback) {
+	@on_dusk_callback = callback;
+}
+
+void register_midnight_event(time_event_callback@ callback) {
+	@on_midnight_callback = callback;
+}
+

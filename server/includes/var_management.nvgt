@@ -1,0 +1,419 @@
+﻿// var_management.nvgt - Sistema de gerenciamento de variÃ¡veis do jogador
+// Convertido de BGT para NVGT
+
+class var_management {
+	dictionary@ data;
+	string nameplayer;
+	string origin;
+
+	var_management() {
+		origin = "none";
+	}
+
+	var_management(string origin2, string playername) {
+		file f;
+		if (!f.open(origin2, "rb")) {
+			// Se o arquivo nÃ£o existe, cria um dicionÃ¡rio vazio
+			@data = dictionary();
+		} else {
+			string serialized_data = f.read();
+			@data = deserialize(serialized_data);
+			f.close();
+		}
+		origin = origin2;
+		this.nameplayer = playername;
+	}
+
+	void reset() {
+		file f;
+		if (!f.open(origin, "rb")) {
+			@data = dictionary();
+			return;
+		}
+		string serialized_data = f.read();
+		@data = deserialize(serialized_data);
+		f.close();
+	}
+
+	bool manage(string name, string operator, string var_data, bool is_number) {
+		if (operator == "<" && is_number) {
+			return is_less_than(name, string_to_number(var_data));
+		}
+		if (operator == ">" && is_number) {
+			return is_greater_than(name, string_to_number(var_data));
+		}
+		if (operator == "<=" && is_number) {
+			return is_less_or_equal_than(name, string_to_number(var_data));
+		}
+		if (operator == ">=" && is_number) {
+			return is_greater_or_equal_than(name, string_to_number(var_data));
+		}
+		if (operator == "==") {
+			return is_equal_than(name, var_data, is_number);
+		}
+		if (operator == "!=") {
+			return is_different_than(name, var_data, is_number);
+		}
+		if (operator == "=") {
+			return set_var_to(name, var_data, is_number);
+		}
+		if (operator == "+=") {
+			return add_value_to(name, var_data, is_number);
+		}
+		if (operator == "-=" && is_number) {
+			return subtract_value_to(name, string_to_number(var_data));
+		}
+		if (operator == "*=" && is_number) {
+			return multiply_value_to(name, string_to_number(var_data));
+		}
+		if (operator == "/=" && is_number) {
+			return divide_value_to(name, string_to_number(var_data));
+		}
+		return false;
+	}
+
+	bool is_less_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get < value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_greater_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get > value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_less_or_equal_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get <= value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_greater_or_equal_than(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		if (get >= value) {
+			return true;
+		}
+		return false;
+	}
+
+	bool is_equal_than(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get, value2 = string_to_number(value);
+			data.get(key, get);
+			if (get == value2) {
+				return true;
+			}
+		} else {
+			string get;
+			data.get(key, get);
+			if (get == value) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool is_different_than(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get, value2 = string_to_number(value);
+			data.get(key, get);
+			if (get != value2) {
+				return true;
+			}
+		} else {
+			string get;
+			data.get(key, get);
+			if (get != value) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool set_var_to(string key, string value, bool is_number) {
+		if (is_number) {
+			data.set(key, string_to_number(value));
+			save_configs(origin, nameplayer);
+			return true;
+		} else {
+			data.set(key, value);
+			save_configs(origin, nameplayer);
+			return true;
+		}
+	}
+
+	bool add_value_to(string key, string value, bool is_number) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		if (is_number) {
+			double get;
+			data.get(key, get);
+			get += string_to_number(value);
+			data.set(key, get);
+			save_configs(origin, nameplayer);
+			return true;
+		} else {
+			string get;
+			data.get(key, get);
+			get += value;
+			data.set(key, get); // Bug corrigido: era 'value', agora Ã© 'get'
+			save_configs(origin, nameplayer);
+			return true;
+		}
+	}
+
+	bool subtract_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get -= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	bool multiply_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get *= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	bool divide_value_to(string key, double value) {
+		if (!data.exists(key)) {
+			return false;
+		}
+		double get;
+		data.get(key, get);
+		get /= value;
+		data.set(key, get);
+		save_configs(origin, nameplayer);
+		return true;
+	}
+
+	void save_configs(string dir, string player_name) {
+		int index_player = get_player_index_from(player_name);
+		file f;
+		if (!f.open(dir, "wb")) {
+			return; // NÃ£o conseguiu abrir arquivo para escrita
+		}
+		f.write(data.serialize());
+		f.close();
+        // Sem reload imediato: este objeto ja mantem o estado em memoria.
+        // Aqui garantimos persistencia em disco e evitamos recursao de escrita.
+        if(index_player > -1 && players[index_player].charname == player_name) {
+            debug_log("Configs de " + player_name + " salvas em " + dir);
+        }
+	}
+}
+
+// ============================================================================
+// ðŸ†• SISTEMA DE RELOAD DE CONFIGURAÃ‡Ã•ES DO SERVIDOR
+// ============================================================================
+
+// Recarregar configuraÃ§Ãµes do servidor (config.nvgt)
+void reload_server_config() {
+	debug_log("Recarregando configuraÃ§Ãµes do servidor...");
+	
+	file f;
+	if(!f.open("config.nvgt", "rb")) {
+		debug_log("ERRO: NÃ£o foi possÃ­vel abrir config.nvgt");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") {
+		debug_log("AVISO: config.nvgt estÃ¡ vazio");
+		return;
+	}
+	
+	string[] lines = content.split("\n");
+	int loaded = 0;
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+
+		// Ignorar comentÃ¡rios e linhas vazias
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		// Processar linha de configuraÃ§Ã£o (formato: VARIAVEL=valor)
+		int equal_pos = line.find_first("=");
+		if(equal_pos < 0) continue;
+
+		string var_name = trim(line.substr(0, equal_pos));
+		string var_value = trim(line.substr(equal_pos + 1));
+		
+		// Aplicar configuraÃ§Ãµes conhecidas
+		if(var_name == "MAX_PLAYERS") {
+			MAX_PLAYERS = string_to_number(var_value);
+			loaded++;
+		}
+		else if(var_name == "AUTOSAVE_INTERVAL") {
+			AUTOSAVE_INTERVAL = string_to_number(var_value);
+			loaded++;
+		}
+		// Adicionar mais variÃ¡veis conforme necessÃ¡rio
+	}
+	
+	debug_log("ConfiguraÃ§Ãµes recarregadas: " + loaded + " variÃ¡veis atualizadas");
+}
+
+// Recarregar receitas de crafting
+void reload_crafting_recipes() {
+	debug_log("Recarregando receitas de crafting...");
+	
+	file f;
+	if(!f.open("crafting_recipes.dat", "rb")) {
+		debug_log("AVISO: crafting_recipes.dat nÃ£o encontrado, usando receitas padrÃ£o");
+		return;
+	}
+	
+	string content = f.read();
+	f.close();
+	
+	if(content == "") return;
+	
+	// Limpar receitas antigas
+	crafting_system.recipes.delete_all();
+	
+	// Carregar novas receitas
+	string[] lines = content.split("\n");
+	int loaded = 0;
+
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+		if(line == "" || line.substr(0, 2) == "//") continue;
+		
+		// Formato: result_item|ingredients|description|quantity
+		string[] parts = line.split("|");
+		if(parts.length() >= 3) {
+			string result = parts[0];
+			string ingredients = parts[1];
+			string description = parts[2];
+			int quantity = (parts.length() >= 4) ? string_to_number(parts[3]) : 1;
+			
+			crafting_system.add_recipe(result, ingredients, description, quantity);
+			loaded++;
+		}
+	}
+	
+	debug_log("Receitas de crafting recarregadas: " + loaded + " receitas");
+}
+
+// Recarregar dados de armas do weapons.db
+void reload_weapons() {
+	debug_log("Recarregando armas...");
+	
+	// Limpar armas antigas
+	weapons_list.resize(0);
+	
+	// Recarregar
+	load_weapons();
+	
+	debug_log("Armas recarregadas: " + weapons_list.length() + " armas carregadas");
+}
+
+// Recarregar zonas desabilitadas
+void reload_disabled_zones() {
+	debug_log("Recarregando zonas desabilitadas...");
+
+	// Limpar zonas antigas
+	game_disabled_zones.resize(0);
+
+	// Recarregar
+	init_disabled_zones();
+
+	debug_log("Zonas desabilitadas recarregadas: " + game_disabled_zones.length() + " zonas");
+}
+
+// Recarregar tudo (uso com cuidado - pode causar lag temporÃ¡rio)
+void reload_all_server_data() {
+	debug_log("=== INICIANDO RELOAD COMPLETO DO SERVIDOR ===");
+	
+	reload_server_config();
+	reload_crafting_recipes();
+	reload_weapons();
+	reload_disabled_zones();
+	
+	debug_log("=== RELOAD COMPLETO FINALIZADO ===");
+}
+
+// Atualizar variÃ¡vel especÃ­fica do servidor em runtime
+bool set_server_var(string var_name, string value) {
+	if(var_name == "MAX_PLAYERS") {
+		MAX_PLAYERS = string_to_number(value);
+		debug_log("MAX_PLAYERS atualizado para: " + value);
+		return true;
+	}
+	else if(var_name == "AUTOSAVE_INTERVAL") {
+		AUTOSAVE_INTERVAL = string_to_number(value);
+		debug_log("AUTOSAVE_INTERVAL atualizado para: " + value);
+		return true;
+	}
+	
+	debug_log("ERRO: VariÃ¡vel desconhecida: " + var_name);
+	return false;
+}
+
+// Obter valor de variÃ¡vel do servidor
+string get_server_var(string var_name) {
+	if(var_name == "MAX_PLAYERS") {
+		return MAX_PLAYERS;
+	}
+	else if(var_name == "AUTOSAVE_INTERVAL") {
+		return AUTOSAVE_INTERVAL;
+	}
+	
+	return "UNKNOWN";
+}
+
+// Listar todas as variÃ¡veis configurÃ¡veis
+string list_server_vars() {
+	string result = "=== VARIÃVEIS DO SERVIDOR ===\n";
+	result += "MAX_PLAYERS = " + MAX_PLAYERS + "\n";
+	result += "AUTOSAVE_INTERVAL = " + AUTOSAVE_INTERVAL + "\n";
+	result += "TOTAL_PLAYERS = " + players.length() + "\n";
+	result += "SERVER_UPTIME = " + (server_uptime.elapsed / 1000) + "s\n";
+	return result;
+}
+

@@ -1,0 +1,2300 @@
+// player.nvgt - Sistema de Jogadores do EVM Server (convertido de BGT)
+// Conversão completa: BGT → NVGT
+
+#include "playerfires.nvgt"
+#include "settitle.nvgt"
+// #include "var_management.nvgt" // TEMPORARIAMENTE DESABILITADO (variáveis não existem)
+#include "db.nvgt"
+#include "crafting.nvgt"
+
+player@[] players(0);
+const bool INVENTORY_ENABLE_LEGACY_FILE_FALLBACK = true;
+
+class player {
+	// --- Sistema de Recompensa (Bounty) ---
+	int bounty_on_head = 0;      // 1 se tem recompensa na cabeça, 0 caso contrário
+	int bounty_value = 0;        // Valor da recompensa em moedas
+	string bounty_owner = "";    // Quem colocou a recompensa
+	int bounty_active = 0;       // Se a recompensa está ativa
+	string bounty_target = "";   // Alvo da recompensa (se este jogador colocou recompensa em alguém)
+	int bounty_online_time = 0;  // Tempo online com recompensa
+	
+	// --- Sistema de Fogo no Jogador (Playerfires) ---
+	playerfire@[] playerfires;   // Array de fogos ativos no jogador
+	
+	// --- Sistema de Degradação de Equipamentos ---
+	dictionary degradation;      // Dicionário com degradação de cada item (0-100%)
+	
+	// --- Sistema de Inventário ---
+	db inv;                      // Inventário do jogador (item => quantidade)
+	int aitem = 1;              // Anunciar quando ganha item (1=sim, 0=não)
+
+	// --- Sistema de Crafting ---
+	crafting c;                  // Sistema de criação de itens
+
+	// --- Sistema de Gerenciamento de Variáveis ---
+	var_management@ v_m;         // Gerenciador de variáveis do jogador (.ini)
+
+	// --- Sistema de Arena PvP ---
+	int in_arena = 0;           // Se está em uma arena (1=sim, 0=não)
+	string maparena = "";       // Nome do mapa da arena
+	int xarena = 0;             // Coordenada X de spawn da arena
+	int yarena = 0;             // Coordenada Y de spawn da arena
+	int arena_wins = 0;         // 🆕 Total de vitórias em arenas
+	int arena_kills = 0;        // 🆕 Total de kills em arenas
+	
+	// --- Sistema de Morte Progressiva ---
+	int progressive_death = 0;  // Se está em morte progressiva (1=sim, 0=não)
+	int death_index = -1;       // Tipo de morte (1=sangramento, 2=veneno, etc)
+	double death_life = 0;      // Dano por tick
+	int death_time = 1000;      // Intervalo entre ticks (ms)
+	string death_reason = "";   // Razão/causa da morte
+	timer tdeath;               // Timer para morte progressiva
+	
+	// --- Sistema de Vestimentas Avançado ---
+	string[] clothing;          // Array de roupas equipadas
+	string[] body_parts;        // Array de partes do corpo cobertas
+	int[] clothing_indexs;      // Índices das roupas
+	double clothing_protection = 0; // Proteção total das roupas (0-90%)
+	
+	// --- Sistema de Calendário (por jogador) ---
+	game_calendar time;         // Calendário pessoal do jogador
+	timer tcalendar;            // Timer do calendário
+	
+	// --- Sistema de Silêncio/Prisão ---
+	int temposilencio = 0;      // Tempo de silêncio em minutos
+	int tempoprision = 0;       // Tempo de prisão em minutos
+	int silenciado = 0;         // Se está silenciado (1=sim, 0=não)
+	timer tsilencio;            // Timer de silêncio
+	timer tempoprisao;          // Timer de prisão
+	string premapa = "";        // Mapa anterior (antes da prisão)
+	int prex = 0, prey = 0;     // Coordenadas anteriores
+	
+	// --- Sistema Anti-Spam ---
+	int total_messages = 0;     // Total de mensagens enviadas
+	int antispam_time = 0;      // Tempo restante de bloqueio (segundos)
+	int antispam = 0;           // Se está em anti-spam (1=sim, 0=não)
+	timer chattimer;            // Timer do chat
+	timer spamtimer;            // Timer de spam
+	timer tpackets;             // Timer de pacotes
+	
+	// --- Sistema de Combate Avançado ---
+	int flecha = 0;             // Quantidade de flechas
+	int nveneno = 0;            // Veneno
+	int rajada = 0;             // Modo rajada
+	int cmortal = 0;            // Combate mortal
+	int galil = 1000;           // Munição Galil
+	uint mp7 = 50000;           // Munição MP7
+	uint bazuca = 50000;        // Munição Bazuca
+	uint m16 = 50000;           // Munição M16
+	uint pistola_temporal = 50000; // Munição pistola temporal
+	uint sub_laser = 1000;      // Munição sub laser
+	timer tlutar;               // Timer de luta
+	
+	// --- Sistema de Economia ---
+	double stryx = 0;           // Moeda premium
+	double creditos = 0;        // Créditos
+	int contabancaria = 0;      // Tem conta bancária (1=sim, 0=não)
+	int payment = 0;            // Pagamento pendente
+	int payed = 0;              // Já pagou (1=sim, 0=não)
+	int gcoins = 0;             // Game coins (removido do meio, agora aqui)
+	int greais = 0;             // Moeda alternativa
+	int aposto = 0;             // Valor apostado
+	double saldo = 0;           // Saldo em moedas normais (removido do meio, agora aqui)
+	
+	// --- Sistema de Equipes/Clãs ---
+	int emequipe = 0;           // Está em equipe (1=sim, 0=não)
+	int equipemortal = 0;       // Equipe no combate mortal
+	int equipedesafio = 0;      // Equipe no desafio
+	int pdesafio = 0;           // Participando de desafio (removido do meio, agora aqui)
+	string[] nomesequipe;       // Nomes dos membros da equipe (removido do meio, agora aqui)
+	string[] preteam;           // Time anterior
+	int dequipo = 0;            // Chat de equipe desativado (1=desativado, 0=ativado)
+	int dpm = 0;                // Mensagens privadas desativadas (1=desativado, 0=ativado)
+	
+	// --- Propriedades Básicas Importantes ---
+	bool constructor = false;   // É construtor/builder
+	bool avisado = false;       // Foi avisado (advertência 1)
+	bool avisado2 = false;      // Segunda advertência
+	int watching = 0;           // Assistindo jogador (0=não, 1=sim)
+	string[] watcher_list;      // Lista de quem está assistindo este jogador
+	string w_name = "";         // Nome de quem está assistindo
+	int weapon_index = -1;      // Índice da arma do jogador assistido
+	int mapindex = -1;          // Índice do mapa atual no array server_maps
+	double premaxhealth = 0;    // Max HP anterior (para buffs temporários)
+	int reencarnou = 0;         // Quantidade de reencarnações
+	int votou = 0, votou2 = 0;  // Sistema de votação
+	string seestatus = "";      // Status de "ver status"
+	int sexo = 0;               // Gênero (0=M, 1=F)
+	string sexo2 = "";          // Gênero (string)
+	int bus = 0;                // No ônibus
+	string mapaatual2 = "";     // Mapa atual 2 (backup)
+	int negativo = 0;           // Flag negativo
+	int fichaprisao = 0;        // Ficha de prisão
+	int trancado = 0;           // Está trancado
+	int naoitens = 0;           // Não pode pegar itens
+	int frozen_time = 0;        // Tempo congelado (ms)
+	int portal = 0;             // Em portal
+	bool in_portal = false;     // Flag de portal
+	string comida = "";         // Comida sendo consumida
+	string destinocomida = "";  // Destino da comida
+	double valorcomida = 0;     // Valor nutricional
+	timer tcomida;              // Timer de comida
+	string vehicle_type = "";   // Tipo de veículo
+	int lquest = 0;             // Leu tutorial de quests
+	int lnvdes = 0;             // Leu novidades
+	int lnovedades = 0;         // Leu novidades (alt)
+	int lcomandos = 0;          // Leu comandos
+	int ndeath = 0;             // Flag de morte
+	bool floating = false;      // Está flutuando
+	bool cloaked = false;       // Está invisível (cloak)
+	bool superjump = false;     // Super pulo ativo
+	bool cloakhiding = false;   // Escondido por cloak
+	int starsoundid = -1;       // ID do som de estrela
+	string nonomemapa = "";     // Nome no mapa
+	int tx = -1, ty = -1;       // Posição de teleporte
+	int npasso = 0, tpasso = 0; // Contador de passos
+	string telemap = "";        // Mapa de teleporte
+	int tfid = -1;              // ID do som de movimento
+	string curmusic = "";       // Música atual
+	timer pingtimer;            // Timer de ping
+	timer safetimer;            // Timer de segurança
+	timer maptraveltimer;       // Timer de viagem entre mapas
+	timer playtimer;            // Timer de tempo de jogo
+	timer startimer;            // Timer de estrela
+	timer teletimer;            // Timer de teleporte
+	timer omtimer;              // Timer OM
+	timer afksecondtimer;       // Timer de segundos AFK
+	timer afkreturntimer;       // Timer de retorno AFK
+	uint afkseconds = 0;        // Segundos AFK
+	uint starseconds = 0;       // Segundos de estrela
+	string validated_name = ""; // Nome validado
+	int pitch = 0;              // Tom de voz
+	
+	bool moderador = false, achuva = false;
+	int nchuva = 600000, ncaverna = -1;
+	timer tempoveneno2, tszona, tvelocidade, idletimer;
+	timer tinv;
+	timer tpa, tmaquina, thack, tpa2, tsedefome;
+	timer tdoente, tdoente2, tsvida, tsitem, tsugando, tgripe;
+	timer tcaverna, tsalvar, tvarinha;
+	timer tmcampo, tmflutuar, tmpulo, tminvs, tppeixe, tmveloz, tmcampo2;
+	timer tmchuva;
+	timer tcongelar, tmeteoro, tmagia;
+	int ncongelar = 0, nalancha = 0;
+	int inq = 0, ppeixe = 0;
+	int lado = Right, conectou = 0;
+	int facing = 0;  // Direção que o jogador está olhando (0=Forward, 1=Back, 2=Left, 3=Right)
+	uint npescar = 0, npescando, plinha = 0;
+	bool jpescar = false, curando = false;
+	double tempopacifico, nfome = 0, nsede = 0, ncoco = 0, nurina = 0;
+	string idiomachat, dmaquina, dbus, mapavoltar = "milão", mapaatual;
+	string tarma = "soco.ogg";
+	string dalison2, anotado, cidadenatal, draw;
+	string voice_id = "default"; // Voz preferida do narrador (NVDA/SAPI)
+	int questmontanha = 0, terminouquestmontanha = 0, questdesaparecida = 0, terminouquestdesaparecida = 0, bipar = 1;
+	int questritual = 0, terminouquestritual = 0;
+	int caverna = 0, ninv = random(30000, 60000);
+	int chegoucidade, lregras = 0;
+	int ouvirpassos = 1, namaquina = 0, vtempo = 0, subirvida = 0;
+	int relogio = 0;
+	int mdor = 1;
+	
+	// --- Propriedades para Comandos Admin e Compatibilidade ---
+	bool online = false;           // Estado de conexão (para voids.nvgt)
+	bool dead = false;             // Estado de morte (para cmd_kill/revive)
+	bool godmode = false;          // Modo deus
+	bool is_muted = false;         // Se está mutado (renomeado para evitar conflito com 'muted' string)
+	bool arrested = false;         // Se está preso
+	double mute_end_time = 0;      // Tempo de término do mute
+	double arrest_end_time = 0;    // Tempo de término da prisão
+	string arrest_reason = "";     // Motivo da prisão
+	double money = 0;              // Dinheiro (alias ou separado de creditos/saldo)
+	int max_health = 100;          // Vida máxima (para cmd_heal/revive)
+
+	int ngripe = 0;
+	int nvarinha = 0;
+	double doente = 0, sujo = 0;
+	timer minatimer;
+	int minaplacetime = 15000;
+	bool ouvirhits = true, envenenado = false, bolhaar = false;
+	bool calor_reprimido = false, centado = false, cavalo = false, star = false, star2 = false;
+	bool insz = false, dev = false, newbie = false;
+	bool paralisado = false, paralisado2 = false;
+	int javoou = 0, noaviao = 0, notrem = 0, jaandou = 0;
+	int vbipar, vinvs;
+	string muted, nconta, vconta, sugando;
+	string destino, destino2, destino3, nsugador, vmap;
+	int chegounavio = 0, avisanivel = 1;
+	uint tirostaser = 0, extintor = 10;
+	int passaporte = 0, vx, vy;
+	int xp, xprequerida;
+	int nparalisado = 0;
+	int atpacifistasegundos, pacifico = 0;
+	bool afk = false, afking = false, atpacifista = false;
+	string msgliberdade = "";
+	double sanity = 100.0;
+	double demoniaca = 0;
+	timer tdemoniaco2;
+	
+	// Propriedades de combate e status
+	int fighters = 0;
+	int counter_deaths = 0;
+	int antimina = 0;
+	
+	// 🆕 Sistema de Buffs de Consumíveis
+	double speed_multiplier = 1.0;      // Multiplicador de velocidade (1.0 = normal)
+	double damage_multiplier = 1.0;     // Multiplicador de dano (1.0 = normal)
+	bool invisible = false;             // Se está invisível
+	bool drunk = false;                 // Se está bêbado (controles alterados)
+	int stamina = 100;                  // Stamina/energia
+	bool poisoned = false;              // Se está envenenado
+	int radiation = 0;                  // Nível de radiação (0-100)
+	int fome = 0;                       // Fome (0-100, 0=sem fome)
+	// NOTA: sanity já existe na linha 219 como double
+	
+	double elemental_energy = 0.0;
+	int amethyst = 0;
+	timer tamethyst;
+	int amethyst_time = 0;
+	int antispamcounter = 0; // Contador anti-spam
+	
+	// Propriedades de habilidades mágicas/especiais (CORRIGIDO: int → timer onde necessário)
+	int eagle_invoked = 0; // Se invocou eagle
+	timer teagle; // Timer do eagle (CORRIGIDO: era int)
+	int caverna_time = 0; // Tempo na caverna
+	timer tantimina; // Timer antimina (CORRIGIDO: era int)
+	int ameteoro = 0; // Meteoro ativo
+	timer tameteoro; // Timer do meteoro (CORRIGIDO: era int)
+	int tiempometeoro = 0; // Tempo meteoro (configuração)
+	int trueno = 0; // Trovão ativo
+	timer tmveloz2; // Timer velocidade 2 (CORRIGIDO: era int)
+	int protegido = 0; // Protegido ativo
+	timer tprotegido; // Timer protegido (CORRIGIDO: era int)
+	bool needs_to_change = false; // Precisa trocar (nome/dados)
+	timer tbaculo; // Timer báculo (CORRIGIDO: era int)
+	int nbaculo = 0; // Báculo ativo
+	int baculofangelical = 0; // Báculo angélico
+	int baculotiempo = 0; // Tempo do báculo (configuração)
+	timer tdemoniaco; // Timer demoníaco (CORRIGIDO: era int)
+	bool newsafe = false; // Nova segurança
+	bool canmaptravel = true; // Pode viajar entre mapas
+	timer silenciadotimer; // Timer silenciado (CORRIGIDO: era int)
+	int silenciadotiempo = 0; // Tempo silenciado (configuração)
+	bool preso = false; // Está preso
+	timer temppreso; // Timer preso (CORRIGIDO: era int)
+	bool antispamactivated = false; // Anti-spam ativado
+	timer tantispam; // Timer anti-spam (CORRIGIDO: era int, renomeado para evitar conflito com int antispam)
+	int vbomba = 0; // Bomba V
+	timer tbomba; // Timer bomba (CORRIGIDO: era int)
+	int vbombaseg = 0; // Bomba segundos
+	int arank = 0; // Rank A
+	bool magiaactiva = false; // Magia ativa
+	timer tmbendicion; // Tempo bênção (CORRIGIDO: era int)
+	int bendicionsegundos = 0; // Segundos bênção
+	bool bendicion = false; // Bênção ativa (CORRIGIDO: era int)
+	bool crouched = false; // Agachado
+	
+	timer tparalisado, atpacifistatempo;
+	timer carregandotaser;
+	timer tempovoandoaviao, tempodentrotrem;
+	string computer_id;
+	double level;
+	string map = "test";
+	int matou;
+	string title;
+	int chats, a10 = 0;
+	double playtime;
+	int kills;
+	int deaths;
+	int jumping;
+	string lasthit;
+	double health = 5000;
+	double maxhealth = 5000;
+	bool admin = false;
+	bool is_admin = false; // Adicionado para compatibilidade com sistema de comandos
+	string item_active = ""; // ✅ Task 2.6.3: Item ativo (lanterna, detector, etc)
+	int invs = 0, invs2 = 0;
+	int tempotrancado;
+	
+	// 🆕 Sistema de Inventário Avançado
+	double max_carry_weight = 50.0;      // Peso máximo que pode carregar (kg)
+	int max_inventory_slots = 20;        // Número máximo de slots
+	double movement_speed = 1.0;         // Velocidade de movimento (1.0 = normal)
+	bool is_overweight = false;          // Se está sobrecarregado
+	
+	// Equipamentos/vestimentas
+	int caneleirametal = 0, caneleiramadeira = 0;
+	int capacetepolicia = 0;
+	int anel = 0;
+	int bracadeira = 0;
+	int pulseira = 0;
+	int coletesalvavida = 0, colete_aprova_de_balas = 0, naopodevestir = 0, ncolete = 0;
+	int casacopeles = 0;
+	int oculosmizuno = 0;
+	int coletemizuno = 0;
+	int calcamizuno = 0;
+	int botamizuno = 0;
+	int escudo = 0;
+	int coletemilitar = 0;
+	int coletecamuflado = 0;
+	int tenisnike = 0;
+	int camisamalha = 0;
+	int jaquetacouro = 0;
+	int calcajeans = 0;
+	int sapatoscarpin = 0, sapatomagnetico = 0;
+	int coturnomilitar = 0;
+	int calcalegging = 0;
+	int calcacamuflada = 0;
+	int luvas = 0;
+	int tenisadidas = 0;
+	int pulseiraouro = 0;
+	int pulseiraprata = 0;
+	int pulseirabronze = 0;
+	int chapeupanama = 0;
+	int bonemizuno = 0;
+	timer congelartimer;
+	timer tempofogo;
+	int congelado = 0; // 0 = não congelado, 1 = congelado
+	int voice;
+	string version;
+	uint peer_id = 0;
+	string charname;
+	string name; // Alias para charname para compatibilidade
+	int x;
+	int y;
+	int z = 0; // Coordenada Z para 3D
+	string map_name = "test"; // Nome do mapa atual (mudado para test durante desenvolvimento)
+	string replyname = "";
+	bool is_logged_in = false; // Estado de login
+	bool admin_status = false; // Status de administrador
+	int player_level = 1; // Nível do jogador
+	int exp = 0; // Experiência
+	int gold = 100; // Ouro/dinheiro
+	int hp = 100; // Vida atual
+	int max_hp = 100; // Vida máxima
+	int mp = 50; // Mana atual
+	int max_mp = 50; // Mana máxima
+	string race = "humano"; // Raça do jogador
+	string status = "normal"; // Status do jogador (normal, afk, combate, etc)
+	
+	// 🆕 Propriedades adicionais de compatibilidade
+	bool active = true;          // Se o jogador está ativo/online
+	int rank = 0;                // Rank/permissão do jogador (0=normal, 5=admin)
+	dictionary inventory;        // Inventário como dicionário (compatibilidade)
+	timer last_activity;         // Última atividade de rede (heartbeat/packets)
+	timer last_move_time;        // Último movimento validado
+	int last_valid_x = 0;        // Última coordenada X validada
+	int last_valid_y = 0;        // Última coordenada Y validada
+	int violation_count = 0;     // Contador de violações de movimento
+	uint16 last_seq = 0;         // Último sequence number recebido
+	double HARD_CAP_DISTANCE = 25.0; // Distância máxima instantânea permitida
+	double MAX_WALK_SPEED = 14.0;    // Velocidade base máxima (tiles/s)
+	double SPEED_TOLERANCE = 1.8;    // Tolerância para jitter/latência
+	int MAX_VIOLATIONS = 5;      // Violações seguidas antes de correção
+	
+	timer bolhatimer, calortimer;
+	uint bolhaseconds = 0, calorseconds = 0;
+	uint telestage = 0;
+	timer telestagetimer;
+	timer castingtimer, casttimer, curspelltimer;
+	string curspell;
+	bool casting = false;
+	
+	player(uint id, string name, string pver, string bannable_id) {
+		// Inicializar todos os timers
+		tcongelar.force(0);
+		tcongelar.pause();
+		tppeixe.force(0);
+		tppeixe.pause();
+		tsugando.force(0);
+		tsugando.pause();
+		tmveloz.force(0);
+		tmveloz.pause();
+		tmcampo.force(0);
+		tmcampo.pause();
+		tmchuva.force(0);
+		tmchuva.pause();
+		tmcampo2.force(0);
+		tmcampo2.pause();
+		tmeteoro.force(0);
+		tmeteoro.pause();
+		tmflutuar.force(0);
+		tmflutuar.pause();
+		tmpulo.force(0);
+		tmpulo.pause();
+		tmagia.force(0);
+		tmagia.pause();
+		tminvs.force(0);
+		tminvs.pause();
+		thack.force(0);
+		thack.pause();
+		tlutar.force(0);
+		tlutar.pause();
+		tmaquina.force(0);
+		tmaquina.pause();
+		tparalisado.force(0);
+		tparalisado.pause();
+		carregandotaser.force(0);
+		carregandotaser.pause();
+		tempodentrotrem.force(0);
+		tempodentrotrem.pause();
+		tempovoandoaviao.force(0);
+		teletimer.force(30000);
+		casttimer.force(30000);
+		omtimer.force(60000);
+		// ondatempo.force(60000); // TODO: definir essa variável
+		tempofogo.force(500);
+		
+		peer_id = id;
+		charname = name;
+		this.name = name; // Alias para charname
+		nonomemapa = "temporária_" + name;
+		version = pver;
+		computer_id = bannable_id;
+
+		// Inicializar campos de compatibilidade com o servidor
+		is_logged_in = false;
+		is_admin = false;
+		level = 1;
+		exp = 0;
+		gold = 100;
+		hp = 100;
+		max_hp = 100;
+		mp = 50;
+		max_mp = 50;
+		race = "humano";
+		map_name = "test"; // Mudado para test durante desenvolvimento
+		x = 0;
+		y = 0;
+		z = 0;
+		
+		// 🆕 Inicializar propriedades adicionais
+		active = true;
+		rank = 0;  // 0=normal, 5=admin
+		// inventory já é inicializado automaticamente como dictionary vazio
+		last_activity.restart();
+		last_move_time.force(0);
+		last_move_time.pause();
+		last_valid_x = x;
+		last_valid_y = y;
+		violation_count = 0;
+		last_seq = 0;
+	}
+	
+	// NVGT: Método renomeado para evitar conflito com campo is_admin
+	bool check_admin() {
+		bool is_adm = this.dev || this.admin;
+		
+		// Atualizar rank automaticamente
+		if(is_adm && this.rank < 5) {
+			this.rank = 5;  // Admin tem rank 5
+		}
+		
+		return is_adm;
+	}
+
+	// Enviar mensagem para o jogador usando networking NVGT
+	void send_message(string message) {
+		// Normalização de mojibake comum em strings legadas.
+		message = message.replace("ÃƒÆ’Ã‚Â£", "ã");
+		message = message.replace("ÃƒÆ’Ã‚Â¡", "á");
+		message = message.replace("ÃƒÆ’Ã‚Â©", "é");
+		message = message.replace("ÃƒÆ’Ã‚Â­", "í");
+		message = message.replace("ÃƒÆ’Ã‚Â³", "ó");
+		message = message.replace("ÃƒÆ’Ã‚Âº", "ú");
+		message = message.replace("ÃƒÆ’Ã‚Â§", "ç");
+		message = message.replace("ÃƒÆ’Ã‚Âª", "ê");
+		message = message.replace("ÃƒÆ’Ã‚Â´", "ô");
+		message = message.replace("ÃƒÆ’Ã‚Â‰", "É");
+		message = message.replace("ÃƒÆ’Ã‚Â", "Í");
+		message = message.replace("ÃƒÂ£", "ã");
+		message = message.replace("ÃƒÂ¡", "á");
+		message = message.replace("ÃƒÂ©", "é");
+		message = message.replace("ÃƒÂ­", "í");
+		message = message.replace("ÃƒÂ³", "ó");
+		message = message.replace("ÃƒÂº", "ú");
+		message = message.replace("ÃƒÂ§", "ç");
+		message = message.replace("Ã£", "ã");
+		message = message.replace("Ã¡", "á");
+		message = message.replace("Ã©", "é");
+		message = message.replace("Ã­", "í");
+		message = message.replace("Ã³", "ó");
+		message = message.replace("Ãº", "ú");
+		message = message.replace("Ã§", "ç");
+		message = message.replace("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ ", "");
+		message = message.replace("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â ", "");
+		message = message.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â° ", "");
+		message = message.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ ", "");
+		message = message.replace("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â£ ", "");
+
+		send_reliable_text(this.peer_id, message);
+	}
+
+	// Salvar dados do jogador
+	void save_player_data() {
+		save_player_to_database(this);
+	}
+	
+	void inv_add_item(string itemname, int itemvalue, bool enviar = true) {
+		// Agora inv é dictionary - muito mais simples!
+		if (inv.exists(itemname)) {
+			// Item já existe, adiciona/subtrai quantidade
+			int orgval = 0;
+			inv.get(itemname, orgval);
+			
+			if (orgval + itemvalue < 1) {
+				// Quantidade ficou zero ou negativa, remove item
+				inv.delete(itemname);
+				if (itemname.find("mm") == -1 && itemname.find("comida") == -1 && itemname != "mina" && itemname != "xp") {
+					// net.send_reliable_text(peer_id, itemvalue + " " + itemname, 4);
+				}
+			} else {
+				// Atualiza quantidade
+				inv.set(itemname, orgval + itemvalue);
+			}
+		} else {
+			// Item não existe, adiciona se quantidade > 0
+			if (itemvalue > 0) {
+				inv.set(itemname, itemvalue);
+				if (itemname.find("mm") == -1 && itemname.find("comida") == -1 && itemname != "mina" && itemname != "xp") {
+					// net.send_reliable_text(peer_id, itemvalue + " " + itemname, 4);
+				}
+			}
+		}
+		
+		if (enviar == true) {
+			// Enviar inventário serializado
+			send_reliable_text(peer_id, "inv " + inv.serialize(), 0);
+			string[] invsec;
+			if (inv_item_number("vara_de_pesca") > 0) invsec.insert_last("vara_de_pesca");
+			if (inv_item_number("dardo") > 0) invsec.push_back("dardo");
+			if (inv_item_number("dardo_envenenado") > 0) invsec.push_back("dardo_envenenado");
+			if (inv_item_number("fita_explosiva") > 0) invsec.push_back("fita_explosiva");
+			if (invsec.length() > 0) {
+				// net.send_reliable_text(peer_id, "invsec " + linear(invsec), 0);
+			}
+		}
+	}
+	
+	bool inv_item_exists(string itemname) {
+		// Agora é muito simples com dictionary
+		return inv.exists(itemname);
+	}
+	
+	int inv_item_number(string itemname) {
+		// Retorna quantidade do item (0 se não existir)
+		if (!inv.exists(itemname)) return 0;
+		int value = 0;
+		inv.get(itemname, value);
+		return value;
+	}
+	
+	int inv_item(string itemname) {
+		// Este método retornava o índice do item no array
+		// Com dictionary, não temos índices - retorna 0 se existe, -1 se não existe
+		// (mantido para compatibilidade com código existente)
+		return inv.exists(itemname) ? 0 : -1;
+	}
+	
+	// ✅ IMPLEMENTADO: Remove quantidade específica de um item
+	void inv_remove_item(string itemname, int quantity) {
+		if (!inv.exists(itemname)) return;
+		
+		int current = 0;
+		inv.get(itemname, current);
+		
+		if (current <= quantity) {
+			// Remove completamente
+			inv.delete(itemname);
+		} else {
+			// Remove apenas a quantidade
+			inv.set(itemname, current - quantity);
+		}
+		
+		// Atualizar cliente
+		send_reliable_text(peer_id, "inv " + inv.serialize(), 0);
+	}
+	
+	void inv_delete_item(string itemname) {
+		// Remove item do inventário
+		if (inv.exists(itemname)) {
+			inv.delete(itemname);
+		}
+	}
+	
+	bool has_muted(string name) {
+		string[] m = muted.split("\r\n");
+		for (uint i = 0; i < m.length(); i++) {
+			if (m[i] == name) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	void add_muted(string name) {
+		muted += "\r\n" + name;
+		write_to(charname, "muted.usr", muted);
+	}
+	
+	bool remove_muted(string name) {
+		string[] m = muted.split("\r\n");
+		string newmuted;
+		bool succeeded = false;
+		for (uint i = 0; i < m.length(); i++) {
+			if (m[i] != name)
+				newmuted += "\r\n" + m[i];
+			else
+				succeeded = true;
+		}
+		muted = newmuted;
+		write_to(charname, "muted.usr", muted);
+		return succeeded;
+	}
+	
+	// =====================================================
+	// MÉTODOS DE FOGO NO JOGADOR (Playerfires)
+	// =====================================================
+	
+	void add_playerfire(string enemy) {
+		playerfire pf(enemy);
+		playerfires.insert_last(pf);
+	}
+	
+	void playerfireloop() {
+		for(uint i = 0; i < playerfires.length(); i++) {
+			// Remover fogo após 30 segundos
+			if(playerfires[i].tt.elapsed >= 30000) {
+				playerfires.remove_at(i);
+				break;
+			}
+			
+			// Aplicar dano a cada 1 segundo
+			if(playerfires[i].t.elapsed >= 1000) {
+				playerfires[i].t.restart();
+				
+				// Verificar se está na água (apaga o fogo)
+				string tile = get_tile_at(this.x, this.y, this.map);
+				if(tile.find_first("water") != -1 || tile.find_first("shallow") != -1) {
+					server_maps[this.mapindex].send_packet(0, "play waterhardland.ogg", this.x, this.y);
+					playerfires.remove_at(i);
+					break;
+				}
+				
+				// Aplicar dano de fogo
+				this.health -= random(200, 400);
+				this.lasthit = "boladefogo_" + playerfires[i].enemy;
+				this.nsede += 0.5;
+				server_maps[this.mapindex].send_packet(0, "inithurt " + this.voice, this.x, this.y);
+			}
+		}
+	}
+	
+	// =====================================================
+	// MÉTODOS DE DEGRADAÇÃO DE EQUIPAMENTOS
+	// =====================================================
+	
+	void load_degradation() {
+		bool needs_create = false;
+		if(!file_exists("players/" + this.charname + "/degradation.ini")) {
+			needs_create = true;
+		}
+		
+		file f;
+		if(f.open("players/" + this.charname + "/degradation.ini", "rb")) {
+			string data = f.read();
+			f.close();
+			// Deserializar degradation do arquivo
+			dictionary@ temp = deserialize(data);
+			if (@temp != null) {
+				degradation = temp;
+			}
+		}
+
+		if(degradation.is_empty() || needs_create) {
+			// Inicializar degradação para todos os itens
+			// Itens do inventário começam com 100% de durabilidade
+			string[]@ keys = inv.get_keys();
+			if (@keys != null) {
+				for (uint i = 0; i < keys.length(); i++) {
+					if (!degradation.exists(keys[i])) {
+						degradation.set(keys[i], 100.0);
+					}
+				}
+			}
+		}
+	}
+	
+	void save_degradation() {
+		file f;
+		if(f.open("players/" + this.charname + "/degradation.ini", "wb")) {
+			// Serializar degradation
+			f.write(degradation.serialize());
+			f.close();
+		}
+	}
+	
+	void manage_degradation(string name, double quantity, bool set = false) {
+		if(degradation.exists(name)) {
+			double degradation_value;
+			
+			if(!set) {
+				degradation.get(name, degradation_value);
+				degradation_value += quantity;
+				
+				if(degradation_value <= 0) degradation_value = 0;
+				
+				// Item quebrou (100% degradado)
+				if(degradation_value >= 100) {
+					if(this.inv_item_number(name) > 0) {
+						this.inv_add_item(name, -1);
+
+						// Verificar se é arma ou roupa para efeitos especiais
+						// Se for arma, adiciona "base_pulverizada" (resíduo da arma quebrada)
+						bool is_weapon = is_item_weapon(name);
+						bool is_clothing = is_item_clothing(name);
+
+						if (is_weapon) {
+							// Arma quebrada gera base pulverizada
+							this.inv_add_item("base_pulverizada", 1);
+							send_reliable_text(this.peer_id, "msg Sua arma " + name + " quebrou e virou pó!", 3);
+						} else if (is_clothing) {
+							// Remove roupa do jogador se estiver equipada
+							remove_clothing_by_name(name);
+							send_reliable_text(this.peer_id, "msg Sua roupa " + name + " se desgastou completamente!", 3);
+						}
+					}
+					degradation_value = 0;
+				}
+				
+				degradation.set(name, degradation_value);
+			} else {
+				// Modo set: define valor direto
+				degradation.set(name, quantity);
+			}
+		}
+	}
+	
+	double get_degradation(string name) {
+		if(degradation.exists(name)) {
+			double value;
+			degradation.get(name, value);
+			return value;
+		}
+		return 0;
+	}
+	
+	// =====================================================
+	// MÉTODOS DE INVENTÁRIO AVANÇADOS
+	// =====================================================
+	
+	void inv_add_item(string itemname, double itemvalue, bool enviar = true, bool anunciar = true) {
+		double result = 0;
+		double value;
+		
+		if(inv.exists(itemname)) {
+			inv.get(itemname, value);
+			double orgval = value > 0 ? value : 0;
+			
+			if(orgval == 0) {
+				return;
+			}
+			
+			if(orgval + itemvalue < 1) {
+				inv_delete_item(itemname);
+			} else {
+				result = (orgval + itemvalue);
+				inv.set(itemname, result);
+			}
+		} else {
+			if(itemvalue > 0) {
+				result = itemvalue;
+				inv.set(itemname, result);
+			}
+		}
+		
+		if(enviar == true) {
+			send_reliable_text(peer_id, "inv " + itemname + "=" + result, 0);
+		}
+		
+		if(anunciar == true && itemvalue > 0) {
+			if(aitem == 1) {
+				send_reliable_text(peer_id, "msg2 " + itemvalue + " ;" + itemname + ";.", 0);
+			}
+		}
+	}
+	
+	void inv_delete_item_dict(string itemname) {
+		if(inv.exists(itemname)) {
+			inv.delete(itemname);
+		}
+	}
+	
+	// =====================================================
+	// MÉTODOS DE COMBATE E DANO
+	// =====================================================
+	
+	void take_damage(double damage, string source) {
+		this.health -= damage;
+		this.lasthit = source;
+		
+		if(this.health <= 0) {
+			this.health = 0;
+			// Morte do jogador será processada externamente
+		}
+	}
+	
+	void heal(double amount) {
+		this.health += amount;
+		if(this.health > this.maxhealth) {
+			this.health = this.maxhealth;
+		}
+	}
+	
+	bool is_alive() {
+		return this.health > 0;
+	}
+	
+	// =====================================================
+	// MÉTODOS DE TELEPORTE E MOVIMENTO
+	// =====================================================
+	
+	void teleport(int tx, int ty, string tmap) {
+		this.x = tx;
+		this.y = ty;
+		this.map = tmap;
+		this.map_name = tmap;
+	}
+	
+	double distance_to(int tx, int ty) {
+		int dx = abs(this.x - tx);
+		int dy = abs(this.y - ty);
+		return dx + dy;
+	}
+	
+	// =====================================================
+	// MÉTODOS DE ATUALIZAÇÃO E ESTADO
+	// =====================================================
+	
+	void update_title() {
+		settitle(get_player_index_from(this.charname));
+	}
+	
+	void update_xp(double amount) {
+		this.xp += amount;
+		
+		// Verificar se subiu de nível
+		while(this.xp >= this.xprequerida) {
+			level_up();
+		}
+	}
+	
+	void level_up() {
+		this.level += 1;
+		this.xp -= this.xprequerida;
+		this.xprequerida = this.level * 10;
+		
+		// Atualizar título
+		update_title();
+		
+		// Notificar jogador
+		send_reliable_text(this.peer_id, "msg2 Você subiu para o nível " + this.level + "!", 0);
+		send_reliable_text(this.peer_id, "ps level2.ogg", 0);
+	}
+	
+	// =====================================================
+	// SISTEMA DE SILÊNCIO/PRISÃO
+	// =====================================================
+	
+	void silence_player(int minutes) {
+		this.silenciado = 1;
+		this.temposilencio = minutes;
+		this.tsilencio.restart();
+		file_write("players/" + this.charname + "/silencio.usr", "1");
+		send_reliable_text(this.peer_id, "msg2 Você foi silenciado por " + minutes + " minutos.", 0);
+	}
+	
+	void unsilence_player() {
+		this.silenciado = 0;
+		this.temposilencio = 0;
+		this.tsilencio.force(0);
+		this.tsilencio.pause();
+		file_delete("players/" + this.charname + "/silencio.usr");
+		send_reliable_text(this.peer_id, "msg2 Você foi dessilenciado. Tome cuidado!", 0);
+	}
+	
+	void jail_player(int minutes, string reason = "") {
+		this.tempoprision = minutes;
+		this.tempoprisao.restart();
+		
+		// Salvar posição atual
+		this.premapa = this.map;
+		this.prex = this.x;
+		this.prey = this.y;
+		
+		// Teleportar para prisão
+		changemap("prisão2", get_player_index_from(this.charname), 50, 50);
+		
+		string msg = "Você foi preso por " + minutes + " minutos.";
+		if(reason != "") msg += " Motivo: " + reason;
+		send_reliable_text(this.peer_id, "msg2 " + msg, 0);
+	}
+	
+	void unjail_player() {
+		this.tempoprision = 0;
+		this.tempoprisao.force(0);
+		this.tempoprisao.pause();
+		
+		// Voltar para posição anterior
+		changemap(this.premapa, get_player_index_from(this.charname), this.prex, this.prey);
+		send_reliable_text(this.peer_id, "msg2 " + this.msgliberdade, 0);
+	}
+	
+	void process_silence_jail() {
+		// Processar silêncio
+		if(this.tsilencio.elapsed >= this.temposilencio * 60000 && this.silenciado == 1) {
+			unsilence_player();
+		}
+		
+		// Processar prisão
+		if(this.tempoprisao.elapsed >= this.tempoprision * 60000 && this.map == "prisão2") {
+			unjail_player();
+		}
+	}
+	
+	// =====================================================
+	// SISTEMA ANTI-SPAM
+	// =====================================================
+	
+	bool can_send_message() {
+		if(this.antispam == 1) {
+			send_reliable_text(this.peer_id, "msg2 Aguarde " + this.antispam_time + " segundos antes de enviar outra mensagem.", 0);
+			return false;
+		}
+		
+		if(this.silenciado == 1) {
+			send_reliable_text(this.peer_id, "msg2 Você está silenciado e não pode falar.", 0);
+			return false;
+		}
+		
+		return true;
+	}
+	
+	void register_message() {
+		this.total_messages++;
+		
+		// Se enviou 3+ mensagens rápidas, ativar anti-spam
+		if(this.antispam == 0 && this.total_messages >= 3) {
+			this.antispam = 1;
+			this.antispam_time = 10;
+			send_reliable_text(this.peer_id, "msg2 Você está enviando mensagens muito rápido! Aguarde 10 segundos.", 0);
+		}
+	}
+	
+	void process_antispam() {
+		// Processar timer de anti-spam
+		if(this.spamtimer.elapsed >= 1000) {
+			this.spamtimer.restart();
+			
+			// Decrementar tempo de bloqueio
+			if(this.antispam == 1 && this.antispam_time > 0) {
+				this.antispam_time--;
+			}
+		}
+		
+		// Resetar anti-spam quando tempo acabar
+		if(this.antispam == 1 && this.antispam_time == 0) {
+			this.antispam = 0;
+			this.total_messages = 0;
+		}
+	}
+	
+	// =====================================================
+	// SISTEMA DE COMBATE AVANÇADO
+	// =====================================================
+	
+	bool has_ammo(string weapon) {
+		if(weapon == "galil" && this.galil > 0) return true;
+		if(weapon == "mp7" && this.mp7 > 0) return true;
+		if(weapon == "bazuca" && this.bazuca > 0) return true;
+		if(weapon == "m16" && this.m16 > 0) return true;
+		if(weapon == "pistola_temporal" && this.pistola_temporal > 0) return true;
+		if(weapon == "sub_laser" && this.sub_laser > 0) return true;
+		return false;
+	}
+	
+	void use_ammo(string weapon, int amount = 1) {
+		if(weapon == "galil") this.galil -= amount;
+		else if(weapon == "mp7") this.mp7 -= amount;
+		else if(weapon == "bazuca") this.bazuca -= amount;
+		else if(weapon == "m16") this.m16 -= amount;
+		else if(weapon == "pistola_temporal") this.pistola_temporal -= amount;
+		else if(weapon == "sub_laser") this.sub_laser -= amount;
+	}
+	
+	void add_ammo(string weapon, int amount) {
+		if(weapon == "galil") this.galil += amount;
+		else if(weapon == "mp7") this.mp7 += amount;
+		else if(weapon == "bazuca") this.bazuca += amount;
+		else if(weapon == "m16") this.m16 += amount;
+		else if(weapon == "pistola_temporal") this.pistola_temporal += amount;
+		else if(weapon == "sub_laser") this.sub_laser += amount;
+	}
+	
+	int get_ammo(string weapon) {
+		if(weapon == "galil") return this.galil;
+		if(weapon == "mp7") return this.mp7;
+		if(weapon == "bazuca") return this.bazuca;
+		if(weapon == "m16") return this.m16;
+		if(weapon == "pistola_temporal") return this.pistola_temporal;
+		if(weapon == "sub_laser") return this.sub_laser;
+		return 0;
+	}
+	
+	// =====================================================
+	// SISTEMA DE ECONOMIA
+	// =====================================================
+	
+	bool has_money(double amount) {
+		return this.saldo >= amount;
+	}
+	
+	bool has_stryx(double amount) {
+		return this.stryx >= amount;
+	}
+	
+	bool has_credits(double amount) {
+		return this.creditos >= amount;
+	}
+	
+	void add_money(double amount, string reason = "") {
+		this.saldo += amount;
+		if(reason != "") {
+			send_reliable_text(this.peer_id, "msg2 +$" + amount + " (" + reason + ")", 0);
+		}
+	}
+	
+	void remove_money(double amount, string reason = "") {
+		this.saldo -= amount;
+		if(this.saldo < 0) this.saldo = 0;
+		if(reason != "") {
+			send_reliable_text(this.peer_id, "msg2 -$" + amount + " (" + reason + ")", 0);
+		}
+	}
+	
+	void add_stryx(double amount) {
+		this.stryx += amount;
+		send_reliable_text(this.peer_id, "msg2 +" + amount + " Stryx (moeda premium)", 0);
+	}
+	
+	void remove_stryx(double amount) {
+		this.stryx -= amount;
+		if(this.stryx < 0) this.stryx = 0;
+	}
+	
+	void add_credits(double amount) {
+		this.creditos += amount;
+		send_reliable_text(this.peer_id, "msg2 +" + amount + " créditos", 0);
+	}
+	
+	void remove_credits(double amount) {
+		this.creditos -= amount;
+		if(this.creditos < 0) this.creditos = 0;
+	}
+	
+	bool transfer_money(int target_index, double amount) {
+		if(!has_money(amount)) {
+			send_reliable_text(this.peer_id, "msg2 Você não tem dinheiro suficiente.", 0);
+			return false;
+		}
+		
+		remove_money(amount, "transferência");
+		players[target_index].add_money(amount, "transferência de " + this.charname);
+		return true;
+	}
+	
+	// =====================================================
+	// SISTEMA DE EQUIPES/CLÃS
+	// =====================================================
+	
+	bool is_in_team() {
+		return this.emequipe == 1 && this.nomesequipe.length() > 0;
+	}
+	
+	bool is_team_member(string playername) {
+		for(uint i = 0; i < this.nomesequipe.length(); i++) {
+			if(this.nomesequipe[i] == playername) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	void add_team_member(string playername) {
+		if(!is_team_member(playername)) {
+			this.nomesequipe.insert_last(playername);
+		}
+	}
+	
+	void remove_team_member(string playername) {
+		for(uint i = 0; i < this.nomesequipe.length(); i++) {
+			if(this.nomesequipe[i] == playername) {
+				this.nomesequipe.remove_at(i);
+				break;
+			}
+		}
+		
+		// Se não tem mais membros, sair da equipe
+		if(this.nomesequipe.length() == 0) {
+			leave_team();
+		}
+	}
+	
+	void join_team() {
+		this.emequipe = 1;
+		// Adicionar a si mesmo se não estiver na lista
+		if(this.nomesequipe.length() == 0) {
+			this.nomesequipe.insert_last(this.charname);
+		}
+	}
+	
+	void leave_team() {
+		this.emequipe = 0;
+		this.nomesequipe.resize(0);
+		this.equipemortal = 0;
+		this.equipedesafio = 0;
+		send_reliable_text(this.peer_id, "msg2 Você saiu da equipe.", 0);
+	}
+	
+	void broadcast_to_team(string message) {
+		for(uint i = 0; i < this.nomesequipe.length(); i++) {
+			int idx = get_player_index_from(this.nomesequipe[i]);
+			if(idx > -1) {
+				send_reliable_text(players[idx].peer_id, message, 0);
+			}
+		}
+	}
+	
+	int get_team_size() {
+		return this.nomesequipe.length();
+	}
+	
+	string get_team_list() {
+		string result = "Membros da equipe (" + this.nomesequipe.length() + "): ";
+		for(uint i = 0; i < this.nomesequipe.length(); i++) {
+			result += this.nomesequipe[i];
+			if(i < this.nomesequipe.length() - 1) result += ", ";
+		}
+		return result;
+	}
+	
+	// =====================================================
+	// MÉTODOS DE PERMISSÃO
+	// =====================================================
+	
+	bool is_builder() {
+		return this.constructor;
+	}
+	
+	bool is_translator() {
+		return file_exists("players/" + this.charname + "/translator.usr");
+	}
+	
+	// =====================================================
+	// SISTEMA DE OBSERVADOR/SPECTATOR
+	// =====================================================
+	
+	void watch_player(string who) {
+		this.watching = 1;
+		this.w_name = who;
+		
+		int target_idx = get_player_index_from(who);
+		if(target_idx > -1) {
+			// Adicionar este jogador à lista de watchers do alvo
+			players[target_idx].watcher_list.insert_last(this.charname);
+			
+			// Teleportar para posição do alvo
+			this.x = players[target_idx].x;
+			this.y = players[target_idx].y;
+			send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
+			
+			send_reliable_text(this.peer_id, "msg2 Assistindo: " + who, 0);
+		}
+	}
+	
+	void stop_watch() {
+		if(this.watching == 0) return;
+		
+		int w_index = get_player_index_from(this.w_name);
+		if(w_index > -1) {
+			// Remover da lista de watchers
+			for(uint i = 0; i < players[w_index].watcher_list.length(); i++) {
+				if(players[w_index].watcher_list[i] == this.charname) {
+					players[w_index].watcher_list.remove_at(i);
+					break;
+				}
+			}
+		}
+		
+		this.watching = 0;
+		this.w_name = "";
+		send_reliable_text(this.peer_id, "msg2 Parou de assistir.", 0);
+	}
+	
+	// Sistema de Morte e Respawn
+	void check_health_info() {
+		if(this.map != "portal_espiritual") {
+			if(this.tfid > -1) server_maps[this.mapindex].destroy_moving_sound(this.tfid);
+			
+			if(in_portal) {
+				in_portal = false;
+				for(uint i = 0; i < server_maps[mapindex].portals.length(); i++) {
+					if(server_maps[mapindex].portals[i].portalplayers.exists(this.charname)) {
+						server_maps[mapindex].portals[i].portalplayers.delete(this.charname);
+					}
+				}
+			}
+			
+			this.centado = false;
+			this.nparalisado = 0;
+			this.paralisado = false;
+			this.tparalisado.force(0);
+			this.tparalisado.pause();
+			
+			if(this.cloaked) {
+				this.cloaked = false;
+				this.cloakhiding = false;
+				send_reliable_text(this.peer_id, "stopcloak", 0);
+				server_maps[this.mapindex].send_packet(0, "play spell_cloak_powerdown.ogg", this.x, this.y);
+			}
+			
+			if(this.newbie == false && this.pacifico == 0) send_reliable_text(this.peer_id, "fimnovato", 0);
+			
+			if(this.invs == 0) {
+				send_reliable_text(0, "playerbeep " + this.charname + " 1", 0);
+				this.bipar = 1;
+			}
+			
+			if(gamestopped == false) send_reliable_text(this.peer_id, "startmoving", 0);
+			
+			// Processar morte por jogador
+			if(get_player_index_from(this.lasthit) > -1) {
+				int killer_index = get_player_index_from(this.lasthit);
+				int victim_index = get_player_index_from(this.charname);
+				
+				players[killer_index].matou += 1;
+				players[killer_index].sanity -= random(1, 5);
+				
+				// 🆕 INTEGRAÇÃO: Sistema de Estatísticas
+				server_stats.register_kill(players[killer_index].charname, this.charname);
+				server_stats.register_death(this.charname);
+				
+				// 🆕 INTEGRAÇÃO: Sistema de Experiência
+				// Dar XP ao killer baseado no level da vítima
+				int xp_reward = int(this.level * 100 + random(50, 150));
+				int gold_reward = int(this.level * 10 + random(5, 20));
+				ganhaxp(killer_index, xp_reward, gold_reward);
+				
+				// Processa recompensa se a vítima tiver uma
+				process_bounty_kill(killer_index, victim_index);
+				
+				// Arena
+				if(players[killer_index].map == "arena") {
+					int fightindex = get_player_index_from(this.lasthit);
+					if(fightindex > -1) {
+						// Jogador morreu na arena
+						arena_global.counter_deaths++;
+						arena_global.remove_player_from(get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por fogo
+			else if(this.lasthit == "fogo") {
+				if(this.sexo == 0) send_reliable_text(0, "msgmuerte " + this.charname + " morreu queimada!", 3);
+				else if(this.sexo == 1) send_reliable_text(0, "msgmuerte " + this.charname + " morreu queimado!", 3);
+			}
+			// Morte por queda
+			else if(lasthit == "altura") {
+				send_reliable_text(0, "msgmuerte " + this.charname + " ;fue presa de la gravedad, perdiendo la vida en sus garras al destrozar su columna vertebral en mil pedazos.", 3);
+			}
+			// Morte customizada
+			else if(this.lasthit == this.death_reason) {
+				string reason = this.death_reason;
+				if(string_contains(reason, "*nick*", 1) > -1) reason = string_replace(reason, "*nick*", this.charname, true);
+				if(string_contains(reason, "*g*", 1) > -1) reason = string_replace(reason, "*g*", this.sexo2, true);
+				send_reliable_text(0, "msgmuerte " + reason, 3);
+			}
+			// Morte por fita explosiva
+			else if(string_contains(this.lasthit, "fita_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "fita_", "", false);
+				send_reliable_text(0, "msg2 fita_explosiva; ;de; " + pname + " ;matou; " + this.charname + "!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+						
+						if(players[pid].matou == 10) {
+							settitle(pid);
+							send_reliable_text(players[pid].peer_id, "msg2 ;Parabéns! Você recebeu a patente de Mercenário por derrotar 10 jogadores!;", 0);
+						}
+					}
+				}
+			}
+			// Morte por enfermidade demoníaca
+			else if(this.lasthit == "enfermedad_demoniaca") {
+				send_reliable_text(0, "msg2 " + this.charname + " morreu por la enfermedad demoniaca!", 3);
+				this.demoniaca = 0;
+				this.tdemoniaco2.restart();
+			}
+			// Morte por sede
+			else if(this.lasthit == "sede") {
+				send_reliable_text(0, "msg2 " + this.charname + "; ;morreu de sede!", 3);
+				this.nsede = 0;
+				this.nfome = 0;
+				this.tsedefome.restart();
+			}
+			// Morte por fome
+			else if(this.lasthit == "fome") {
+				send_reliable_text(0, "msg2 " + this.charname + "; ;morreu de fome!", 3);
+				this.nsede = 0;
+				this.nfome = 0;
+				this.tsedefome.restart();
+			}
+			// Morte por míssil de avião
+			else if(string_contains(this.lasthit, "misilavion_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "misilavion_", "", false);
+				send_reliable_text(0, "msgmuerte " + this.charname + " no pudo sobrevivir a la gran explosión provocada por los misiles de " + pname + "!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+						ganhaxp(players[pid].charname, random(30000, 100000));
+					}
+				}
+			}
+			// Morte por punho de Lúcifer
+			else if(string_contains(this.lasthit, "punho_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "punho_", "", false);
+				send_reliable_text(0, "msg2 el poderoso puño de lucifer ha mandado a " + this.charname + " directo a los infiernos!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por raio celestial
+			else if(string_contains(this.lasthit, "rayo_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "rayo_", "", false);
+				send_reliable_text(0, "msg2 el rayo de energía celestial invocado por " + pname + ", acaba de desintegrar el cuerpo de; " + this.charname + ", eliminándol" + this.sexo2 + " de este planeta!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por terremoto
+			else if(string_contains(this.lasthit, "terremoto_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "terremoto_", "", false);
+				send_reliable_text(0, "msgmuerte " + this.charname + " ;no pudo sobrevivir al impacto de las ondas expansivas provenientes del terremoto invocado por; " + pname + "!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por trovão
+			else if(string_contains(this.lasthit, "trovão_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "trovão_", "", false);
+				send_reliable_text(0, "msg2 " + this.charname + " murió a causa del impacto del rayo que cayó en su cuerpo, todo gracias a " + pname + "!", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por meteoro
+			else if(string_contains(this.lasthit, "meteoro_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "meteoro_", "", false);
+				send_reliable_text(0, "msg2 " + this.charname + " ;foi atingid" + this.sexo2 + " por um dos meteoros que veio de encontro à este planeta!; ;Excelente trabalho de; " + pname + ".", 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por bola de fogo
+			else if(string_contains(this.lasthit, "boladefogo_", 1) > -1) {
+				string pname = string_replace(this.lasthit, "boladefogo_", "", false);
+				send_reliable_text(0, "msg2 " + this.charname + " ;teve seu corpo consumido pelas chamas da bola de fogo de; " + pname, 3);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte por suicídio (vidro)
+			else if(this.lasthit == "vidrio") send_reliable_text(0, "msgmuerte " + this.charname + " ;decidió no vivir más en este mundo!;", 3);
+			// Morte por mina
+			else if(string_contains(this.lasthit, "'s mina", 1) > -1) {
+				string pname = string_replace(this.lasthit, "'s mina", "", false);
+				int pid = get_player_index_from(pname);
+				if(pid > -1) {
+					pname = players[pid].charname;
+					send_reliable_text(0, "msgmuerte " + this.charname + " ;no fue capaz de sobrevivir a la onda expansiva causada por la explosión de la mina colocada por; " + pname + ".", 3);
+					if(players[pid].charname != this.charname) {
+						players[pid].matou += 1;
+						process_bounty_kill(pid, get_player_index_from(this.charname));
+					}
+				}
+			}
+			// Morte genérica
+			else if(this.lasthit != "") send_reliable_text(0, "msgmuerte " + this.lasthit + "; ;matou; ;" + this.charname + ";!", 3);
+			
+			// Respawn
+			if(string_contains(this.map, "prisão2", 1) < 0 && string_contains(this.map, "test", 1) < 0 && string_contains(this.map, "isla_privada_de_", 1) < 0 && is_game_disabled(this.x, this.y, this.map) == false) 
+				changemap(mapainicial, get_player_index_from(this.charname), 1, 0);
+			else 
+				changemap(this.mapavoltar, get_player_index_from(this.charname), this.x, this.y);
+			
+			this.health = this.maxhealth;
+			this.lasthit = "";
+		}
+	}
+	
+	// Sistema de Movimento
+	int have_death(int x, int y) {
+		for(uint i = 0; i < server_maps[mapindex].deaths.length(); i++) {
+			int minx = server_maps[mapindex].deaths[i].minx;
+			int maxx = server_maps[mapindex].deaths[i].maxx;
+			int miny = server_maps[mapindex].deaths[i].miny;
+			int maxy = server_maps[mapindex].deaths[i].maxy;
+			if(minx > x) continue;
+			if(minx <= x && maxx >= x && miny <= y && maxy >= y) {
+				return i;
+			}
+		}
+		return -1;
+	}
+	
+	void move(string steps, int x, int y, int n = 0) {
+		int dindex = have_death(x, y);
+		if(this.paralisado == true || this.paralisado2 == true || this.afk) return;
+		
+		this.x = x;
+		this.y = y;
+		
+		if(this.starsoundid > -1) server_maps[this.mapindex].update_moving_sound(this.starsoundid, this.x, this.y);
+		
+		if(!this.cloakhiding && this.invs == 0 && this.jumping == 0 && n == 0 && !is_game_disabled(this.x, this.y, this.map)) {
+			server_maps[mapindex].send_to_others(this.peer_id, 0, "s " + this.peer_id + " " + steps + " " + this.x + " " + this.y, true);
+		}
+		else {
+			server_maps[mapindex].send_to_others(this.peer_id, 0, "upl " + this.peer_id + " " + this.x + " " + this.y, true);
+		}
+		
+		// Detecção de zona de morte
+		if(this.ndeath == 0 && dindex > -1) {
+			this.ndeath = 1;
+			this.tdeath.restart();
+			this.death_index = dindex;
+			this.death_time = server_maps[mapindex].deaths[dindex].time;
+			this.death_reason = server_maps[mapindex].deaths[dindex].reason;
+			this.progressive_death = server_maps[mapindex].deaths[dindex].enable_progressive_death ? 1 : 0;
+			this.death_life = server_maps[mapindex].deaths[dindex].life;
+		}
+		else if(this.ndeath == 1 && dindex < 0) {
+			this.ndeath = 0;
+			this.death_index = dindex;
+			this.tdeath.force(0);
+			this.tdeath.pause();
+			this.death_reason = "";
+			this.death_time = 0;
+			this.progressive_death = 0;
+		}
+		
+		// Detecção de objetos
+		int find_objects = server_maps[mapindex].have_obj(this.x, this.y);
+		if(find_objects > -1) {
+			send_reliable_text(this.peer_id, "ps cameratile.ogg", 0);
+		}
+		
+		// Detecção de minas
+		int mineindex = server_maps[mapindex].have_mine(this.x, this.y);
+		if(mineindex > -1) {
+			if(!this.newbie && this.pacifico == 0 && this.antimina == 0) {
+				server_maps[mapindex].mines[mineindex].active = true;
+			}
+		}
+	}
+	
+	// Sistema de Inventário - Persistência
+	void load_inv() {
+		if(load_player_inventory_from_database(this, INVENTORY_ENABLE_LEGACY_FILE_FALLBACK)) {
+			return;
+		}
+		load_initial_inventory_from_db();
+	}
+	
+	// Carregar inventário inicial do banco de dados
+	void load_initial_inventory_from_db() {
+		debug_log("Carregando inventário inicial do banco de dados para " + this.charname);
+		
+		string query = "SELECT item_name, quantity FROM initial_inventory;";
+		sqlite3statement@ stmt = bancoJogo.prepare(query);
+		
+		if(@stmt == null) {
+			debug_log("ERRO: Tabela initial_inventory não encontrada. Usando fallback básico.");
+			// Fallback mínimo
+			inv.set("reais", 1000.0);
+			inv.set("faca", 1.0);
+			return;
+		}
+		
+		while(stmt.step() == SQLITE_ROW) {
+			string name = stmt.column_text(0);
+			int qty = stmt.column_int(1);
+			inv.set(name, double(qty));
+		}
+		
+		// Salvar o inventário carregado no arquivo do jogador
+		string inv_content = this.getinv();
+		this.setinv(inv_content);
+		debug_log("✅ Inventário inicial carregado do banco para " + this.charname);
+	}
+	
+	void setinv(string content) {
+		if(content == "") return;
+		
+		inv.delete_all();
+		string[] lines = delinear(content);
+		for(uint i = 0; i < lines.length(); i++) {
+			if(lines[i] == "") continue;
+			string[] data = string_split(lines[i], "=", true);
+			if(data.length() != 2) continue;
+			inv.set(data[0], string_to_number(data[1]));
+		}
+		
+		save_player_inventory_to_db(this);
+	}
+	
+	string getinv() {
+		string[] itemnames;
+		double values;
+		string final;
+		
+		if(!inv.is_empty()) {
+			itemnames = inv.get_keys();
+		}
+		else {
+			return "";
+		}
+		
+		for(uint i = 0; i < itemnames.length(); i++) {
+			inv.get(itemnames[i], values);
+			final += itemnames[i] + "=" + values + "\r\n";
+		}
+		return final;
+	}
+	
+	// Loop Principal do Jogador (sem sistema angelical)
+	void playerloop() {
+		if(this.conectou == 1) {
+			// Calendário
+			if(this.tcalendar.elapsed >= 1000) {
+				this.tcalendar.restart();
+				this.time.tick();
+			}
+			
+			// Morte
+			if(this.health <= 0) {
+				check_health_info();
+			}
+			
+			if(this.elemental_energy < 0) {
+				this.elemental_energy = 0;
+			}
+			if(this.sanity > 1000) this.sanity = 1000;
+			
+			// Fogo de jogador
+			if(playerfires.length() > 0) playerfireloop();
+			
+			// Sistema de observador
+			if(this.watching == 1) {
+				int w_index = get_player_index_from(w_name);
+				if(w_index > -1) {
+					if(this.x != players[w_index].x || this.y != players[w_index].y) {
+						this.x = players[w_index].x;
+						this.y = players[w_index].y;
+						send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
+					}
+				}
+			}
+			
+			// PULADO: Sistema angelical (linhas 1095-1109 do BGT) - conforme solicitado pelo usuário
+			
+			// Ilha privada
+			if(string_contains(this.map, "isla_privada_de_", 1) > -1) {
+				string data = string_replace(this.map, "isla_privada_de_", "", true);
+				int index2 = get_player_index_from(data);
+				if(index2 > -1) {
+					if(players[index2].payment == 0) {
+						send_reliable_text(this.peer_id, "msg2 ;la reja de entrada a esta isla tiene una barrera mágica la cuál al intentar atravezarla con tu mano hace que se graben algunas letras en tu retina: Clausurada temporalmente por falta de pago.;", 0);
+						changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 110);
+					}
+				}
+				else if(index2 < 0) {
+					int pay;
+					if(!file_exists("players/" + data + "/configs.ini")) return;
+					else {
+						file f;
+						f.open("players/" + data + "/configs.ini", "rb");
+						dictionary@ sd = deserialize(f.read());
+						f.close();
+						if(sd.exists("payment")) {
+							sd.get("payment", pay);
+						}
+						if(pay == 0) {
+							send_reliable_text(this.peer_id, "msg2 ;la reja de entrada a esta isla tiene una barrera mágica la cuál al intentar atravezarla con tu mano hace que se graben algunas letras en tu retina: Clausurada temporalmente por falta de pago.;", 0);
+							changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 110);
+						}
+					}
+				}
+			}
+			
+			// Amethyst
+			if(this.amethyst == 1 && this.tamethyst.elapsed >= 1000) {
+				this.tamethyst.restart();
+				if(this.pacifico == 0) this.amethyst_time++;
+			}
+			if(this.amethyst_time >= 900) {
+				this.amethyst = 0;
+				this.tamethyst.force(0);
+				this.tamethyst.pause();
+				this.amethyst_time = 0;
+				server_maps[this.mapindex].send_packet(0, "play ma15.ogg", this.x, this.y);
+				send_reliable_text(this.peer_id, "msg2 ;De forma inexplicable sientes como tu fuerza te abandona...;", 0);
+			}
+			
+			// PULADO: Sistema de sanidade/madness (linhas ~1179-1243 no BGT) - pode ser reativado se necessário
+			
+			// Eagle
+			if(this.teagle.elapsed >= random(6000, 9000)) {
+				teagle.force(0);
+				teagle.pause();
+				server_maps[mapindex].send_packet(0, "play bot126.ogg", this.x, this.y);
+				send_reliable_text(this.peer_id, "msg2 ;el imponente ave te otorga un pergamino de fuego con su pico para que escribas tu petición hacia los adms, luego se posa frente a ti y espera paciente.;", 0);
+				this.inv_add_item("pergamino_de_fuego", 1);
+				this.inv_add_item("pluma_de_diamante", 1);
+				this.eagle_invoked = 0;
+			}
+			
+			// Caverna
+			if(this.caverna == 1 && this.tcaverna.elapsed >= 1000) {
+				this.tcaverna.restart();
+				if(this.pacifico == 0) this.caverna_time++;
+			}
+			if(this.caverna == 1 && this.caverna_time >= 7200) {
+				this.ncaverna = -1;
+				this.caverna = 0;
+				send_reliable_text(this.peer_id, "msgnormal Sientes la fuerza divina regresándote a la normalidad...", 0);
+			}
+			
+			// Anti-mina
+			if(this.antimina == 1 && this.tantimina.elapsed >= 300000) {
+				this.tantimina.force(0);
+				this.tantimina.pause();
+				this.antimina = 0;
+				send_reliable_text(this.peer_id, "msgnormal de repente, te comienzas a sentir vulnerable.", 0);
+				send_packet10(0, this.charname, this.charname, "door17open.ogg " + this.x + " " + this.y, this.map);
+			}
+			
+			// Anti-meteoro
+			if(this.ameteoro == 1 && this.tameteoro.elapsed >= 600000) {
+				this.tameteoro.force(0);
+				this.tameteoro.pause();
+				this.ameteoro = 0;
+				send_reliable_text(this.peer_id, "msg2 ;Sientes que algo extraño abandona tu cuerpo.;", 0);
+				server_maps[mapindex].send_packet(0, "play appear.ogg", this.x, this.y);
+			}
+			
+			// Trovão velocidade
+			if(this.trueno == 1 && this.tmveloz2.elapsed >= 600000) {
+				this.trueno = 0;
+				send_reliable_text(this.peer_id, "dveloz", 0);
+				send_reliable_text(this.peer_id, "msgnormal Sientes la energía del rayo dejando de fluir por tus venas.", 0);
+				send_packet10(0, this.charname, this.charname, "trovao7.ogg " + this.x + " " + this.y, this.map);
+				this.tmveloz2.force(0);
+				this.tmveloz2.pause();
+			}
+			
+			// Protegido
+			if(this.protegido == 1 && this.tprotegido.elapsed >= 60000) {
+				this.tprotegido.force(0);
+				this.tprotegido.pause();
+				this.protegido = 0;
+				send_reliable_text(this.peer_id, "msgnormal Sientes que algo extraño abandona tu cuerpo.", 0);
+				send_packet10(0, this.charname, this.charname, "door17open.ogg " + this.x + " " + this.y, this.map);
+			}
+			
+			// Limites de posição
+			if(this.y < 0) {
+				this.y = 0;
+				send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
+				server_maps[this.mapindex].send_packet(0, "upl " + this.peer_id + " " + this.x + " " + this.y + " " + this.map, true);
+			}
+			else if(this.x < 0) {
+				this.x = 0;
+				send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
+				server_maps[this.mapindex].send_packet(0, "upl " + this.peer_id + " " + this.x + " " + this.y + " " + this.map, true);
+			}
+			
+			// Presentes
+			if(file_exists("players/" + this.charname + "/regalo.txt")) {
+				file f;
+				f.open("players/" + this.charname + "/regalo.txt", "r");
+				string[] lines = string_split(f.read(), "\r\n", false);
+				f.close();
+				for(uint i = 0; i < lines.length(); i++) {
+					this.inv_add_item(lines[i], 1);
+					send_reliable_text(this.peer_id, "ps2 notify8.ogg 130", 0);
+				}
+				file_delete("players/" + this.charname + "/regalo.txt");
+			}
+			
+			// Mudança de nome
+			if(this.needs_to_change) {
+				changename(get_player_index_from(this.charname), this.validated_name);
+			}
+			
+			// Mensagem da águia
+			if(file_exists("players/" + this.charname + "/eagle_message.txt")) {
+				file f;
+				f.open("players/" + this.charname + "/eagle_message.txt", "r");
+				string[] lines = delinear(f.read());
+				f.close();
+				for(uint x = 0; x < lines.length(); x++) {
+					send_reliable_text(this.peer_id, "msg4 " + lines[x], 0);
+				}
+				send_reliable_text(this.peer_id, "ps trovao7.ogg", 0);
+				file_delete("players/" + this.charname + "/eagle_message.txt");
+			}
+			
+			// Créditos (compra no site)
+			if(file_exists("players/" + this.charname + "/credits.txt")) {
+				file f;
+				f.open("players/" + this.charname + "/credits.txt", "r");
+				string[] content = string_split(f.read(), "|", false);
+				f.close();
+				double cantity = 0;
+				for(uint i = 0; i < content.length(); i++) {
+					cantity += string_to_number(content[i]);
+				}
+				if(enable_double_emeralds == 1) ge(this.charname, cantity * 2);
+				else ge(this.charname, cantity);
+				file_delete("players/" + this.charname + "/credits.txt");
+				save_transfer("sistema", this.charname, "creditos", "mediante compra em sitio web", cantity);
+				string text = this.charname + " hizo la compra de " + cantity + " créditos el " + DATE_DAY + "." + DATE_MONTH + "." + DATE_YEAR + " a " + TIME_HOUR + "." + TIME_MINUTE + ".";
+				eadm(text, "notify5.ogg", 150);
+				log(text, "log_compras");
+			}
+			
+			// Mensagens permanentes
+			if(file_exists("players/" + this.charname + "/pm.md")) {
+				file f;
+				f.open("players/" + this.charname + "/pm.md", "r");
+				string mensaje = f.read();
+				f.close();
+				string[] lines = string_split(mensaje, "\r\n", false);
+				for(uint i = 0; i < lines.length(); i++) {
+					send_reliable_text(this.peer_id, "permanent " + lines[i], 0);
+					send_reliable_text(this.peer_id, "ps message.ogg", 0);
+				}
+				file_delete("players/" + this.charname + "/pm.md");
+			}
+			
+			// Mensagens para admins/mods
+			if(file_exists("mensagemaes.txt")) {
+				file pr;
+				pr.open("mensagemaes.txt", "r");
+				string mensaje = pr.read();
+				pr.close();
+				for(uint i = 0; i < players.length(); i++) {
+					if(!this.avisado && this.check_admin()) {
+						send_reliable_text(this.peer_id, "msg4 Mensagem disponível! " + mensaje, 0);
+						send_reliable_text(this.peer_id, "ps motd.ogg", 0);
+						this.avisado = true;
+						break;
+					}
+					if(!this.avisado && is_mod(int(i))) {
+						send_reliable_text(this.peer_id, "msg4 Mensagem disponível! " + mensaje, 0);
+						send_reliable_text(this.peer_id, "ps motd.ogg", 0);
+						this.avisado = true;
+						break;
+					}
+				}
+			}
+			
+			// Báculo recarga
+			if(this.tbaculo.elapsed >= this.baculotiempo && this.nbaculo < this.baculofangelical) {
+				this.tbaculo.restart();
+				this.nbaculo += 5;
+				if(this.nbaculo > this.baculofangelical) this.nbaculo = this.baculofangelical;
+			}
+			
+			// Lista de equipe
+			if(this.nomesequipe.length() == 0) this.nomesequipe.insert_last(this.charname);
+			
+			// Validações gerais
+			if(this.maxhealth >= 400000 && this.in_arena == 1) this.maxhealth = 400000;
+			if(this.maxhealth < 5000) this.maxhealth = 5000;
+			if(this.health > this.maxhealth) this.health = this.maxhealth;
+			if(this.nsede < 0) this.nsede = 0;
+			if(this.nfome < 0) this.nfome = 0;
+			if(this.nsede > 100) this.nsede = 100;
+			if(this.nfome > 100) this.nfome = 100;
+			if(this.xp < 0) this.xp = 0;
+			
+			// Prisão
+			this.tempotrancado = this.fichaprisao * 30000 + 60000;
+			
+			// Doença
+			if(this.tdoente.elapsed >= 60000 && this.sujo >= 50) {
+				this.tdoente.restart();
+				this.doente += 10;
+			}
+			if(this.tdoente2.elapsed >= 30000 && this.doente > 0) {
+				this.tdoente2.restart();
+				this.lasthit = "doente";
+				this.health -= (this.doente + 100 * this.doente);
+			}
+			
+			// Proteção contra enfermidade demoníaca
+			if(this.protegido == 0 && this.tdemoniaco.elapsed >= 15000 && this.afk == false && this.newbie == false && this.map == "mausoleo_infernal" && this.check_admin() == false) {
+				this.tdemoniaco.restart();
+				if(this.demoniaca == 0) {
+					this.demoniaca = 1;
+					send_reliable_text(this.peer_id, "msg2 has sido infectado por una enfermedad demoniaca!", 0);
+					this.tdemoniaco2.restart();
+				}
+			}
+			
+			// Enfermidade demoníaca
+			if(this.demoniaca == 1 && this.tdemoniaco2.elapsed >= 30000) {
+				this.tdemoniaco2.restart();
+				this.lasthit = "enfermedad_demoniaca";
+				this.health -= random(10000, 25000);
+			}
+			
+			// Morte progressiva
+			if(this.progressive_death == 1 && this.ndeath == 1 && this.tdeath.elapsed >= 1000) {
+				this.tdeath.restart();
+				this.health -= this.death_life;
+			}
+			
+			// Zona de morte instantânea
+			if(this.progressive_death == 0 && this.ndeath == 1 && this.tdeath.elapsed >= this.death_time) {
+				this.lasthit = this.death_reason;
+				this.health = -1;
+			}
+			
+			// Sede/Fome
+			if(this.tsedefome.elapsed >= 20000) {
+				this.tsedefome.restart();
+				if(!this.afk && this.pacifico == 0) {
+					this.nsede += random(0.1, 0.5);
+					this.nfome += random(0.1, 0.5);
+				}
+			}
+			if(this.nsede >= 100) {
+				this.lasthit = "sede";
+				this.health = -1;
+			}
+			if(this.nfome >= 100) {
+				this.lasthit = "fome";
+				this.health = -1;
+			}
+			
+			// Temporizador de segurança
+			if(this.safetimer.elapsed >= 30000 && this.newsafe) {
+				this.newsafe = false;
+				send_reliable_text(this.peer_id, "msg2 agora você está vulnerável!", 0);
+			}
+			
+			// Viagem entre mapas
+			if(this.maptraveltimer.elapsed >= 10000 && !this.canmaptravel) {
+				this.canmaptravel = true;
+			}
+			
+			// Silêncio (mute)
+			if(this.silenciadotimer.elapsed >= this.silenciadotiempo && this.silenciado == 1) {
+				this.silenciadotimer.force(0);
+				this.silenciadotimer.pause();
+				this.silenciado = 0;
+				send_reliable_text(this.peer_id, "msg2 você foi libertado do silêncio!", 0);
+			}
+			
+			// Prisão
+			if(this.temppreso.elapsed >= this.tempotrancado && this.preso) {
+				this.fichaprisao = 0;
+				this.preso = false;
+				this.temppreso.force(0);
+			this.temppreso.pause();
+			changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 1);
+			send_reliable_text(this.peer_id, "msg2 você foi libertado!", 0);
+		}
+		
+		// Anti-spam
+		if(this.tantispam.elapsed >= 10000 && this.antispamactivated) {
+			this.tantispam.restart();
+			if(this.antispamcounter > 0) {
+				this.antispamcounter--;
+				if(this.antispamcounter <= 0) {
+					this.antispamactivated = false;
+				}
+			}
+		}
+					// Bomba
+			if(this.vbomba == 1 && this.tbomba.elapsed >= 1000) {
+				this.tbomba.restart();
+				this.vbombaseg--;
+				if(this.vbombaseg < 0) {
+					this.vbomba = 0;
+				}
+			}
+			
+			// Pacifista temporizado
+			if(this.atpacifista && this.atpacifistatempo.elapsed >= 1000) {
+				this.atpacifistatempo.restart();
+				this.atpacifistasegundos--;
+				if(this.atpacifistasegundos < 0) {
+					this.atpacifista = false;
+					if(this.pacifico == 0) {
+						// Verifica se tem recompensa na cabeça
+						if(this.bounty_on_head == 1) {
+							send_reliable_text(this.peer_id, "msg2 ;Você não pode usar modo pacifista com recompensa na cabeça.;", 0);
+							this.atpacifistasegundos = 10;
+							return;
+						}
+						
+						this.pacifico = 1;
+						send_reliable_text(this.peer_id, "ininovato", 0);
+						for(uint x = 0; x < players.length(); x++) {
+							if(players[x].arank == 0) {
+								send_reliable_text(players[x].peer_id, "ps notify_text.ogg", 0);
+								send_reliable_text(players[x].peer_id, "msgdepois " + this.charname + " ativou o modo pacífico!", 0);
+							}
+						}
+						send_reliable_text(0, "pp " + this.charname + " " + this.pacifico, 0);
+						settitle(get_player_index_from(charname));
+						return;
+					}
+					if(this.pacifico == 1) {
+						this.pacifico = 0;
+						send_reliable_text(this.peer_id, "fimnovato", 0);
+						for(uint x = 0; x < players.length(); x++) {
+							if(players[x].arank == 0) {
+								send_reliable_text(players[x].peer_id, "ps notify_text.ogg", 0);
+								send_reliable_text(players[x].peer_id, "msgdepois " + this.charname + " deixou de ser pacífico!", 0);
+							}
+						}
+						send_reliable_text(0, "pp " + this.charname + " " + this.pacifico, 0);
+						settitle(get_player_index_from(charname));
+						return;
+					}
+				}
+				else send_packet10(0, this.charname, this.charname, "timebombbeep.ogg " + this.x + " " + this.y, this.map);
+			}
+			
+			// Invisibilidade (cloaked)
+			if(this.tminvs.elapsed >= 60000) {
+				this.cloaked = false;
+				send_reliable_text(this.peer_id, "stopcloak", 0);
+				server_maps[mapindex].send_packet(0, "play spell_cloak_hide.ogg", this.x, this.y);
+				if(!this.afk) {
+					send_reliable_text(0, "playerbeep " + this.charname + " 1", 0);
+					this.bipar = 1;
+				}
+				this.tminvs.force(0);
+				this.tminvs.pause();
+			}
+			
+			// Magia (cura/teleporte)
+			if(this.tmagia.elapsed >= 2000) {
+				this.x = this.vx;
+				this.y = this.vy;
+				send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
+				server_maps[mapindex].send_packet(0, "upl " + this.peer_id + " " + this.x + " " + this.y + " " + this.map, true);
+				send_reliable_text(this.peer_id, "startmoving", 0);
+				this.tmagia.force(0);
+				this.tmagia.pause();
+				this.curando = false;
+			}
+			
+			// Velocidade
+			if(this.tmveloz.elapsed >= 50000) {
+				send_reliable_text(this.peer_id, "dveloz", 0);
+				server_maps[mapindex].send_packet(0, "play spell_cloak_hideoff.ogg", this.x, this.y);
+				this.tmveloz.force(0);
+				this.tmveloz.pause();
+			}
+			
+			// Super pulo
+			if(this.tmpulo.elapsed >= 30000) {
+				server_maps[mapindex].send_packet(0, "play spell_superjump_off.ogg", this.x, this.y);
+				send_reliable_text(this.peer_id, "superjumpoff", 0);
+				this.tmpulo.force(0);
+				this.tmpulo.pause();
+			}
+			
+			// Meteoro
+			if(this.tmeteoro.elapsed >= 600000 && this.ameteoro == 0 && this.tiempometeoro == 1) {
+				this.tmeteoro.pause();
+				this.tiempometeoro = 0;
+				achuva = false;
+			}
+			
+			// Flutuar
+			if(this.tmflutuar.elapsed >= 30000 && this.magiaactiva == true) {
+				this.magiaactiva = false;
+				server_maps[mapindex].send_packet(0, "play spell_float_off.ogg", this.x, this.y);
+				send_reliable_text(this.peer_id, "stopfloat", 0);
+				this.tmflutuar.force(0);
+				this.tmflutuar.pause();
+			}
+			
+			// Star
+			if(this.star) {
+				if(this.startimer.elapsed > 1000) {
+					this.startimer.restart();
+					this.starseconds -= 1;
+					if(this.starseconds > 0 && this.starseconds < 6) send_reliable_text(this.peer_id, "ps starwarn.wav", 0);
+					if(this.starseconds == 0) {
+						server_maps[mapindex].send_packet(0, "play staroff.ogg", this.x, this.y);
+						this.star = false;
+						server_maps[this.mapindex].destroy_moving_sound(this.starsoundid);
+						this.starsoundid = -1;
+						send_reliable_text(this.peer_id, "staroff", 0);
+					}
+				}
+			}
+			
+			// Bolha de ar
+			if(this.bolhatimer.elapsed > 1000) {
+				this.bolhatimer.restart();
+				this.bolhaseconds -= 1;
+				if(this.bolhaseconds > 0 && this.bolhaseconds < 11) send_reliable_text(this.peer_id, "ps magia_bolhaar_acabou.ogg", 0);
+				if(this.bolhaseconds == 0) {
+					server_maps[mapindex].send_packet(0, "play magia_bolhaar_acabou.ogg", this.x, this.y);
+					this.bolhaar = false;
+					send_reliable_text(this.peer_id, "bolhaaroff", 0);
+				}
+			}
+			
+			// Benção
+			if(this.tmbendicion.elapsed > 1000) {
+				this.tmbendicion.restart();
+				this.bendicionsegundos -= 1;
+				if(this.bendicionsegundos > 0 && this.bendicionsegundos < 11) send_reliable_text(this.peer_id, "ps magia_fogo.ogg", 0);
+				if(this.bendicionsegundos == 0) {
+					server_maps[mapindex].send_packet(0, "play staroff.ogg", this.x, this.y);
+					this.bendicion = false;
+				}
+			}
+			
+			// Calor reprimido
+			if(this.calortimer.elapsed > 1000) {
+				this.calortimer.restart();
+				this.calorseconds -= 1;
+				if(this.calorseconds > 0 && this.calorseconds < 11) send_reliable_text(this.peer_id, "ps magia_fogo.ogg", 0);
+				if(this.calorseconds == 0) {
+					server_maps[mapindex].send_packet(0, "play staroff.ogg", this.x, this.y);
+					this.calor_reprimido = false;
+				}
+			}
+			
+			// Débitos
+			if(this.negativo > 0) {
+				if(this.inv_item_number("reais") >= this.negativo) {
+					this.inv_add_item("reais", 0 - this.negativo);
+					this.negativo = 0;
+					write_to(this.charname, "negativo.usr", this.negativo);
+				}
+			}
+			
+			// Auto-salvar
+			if(savetimer.elapsed >= 90000) {
+				savetimer.restart();
+				this.save_player_data();
+			}
+		}
+		netloop();
+	}
+
+	// =====================================================
+	// MÉTODOS AUXILIARES PARA ITENS
+	// =====================================================
+
+	// Verifica se um item é uma arma
+	bool is_item_weapon(string item_name) {
+		// Lista de armas conhecidas (baseado nos weapons do jogo)
+		string[] weapons_list = {
+			"soco", "faca", "pistola", "revolver", "escopeta", "ak47",
+			"m16", "sniper", "bazuca", "granada", "molotov", "mp7",
+			"galil", "sub_laser", "pistola_temporal", "arco", "besta"
+		};
+
+		for (uint i = 0; i < weapons_list.length(); i++) {
+			if (item_name == weapons_list[i]) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Verifica se um item é uma roupa
+	bool is_item_clothing(string item_name) {
+		// Lista de roupas conhecidas
+		string[] clothing_list = {
+			"capacete", "colete", "armadura", "botas", "luvas",
+			"camisa", "calca", "jaqueta", "chapeu"
+		};
+
+		for (uint i = 0; i < clothing_list.length(); i++) {
+			if (item_name == clothing_list[i]) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Remove uma roupa pelo nome
+	void remove_clothing_by_name(string clothing_name) {
+		for (uint i = 0; i < clothing.length(); i++) {
+			if (clothing[i] == clothing_name) {
+				clothing.erase(i);
+				if (i < body_parts.length()) {
+					body_parts.erase(i);
+				}
+				if (i < clothing_indexs.length()) {
+					clothing_indexs.erase(i);
+				}
+				// Recalcular proteção após remover roupa
+				calculate_clothing_protection();
+				break;
+			}
+		}
+	}
+
+	// Calcula a proteção total das roupas equipadas
+	void calculate_clothing_protection() {
+		clothing_protection = 0;
+		// Cada peça de roupa pode dar proteção
+		for (uint i = 0; i < clothing.length(); i++) {
+			// Por enquanto, cada roupa dá 10% de proteção
+			clothing_protection += 10.0;
+		}
+		// Limitar proteção máxima a 90%
+		if (clothing_protection > 90) {
+			clothing_protection = 90;
+		}
+	}
+
+	// Aplicar fogo contínuo ao jogador
+	void spawn_playerfire(string source_name) {
+		add_playerfire(source_name);
+	}
+}
+
+
+
+
+
+void spawn_player(uint id, string name, string vers, string thebanid) {
+	player player1(id, name, vers, thebanid);
+	players.push_back(player1);
+}
+
+double get_player_distance(player@ p1, player@ p2) {
+	if (p1.map != p2.map) return -1;
+	int dx, dy;
+	if (p1.x <= p2.x) dx = p2.x - p1.x;
+	else dx = p1.x - p2.x;
+	if (p1.y <= p2.y) dy = p2.y - p1.y;
+	else dy = p1.y - p2.y;
+	return dx + dy;
+}
+
+double get_bala_y_distance(bullet@ p1, player@ p2) {
+	if (p1.mapname != p2.map) return -1;
+	int dy;
+	if (p1.y <= p2.y) dy = p2.y - p1.y;
+	else dy = p1.y - p2.y;
+	return dy;
+}
+
+// Funções auxiliares de player
+player@ get_player_by_name(string name) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].name == name || players[i].charname == name) {
+			return players[i];
+		}
+	}
+	return null;
+}
+
+player@ get_player_by_id(uint64 peer_id) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].peer_id == peer_id) {
+			return players[i];
+		}
+	}
+	return null;
+}
+
+// Sobrecarga para string (converte para uint64)
+player@ get_player_by_id(string peer_id_str) {
+	uint64 peer_id = string_to_number(peer_id_str);
+	return get_player_by_id(peer_id);
+}
+
+player@[] get_players_in_map(string map_name) {
+	player@[] result;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].map_name == map_name) {
+			result.push_back(players[i]);
+		}
+	}
+	return result;
+}
+
+int get_player_index_from(string name) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].name == name || players[i].charname == name) {
+			return int(i);
+		}
+	}
+	return -1;
+}
+

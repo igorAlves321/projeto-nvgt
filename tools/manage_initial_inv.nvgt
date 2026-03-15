@@ -1,0 +1,202 @@
+// manage_initial_inv.nvgt
+// Script para gerenciar o inventário inicial dos jogadores via Banco de Dados
+// Versão GUI/Audio Menu Acessível
+
+#pragma plugin nvgt_sqlite
+
+#include "../docks/include/bgt_compat.nvgt"
+#include "../docks/include/sqlite3constants.nvgt"
+#include "../docks/include/db_props.nvgt"
+#include "../docks/include/menu.nvgt"
+#include "../docks/include/input_forms.nvgt"
+#include "../docks/include/speech.nvgt"
+
+// Objeto do banco de dados
+sqlite3 db;
+
+void main() {
+    // Inicializar janela para garantir que forms funcionem
+    show_window("Gerenciador de Inventário Inicial");
+    
+    speak("Conectando ao banco de dados...");
+    
+    // Ajuste o caminho se necessário dependendo de onde o script é executado
+    string db_path = "../server/database/evm.db";
+    
+    // Verificacao manual do arquivo
+    file f_check;
+    if(f_check.open(db_path, "r")) {
+        f_check.close();
+    } else {
+        // Tentar caminho absoluto baseado na posicao provavel
+        // Se nao achar, avisa
+        db_path = "server/database/evm.db"; // Tenta relativo da raiz se estiver rodando de la
+        if(f_check.open(db_path, "r")) {
+            f_check.close();
+        } else {
+             // Fallback para absoluto se soubermos, senao deixa o ../
+             db_path = "../server/database/evm.db";
+        }
+    }
+
+    if(db.open(db_path) != SQLITE_OK) {
+        alert("Erro", "Erro ao abrir banco de dados (" + db_path + "): " + db.get_last_error_text());
+        return;
+    }
+    
+    // Garantir que a tabela existe
+    create_table_if_not_exists();
+    
+    while(true) {
+        menu m;
+        m.intro_text = "Gerenciador de Inventário Inicial. Banco: " + db_path;
+        m.add_item("Listar itens atuais", "list");
+        m.add_item("Adicionar item ou Atualizar quantidade", "add");
+        m.add_item("Remover item", "remove");
+        m.add_item("Limpar todos os itens", "clear");
+        m.add_item("Sair", "exit");
+        
+        int choice = m.run();
+        string id = m.get_item_id(choice);
+        
+        if(id == "exit" || choice == -1) break;
+        
+        if(id == "list") list_items_gui();
+        else if(id == "add") add_item_gui();
+        else if(id == "remove") remove_item_gui();
+        else if(id == "clear") clear_items_gui();
+    }
+    
+    db.close();
+}
+
+void create_table_if_not_exists() {
+    string query = "CREATE TABLE IF NOT EXISTS initial_inventory (item_name TEXT PRIMARY KEY, quantity INT);";
+    if(db.execute(query) != SQLITE_OK) {
+        speak("Erro ao criar tabela: " + db.get_last_error_text());
+        wait(2000);
+    }
+    
+    // Verificar se está vazia, se sim, popular com padrão
+    string check = "SELECT COUNT(*) FROM initial_inventory;";
+    sqlite3statement@ stmt = db.prepare(check);
+    if(@stmt != null && stmt.step() == SQLITE_ROW) {
+        int count = stmt.column_int(0);
+        if(count == 0) {
+            // Validar se usuário quer popular
+            if(yes_no("A tabela de inventário está vazia. Deseja preencher com itens padrão?")) {
+                db.execute("INSERT INTO initial_inventory VALUES ('faca', 1);");
+                db.execute("INSERT INTO initial_inventory VALUES ('reais', 1000);");
+                db.execute("INSERT INTO initial_inventory VALUES ('euro', 500);");
+                db.execute("INSERT INTO initial_inventory VALUES ('calca_jeans', 1);");
+                db.execute("INSERT INTO initial_inventory VALUES ('camisa_de_malha', 1);");
+                db.execute("INSERT INTO initial_inventory VALUES ('tenis', 1);");
+                speak("Itens padrão adicionados.");
+                wait(1000);
+            }
+        }
+    }
+}
+
+void list_items_gui() {
+    string query = "SELECT item_name, quantity FROM initial_inventory ORDER BY item_name;";
+    sqlite3statement@ stmt = db.prepare(query);
+    
+    if(@stmt == null) {
+        alert("Erro", "Erro ao preparar consulta.");
+        return;
+    }
+    
+    menu m;
+    m.intro_text = "Itens no inventário inicial. Pressione enter para voltar.";
+    m.add_item("Voltar", "back");
+    
+    int count = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        string name = stmt.column_text(0);
+        int qty = stmt.column_int(1);
+        m.add_item(name + ": " + qty, name); // ID é o nome para possível uso futuro
+        count++;
+    }
+    
+    if(count == 0) {
+        m.add_item("(Nenhum item encontrado)", "empty");
+    }
+    
+    m.run();
+}
+
+void add_item_gui() {
+    input_form f("Adicionar Item");
+    f.description = "Preencha os dados do item.";
+    f.add_text_field("name", "Nome do item (ex: faca)", "", true);
+    f.add_number_field("qty", "Quantidade", 1, true);
+    
+    dictionary@ result = f.run();
+    if(result !is null) {
+        string name = "";
+        double qty_d = 0;
+        
+        result.get("name", name);
+        result.get("qty", qty_d);
+        int qty = int(qty_d);
+        
+        if(name != "" && qty > 0) {
+            string query = "INSERT OR REPLACE INTO initial_inventory (item_name, quantity) VALUES (?, ?);";
+            sqlite3statement@ stmt = db.prepare(query);
+            stmt.bind_text(1, name);
+            stmt.bind_int(2, qty);
+            
+            if(stmt.step() == SQLITE_DONE) {
+                speak("Item " + name + " salvo com sucesso!");
+            } else {
+                alert("Erro", "Erro ao salvar item no banco.");
+            }
+            wait(1000);
+        }
+    }
+}
+
+void remove_item_gui() {
+    // Listar itens para escolher qual remover (muito melhor que digitar)
+    string query = "SELECT item_name FROM initial_inventory ORDER BY item_name;";
+    sqlite3statement@ stmt = db.prepare(query);
+    
+    menu m;
+    m.intro_text = "Selecione o item que deseja remover.";
+    m.add_item("Cancelar", "cancel");
+    
+    while(stmt.step() == SQLITE_ROW) {
+        string name = stmt.column_text(0);
+        m.add_item(name, name);
+    }
+    
+    int choice = m.run();
+    string selected = m.get_item_id(choice);
+    
+    if(selected != "cancel" && choice != -1) {
+        if(yes_no("Tem certeza que deseja remover " + selected + "?")) {
+            string del_query = "DELETE FROM initial_inventory WHERE item_name = ?;";
+            sqlite3statement@ stmt_del = db.prepare(del_query);
+            stmt_del.bind_text(1, selected);
+            
+            if(stmt_del.step() == SQLITE_DONE) {
+                speak("Item removido.");
+            } else {
+                speak("Erro ao remover item.");
+            }
+            wait(1000);
+        }
+    }
+}
+
+void clear_items_gui() {
+    if(yes_no("ATENÇÃO! Isso removerá TODOS os itens do inventário inicial. Tem certeza absoluta?")) {
+        if(db.execute("DELETE FROM initial_inventory;") == SQLITE_OK) {
+            speak("Todos os itens foram removidos.");
+        } else {
+            speak("Erro ao limpar tabela.");
+        }
+        wait(1500);
+    }
+}

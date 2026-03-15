@@ -1,0 +1,2461 @@
+﻿// admin_commands.nvgt - Sistema de Comandos Administrativos
+// âœ… ITEM 4: COMANDOS ADMINISTRATIVOS
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de Inputs Admin
+
+// ============================================================================
+// ðŸ”’ CONSTANTES DE SEGURANÃ‡A (Task 1.2.1)
+// ============================================================================
+// Limites para validaÃ§Ã£o de inputs em comandos administrativos
+
+const int ADMIN_MIN_LEVEL = 1;
+const int ADMIN_MAX_LEVEL = 100;
+const int ADMIN_MAX_GOLD = 999999999;   // ~1 bilhÃ£o
+const int ADMIN_MAX_XP = 999999999;
+const int ADMIN_MAX_ITEM_QTY = 9999;
+const int ADMIN_MAX_DURATION = 525600;  // 1 ano em minutos
+const int ADMIN_MAX_COORD = 99999;      // Limite de coordenadas
+const int ADMIN_MIN_COORD = -99999;
+const int ADMIN_MAX_REASON_LEN = 500;   // Tamanho mÃ¡ximo de razÃ£o para ban/kick
+
+// ============================================================================
+// ðŸ”’ FUNÃ‡Ã•ES DE VALIDAÃ‡ÃƒO (Task 1.2.1)
+// ============================================================================
+
+// Envia erro formatado para o admin e retorna false para interromper execuÃ§Ã£o
+bool send_admin_error(int player_index, string command, string message) {
+    send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] /" + command + ": " + message, 0);
+    debug_log("ADMIN ERROR: " + players[player_index].charname + " - /" + command + " - " + message);
+    return false;
+}
+
+// Valida se uma string contÃ©m apenas dÃ­gitos (nÃºmeros positivos)
+bool is_valid_number(string str) {
+    if(str.length() == 0) return false;
+    
+    // Permite sinal negativo no inÃ­cio
+    uint start = 0;
+    if(str[0] == '-') {
+        if(str.length() == 1) return false; // Apenas "-" nÃ£o Ã© vÃ¡lido
+        start = 1;
+    }
+    
+    for(uint i = start; i < str.length(); i++) {
+        if(str[i] < '0' || str[i] > '9') return false;
+    }
+    return true;
+}
+
+// Valida se uma string contÃ©m apenas dÃ­gitos positivos (sem sinal negativo)
+bool is_positive_number(string str) {
+    if(str.length() == 0) return false;
+    for(uint i = 0; i < str.length(); i++) {
+        if(str[i] < '0' || str[i] > '9') return false;
+    }
+    return true;
+}
+
+// Valida nome de jogador (nÃ£o vazio, sem caracteres especiais perigosos)
+bool is_valid_player_name(string name) {
+    if(name.length() == 0) return false;
+    if(name.length() > 32) return false; // Limite razoÃ¡vel
+    
+    // Verificar caracteres perigosos
+    if(name.find(";") >= 0) return false;
+    if(name.find("|") >= 0) return false;
+    if(name.find("\\") >= 0) return false;
+    if(name.find("\"") >= 0) return false;
+    if(name.find("'") >= 0) return false;
+    
+    return true;
+}
+
+// Valida nome de item (nÃ£o vazio, caracteres vÃ¡lidos)
+bool is_valid_item_name(string item) {
+    if(item.length() == 0) return false;
+    if(item.length() > 64) return false;
+    
+    // Verificar caracteres perigosos
+    if(item.find(";") >= 0) return false;
+    if(item.find("|") >= 0) return false;
+    if(item.find("\\") >= 0) return false;
+    
+    return true;
+}
+
+// Valida nome de mapa
+bool is_valid_map_name(string map_name) {
+    if(map_name.length() == 0) return false;
+    if(map_name.length() > 64) return false;
+    
+    // Verificar caracteres perigosos para path traversal
+    if(map_name.find("..") >= 0) return false;
+    if(map_name.find("/") >= 0) return false;
+    if(map_name.find("\\") >= 0) return false;
+    if(map_name.find(":") >= 0) return false;
+    
+    return true;
+}
+
+// Valida se um valor inteiro estÃ¡ dentro dos limites
+bool is_within_limits(int value, int min_val, int max_val) {
+    return (value >= min_val && value <= max_val);
+}
+
+// Valida coordenada
+bool is_valid_coord(int coord) {
+    return is_within_limits(coord, ADMIN_MIN_COORD, ADMIN_MAX_COORD);
+}
+
+// ============================================================================
+// ðŸ”’ VERIFICAÃ‡ÃƒO DE PERMISSÃ•ES
+// ============================================================================
+
+// Verifica permissÃ£o de admin
+bool is_admin(int player_index) {
+	return players[player_index].admin;
+}
+
+// Verifica se Ã© super admin (usando admin_status)
+bool is_super_admin(int player_index) {
+	return players[player_index].admin_status;
+}
+
+// Permissao para gerenciar catalogo de itens (admin/dev)
+bool can_access_item_builder(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    string username = players[player_index].charname;
+    return check_is_admin(username);
+}
+
+
+// Comando /playtime
+void cmd_playtime(int player_index, string target_name = "") {
+	if(!is_admin(player_index)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 VocÃª nÃ£o tem permissÃ£o!", 0);
+		return;
+	}
+	
+	if(target_name == "") {
+		// Mostrar prÃ³prio tempo
+		int minutes = int(players[player_index].playtimer.elapsed / 60000);
+		send_reliable_text(players[player_index].peer_id, "msg2 Seu tempo conectado: " + minutes + " minutos", 0);
+	} else {
+		// 2. ValidaÃ§Ã£o de Nome do Jogador
+		if(!is_valid_player_name(target_name)) {
+			send_admin_error(player_index, "playtime", "Nome de jogador invÃ¡lido!");
+			return;
+		}
+		
+		// 3. ValidaÃ§Ã£o de Entidade
+		int target = get_player_index_from(target_name);
+		if(target == -1) {
+			send_admin_error(player_index, "playtime", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+			return;
+		}
+		
+		int minutes = int(players[target].playtimer.elapsed / 60000);
+		send_reliable_text(players[player_index].peer_id, "msg2 Tempo de " + target_name + ": " + minutes + " minutos", 0);
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " usou /playtime");
+}
+
+// Comando /kick
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_kick(int player_index, string target_name, string reason = "Expulso por admin") {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "kick", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "kick", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "kick", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// 4. ProteÃ§Ã£o: NÃ£o pode kickar outro admin
+	if(players[target].admin) {
+		send_admin_error(player_index, "kick", "VocÃª nÃ£o pode kickar este jogador (admin protegido)!");
+		return;
+	}
+	
+	// 5. ValidaÃ§Ã£o do tamanho da razÃ£o
+	if(reason.length() > 256) {
+		reason = reason.substr(0, 256); // Truncar razÃ£o muito longa
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	// Guardar peer_id antes de qualquer modificaÃ§Ã£o
+	uint64 target_peer = players[target].peer_id;
+	
+	// 1. Notificar o alvo ANTES de desconectar (para ele ver a mensagem)
+	send_reliable_text(target_peer, "msg2 VocÃª foi chutado do servidor! Motivo: " + reason, 0);
+	send_reliable_text(target_peer, "chutad", 0); // Toca som de chute no cliente
+	
+	// 2. Broadcast para todos os outros
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].peer_id != target_peer) {
+			send_reliable_text(players[i].peer_id, "msg2 " + target_name + " foi chutado do servidor. Motivo: " + reason, 0);
+		}
+	}
+	
+	// 3. Log
+	debug_log("ADMIN: " + players[player_index].charname + " chutou " + target_name + " - Motivo: " + reason);
+	
+	// Pequena espera para entregar msg/som antes de fechar conexÃ£o
+	wait(500);
+	
+	// 4. Desconectar fisicamente o jogador
+	force_disconnect_and_cleanup(target_peer, true);
+}
+
+// Comando /inventory
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_inventory(int player_index, string target_name) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "inventory", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "inventory", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "inventory", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	// Serializar inventÃ¡rio
+	string inv = players[target].inv.serialize();
+	string[] items = inv.split("|");
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 === InventÃ¡rio de " + target_name + " ===", 0);
+	
+	for(uint i = 0; i < items.length(); i++) {
+		if(items[i].find(":") > -1) {
+			string[] parts = items[i].split(":");
+			send_reliable_text(players[player_index].peer_id, "msg2 " + parts[0] + " x" + parts[1], 0);
+		}
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " visualizou inventÃ¡rio de " + target_name);
+}
+
+// Comando /freezeall
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de inputs
+void cmd_freezeall(int player_index, int duration = 10) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "freezeall", "VocÃª precisa ser super admin!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de DuraÃ§Ã£o
+	if(!is_within_limits(duration, 1, 3600)) { // MÃ¡ximo 1 hora
+		send_admin_error(player_index, "freezeall", "DuraÃ§Ã£o deve ser entre 1 e 3600 segundos.");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].admin) { // NÃ£o congelar admins
+			players[i].congelado = 1;
+			send_reliable_text(players[i].peer_id, "msg2 VocÃª foi congelado por " + duration + " segundos!", 0);
+		}
+	}
+	
+	debug_log("ADMIN: " + players[player_index].charname + " congelou todos os jogadores por " + duration + "s");
+	
+	// Broadcast
+	for(uint i = 0; i < players.length(); i++) {
+		send_reliable_text(players[i].peer_id, "msg2 ADMIN CONGELOU TODOS POR " + duration + " SEGUNDOS!", 0);
+	}
+}
+
+// Comando /backup
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de permissÃ£o
+void cmd_backup(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "backup", "VocÃª precisa ser super admin!");
+		return;
+	}
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 Iniciando backup do banco em backups/ ...", 0);
+	
+	// Salvar tudo e disparar backup do banco (assÃ­ncrono)
+	auto_save_all_players();
+	perform_database_backup();
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 Backup solicitado com sucesso.", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " solicitou backup do banco");
+}
+
+// Comando /forcedc (forÃ§a desconexÃ£o de todos)
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de permissÃ£o
+void cmd_forcedc(int player_index) {
+    if(!is_super_admin(player_index)) {
+        send_admin_error(player_index, "forcedc", "Voce precisa ser super admin!");
+        return;
+    }
+
+    debug_log("ADMIN: " + players[player_index].charname + " forçou desconexao de todos");
+
+    // Notificar todos e desconectar de forma imediata/segura
+    for(uint i = 0; i < players.length(); i++) {
+        send_reliable_text(players[i].peer_id, "msg2 SERVIDOR REINICIANDO AGORA!", 0);
+    }
+
+    // Salvar estado antes de encerrar
+    auto_save_all_players();
+    perform_database_backup();
+
+    // Encerrar o loop principal do servidor (shutdown gracioso)
+    server_running = false;
+}
+
+// Comando /tp (teleportar)
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_tp(int player_index, string target_name) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "tp", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tp", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "tp", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	players[player_index].x = players[target].x;
+	players[player_index].y = players[target].y;
+	players[player_index].map = players[target].map;
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 Teleportado para " + target_name, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " teleportou para " + target_name);
+}
+
+// Comando /tphere (trazer jogador)
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de inputs
+void cmd_tphere(int player_index, string target_name) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "tphere", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tphere", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "tphere", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	players[target].x = players[player_index].x;
+	players[target].y = players[player_index].y;
+	players[target].map = players[player_index].map;
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi trazido atÃ© vocÃª", 0);
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi teleportado por um admin", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " trouxe " + target_name);
+}
+
+// Comando /givexp
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_givexp(int player_index, string target_name, int xp_amount) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "givexp", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "givexp", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "givexp", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// 4. ValidaÃ§Ã£o de Limites de XP
+	if(!is_within_limits(xp_amount, 1, ADMIN_MAX_XP)) {
+		send_admin_error(player_index, "givexp", "Quantidade de XP deve ser entre 1 e " + ADMIN_MAX_XP + ".");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	ganhaxp(target, xp_amount, 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 VocÃª deu " + xp_amount + " XP para " + target_name, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + xp_amount + " XP para " + target_name);
+}
+
+// Comando /giveitem
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_giveitem(int player_index, string target_name, string item_name, int quantity = 1) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "giveitem", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+	
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "giveitem", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+	
+	// 3. ValidaÃ§Ã£o de Entidade (Jogador Existe?)
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "giveitem", "Jogador '" + target_name + "' nÃ£o encontrado ou offline.");
+		return;
+	}
+	
+	// 4. ValidaÃ§Ã£o de Nome do Item
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "giveitem", "Nome de item invÃ¡lido!");
+		return;
+	}
+	
+	// 5. ValidaÃ§Ã£o de Quantidade
+	if(!is_within_limits(quantity, 1, ADMIN_MAX_ITEM_QTY)) {
+		send_admin_error(player_index, "giveitem", "Quantidade deve ser entre 1 e " + ADMIN_MAX_ITEM_QTY + ".");
+		return;
+	}
+	
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	players[target].inv_add_item(item_name, quantity);
+	send_reliable_text(players[player_index].peer_id, "msg2 VocÃª deu " + quantity + "x " + item_name + " para " + target_name, 0);
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª recebeu " + quantity + "x " + item_name + " de um admin", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + quantity + "x " + item_name + " para " + target_name);
+}
+
+// ============================================================================
+// ðŸ†• COMANDOS DE GESTÃƒO DE ZONAS DESABILITADAS
+// ============================================================================
+
+// Comando /addzone - Adicionar nova zona desabilitada
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_addzone(int player_index, int minx, int maxx, int miny, int maxy, string map_name, string message = "Zona Segura") {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "addzone", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Coordenadas
+	if(!is_valid_coord(minx) || !is_valid_coord(maxx) || !is_valid_coord(miny) || !is_valid_coord(maxy)) {
+		send_admin_error(player_index, "addzone", "Coordenadas fora dos limites permitidos (" + ADMIN_MIN_COORD + " a " + ADMIN_MAX_COORD + ").");
+		return;
+	}
+
+	// 3. ValidaÃ§Ã£o de LÃ³gica das Coordenadas
+	if(minx > maxx || miny > maxy) {
+		send_admin_error(player_index, "addzone", "Coordenadas invÃ¡lidas: min deve ser menor que max.");
+		return;
+	}
+
+	// 4. ValidaÃ§Ã£o de Nome do Mapa
+	if(!is_valid_map_name(map_name)) {
+		send_admin_error(player_index, "addzone", "Nome de mapa invÃ¡lido!");
+		return;
+	}
+
+	// 5. ValidaÃ§Ã£o de Mensagem
+	if(message.length() > 128) {
+		message = message.substr(0, 128); // Truncar mensagem muito longa
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	game_disabled_zone@ nova_zona = game_disabled_zone(minx, maxx, miny, maxy, map_name, message);
+	nova_zona.disable_pvp = true;
+	nova_zona.disable_items = false;
+	nova_zona.disable_commands = false;
+	game_disabled_zones.insert_last(nova_zona);
+
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 Zona adicionada: [" + minx + "," + maxx + "] x [" + miny + "," + maxy + "] no mapa " + map_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " adicionou zona desabilitada no mapa " + map_name);
+}
+
+// Comando /removezone - Remover zona desabilitada por Ã­ndice
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_removezone(int player_index, int zone_index) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "removezone", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Ãndice
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_admin_error(player_index, "removezone", "Ãndice de zona invÃ¡lido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	string map_removed = game_disabled_zones[zone_index].map;
+	game_disabled_zones.remove_at(zone_index);
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Zona " + zone_index + " removida do mapa " + map_removed, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " removeu zona " + zone_index);
+}
+
+// Comando /listzones - Listar todas as zonas desabilitadas
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de permissÃ£o
+void cmd_listzones(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "listzones", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(game_disabled_zones.length() == 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Nenhuma zona desabilitada configurada", 0);
+		return;
+	}
+
+	string result = "=== ZONAS DESABILITADAS (" + game_disabled_zones.length() + ") ===\\r\\n";
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		result += "[" + i + "] Mapa: " + game_disabled_zones[i].map +
+			" | Ãrea: [" + game_disabled_zones[i].minx + "-" + game_disabled_zones[i].maxx +
+			"] x [" + game_disabled_zones[i].miny + "-" + game_disabled_zones[i].maxy + "]";
+
+		if(game_disabled_zones[i].disable_pvp) result += " | PvP:OFF";
+		if(game_disabled_zones[i].disable_items) result += " | Items:OFF";
+		if(game_disabled_zones[i].disable_commands) result += " | Commands:OFF";
+
+		result += "\\r\\n";
+	}
+
+	send_reliable_text(players[player_index].peer_id, "say " + result, 0);
+}
+
+// Comando /togglezonepvp - Alternar PvP em uma zona
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_togglezonepvp(int player_index, int zone_index) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "togglezonepvp", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Ãndice
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_admin_error(player_index, "togglezonepvp", "Ãndice de zona invÃ¡lido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	game_disabled_zones[zone_index].disable_pvp = !game_disabled_zones[zone_index].disable_pvp;
+
+	string status = game_disabled_zones[zone_index].disable_pvp ? "desabilitado" : "habilitado";
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 PvP " + status + " na zona " + zone_index + " (" + game_disabled_zones[zone_index].map + ")", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " alterou PvP na zona " + zone_index + " para " + status);
+}
+
+// Comando /checkzone - Verificar se posiÃ§Ã£o atual estÃ¡ em zona desabilitada
+// âœ… Task 1.2.1: Comando pÃºblico (sem restriÃ§Ã£o de admin) - validaÃ§Ã£o bÃ¡sica de Ã­ndice
+void cmd_checkzone(int player_index) {
+	// ValidaÃ§Ã£o bÃ¡sica de player_index
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+
+	bool in_zone = false;
+	int zone_id = -1;
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		if(game_disabled_zones[i].is_inside(players[player_index].x, players[player_index].y, players[player_index].map)) {
+			in_zone = true;
+			zone_id = i;
+			break;
+		}
+	}
+
+	if(in_zone) {
+		send_reliable_text(players[player_index].peer_id,
+			"msg2 VocÃª estÃ¡ na zona [" + zone_id + "] - " + game_disabled_zones[zone_id].message +
+			" | PvP:" + (game_disabled_zones[zone_id].disable_pvp ? "OFF" : "ON"), 0);
+	} else {
+		send_reliable_text(players[player_index].peer_id, "msg2 VocÃª nÃ£o estÃ¡ em nenhuma zona desabilitada", 0);
+	}
+}
+
+// Comando /savezones - Salvar zonas em arquivo de configuraÃ§Ã£o
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de permissÃ£o
+void cmd_savezones(int player_index) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "savezones", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	file f;
+	if(!f.open("disabled_zones.cfg", "wb")) {
+		send_admin_error(player_index, "savezones", "Erro ao abrir arquivo para salvar!");
+		return;
+	}
+
+	string content = "// Zonas Desabilitadas - ConfiguraÃ§Ã£o\\n";
+	content += "// Formato: map|minx|maxx|miny|maxy|pvp|items|commands|message\\n\\n";
+
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		content += game_disabled_zones[i].map + "|";
+		content += game_disabled_zones[i].minx + "|";
+		content += game_disabled_zones[i].maxx + "|";
+		content += game_disabled_zones[i].miny + "|";
+		content += game_disabled_zones[i].maxy + "|";
+		content += (game_disabled_zones[i].disable_pvp ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_items ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_commands ? "1" : "0") + "|";
+		content += game_disabled_zones[i].message + "\\n";
+	}
+
+	f.write(content);
+	f.close();
+
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 " + game_disabled_zones.length() + " zonas salvas em disabled_zones.cfg", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " salvou " + game_disabled_zones.length() + " zonas");
+}
+
+int load_disabled_zones_from_disk() {
+	file f;
+	if(!f.open("disabled_zones.cfg", "rb")) {
+		return -1;
+	}
+
+	string content = f.read();
+	f.close();
+
+	// Limpar zonas atuais
+	game_disabled_zones.resize(0);
+
+	string[] lines = content.split("\\n");
+	int loaded = 0;
+
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		string[] parts = line.split("|");
+		if(parts.length() >= 9) {
+			string map = parts[0];
+			int minx = string_to_number(parts[1]);
+			int maxx = string_to_number(parts[2]);
+			int miny = string_to_number(parts[3]);
+			int maxy = string_to_number(parts[4]);
+			bool pvp = (parts[5] == "1");
+			bool items = (parts[6] == "1");
+			bool commands = (parts[7] == "1");
+			string message = parts[8];
+
+			game_disabled_zone@ zona = game_disabled_zone(minx, maxx, miny, maxy, map, message);
+			zona.disable_pvp = pvp;
+			zona.disable_items = items;
+			zona.disable_commands = commands;
+			game_disabled_zones.insert_last(zona);
+			loaded++;
+		}
+	}
+
+	return loaded;
+}
+
+// Comando /loadzones - Carregar zonas de arquivo de configuraÃ§Ã£o
+// âœ… Task 1.2.1: ValidaÃ§Ã£o de permissÃ£o
+void cmd_loadzones(int player_index) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "loadzones", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	int loaded = load_disabled_zones_from_disk();
+	if(loaded < 0) {
+		send_admin_error(player_index, "loadzones", "Arquivo disabled_zones.cfg nÃ£o encontrado!");
+		return;
+	}
+
+	send_reliable_text(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas de disabled_zones.cfg", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " carregou " + loaded + " zonas");
+}
+
+// Comando /createportal - Criar portal de teletransporte
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_createportal(int player_index, string destination_map, int dest_x, int dest_y) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "createportal", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Nome do Mapa de Destino
+	if(!is_valid_map_name(destination_map)) {
+		send_admin_error(player_index, "createportal", "Nome de mapa invÃ¡lido! Use apenas letras, nÃºmeros e underscore.");
+		return;
+	}
+
+	// 3. ValidaÃ§Ã£o de Coordenadas
+	if(!is_valid_coord(dest_x) || !is_valid_coord(dest_y)) {
+		send_admin_error(player_index, "createportal", "Coordenadas invÃ¡lidas! Use valores entre " + ADMIN_MIN_COORD + " e " + ADMIN_MAX_COORD + ".");
+		return;
+	}
+
+	// 4. Verificar se o mapa de destino existe
+	int dest_map_index = get_map_index_from(destination_map);
+	if(dest_map_index == -1) {
+		send_admin_error(player_index, "createportal", "Mapa de destino nÃ£o encontrado: " + destination_map);
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	spawn_portal(player_index, players[player_index].x, players[player_index].y, 
+	             players[player_index].map, destination_map, dest_x, dest_y);
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Portal criado para " + destination_map + " em (" + dest_x + ", " + dest_y + ")", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " criou portal para " + destination_map);
+}
+
+// Comando /deleteportal - Deletar portal prÃ³ximo
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_deleteportal(int player_index, int range = 10) {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "deleteportal", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Range
+	if(range < 1 || range > 100) {
+		send_admin_error(player_index, "deleteportal", "Range invÃ¡lido! Use valores entre 1 e 100.");
+		return;
+	}
+
+	// 3. ValidaÃ§Ã£o do Mapa
+	int map_index = get_map_index_from(players[player_index].map);
+	if(map_index == -1) {
+		send_admin_error(player_index, "deleteportal", "Erro ao obter mapa atual!");
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	for(uint i = 0; i < server_maps[map_index].portals.length(); i++) {
+		portal@ pt = server_maps[map_index].portals[i];
+		int distance = int(get_distance(players[player_index].x, players[player_index].y, pt.x, pt.y));
+
+		if(distance <= range) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Portal deletado!", 0);
+			server_maps[map_index].portals.remove_at(i);
+			debug_log("ADMIN: " + players[player_index].charname + " deletou portal em " + players[player_index].map);
+			return;
+		}
+	}
+
+	send_admin_error(player_index, "deleteportal", "Nenhum portal encontrado em um raio de " + range + " tiles.");
+}
+
+// Comando /tempban - Banir temporariamente
+// âœ… Task 1.2.1: ValidaÃ§Ã£o completa de inputs
+void cmd_tempban(int player_index, string target_name, double days, string reason = "ViolaÃ§Ã£o das regras") {
+	// 1. ValidaÃ§Ã£o de PermissÃ£o
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "tempban", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	// 2. ValidaÃ§Ã£o de Nome do Jogador
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "tempban", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	// 3. ValidaÃ§Ã£o de DuraÃ§Ã£o
+	if(days < 0.001 || days > 365.0) {
+		send_admin_error(player_index, "tempban", "DuraÃ§Ã£o invÃ¡lida! Use valores entre 0.001 e 365 dias.");
+		return;
+	}
+
+	// 4. ValidaÃ§Ã£o de RazÃ£o
+	if(reason.length() > ADMIN_MAX_REASON_LEN) {
+		reason = reason.substr(0, ADMIN_MAX_REASON_LEN);
+	}
+
+	// 5. Verificar se jogador existe
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "tempban", "Jogador '" + target_name + "' nÃ£o encontrado!");
+		return;
+	}
+
+	// 6. NÃ£o pode banir outro admin
+	if(players[target].admin) {
+		send_admin_error(player_index, "tempban", "VocÃª nÃ£o pode banir outro administrador!");
+		return;
+	}
+
+	// --- EXECUÃ‡ÃƒO DA LÃ“GICA ---
+	// âœ… MigraÃ§Ã£o SQL: Usando add_ban_db() em vez de create_temp_ban()
+	double minutes = days * 1440.0; // 1 dia = 1440 minutos
+	string admin_name = players[player_index].charname;
+	string computer_id = players[target].computer_id;
+	
+	if(!add_ban_db(target_name, computer_id, "", admin_name, reason, minutes)) {
+		// Fallback para sistema legado se SQL falhar
+		create_temp_ban(target_name, minutes, 0.0, reason, computer_id);
+		debug_log("WARN: Fallback para create_temp_ban() - SQL falhou");
+	}
+
+	// Broadcast
+	eadm(admin_name + " baniu temporariamente " + target_name + " por " + days + " dias. RazÃ£o: " + reason);
+
+	// Notificar jogador banido
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi banido temporariamente por " + days + " dias. RazÃ£o: " + reason, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " baniu " + target_name + " por " + days + " dias");
+
+	// Desconectar jogador banido e limpar rastros de conexÃ£o
+	uint64 target_peer = players[target].peer_id;
+	force_disconnect_and_cleanup(target_peer, true);
+}
+
+// ============================================================================
+// COMANDOS ADMIN ADICIONAIS - Para Menu Administrativo
+// ============================================================================
+
+// Comando /ban - Banir permanentemente
+void cmd_ban(int player_index, string target_name, string reason = "ViolaÃ§Ã£o das regras") {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "ban", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "ban", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(reason.length() > ADMIN_MAX_REASON_LEN) {
+		reason = reason.substr(0, ADMIN_MAX_REASON_LEN);
+	}
+
+	int target = get_player_index_from(target_name);
+	
+	if(target != -1 && players[target].admin) {
+		send_admin_error(player_index, "ban", "VocÃª nÃ£o pode banir outro administrador!");
+		return;
+	}
+
+	string computer_id = (target != -1) ? players[target].computer_id : "";
+	string admin_name = players[player_index].charname;
+	
+	// âœ… MigraÃ§Ã£o SQL: Usando add_ban_db() com expire_minutes=0 para ban permanente
+	if(!add_ban_db(target_name, computer_id, "", admin_name, reason, 0)) {
+		// Fallback para sistema legado se SQL falhar
+		create_temp_ban(target_name, 525600.0 * 10, 0.0, reason, computer_id);
+		debug_log("WARN: Fallback para create_temp_ban() - SQL falhou");
+	}
+
+	eadm(admin_name + " baniu permanentemente " + target_name + ". RazÃ£o: " + reason);
+
+	if(target != -1) {
+		send_reliable_text(players[target].peer_id, "msg2 VocÃª foi banido permanentemente. RazÃ£o: " + reason, 0);
+	}
+
+	debug_log("ADMIN: " + players[player_index].charname + " baniu PERMANENTEMENTE " + target_name);
+}
+
+// Comando /unban - Desbanir jogador
+void cmd_unban(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "unban", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "unban", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	// âœ… MigraÃ§Ã£o SQL: Tenta desbanir via SQL primeiro, depois fallback
+	bool unbanned = unban_player_db(target_name);
+	
+	// TambÃ©m tenta remover do sistema legado para garantir limpeza completa
+	bool legacy_removed = remove_temp_ban(target_name);
+	
+	if(unbanned || legacy_removed) {
+		send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi desbanido.", 0);
+		eadm(players[player_index].charname + " desbaniu " + target_name);
+		debug_log("ADMIN: " + players[player_index].charname + " desbaniu " + target_name);
+	} else {
+		send_admin_error(player_index, "unban", "Jogador nÃ£o estÃ¡ banido ou ban nÃ£o encontrado.");
+	}
+}
+
+// Comando /silenciar - Silenciar jogador (mute)
+void cmd_silenciar(int player_index, string target_name, int minutes = 10) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "silenciar", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "silenciar", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(minutes < 1 || minutes > ADMIN_MAX_DURATION) {
+		send_admin_error(player_index, "silenciar", "DuraÃ§Ã£o invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "silenciar", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].is_muted = true;
+	players[target].mute_end_time = ticks() + (minutes * 60 * 1000);
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi silenciado por " + minutes + " minutos.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi silenciado por " + minutes + " minutos.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " silenciou " + target_name + " por " + minutes + " min");
+}
+
+// Comando /unsilenciar - Remover silÃªncio
+void cmd_unsilenciar(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "unsilenciar", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "unsilenciar", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "unsilenciar", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].is_muted = false;
+	players[target].mute_end_time = 0;
+
+	send_reliable_text(players[target].peer_id, "msg2 Seu silÃªncio foi removido.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 SilÃªncio de " + target_name + " removido.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " removeu silÃªncio de " + target_name);
+}
+
+// Comando /prender - Prender jogador na prisÃ£o
+void cmd_prender(int player_index, string target_name, int minutes, string reason) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "prender", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "prender", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(minutes < 1 || minutes > ADMIN_MAX_DURATION) {
+		send_admin_error(player_index, "prender", "DuraÃ§Ã£o invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "prender", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].arrested = true;
+	players[target].arrest_end_time = ticks() + (minutes * 60 * 1000);
+	players[target].arrest_reason = reason;
+
+	teleport_player(target, "prisao", 0, 0, 0);
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi preso por " + minutes + " minutos. RazÃ£o: " + reason, 0);
+	eadm(players[player_index].charname + " prendeu " + target_name + " por " + minutes + " min. RazÃ£o: " + reason);
+
+	debug_log("ADMIN: " + players[player_index].charname + " prendeu " + target_name);
+}
+
+// Comando /soltar - Soltar jogador da prisÃ£o
+void cmd_soltar(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "soltar", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "soltar", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "soltar", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	if(!players[target].arrested) {
+		send_admin_error(player_index, "soltar", "Jogador nÃ£o estÃ¡ preso!");
+		return;
+	}
+
+	players[target].arrested = false;
+	players[target].arrest_end_time = 0;
+	players[target].arrest_reason = "";
+
+	teleport_player(target, "spawn", 0, 0, 0);
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi solto da prisÃ£o.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi solto.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " soltou " + target_name);
+}
+
+// Comando /sendmap - Enviar jogador para mapa
+void cmd_sendmap(int player_index, string target_name, string map_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "sendmap", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "sendmap", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(!is_valid_map_name(map_name)) {
+		send_admin_error(player_index, "sendmap", "Nome de mapa invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "sendmap", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	int map_index = get_map_index_from(map_name);
+	if(map_index == -1) {
+		send_admin_error(player_index, "sendmap", "Mapa nÃ£o encontrado!");
+		return;
+	}
+
+	teleport_player(target, map_name, 0, 0, 0);
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi enviado para " + map_name, 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " enviado para " + map_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " enviou " + target_name + " para " + map_name);
+}
+
+// Comando /dar - Dar item para jogador
+void cmd_dar(int player_index, string target_name, string item_name, int quantity = 1) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "dar", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "dar", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "dar", "Nome de item invÃ¡lido!");
+		return;
+	}
+
+	if(quantity < 1 || quantity > ADMIN_MAX_ITEM_QTY) {
+		send_admin_error(player_index, "dar", "Quantidade invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "dar", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	add_item_to_player(target, item_name, quantity);
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª recebeu " + quantity + "x " + item_name, 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Dado " + quantity + "x " + item_name + " para " + target_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + quantity + "x " + item_name + " para " + target_name);
+}
+
+// Comando /remover - Remover item do jogador
+void cmd_remover(int player_index, string target_name, string item_name, int quantity = 1) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "remover", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "remover", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "remover", "Nome de item invÃ¡lido!");
+		return;
+	}
+
+	if(quantity < 1 || quantity > ADMIN_MAX_ITEM_QTY) {
+		send_admin_error(player_index, "remover", "Quantidade invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "remover", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	remove_item_from_player(target, item_name, quantity);
+
+	send_reliable_text(players[target].peer_id, "msg2 Removido " + quantity + "x " + item_name, 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Removido " + quantity + "x " + item_name + " de " + target_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " removeu " + quantity + "x " + item_name + " de " + target_name);
+}
+
+// Comando /dare - Dar crÃ©ditos (dinheiro)
+void cmd_dare(int player_index, string target_name, int amount) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "dare", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "dare", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(amount < 1 || amount > ADMIN_MAX_GOLD) {
+		send_admin_error(player_index, "dare", "Quantidade invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "dare", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].money += amount;
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª recebeu $" + amount + " crÃ©ditos!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Dado $" + amount + " crÃ©ditos para " + target_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " deu $" + amount + " para " + target_name);
+}
+
+// Comando /darc - Dar Stryx (moeda premium)
+void cmd_darc(int player_index, string target_name, int amount) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "darc", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "darc", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(amount < 1 || amount > ADMIN_MAX_GOLD) {
+		send_admin_error(player_index, "darc", "Quantidade invÃ¡lida!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "darc", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].stryx += amount;
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª recebeu " + amount + " Stryx!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Dado " + amount + " Stryx para " + target_name, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " deu " + amount + " Stryx para " + target_name);
+}
+
+// Comando /pinfo - InformaÃ§Ãµes do jogador (menu navegÃ¡vel)
+// Envia dados estruturados para o cliente criar menu acessÃ­vel
+void cmd_pinfo(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "pinfo", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "pinfo", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	
+	// Verificar status de ban (para online e offline)
+	// check_ban_db(username, comp_id, &out reason, &out remaining_seconds)
+	string ban_reason = "";
+	int ban_remaining = 0;
+	bool is_banned = check_ban_db(target_name, "", ban_reason, ban_remaining);
+	
+	// Converter segundos restantes para string legÃ­vel
+	string ban_expire = "N/A";
+	if(is_banned && ban_remaining > 0) {
+		int hours = ban_remaining / 3600;
+		int minutes = (ban_remaining % 3600) / 60;
+		ban_expire = hours + "h " + minutes + "min";
+	} else if(is_banned && ban_remaining == -1) {
+		ban_expire = "Permanente";
+	}
+	
+	// Formato: pinfo_data:nome|status|banido|razao_ban|expira_ban|nivel|xp|hp|mapa|pos|admin|gold
+	// PIPE (|) separa campos
+	string data = "pinfo_data:";
+	
+	// Jogador ONLINE
+	if(target != -1) {
+		data += target_name + "|";                                    // 0: Nome
+		data += "Online|";                                            // 1: Status
+		data += (is_banned ? "Sim" : "NÃ£o") + "|";                   // 2: Banido?
+		data += (is_banned ? ban_reason : "N/A") + "|";              // 3: RazÃ£o do ban
+		data += (is_banned ? ban_expire : "N/A") + "|";              // 4: Expira ban
+		data += players[target].level + "|";                          // 5: NÃ­vel
+		data += players[target].xp + "|";                             // 6: XP
+		data += players[target].health + "/" + players[target].max_health + "|"; // 7: HP
+		data += players[target].map + "|";                            // 8: Mapa
+		data += players[target].x + "," + players[target].y + "|";   // 9: PosiÃ§Ã£o
+		data += (players[target].admin ? "Sim" : "NÃ£o") + "|";       // 10: Admin?
+		data += players[target].gold;                                 // 11: Ouro
+		
+		send_reliable_text(players[player_index].peer_id, data, 0);
+		debug_log("ADMIN: " + players[player_index].charname + " consultou info de " + target_name + " (online)");
+		return;
+	}
+	
+	// Jogador OFFLINE - buscar no sistema de arquivos
+	bool exists = file_exists("players/" + target_name + "/player.dat") || 
+	              file_exists("players/" + target_name + "/player.usr");
+	
+	if(!exists) {
+		send_admin_error(player_index, "pinfo", "Jogador '" + target_name + "' nÃ£o encontrado no sistema!");
+		return;
+	}
+	
+	// Verificar se Ã© admin
+	bool is_admin_player = file_exists("players/" + target_name + "/admin.usr");
+	
+	// Dados offline (campos indisponÃ­veis marcados como "?")
+	data += target_name + "|";                                    // 0: Nome
+	data += "Offline|";                                           // 1: Status
+	data += (is_banned ? "Sim" : "NÃ£o") + "|";                   // 2: Banido?
+	data += (is_banned ? ban_reason : "N/A") + "|";              // 3: RazÃ£o do ban
+	data += (is_banned ? ban_expire : "N/A") + "|";              // 4: Expira ban
+	data += "?|";                                                 // 5: NÃ­vel (desconhecido offline)
+	data += "?|";                                                 // 6: XP (desconhecido offline)
+	data += "?|";                                                 // 7: HP (desconhecido offline)
+	data += "?|";                                                 // 8: Mapa (desconhecido offline)
+	data += "?|";                                                 // 9: PosiÃ§Ã£o (desconhecido offline)
+	data += (is_admin_player ? "Sim" : "NÃ£o") + "|";             // 10: Admin?
+	data += "?";                                                  // 11: Ouro (desconhecido offline)
+	
+	send_reliable_text(players[player_index].peer_id, data, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " consultou info de " + target_name + " (offline)");
+}
+
+// Comando /kill - Matar jogador
+void cmd_kill(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "kill", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "kill", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "kill", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].health = 0;
+	players[target].dead = true;
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi morto por um administrador.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi morto.", 0);
+
+	broadcast_message_to_map(players[target].map, "playsound death.ogg " + players[target].x + " " + players[target].y);
+
+	debug_log("ADMIN: " + players[player_index].charname + " matou " + target_name);
+}
+
+// Comando /heal - Curar jogador
+void cmd_heal(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "heal", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "heal", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "heal", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	players[target].health = players[target].max_health;
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi curado por um administrador!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi curado.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " curou " + target_name);
+}
+
+// Comando /revive - Reviver jogador morto
+void cmd_revive(int player_index, string target_name) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "revive", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "revive", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "revive", "Jogador nÃ£o encontrado!");
+		return;
+	}
+
+	if(!players[target].dead) {
+		send_admin_error(player_index, "revive", "Jogador nÃ£o estÃ¡ morto!");
+		return;
+	}
+
+	players[target].dead = false;
+	players[target].health = players[target].max_health;
+
+	send_reliable_text(players[target].peer_id, "msg2 VocÃª foi revivido por um administrador!", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi revivido.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " reviveu " + target_name);
+}
+
+// Comando /freeze - Congelar jogo
+void cmd_freeze(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "freeze", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	game_frozen = true;
+
+	broadcast_all("msg2 O jogo foi congelado por um administrador.");
+	send_reliable_text(players[player_index].peer_id, "msg2 Jogo congelado.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " congelou o jogo");
+}
+
+// Comando /unfreeze - Descongelar jogo
+void cmd_unfreeze(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "unfreeze", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	game_frozen = false;
+
+	broadcast_all("msg2 O jogo foi descongelado.");
+	send_reliable_text(players[player_index].peer_id, "msg2 Jogo descongelado.", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " descongelou o jogo");
+}
+
+// Comando /n - Aviso global (notificaÃ§Ã£o)
+void cmd_notify(int player_index, string message) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "n", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(message.length() == 0 || message.length() > 500) {
+		send_admin_error(player_index, "n", "Mensagem invÃ¡lida!");
+		return;
+	}
+
+	string formatted = "[AVISO] " + message;
+	broadcast_all("msg2 " + formatted);
+
+	debug_log("ADMIN: " + players[player_index].charname + " enviou aviso: " + message);
+}
+
+// Comando /regalos - Dar presente para todos os jogadores online
+void cmd_regalos(int player_index, string item_name, int quantity = 1) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "regalos", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "regalos", "Nome de item invÃ¡lido!");
+		return;
+	}
+
+	if(quantity < 1 || quantity > ADMIN_MAX_ITEM_QTY) {
+		send_admin_error(player_index, "regalos", "Quantidade invÃ¡lida!");
+		return;
+	}
+
+	int count = 0;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].online && !players[i].dead) {
+			add_item_to_player(i, item_name, quantity);
+			send_reliable_text(players[i].peer_id, "msg2 VocÃª recebeu um presente: " + quantity + "x " + item_name + "!", 0);
+			count++;
+		}
+	}
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Presente dado para " + count + " jogadores.", 0);
+	eadm(players[player_index].charname + " deu " + quantity + "x " + item_name + " para todos!");
+
+	debug_log("ADMIN: " + players[player_index].charname + " deu presente para " + count + " jogadores");
+}
+
+// Comando /xps - Toggle XP especial
+void cmd_xps(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "xps", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	special_xp_enabled = !special_xp_enabled;
+
+	string status = special_xp_enabled ? "ativado" : "desativado";
+	broadcast_all("msg2 XP especial foi " + status + "!");
+	send_reliable_text(players[player_index].peer_id, "msg2 XP especial " + status + ".", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " " + status + " XP especial");
+}
+
+// Comando /pvp - Toggle PvP global
+void cmd_pvp(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "pvp", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	pvp_enabled = !pvp_enabled;
+
+	string status = pvp_enabled ? "ativado" : "desativado";
+	broadcast_all("msg2 PvP global foi " + status + "!");
+	send_reliable_text(players[player_index].peer_id, "msg2 PvP global " + status + ".", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " " + status + " PvP global");
+}
+
+// Comando /invis - Modo invisÃ­vel
+void cmd_invis(int player_index) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "invis", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	players[player_index].invisible = !players[player_index].invisible;
+
+	string status = players[player_index].invisible ? "ativado" : "desativado";
+	send_reliable_text(players[player_index].peer_id, "msg2 Modo invisÃ­vel " + status + ".", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " " + status + " modo invisÃ­vel");
+}
+
+// Comando /god - Modo invencÃ­vel
+void cmd_god(int player_index) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "god", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	players[player_index].godmode = !players[player_index].godmode;
+
+	string status = players[player_index].godmode ? "ativado" : "desativado";
+	send_reliable_text(players[player_index].peer_id, "msg2 Modo deus " + status + ".", 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " " + status + " modo deus");
+}
+
+// Comando /serverstats - EstatÃ­sticas do servidor
+void cmd_serverstats(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "serverstats", "VocÃª nÃ£o tem permissÃ£o!");
+		return;
+	}
+
+	int online_count = 0;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].online) online_count++;
+	}
+
+	string stats = "=== EstatÃ­sticas do Servidor ===";
+	stats += " Jogadores online: " + online_count + "/" + players.length();
+	stats += " Mapas carregados: " + server_maps.length();
+	stats += " PvP: " + (pvp_enabled ? "Sim" : "NÃ£o");
+	stats += " XP especial: " + (special_xp_enabled ? "Sim" : "NÃ£o");
+	stats += " Jogo congelado: " + (game_frozen ? "Sim" : "NÃ£o");
+
+	send_reliable_text(players[player_index].peer_id, "msg2 " + stats, 0);
+}
+
+// Comando /forcesave - ForÃ§ar salvar todos os jogadores
+void cmd_forcesave(int player_index) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "forcesave", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	int saved = 0;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].online) {
+			save_player(i);
+			saved++;
+		}
+	}
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Salvos " + saved + " jogadores.", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " forÃ§ou salvamento de " + saved + " jogadores");
+}
+
+// Comando /reload - Recarregar configuraÃ§Ãµes
+void cmd_reload(int player_index) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "reload", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	load_server_config();
+
+	send_reliable_text(players[player_index].peer_id, "msg2 ConfiguraÃ§Ãµes recarregadas.", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " recarregou configuraÃ§Ãµes");
+}
+
+// Comando /addcargo - Adicionar cargo a jogador
+void cmd_addcargo(int player_index, string target_name, string role) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "addcargo", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "addcargo", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	string[] valid_roles = {"dev", "admin", "moderator", "builder", "event_manager", "translator", "vip"};
+	bool valid = false;
+	for(uint i = 0; i < valid_roles.length(); i++) {
+		if(role == valid_roles[i]) {
+			valid = true;
+			break;
+		}
+	}
+
+	if(!valid) {
+		send_admin_error(player_index, "addcargo", "Cargo invÃ¡lido! Use: dev, admin, moderator, builder, event_manager, translator, vip");
+		return;
+	}
+
+	if(add_role(target_name, role)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Cargo " + role + " adicionado a " + target_name, 0);
+		
+		int target = get_player_index_from(target_name);
+		if(target != -1) {
+			send_reliable_text(players[target].peer_id, "msg2 VocÃª recebeu o cargo: " + role, 0);
+		}
+
+		debug_log("ADMIN: " + players[player_index].charname + " deu cargo " + role + " para " + target_name);
+	} else {
+		send_admin_error(player_index, "addcargo", "Erro ao adicionar cargo.");
+	}
+}
+
+// Comando /removecargo - Remover cargo de jogador
+void cmd_removecargo(int player_index, string target_name, string role) {
+	if(!has_role(players[player_index].charname, "dev")) {
+		send_admin_error(player_index, "removecargo", "Apenas devs podem usar este comando!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "removecargo", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	if(remove_role(target_name, role)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Cargo " + role + " removido de " + target_name, 0);
+		
+		int target = get_player_index_from(target_name);
+		if(target != -1) {
+			send_reliable_text(players[target].peer_id, "msg2 Seu cargo foi removido: " + role, 0);
+		}
+
+		debug_log("ADMIN: " + players[player_index].charname + " removeu cargo " + role + " de " + target_name);
+	} else {
+		send_admin_error(player_index, "removecargo", "Erro ao remover cargo.");
+	}
+}
+
+// Comando /cargos - Ver cargos de um jogador
+void cmd_cargos(int player_index, string target_name) {
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "cargos", "Nome de jogador invÃ¡lido!");
+		return;
+	}
+
+	string[] roles = get_player_roles(target_name);
+
+	if(roles.length() == 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " nÃ£o tem cargos.", 0);
+	} else {
+		string role_list = join(roles, ", ");
+		send_reliable_text(players[player_index].peer_id, "msg2 Cargos de " + target_name + ": " + role_list, 0);
+	}
+}
+
+// Comando /listadmins - Listar equipe do servidor
+void cmd_listadmins(int player_index) {
+	string[] admins = get_all_staff();
+
+	if(admins.length() == 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Nenhum membro da equipe encontrado.", 0);
+	} else {
+		string list = "=== Equipe do Servidor ===";
+		for(uint i = 0; i < admins.length(); i++) {
+			list += " " + admins[i];
+		}
+		send_reliable_text(players[player_index].peer_id, "msg2 " + list, 0);
+	}
+}
+
+// Helper para formatar uptime
+string format_uptime(uint64 milliseconds) {
+	int seconds = milliseconds / 1000;
+	int minutes = seconds / 60;
+	int hours = minutes / 60;
+	int days = hours / 24;
+
+	hours = hours % 24;
+	minutes = minutes % 60;
+	seconds = seconds % 60;
+
+	return days + "d " + hours + "h " + minutes + "m " + seconds + "s";
+}
+
+// ============================================================================
+// ðŸ”§ CONSTRUTOR DE ITENS - Item Builder Tool (Admin Only)
+// ============================================================================
+
+// Comando /create_item_tool - Criar item generico (consumivel, armadura, material, melee)
+// Formato legado aceito: type|name|display|desc|category|damage|defense|heal|mp|weight|value|rarity|sound|extra1|extra2
+// Campos efetivamente persistidos no schema BGT: name, msg(desc/display), health(heal), audio(sound)
+// Helpers de validacao para Item Builder
+bool item_builder_is_blank(const string&in value) {
+    return value.trim_whitespace() == "";
+}
+
+void item_builder_send_empty_field_error(int player_index, const string&in command_name, const string&in field_name) {
+    send_admin_error(player_index, command_name, "Campo vazio: " + field_name + ".");
+}
+
+void item_builder_send_invalid_field_error(int player_index, const string&in command_name, const string&in field_name, const string&in detail = "") {
+    string msg = "Dados invalidos: " + field_name;
+    if(detail != "") msg += " (" + detail + ")";
+    msg += ".";
+    send_admin_error(player_index, command_name, msg);
+}
+
+bool item_builder_is_safe_payload(const string&in payload, int max_length = 4096) {
+    if(payload.length() == 0) return false;
+    if(int(payload.length()) > max_length) return false;
+    if(payload.find("\r") >= 0 || payload.find("\n") >= 0) return false;
+    return true;
+}
+
+bool item_builder_is_valid_identifier(const string&in value) {
+    string v = value.trim_whitespace();
+    if(v == "" || v.find(" ") >= 0) return false;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        bool is_letter = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
+        bool is_digit = (ch >= "0" && ch <= "9");
+        bool is_ok = is_letter || is_digit || ch == "_";
+        if(!is_ok) return false;
+    }
+    return true;
+}
+
+bool item_builder_is_valid_number_string(const string&in value, bool allow_decimal) {
+    string v = value.trim_whitespace();
+    if(v == "") return false;
+    bool has_digit = false;
+    int dot_count = 0;
+    for(uint i = 0; i < v.length(); i++) {
+        string ch = v.substr(i, 1);
+        if(ch >= "0" && ch <= "9") {
+            has_digit = true;
+            continue;
+        }
+        if(ch == "-" && i == 0) continue;
+        if(allow_decimal && ch == ".") {
+            dot_count++;
+            if(dot_count > 1) return false;
+            continue;
+        }
+        return false;
+    }
+    return has_digit;
+}
+
+bool item_builder_parse_int_field(int player_index, const string&in command_name, const string&in field_name, const string&in raw_value, int min_value, int max_value, int&out parsed_value) {
+    if(!item_builder_is_valid_number_string(raw_value, false)) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "deve ser numero inteiro");
+        return false;
+    }
+    parsed_value = parse_int(raw_value.trim_whitespace());
+    if(parsed_value < min_value || parsed_value > max_value) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "fora do intervalo");
+        return false;
+    }
+    return true;
+}
+
+bool item_builder_parse_float_field(int player_index, const string&in command_name, const string&in field_name, const string&in raw_value, double min_value, double max_value, double&out parsed_value) {
+    if(!item_builder_is_valid_number_string(raw_value, true)) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "deve ser numero");
+        return false;
+    }
+    parsed_value = parse_float(raw_value.trim_whitespace());
+    if(parsed_value < min_value || parsed_value > max_value) {
+        item_builder_send_invalid_field_error(player_index, command_name, field_name, "fora do intervalo");
+        return false;
+    }
+    return true;
+}
+
+void item_builder_ensure_metadata_tables() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    string q_types = """
+        CREATE TABLE IF NOT EXISTS item_builder_types (
+            type_name TEXT PRIMARY KEY
+        );
+    """;
+    string q_rarities = """
+        CREATE TABLE IF NOT EXISTS item_builder_rarities (
+            rarity_name TEXT PRIMARY KEY
+        );
+    """;
+    string q_categories = """
+        CREATE TABLE IF NOT EXISTS item_builder_categories (
+            item_type TEXT NOT NULL,
+            category_name TEXT NOT NULL,
+            PRIMARY KEY (item_type, category_name)
+        );
+    """;
+    bancoJogo.execute(q_types);
+    bancoJogo.execute(q_rarities);
+    bancoJogo.execute(q_categories);
+
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES ('weapon'),('armor'),('consumable'),('misc');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_rarities(rarity_name) VALUES ('common'),('uncommon'),('rare'),('epic'),('legendary');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('weapon','sword'),('weapon','dagger'),('weapon','axe'),('weapon','hammer'),('weapon','firearm');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('armor','head'),('armor','chest'),('armor','legs'),('armor','boots'),('armor','gloves');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('consumable','potion'),('consumable','food'),('consumable','drink');");
+    bancoJogo.execute("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES ('misc','material'),('misc','quest'),('misc','currency'),('misc','junk'),('misc','legacy');");
+}
+
+string item_builder_join_values(const string&in query, const string&in separator = ",") {
+    if(!database_initialized || bancoJogo is null) return "";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return "";
+
+    string joined_values = "";
+    while(stmt.step() == SQLITE_ROW) {
+        string value = stmt.column_text(0).trim_whitespace();
+        if(value == "") continue;
+        if(joined_values != "") joined_values += separator;
+        joined_values += value;
+    }
+    return joined_values;
+}
+
+bool item_builder_is_protected_type(const string&in type_name) {
+    return type_name == "weapon" || type_name == "armor" || type_name == "consumable" || type_name == "misc";
+}
+
+bool item_builder_is_protected_rarity(const string&in rarity_name) {
+    return rarity_name == "common" || rarity_name == "uncommon" || rarity_name == "rare" || rarity_name == "epic" || rarity_name == "legendary";
+}
+
+bool item_builder_is_protected_category(const string&in item_type, const string&in category_name) {
+    if(item_type == "weapon") {
+        return category_name == "sword" || category_name == "dagger" || category_name == "axe" || category_name == "hammer" || category_name == "firearm";
+    }
+    if(item_type == "armor") {
+        return category_name == "head" || category_name == "chest" || category_name == "legs" || category_name == "boots" || category_name == "gloves";
+    }
+    if(item_type == "consumable") {
+        return category_name == "potion" || category_name == "food" || category_name == "drink";
+    }
+    if(item_type == "misc") {
+        return category_name == "material" || category_name == "quest" || category_name == "currency" || category_name == "junk" || category_name == "legacy";
+    }
+    return false;
+}
+
+void cmd_item_builder_meta(int player_index) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "item_builder_meta", "Permissao negada.");
+        return;
+    }
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] /item_builder_meta: banco nao inicializado.", 0);
+        return;
+    }
+
+    create_items_tables();
+    item_builder_ensure_metadata_tables();
+
+    string types = item_builder_join_values("SELECT type_name FROM item_builder_types ORDER BY type_name ASC;");
+    string rarities = item_builder_join_values("SELECT rarity_name FROM item_builder_rarities ORDER BY rarity_name ASC;");
+    string cat_weapon = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='weapon' ORDER BY category_name ASC;");
+    string cat_armor = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='armor' ORDER BY category_name ASC;");
+    string cat_consumable = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='consumable' ORDER BY category_name ASC;");
+    string cat_misc = item_builder_join_values("SELECT category_name FROM item_builder_categories WHERE item_type='misc' ORDER BY category_name ASC;");
+
+    string payload = "ITEM_BUILDER_META|" + types + "|" + rarities + "|" + cat_weapon + "|" + cat_armor + "|" + cat_consumable + "|" + cat_misc;
+    send_reliable_text(players[player_index].peer_id, "msg2 " + payload, 0);
+}
+
+void cmd_item_builder_meta_list(int player_index) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_list_meta", "Permissao negada.");
+        return;
+    }
+    cmd_item_builder_meta(player_index);
+}
+
+void cmd_item_builder_add_type(int player_index, string type_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_type", "Permissao negada.");
+        return;
+    }
+    type_name = type_name.trim_whitespace();
+    if(type_name == "" || !item_builder_is_valid_identifier(type_name)) {
+        send_admin_error(player_index, "ib_add_type", "Tipo invalido.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES (?);");
+    if(@stmt is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, type_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao adicionar tipo: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Tipo adicionado no catalogo: " + type_name, 0);
+}
+
+void cmd_item_builder_del_type(int player_index, string type_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_type", "Permissao negada.");
+        return;
+    }
+    type_name = type_name.trim_whitespace();
+    if(type_name == "" || !item_builder_is_valid_identifier(type_name)) {
+        send_admin_error(player_index, "ib_del_type", "Tipo invalido.");
+        return;
+    }
+    if(item_builder_is_protected_type(type_name)) {
+        send_admin_error(player_index, "ib_del_type", "Tipo padrao protegido. Nao pode ser removido.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt1 = bancoJogo.prepare("DELETE FROM item_builder_categories WHERE item_type = ?;");
+    if(@stmt1 !is null) {
+        stmt1.bind_text(1, type_name);
+        stmt1.step();
+    }
+    sqlite3statement@ stmt2 = bancoJogo.prepare("DELETE FROM item_builder_types WHERE type_name = ?;");
+    if(@stmt2 is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt2.bind_text(1, type_name);
+    if(stmt2.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao remover tipo: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Tipo removido do catalogo: " + type_name, 0);
+}
+
+void cmd_item_builder_add_rarity(int player_index, string rarity_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_rarity", "Permissao negada.");
+        return;
+    }
+    rarity_name = rarity_name.trim_whitespace();
+    if(rarity_name == "" || !item_builder_is_valid_identifier(rarity_name)) {
+        send_admin_error(player_index, "ib_add_rarity", "Raridade invalida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_rarities(rarity_name) VALUES (?);");
+    if(@stmt is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, rarity_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao adicionar raridade: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Raridade adicionada no catalogo: " + rarity_name, 0);
+}
+
+void cmd_item_builder_del_rarity(int player_index, string rarity_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_rarity", "Permissao negada.");
+        return;
+    }
+    rarity_name = rarity_name.trim_whitespace();
+    if(rarity_name == "" || !item_builder_is_valid_identifier(rarity_name)) {
+        send_admin_error(player_index, "ib_del_rarity", "Raridade invalida.");
+        return;
+    }
+    if(item_builder_is_protected_rarity(rarity_name)) {
+        send_admin_error(player_index, "ib_del_rarity", "Raridade padrao protegida. Nao pode ser removida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM item_builder_rarities WHERE rarity_name = ?;");
+    if(@stmt is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, rarity_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao remover raridade: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Raridade removida do catalogo: " + rarity_name, 0);
+}
+
+void cmd_item_builder_add_category(int player_index, string item_type, string category_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_add_category", "Permissao negada.");
+        return;
+    }
+    item_type = item_type.trim_whitespace();
+    category_name = category_name.trim_whitespace();
+    if(item_type == "" || !item_builder_is_valid_identifier(item_type)) {
+        send_admin_error(player_index, "ib_add_category", "Tipo invalido.");
+        return;
+    }
+    if(category_name == "" || !item_builder_is_valid_identifier(category_name)) {
+        send_admin_error(player_index, "ib_add_category", "Categoria invalida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+
+    sqlite3statement@ type_stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_types(type_name) VALUES (?);");
+    if(@type_stmt !is null) {
+        type_stmt.bind_text(1, item_type);
+        type_stmt.step();
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_builder_categories(item_type, category_name) VALUES (?, ?);");
+    if(@stmt is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, item_type);
+    stmt.bind_text(2, category_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao adicionar categoria: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Categoria adicionada: " + item_type + " -> " + category_name, 0);
+}
+
+void cmd_item_builder_del_category(int player_index, string item_type, string category_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "ib_del_category", "Permissao negada.");
+        return;
+    }
+    item_type = item_type.trim_whitespace();
+    category_name = category_name.trim_whitespace();
+    if(item_type == "" || !item_builder_is_valid_identifier(item_type)) {
+        send_admin_error(player_index, "ib_del_category", "Tipo invalido.");
+        return;
+    }
+    if(category_name == "" || !item_builder_is_valid_identifier(category_name)) {
+        send_admin_error(player_index, "ib_del_category", "Categoria invalida.");
+        return;
+    }
+    if(item_builder_is_protected_category(item_type, category_name)) {
+        send_admin_error(player_index, "ib_del_category", "Categoria padrao protegida. Nao pode ser removida.");
+        return;
+    }
+    item_builder_ensure_metadata_tables();
+    sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM item_builder_categories WHERE item_type = ? AND category_name = ?;");
+    if(@stmt is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro SQL: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    stmt.bind_text(1, item_type);
+    stmt.bind_text(2, category_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao remover categoria: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    send_reliable_text(players[player_index].peer_id, "msg2 Categoria removida: " + item_type + " -> " + category_name, 0);
+}
+void cmd_create_item_tool(int player_index, string data) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "create_item_tool", "Permissao negada. Apenas staff de construcao pode criar itens.");
+        return;
+    }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
+    if(!item_builder_is_safe_payload(data)) {
+        send_admin_error(player_index, "create_item_tool", "Payload invalido (tamanho ou quebra de linha).");
+        return;
+    }
+
+    string[] parts = data.split("|");
+    if(parts.length() < 2) {
+        send_admin_error(player_index, "create_item_tool", "Dados insuficientes. Esperado ao menos type|name.");
+        return;
+    }
+
+    string item_type = parts[0].trim_whitespace();
+    string name = parts[1].trim_whitespace();
+    string display = parts.length() > 2 ? parts[2].trim_whitespace() : "";
+    string desc = parts.length() > 3 ? parts[3].trim_whitespace() : "";
+    string sound_file = parts.length() > 12 ? parts[12].trim_whitespace() : "";
+
+    int heal = 0;
+
+    if(item_builder_is_blank(item_type) || item_builder_is_blank(name)) {
+        if(item_builder_is_blank(item_type)) item_builder_send_empty_field_error(player_index, "create_item_tool", "type");
+        else item_builder_send_empty_field_error(player_index, "create_item_tool", "name");
+        return;
+    }
+
+    if(!item_builder_is_valid_identifier(item_type)) {
+        item_builder_send_invalid_field_error(player_index, "create_item_tool", "type", "use letras, numeros e underscore");
+        return;
+    }
+
+    if(parts.length() > 7 && !item_builder_is_blank(parts[7])) {
+        if(!item_builder_parse_int_field(player_index, "create_item_tool", "heal", parts[7], 0, 100000, heal)) return;
+    }
+
+    if(!item_builder_is_valid_identifier(name)) {
+        item_builder_send_invalid_field_error(player_index, "create_item_tool", "name", "use letras, numeros e underscore");
+        return;
+    }
+
+    if(desc == "") desc = display;
+    if(desc == "") desc = name;
+
+    bool success = create_item(
+        name, display, desc, item_type, "legacy",
+        0, 0, heal, 0,
+        true, 999, 1.0, 0,
+        "common", 1.0, false, true, true,
+        "", sound_file
+    );
+
+    if(success) {
+        load_items_from_database();
+        string msg = "Item criado com sucesso: " + display + " (" + name + ")";
+        send_reliable_text(players[player_index].peer_id, "msg2 " + msg, 0);
+        debug_log("ITEM BUILDER: " + players[player_index].charname + " criou item " + name);
+    } else {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao criar item. O ID '" + name + "' ja existe?", 0);
+    }
+}
+// Comando /create_weapon_tool - Criar arma de fogo (formato weapons_list.db)
+// Formato: name=ammo=sound_shoot=sound_impact=sound_draw=sound_reload=damage=distance=ammo_total=ammo_cantity=speed=speed_burst=speed_loading=require_ammo=enable_burst=is_dropable=sound_impact_on_corpse=sound_unload=sound_mode1=sound_mode2=ammo_cantity_descount=sound_shoot_dist=degradation_point
+void cmd_create_weapon_tool(int player_index, string data) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "create_weapon_tool", "Permissao negada. Apenas staff de construcao pode criar armas.");
+        return;
+    }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
+    if(!file_exists("weapons_list.db")) {
+        file f;
+        f.open("weapons_list.db", "w");
+        f.write("// weapons_list.db - Banco de Dados de Armas\r\n");
+        f.write("// Formato: name=ammo=sound_shoot=sound_impact=sound_draw=sound_reload=damage=distance=ammo_total=ammo_cantity=speed=speed_burst=speed_loading=require_ammo=enable_burst=is_dropable=sound_impact_on_corpse=sound_unload=sound_mode1=sound_mode2=ammo_cantity_descount=sound_shoot_dist=degradation_point\r\n\r\n");
+        f.close();
+    }
+
+    if(!item_builder_is_safe_payload(data, 8192)) {
+        send_admin_error(player_index, "create_weapon_tool", "Payload invalido (tamanho ou quebra de linha).");
+        return;
+    }
+
+    string[] parts = data.split("=");
+    if(parts.length() < 23) {
+        send_admin_error(player_index, "create_weapon_tool", "Dados insuficientes. Esperado 23 campos separados por =");
+        debug_log("Weapon Builder: dados insuficientes: " + parts.length() + " campos");
+        return;
+    }
+
+    string weapon_name = parts[0].trim_whitespace();
+    string ammo_name = parts[1].trim_whitespace();
+    string shoot_sound = parts[2];
+    int damage = 0;
+    int distance = 0;
+
+    if(weapon_name == "" || !item_builder_is_valid_identifier(weapon_name)) {
+        send_admin_error(player_index, "create_weapon_tool", "Nome da arma invalido.");
+        return;
+    }
+    if(ammo_name == "" || !item_builder_is_valid_identifier(ammo_name)) {
+        send_admin_error(player_index, "create_weapon_tool", "Nome da municao invalido.");
+        return;
+    }
+    if(!item_builder_parse_int_field(player_index, "create_weapon_tool", "damage", parts[6], 1, 100000, damage)) return;
+    if(!item_builder_parse_int_field(player_index, "create_weapon_tool", "distance", parts[7], 1, 100000, distance)) return;
+
+    file check;
+    check.open("weapons_list.db", "r");
+    string existing = check.read();
+    check.close();
+
+    if(existing.find(weapon_name + "=") >= 0) {
+        send_reliable_text(players[player_index].peer_id, "msg2 âŒ Arma '" + weapon_name + "' jÃ¡ existe no banco de dados.", 0);
+        return;
+    }
+
+    file f;
+    f.open("weapons_list.db", "a");
+    f.write(data + "\r\n");
+    f.close();
+
+    weapons_list.resize(0);
+    load_weapons();
+
+    string display_name = string_replace(weapon_name, "_", " ", true);
+    string description = "Arma de fogo. Municao: " + ammo_name + ". Alcance: " + distance + ".";
+    int value = damage * 8;
+    if(value < 20) value = 20;
+
+    bool created_in_db = create_item(
+        weapon_name, display_name, description, "weapon", "firearm",
+        damage, 0, 0, 0,
+        false, 1, 2.0, value,
+        "common", 0.0, false, true, true,
+        shoot_sound, shoot_sound
+    );
+
+    if(!created_in_db) {
+        string upsert_query = """
+            UPDATE items
+            SET audio = ?, msg = ?, health = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE name = ?;
+        """;
+        sqlite3statement@ up_stmt = bancoJogo.prepare(upsert_query);
+        if(@up_stmt != null) {
+            up_stmt.bind_text(1, shoot_sound == "" ? "none" : shoot_sound);
+            up_stmt.bind_text(2, description);
+            up_stmt.bind_text(3, weapon_name);
+            up_stmt.step();
+        }
+    }
+
+    load_items_from_database();
+
+    string msg = "âœ… Arma criada com sucesso: " + weapon_name;
+    send_reliable_text(players[player_index].peer_id, "msg2 " + msg, 0);
+    debug_log("WEAPON BUILDER: " + players[player_index].charname + " criou arma " + weapon_name);
+    send_reliable_text(players[player_index].peer_id, "msg2 âš ï¸ Catalogo SQLite sincronizado. Jogadores podem precisar reconectar para runtime de arma.", 0);
+}
+
+// Comando /list_items - Listar itens disponÃ­veis
+void cmd_list_items(int player_index) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "list_items", "Permissao negada.");
+        return;
+    }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro: banco de dados nÃ£o inicializado.", 0);
+        return;
+    }
+
+    // Garante que a tabela exista mesmo em cenÃ¡rios de bootstrap parcial
+    create_items_tables();
+
+    string list_items = "=== Itens do Banco de Dados ===\n";
+
+    string query = "SELECT name, msg, audio FROM items ORDER BY name LIMIT 200;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+
+    int count = 0;
+    if(@stmt != null) {
+        while(stmt.step() == SQLITE_ROW) {
+            string name = stmt.column_text(0);
+            string msg = stmt.column_text(1);
+            string audio = stmt.column_text(2);
+            string display = msg;
+            if(display == "") display = name;
+            list_items += "[legacy] " + name + " - " + display;
+            if(audio != "" && audio != "none") {
+                list_items += " (audio: " + audio + ")";
+            }
+            list_items += "\n";
+            count++;
+        }
+    }
+    else {
+        // Se a query falhou (ex: tabela ausente/corrompida), retorna erro claro sem derrubar servidor
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao listar itens: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+
+    if(count == 0) {
+        list_items += "(Nenhum item cadastrado)\n";
+    }
+
+    list_items += "\n(Fonte unica: tabela items do SQLite / database/ig.db)\n";
+    send_reliable_text(players[player_index].peer_id, "msg2 " + list_items, 0);
+}
+
+// Comando /edit_item_tool - Editar item existente no catalogo SQLite
+// Formato aceito (compat): name|display|desc|type|category|damage|defense|heal|mp|weight|value|rarity|sound|max_stack|drop_rate
+// Campos efetivamente persistidos no schema BGT: msg(desc/display), audio(sound), health(heal)
+void cmd_edit_item_tool(int player_index, string data) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "edit_item_tool", "Permissao negada. Apenas staff de construcao pode editar itens.");
+        return;
+    }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro: banco de dados nao inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
+    if(!item_builder_is_safe_payload(data)) {
+        send_admin_error(player_index, "edit_item_tool", "Payload invalido (tamanho ou quebra de linha).");
+        return;
+    }
+
+    string[] raw_parts = data.split("|");
+    if(raw_parts.length() < 1) {
+        send_admin_error(player_index, "edit_item_tool", "Dados insuficientes. Campo name obrigatorio ausente.");
+        return;
+    }
+    string[] parts(15);
+    for(uint i = 0; i < parts.length(); i++) parts[i] = "";
+    for(uint i = 0; i < raw_parts.length() && i < parts.length(); i++) {
+        parts[i] = raw_parts[i];
+    }
+
+    string name = parts[0].trim_whitespace();
+    if(name == "" || !item_builder_is_valid_identifier(name)) {
+        item_builder_send_invalid_field_error(player_index, "edit_item_tool", "name", "id invalido");
+        return;
+    }
+
+    string exists_query = "SELECT id, msg, audio, health FROM items WHERE name = ? LIMIT 1;";
+    sqlite3statement@ exists_stmt = bancoJogo.prepare(exists_query);
+    if(@exists_stmt == null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao validar item: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    exists_stmt.bind_text(1, name);
+    if(exists_stmt.step() != SQLITE_ROW) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Item nao encontrado no catalogo: " + name, 0);
+        return;
+    }
+
+    string msg_value = exists_stmt.column_text(1);
+    string audio_value = exists_stmt.column_text(2);
+    double health_value = exists_stmt.column_double(3);
+
+    if(!item_builder_is_blank(parts[2])) {
+        msg_value = parts[2].trim_whitespace();
+    } else if(!item_builder_is_blank(parts[1])) {
+        msg_value = parts[1].trim_whitespace();
+    }
+    if(!item_builder_is_blank(parts[12])) {
+        audio_value = parts[12].trim_whitespace();
+    }
+    if(!item_builder_is_blank(parts[7])) {
+        int heal = 0;
+        if(!item_builder_parse_int_field(player_index, "edit_item_tool", "heal", parts[7], 0, 100000, heal)) return;
+        health_value = heal;
+    }
+
+    if(item_builder_is_blank(msg_value)) {
+        item_builder_send_empty_field_error(player_index, "edit_item_tool", "desc");
+        return;
+    }
+
+    if(audio_value == "") audio_value = "none";
+
+    string query = "UPDATE items SET msg = ?, audio = ?, health = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao preparar UPDATE: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+
+    stmt.bind_text(1, msg_value);
+    stmt.bind_text(2, audio_value);
+    stmt.bind_double(3, health_value);
+    stmt.bind_text(4, name);
+
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao editar item: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+
+    load_items_from_database();
+    send_reliable_text(players[player_index].peer_id, "msg2 Item atualizado com sucesso: " + name, 0);
+    debug_log("ITEM BUILDER: " + players[player_index].charname + " editou item " + name);
+}
+// Comando /delete_item_tool - Excluir item do catalogo SQLite
+void cmd_delete_item_tool(int player_index, string item_name) {
+    if(!can_access_item_builder(player_index)) {
+        send_admin_error(player_index, "delete_item_tool", "Permissao negada. Apenas staff de construcao pode excluir itens.");
+        return;
+    }
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro: banco de dados nÃ£o inicializado.", 0);
+        return;
+    }
+    create_items_tables();
+
+    item_name = item_name.trim_whitespace();
+    if(item_name == "") {
+        send_admin_error(player_index, "delete_item_tool", "Nome de item invalido.");
+        return;
+    }
+
+    string exists_query = "SELECT id FROM items WHERE name = ? LIMIT 1;";
+    sqlite3statement@ exists_stmt = bancoJogo.prepare(exists_query);
+    if(@exists_stmt == null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao validar item: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+    exists_stmt.bind_text(1, item_name);
+    if(exists_stmt.step() != SQLITE_ROW) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Item nao encontrado no catalogo: " + item_name, 0);
+        return;
+    }
+
+    string query = "DELETE FROM items WHERE name = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao preparar DELETE: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+
+    stmt.bind_text(1, item_name);
+    if(stmt.step() != SQLITE_DONE) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Erro ao excluir item: " + bancoJogo.get_last_error_text(), 0);
+        return;
+    }
+
+    load_items_from_database();
+    send_reliable_text(players[player_index].peer_id, "msg2 Item removido do catalogo: " + item_name, 0);
+    send_reliable_text(players[player_index].peer_id, "msg2 Nota: se for arma legado, ela ainda pode existir no weapons_list.db.", 0);
+    debug_log("ITEM BUILDER: " + players[player_index].charname + " removeu item " + item_name);
+}
+

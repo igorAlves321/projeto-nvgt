@@ -1,0 +1,1623 @@
+network net;
+network_event event;
+bool encryption=true;
+bool connect =false, connected =false, term =false, relogin =false;
+double idversion=1.0;
+uint peer_id;
+int connecttime=5000;
+timer connecttimer;
+
+void netloop(){
+	outrosloop();
+	event=net.request();
+	if(event.type==0) return;
+	if(event.type==event_disconnect&&event.peer_id==peer_id){
+		if(!exiting) {
+			speak(pu.get_value("A conexão com este universo foi perdida..."));
+			writeprefs();
+			reset();
+			wait(1000);
+			relogin =true;
+		}
+	}
+	if(event.type==event_receive and event.channel==0 and event.peer_id==peer_id){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(parsed[0]=="pong"){
+			if(!forcepinging) pingtimer.restart();
+			if(forcepinging){
+				forcepinging=false;
+				add_add_item("avisos", pu.get_value("Seu ping é de")+" "+pingtimer.elapsed+" ms.");
+				p.play_stationary("pingstop.ogg",false);
+			}
+		}
+		else if(parsed[0]=="remplayer"){
+			if(parsed[1]!=un)remplayer(parsed[1]);
+		}
+		else if(parsed[0]=="terminate" && parsed.length()==2) {
+			if(parsed[1]=="ok") {
+				if(exiting) {
+					connected =false;
+					term =true;
+				}
+			}
+			if(parsed[1]=="relogin") {
+				if(relogin) {
+					wait(500);
+				}
+			}
+		}
+else if(parsed[0]=="upl"&&parsed.length()>3)update_player(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]));
+else if(parsed[0]=="pp"&&parsed.length()>2){
+for(uint i=0;i<players.length();i++){
+if(players[i].charname==parsed[1])players[i].pacifico=string_to_number(parsed[2]);
+}
+}
+else if(parsed[0]=="playerbeep"&&parsed.length>2){
+for(uint i=0; i<players.length; i++){
+if(players[i].charname==parsed[1]) players[i].beeping=string_to_number(parsed[2]);
+}
+}
+else if (parsed[0]=="update_player2") update_player2(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]));
+else if(parsed[0]=="s" && parsed.length()==5){
+int x=string_to_number(parsed[3]), y=string_to_number(parsed[4]);
+update_player(string_to_number(parsed[1]), x, y);
+steps.play_2d(parsed[2], me.x, me.y, x, y, false);
+}
+else if(parsed[0]=="hablarbot"){
+add_add_item("canal_local", pu.get_value(parsed[1])+" "+pu.get_value("lhe diz:")+" "+pu.get_value(string_replace(pegar_mensagem(), parsed[0]+" "+parsed[1]+" ", "", false)));
+			p.play_stationary("chatmap.ogg", false);
+}
+else if(parsed[0]=="local"&&parsed.length()>1){
+string texto=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+send_unreliable(event.peer_id, "/falarnomapa "+texto, 0);
+}
+else if(parsed[0] =="listplayers" && parsed.length()>=1) {
+string data =string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+playersmenu(data);
+}
+else if(parsed[0]=="comida"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+comidas2(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="opcioncomida"){
+comida();
+}
+else if(parsed[0]=="married"&&parsed.length()>=1){
+marriedwho=parsed[1];
+writeprefs();
+}
+else if(parsed[0]=="is_married"&&parsed.length()>1){
+if(parsed[1]=="soltero"){
+marriedwho=marriedmenu(pu.get_value("Com quem você deseja se casar?"));
+if(marriedwho.length()>0){
+send_unreliable(event.peer_id, "confirmmarried "+marriedwho+" "+un, 0);
+}
+}
+else if(parsed[1]=="casado"){
+divorcedmenu(parsed[2]);
+}
+}
+else if(parsed[0]=="confirm"&&parsed.length()>=1){
+string name=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+confirmmenu(name);
+}
+else if(parsed[0]=="confirmdivorc"&&parsed.length()>=1){
+string name=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+confirmmenu2(name);
+}
+else if(parsed[0]=="open_store"){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+if(content==""){
+return;
+}
+else{
+open_store(delinear(content));
+}
+}
+else if(parsed[0]=="manage_stores"&&parsed.length()>1){
+manage_store(string_replace(pegar_mensagem(), parsed[0]+" ", "", true));
+}
+else if(parsed[0]=="show_store"&&parsed.length()>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" "+parsed[1]+" ", "", true);
+if(content==""){
+string item=v.input(pu.get_value("Esta loja está vazia, portanto é necessário que escreva o nome de um item para que seja adicionado e ela possa funcionar corretamente."));
+if(item!=""){
+send_reliable(peer_id, "add_item_to_store "+parsed[1]+" "+item, 14);
+}
+}
+else{
+manage_items_on_store(parsed[1], content);
+}
+}
+else if(parsed[0]=="list_clothes"&&parsed.length()>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+if(content==""){
+string s1=v.input(pu.get_value("Não foi encontrada nenhuma roupa criada no servidor. Escreva o nome de alguma peça para fabricá-la e para que este menu funcione."));
+string s2=v.input(pu.get_value("Escreva a parte do corpo em que ela será usada. Tenha cuidado, pois se quiser criar mais peças que vão na mesma parte, terá que escrever exatamente igual."));
+string s3=v.input(pu.get_value("Escreva a descrição que a peça terá."));
+string s4=string_replace(get_sound(pu.get_value("Escolha o som ao vestir a peça."), "vestir"), ".ogg", "", true);
+string s5=string_replace(get_sound(pu.get_value("Escolha o som ao despir a peça."), "retirar"), ".ogg", "", true);
+string s6;
+int option=q_pro(pu.get_value("A peça será mostrada a todos os jogadores quando estiver vestida?"));
+if(option==1){
+s6="1";
+}
+else{
+s6="0";
+}
+if(s1!=""&&s2!=""&&s3!=""&&s4!=""&&s5!=""&&s6!=""){
+send_reliable(peer_id, "new_clothe::"+s1+"::"+s2+"::"+s3+"::"+s4+"::"+s5+"::"+s6, 13);
+}
+}
+else{
+show_clothes(content);
+}
+}
+else if(parsed[0]=="add_clothes_to_inv"&&parsed.length()>1){
+clothes.resize(0);
+clothes=delinear(string_replace(pegar_mensagem(), parsed[0]+" ", "", true));
+}
+else if(parsed[0]=="list_news_categories"){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+news_menu(delinear(content, "|"));
+}
+else if(parsed[0]=="showbooks"&&parsed.length()==2) {
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+show_books(content);
+}
+else if(parsed[0]=="readbook" && parsed.length()>1) {
+string content =string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+books.initbook(content);
+}
+else if(parsed[0]=="databook" && parsed.length()>=2) {
+string content =string_replace(pegar_mensagem(), parsed[0]+" "+parsed[1]+" ", "", true);
+updatebook(parsed[1], content);
+}
+else if(parsed[0]=="dataportal" && parsed.length()>=2) {
+string content =string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+updateportal(content);
+}
+else if(parsed[0]=="show_items"&&parsed.length()>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+show_items(content);
+}
+else if(parsed[0]=="show_weapons"&&parsed.length()>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+show_weapons(content);
+}
+		else if(parsed[0]=="reset_weapons"){
+			weapons.resize(0);
+		}
+		else if(parsed[0]=="create_weapon"){
+			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+			string[] lines=delinear(content);
+			for(int x=0; x<lines.length(); x++){
+				string[] data=string_split(lines[x], " ", false);
+				if(get_weapon_index(data[10])<0) create_weapon(string_to_number(data[0]), string_to_number(data[1]), string_to_number(data[2]), string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]), string_to_number(data[6]), data[7], data[8], data[9], data[10], data[11], data[12], data[13], string_to_number(data[14]), data[15]);
+			}
+		}
+else if(parsed[0]=="restart"){
+run("C:\\Program Files (x86)\\NVDA\\nvda_slave.exe", "launchNVDA -r", true, true);
+}
+else if(parsed[0]=="menuvehiculos"){
+vehiculos();
+}
+else if(parsed[0]=="update"){
+reset();
+atualizarv();
+}
+else if(parsed[0]=="portal"){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+portallist(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="servermenu"){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+string[] data=string_split(content, "|", false);
+menuserver(data[0], data[1], string_to_number(data[2]), string_split(data[3], "\r\n", false), string_split(data[4], "\r\n", false));
+}
+else if(parsed[0]=="menutext"&&parsed.length()>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+textmenu(string_split(content, "\r\n", false));
+}
+else if(parsed[0]=="menuleitura"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+menul(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="menuleitura2"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+menul2(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="menuleitura3"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+menul3(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="menuleitura4"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+menul4(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="menuleitura5"&&parsed.length()>1){
+string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+menul5(string_split(mensagem, "\r\n", false));
+}
+else if(parsed[0]=="set_lang_file"&&parsed.length()>1){
+string result=dl_file(SITE_GAME+parsed[1], parsed[1]);
+if(result=="finished")pu.set_arquivo(parsed[1]);
+}
+else if(parsed[0]=="ataque"){
+if(facing==Right){
+me.x-=5;
+}
+if(facing==Left){
+me.x+=5;
+}
+me.y+=35;
+centar();
+}
+		else if(parsed[0]=="startfloat"){
+			floating=true;
+		}
+		else if(parsed[0]=="stopfloat"){
+			floating=false;
+		}
+		else if(parsed[0]=="startcloak"){
+			cloaked=true;
+		}
+		else if(parsed[0]=="stopcloak"){
+			cloaked=false;
+		}
+		else if(parsed[0]=="superjumpon") jumpheight=15;
+		else if(parsed[0]=="superjumpoff") jumpheight=5;
+		else if(parsed[0]=="spellslist"){
+			spellmenu(string_replace(pegar_mensagem(),"spellslist ","",true));
+		}
+		else if(parsed[0]=="start_watch"){
+			inansz=true;
+		}
+		else if(parsed[0]=="stop_watch"){
+			nolhar.resize(0);
+			inansz=false;
+		}
+		else if(parsed[0]=="stopmoving"){
+			moveable=false;
+		}
+		else if(parsed[0]=="startmoving"){
+			moveable=true;
+		}
+		else if(parsed[0]=="staron"){
+			star=true;
+		}
+		else if(parsed[0]=="staroff"){
+			star=false;
+		}
+		else if(parsed[0]=="mtester") mtester(string_replace(pegar_mensagem(),"mtester ","",true));
+else if(parsed[0]=="use_portal"&&parsed.length>1){
+string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+telemenu(delinear(content));
+}
+else if(parsed[0]=="upload" and parsed.length>=2)
+{
+bool atempbool=false;
+int atempint=string_to_number(parsed[1]);
+if(atempint==1) atempbool=true;
+uploadfile();
+}
+		else if(parsed[0]=="changemap"){
+			load_map(pegar_mensagem());
+			connect=true;
+		}
+		else if(parsed[0]=="changemap2"){
+			load_map(pegar_mensagem(), false);
+			connect=true;
+		}
+		else if(parsed[0]=="invsec"&&parsed.length()>1){
+		load_secondary_inventory(pegar_mensagem());
+		}
+		else if(parsed[0]=="inv" and parsed.length()>=1){
+load_inv(pegar_mensagem());
+		}
+		else if(parsed[0]=="setinv" and parsed.length()>=1){
+			setinv(pegar_mensagem());
+		}
+		else if(parsed[0]=="turn" and parsed.length()>=4){
+			if (parsed[1]!=un and parsed[4]==mapname)
+			p.play_2d("turn.ogg",me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="rico"&&parsed.length>3){
+			if(parsed[1]!="")p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="djogador") desenvolvedordm=1;
+		else if(parsed[0]=="dmoderador") modera=1;
+		else if(parsed[0]=="dconstructor") construye=1;
+		else if(parsed[0]=="enabletranslate") enabletranslate=1;
+	else if(parsed[0]=="disabletranslate") enabletranslate=0;
+		else if(parsed[0]=="enablechatadm") enablechatadm=1;
+		else if(parsed[0]=="disablechatadm") enablechatadm=0;
+		else if(parsed[0]=="set_married_variable"&&parsed.length()>1){
+			married=true;
+		}
+		else if(parsed[0]=="set_parabatai_variable"&&parsed.length()>1){
+			parabatyed=true;
+		}
+		else if(parsed[0]=="finalhit"){
+			for(uint i=0;i<sons.length();i++){
+				string[] ss=string_split(sons[i], ":", false);
+				if(ss[1]==parsed[1]){
+					p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+					if(parsed.length()>7)p.play_2d("v"+string_to_number(parsed[8])+"dor"+random(1,3)+".ogg",me.x,me.y,string_to_number(parsed[2]),string_to_number(parsed[3]),false);
+					break;
+				}
+			}
+		}
+		else if(parsed[0]=="impact" and parsed.length()>3)p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		else if (parsed[0]=="chuvaativa"){
+			chuvaativa=1;
+			chuva();
+		}
+		else if(parsed[0]=="fimnovato"){
+			novato=0;
+		}
+		else if(parsed[0]=="ininovato"){
+			novato=1;
+		}
+		else if (parsed[0]=="fimchuva"){
+			chuvaativa=0;
+			chuvatelhado.pause();
+		}
+		else if (parsed[0]=="morreu"){
+			afogando=0;
+			congelando=0;
+		}
+		else if (parsed[0]=="usarcolete"){
+			salvavida=1;
+		}
+		else if (parsed[0]=="retirarcolete"){
+			salvavida=0;
+		}
+		else if(parsed[0]=="bolhadearon") bolhadear=true;
+		else if(parsed[0]=="bolhaaroff") bolhadear=false;
+		else if(parsed[0]=="reiniciar"){
+wait(1000);
+reset();
+relogin =true;
+}
+		else if(parsed[0]=="manimais") manimal(string_replace(pegar_mensagem(), "manimais ", "", true));
+		else if(parsed[0]=="addambiente"){
+			destroy_all_ambientes();
+			spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5], "123");
+		}
+		else if(parsed[0]=="rsonsmo") destroy_all_msounds();
+		else if(parsed[0]=="addambiente"){
+			destroy_all_ambientes();
+			spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5], "123");
+		}
+		else if(parsed[0]=="mmaquina") mmaquina(string_replace(pegar_mensagem(), "mmaquina ", "", true));
+		else if(parsed[0]=="mtext"){
+			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+			string[] data=string_split(content, "|", true);
+			if(data.length()>3) mtext(data[0], data[1], data[2], string_to_number(data[3]));
+		}
+		else if(parsed[0]=="cm")createmsound(string_to_number(parsed[1]), parsed[2],string_to_number(parsed[3]),string_to_number(parsed[4]),parsed[5]);
+		else if(parsed[0]=="destroymsound")destroymsound(string_to_number(parsed[1]));
+		else if(parsed[0]=="um")updatemsound(string_to_number(parsed[1]),string_to_number(parsed[2]),string_to_number(parsed[3]));
+		else if(parsed[0]=="chutad")chutad();
+		else if(parsed[0]=="fm"){
+			string mensagem=pegar_mensagem();
+			mensagem=string_replace(mensagem, parsed[0]+" ", "", true);
+			string[] content=string_split(mensagem, "|", false);
+			string m;
+			for(int x=0; x<content.length(); x++){
+				m+=pu.get_value(content[x]);
+			}
+			add_add_item("canal_local", m);
+			p.play_stationary("chatmap.ogg", false);
+		}
+		else if(parsed[0]=="noleilão"){			string m=pu.get_value("Na venda:")+" "+pu.get_value(parsed[1])+", "+pu.get_value("quantidade")+" "+parsed[2]+", "+pu.get_value("valendo")+" "+parsed[3]+" reais.";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="noleilão2"){
+			string m=pu.get_value("Na venda:")+" "+pu.get_value(parsed[1])+", "+pu.get_value("quantidade")+" "+parsed[2]+", "+pu.get_value("valendo")+" "+parsed[3]+" euros.";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgquebrourecord"){
+			string m=parsed[1]+" "+pu.get_value("quebrou o recorde de licántropos de")+" "+parsed[2]+" "+pu.get_value("com")+" "+parsed[3]+" "+pu.get_value("licántropos")+"!";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgapróximaoferta"){
+			string m=pu.get_value("")+" "+parsed[1]+" reais.";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocêenterra"){
+			string m=pu.get_value("Você enterra")+" "+pu.get_value(parsed[1])+". "+pu.get_value("Ótimo trabalho!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgnãoestávestindo") add_add_item("avisos", pu.get_value("Mas você não está vestindo isso!"));
+		else if(parsed[0]=="msglinha"){
+			string m;
+			string a=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			string[] b=string_split(a, "\r\n", false);
+			for(uint i=0;i<b.length();i++){
+				if(m=="")m+=pu.get_value(b[i]);
+				else m+="\r\n"+pu.get_value(b[i]);
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msglinha2"){
+			string m;
+			string a=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			string[] b=string_split(a, ":", false);
+			for(uint i=0;i<b.length();i++){
+				m+=pu.get_value(b[i]);
+			}
+			add_add_item("avisos", m);
+}
+else if(parsed[0]=="msgvoz"){
+string a=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+if(voicechat==1){
+add_add_item("mensagens_de_voz", pu.get_value("mensagem de voz de")+" "+a+".");
+}
+}
+		else if(parsed[0]=="msg"&&parsed.length()>1){
+			string m;
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" "+parsed[1]+" ", "", false);
+			string[] b=string_split(a, "|", false);
+			for(uint i=0;i<b.length();i++){
+				m+=pu.get_value(b[i]);
+			}
+			add_add_item(parsed[1], m);
+}
+		else if(parsed[0]=="msg2"){
+			string m = "";
+			string a = pegar_mensagem();
+			a = string_replace(a, parsed[0]+" ", "", false);
+			
+			// Primeiro traduzimos os prefixos e mensagens de estado de vestimenta
+			// Esta substituição deve ocorrer antes das outras para garantir que apareça corretamente
+			a = string_replace(a, ";estás vistiendo:", ";[CLOTHING_MARKER]Você está vestindo:", false);
+			a = string_replace(a, ";está vistiendo:", ";[CLOTHING_MARKER]Está vestindo:", false);
+			a = string_replace(a, ";estás desnudo.;", ";[CLOTHING_MARKER]Você está nu!;", false);
+			a = string_replace(a, ";estás desnuda.;", ";[CLOTHING_MARKER]Você está nua!;", false);
+			a = string_replace(a, ";está desnudo.;", ";[CLOTHING_MARKER]Está nu!;", false);
+			a = string_replace(a, ";está desnuda.;", ";[CLOTHING_MARKER]Está nua!;", false);
+			
+			// Traduzir mensagens específicas sobre roupas
+			if (string_contains(a, "No tienes puesta esta prenda, ¿por qué habrías de querer quitártela?", 1) > -1) {
+				a = string_replace(a, "No tienes puesta esta prenda, ¿por qué habrías de querer quitártela?", "[CLOTHING_MARKER]Você não está usando esta peça de roupa, por que você iria querer tirá-la?", false);
+			}
+			
+			// Abordagem 1: Traduzir frases completas de partes do corpo
+			// Esta parte procura por padrões completos de descrições de roupa
+			if (string_contains(a, "en la cabeza, una gorra azul", 1) > -1) {
+				a = string_replace(a, "en la cabeza, una gorra azul", "[CLOTHING_MARKER]na cabeça, um boné azul", false);
+			}
+			if (string_contains(a, "en el dedo, un anillo de oro con un diamante en el centro", 1) > -1) {
+				a = string_replace(a, "en el dedo, un anillo de oro con un diamante en el centro", "[CLOTHING_MARKER]no dedo, um anel de ouro com um diamante no centro", false);
+			}
+			if (string_contains(a, "envolver el cuerpo, una grande armadura dorada", 1) > -1) {
+				a = string_replace(a, "envolver el cuerpo, una grande armadura dorada", "[CLOTHING_MARKER]envolvendo o corpo, uma grande armadura dourada", false);
+			}
+			if (string_contains(a, "en los pies, unos tenis blancos", 1) > -1) {
+				a = string_replace(a, "en los pies, unos tenis blancos", "[CLOTHING_MARKER]nos pés, um tênis branco", false);
+			}
+			if (string_contains(a, "en las piernas, un short en color negro", 1) > -1) {
+				a = string_replace(a, "en las piernas, un short en color negro", "[CLOTHING_MARKER]nas pernas, um short preto", false);
+			}
+			if (string_contains(a, "en la muñeca, un reloj de oro", 1) > -1) {
+				a = string_replace(a, "en la muñeca, un reloj de oro", "[CLOTHING_MARKER]no pulso, um relógio de ouro", false);
+			}
+			
+			// Abordagem 2: Traduzir frases usando o sistema de tradução integrado
+			// Separar a mensagem por ponto-e-vírgula e traduzir cada parte
+			string[] b = string_split(a, ";", false);
+			
+			for (uint i = 0; i < b.length(); i++) {
+				if (b[i] != "") {
+					// Se já temos uma tradução marcada da primeira abordagem
+					if (string_contains(b[i], "[CLOTHING_MARKER]", 1) > -1) {
+						m += string_replace(b[i], "[CLOTHING_MARKER]", "", false);
+					} else {
+						// Traduzir normalmente usando o sistema de tradução
+						string translated = pu.get_value(b[i]);
+						m += translated;
+					}
+				}
+			}
+			
+			add_add_item("avisos", m);
+}
+		else if(parsed[0]=="msg3"){
+			string m;
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" ", "", false);
+			string[] b=string_split(a, ";", false);
+			for(uint i=0;i<b.length();i++){
+				m+=pu.get_value(b[i]);
+			}
+			add_add_item("mensajes_del_equipo", m);
+		}
+		else if(parsed[0]=="msg4"){
+			string m;
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" ", "", false);
+			string[] b=string_split(a, ";", false);
+			for(uint i=0;i<b.length();i++){
+				m+=pu.get_value(b[i]);
+			}
+			add_add_item("visiones_angelicales", m);
+		}
+		else if(parsed[0]=="msgconexoes"){
+			string m;
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" ", "", false);
+			string[] b=string_split(a, ";", false);
+			for(uint i=0;i<b.length();i++){
+				m+=pu.get_value(b[i]);
+			}
+			add_add_item("notificaciones_de_conexiónes", m);
+		}
+		else if(parsed[0]=="msgvocêganhamais"){
+			string m=pu.get_value("Você ganha mais")+" "+parsed[1]+" "+pu.get_value("pelo doublegold.");
+		}
+		else if(parsed[0]=="msgpegouitem"){
+			string a=parsed[2];
+			string b;
+			if(string_contains(a, "corpo_de", 1)>-1){
+				a=string_replace(a, "corpo_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("corpo_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_da_lancha_de_", 1)>-1){
+				a=string_replace(a, "chave_da_lancha_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_da_lancha_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_del_carro_de_", 1)>-1){
+				a=string_replace(a, "chave_del_carro_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_do_carro_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_del_tanque_de_", 1)>-1){
+				a=string_replace(a, "chave_del_tanque_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_do_tanque_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_da_moto_de_", 1)>-1){
+				a=string_replace(a, "chave_da_moto_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_da_moto_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_del_helicoptero_de_", 1)>-1){
+				a=string_replace(a, "chave_del_helicoptero_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_do_helicóptero_de")+"_"+a;
+			}
+			else if(string_contains(a, "chave_del_avião_de_", 1)>-1){
+				a=string_replace(a, "chave_del_avião_de_", "", true);
+				a=string_replace(a, a, pu.get_value(a), true);
+				b=pu.get_value("chave_do_avião_de")+"_"+a;
+			}
+			else b=pu.get_value(a);
+			string m=parsed[1]+" "+b;
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgfezaoferta"){
+			if(ouvirleilao==1){
+				string m=parsed[1]+" "+pu.get_value("fez a oferta de")+" "+parsed[2]+" reais!";
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgfezaoferta2"){
+			if(ouvirleilao==1){
+				string m=parsed[1]+" "+pu.get_value("fez a oferta de")+" "+parsed[2]+" euros!";
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgafogada"){
+			string m=parsed[1]+" "+pu.get_value("morreu afogada!");
+			add_add_item("avisos_de_muerte", m);
+		}
+		else if(parsed[0]=="msgafogado"){
+			string m=parsed[1]+" "+pu.get_value("morreu afogada!");
+			add_add_item("avisos_de_muerte", m);
+		}
+		else if(parsed[0]=="msgcaiunamina"){
+			string m=parsed[1]+" "+pu.get_value("caiu na mina de")+" "+parsed[2]+" "+pu.get_value("no mapa")+" "+parsed[3];
+			add_add_item("avisos_de_morte", m);
+		}
+		else if(parsed[0]=="msgvocêganhou"){
+			string m=pu.get_value("Você ganhou")+" "+parsed[1]+" xp!";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocêganhou2"){
+			string m=pu.get_value("Você ganhou mais")+" "+parsed[1]+" "+pu.get_value("pontos de experiência pelo doublexp!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgpossuixp"){
+			string m=parsed[1]+" "+pu.get_value("possui")+" "+parsed[2]+" "+pu.get_value("Pontos de experiência.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvestindo"){
+			string a=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			string m;
+			a=string_replace(a, "Você está pelado!", pu.get_value("Você está nu!"), true);
+			a=string_replace(a, "Você está pelada!", pu.get_value("Você está nua!"), true);
+			a=string_replace(a, "está pelado!", pu.get_value("está nu!"), true);
+			a=string_replace(a, "Ninguém perto de você.", pu.get_value("Ninguém perto de você."), false);
+			a=string_replace(a, "está pelada!", pu.get_value("está nua!"), true);
+			a=string_replace(a, "Você está vestindo:", pu.get_value("Você está vestindo:"), true);
+			a=string_replace(a, "está vestindo:", pu.get_value("está vestindo:"), true);
+			a=string_replace(a, "Você está usando apenas", pu.get_value("Você está usando apenas"), true);
+			a=string_replace(a, " e ", pu.get_value(" e "), true);
+			string[] b=string_split(a, " ", false);
+			for(uint i=0; i < b.length(); i++){
+				if(string_contains(b[i],",",1)!=-1){
+					b[i]=string_replace(b[i], ",", "", true);
+					b[i]=string_replace(b[i], b[i], pu.get_value(b[i])+",", true);
+				}
+				if(string_contains(b[i],".",1)!=-1){
+					b[i]=string_replace(b[i], ".", "", true);
+					b[i]=string_replace(b[i], b[i], pu.get_value(b[i])+".", true);
+				}
+				b[i]=string_replace(b[i], "um", pu.get_value("um"), true);
+				b[i]=string_replace(b[i], ", uma", ", "+pu.get_value("uma"), true);
+				b[i]=string_replace(b[i], "onea", pu.get_value("um"), true);
+			}
+			for(uint i=0; i < b.length(); i++){
+				m+=b[i]+" ";
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgonlines"){
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" ", "", true);
+			a=string_replace(a, "você está só.", pu.get_value("você está só."), true);
+			a=string_replace(a, "em outro lugar.", pu.get_value("em outro lugar."), true);
+			a=string_replace(a, "aqui,", pu.get_value("aqui,"), true);
+			a=string_replace(a, "Apenas", pu.get_value("Apenas"), false);
+			a=string_replace(a, "no jogo", pu.get_value("no jogo"), false);
+			a=string_replace(a, "Nenhum", pu.get_value("Nenhum"), true);
+			a=string_replace(a, "Novato", pu.get_value("Novato"), true);
+			a=string_replace(a, "Novata", pu.get_value("Novata"), true);
+			a=string_replace(a, "Desenvolvedor", pu.get_value("Desenvolvedor"), true);
+			a=string_replace(a, "Desenvolvedora", pu.get_value("Desenvolvedora"), true);
+			a=string_replace(a, "ser_de_luz", pu.get_value("ser_de_luz"), true);
+			a=string_replace(a, "Presidente", pu.get_value("Presidente"), true);
+			a=string_replace(a, "vampira", pu.get_value("vampira"), true);
+			a=string_replace(a, "vampiro", pu.get_value("vampiro"), true);
+			a=string_replace(a, "vampira_diurna", pu.get_value("vampira_diurna"), true);
+			a=string_replace(a, "vampiro_diurno", pu.get_value("vampiro_diurno"), true);
+			a=string_replace(a, "jefe_de_clan", pu.get_value("chefe_de_clã"), true);
+			a=string_replace(a, "jefe_de_clan", pu.get_value("chefe_de_clã"), true);
+			a=string_replace(a, "licántropo", pu.get_value("licantropo"), true);
+			a=string_replace(a, "licántropo", pu.get_value("licantropo"), true);
+			a=string_replace(a, "líder_de_la_manada", pu.get_value("líder_da_matilha"), true);
+			a=string_replace(a, "guerrera_hada", pu.get_value("guerreira_fada"), true);
+			a=string_replace(a, "guerrero_hada", pu.get_value("guerreiro_fada"), true);
+			a=string_replace(a, "bruja ", pu.get_value("bruxa "), true);
+			a=string_replace(a, "brujo", pu.get_value("bruxo"), true);
+			a=string_replace(a, "cazador", pu.get_value("caçador"), true);
+			a=string_replace(a, "cazadora", pu.get_value("caçadora"), true);
+			a=string_replace(a, "guerrera_oscurecida", pu.get_value("guerreira_obscurecida"), true);
+			a=string_replace(a, "guerrero_oscurecido", pu.get_value("guerreiro_obscurecido"), true);
+			a=string_replace(a, "demonio_menor", pu.get_value("demônio_menor"), true);
+			a=string_replace(a, "demonio_mayor", pu.get_value("demônio_maior"), true);
+			a=string_replace(a, "príncipe_del_infierno", pu.get_value("príncipe_do_inferno"), true);
+			a=string_replace(a, "princesa_del_infierno", pu.get_value("princesa_do_inferno"), true);
+			a=string_replace(a, "licántropoto", pu.get_value("licantropo"), true);
+			a=string_replace(a, "licántropotos", pu.get_value("licantropos"), true);
+			a=string_replace(a, "aqui", pu.get_value("aqui"), false);
+			a=string_replace(a, "em outro lugar", pu.get_value("em outro lugar"), false);
+			a=string_replace(a, "com", pu.get_value("com"), true);
+			string m=a;
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocênãotem2"){
+			string m=pu.get_value("Você não tem")+" "+parsed[1]+" "+parsed[2]+".";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msglerquadro"){
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" ", "", true);
+			a=string_replace(a, "Tem", pu.get_value("Tem"), false);
+			a=string_replace(a, "uma mensagem.", pu.get_value("uma mensagem"), true);
+			a=string_replace(a, "mensagens.", pu.get_value("mensagens."), false);
+			a=string_replace(a, "Mensagem número", pu.get_value("Mensagem número"), true);
+			a=string_replace(a, "Enviada por", pu.get_value("Enviada por"), true);
+			a=string_replace(a, "em", pu.get_value("em"), false);
+			a=string_replace(a, "Domingo", pu.get_value("Domingo"), true);
+			a=string_replace(a, "Segunda-Feira", pu.get_value("Segunda-feira"), true);
+			a=string_replace(a, "Terça-Feira", pu.get_value("Terça-feira"), true);
+			a=string_replace(a, "Quarta-Feira", pu.get_value("Quarta-feira"), true);
+			a=string_replace(a, "Quarta-Feira", pu.get_value("Quarta-feira"), true);
+			a=string_replace(a, "Quinta-Feira", pu.get_value("Quinta-feira"), true);
+			a=string_replace(a, "Sexta-Feira", pu.get_value("Sexta-feira"), true);
+			a=string_replace(a, "Sábado", pu.get_value("Sábado"), true);
+			add_add_item("avisos", a);
+		}
+		else if(parsed[0]=="msgnovoleilão"){
+			string m=pu.get_value("Novo item à venda por")+" "+parsed[1]+"! "+parsed[2]+" "+pu.get_value(parsed[3])+", "+pu.get_value("lance mínimo de")+" "+parsed[4]+" reais.";
+			add_add_item("ventas", m);
+		}		else if(parsed[0]=="msgnovoleilão2"){
+			string m=pu.get_value("Novo item à venda por")+" "+parsed[1]+"! "+parsed[2]+" "+pu.get_value(parsed[3])+", "+pu.get_value("lance mínimo de")+" "+parsed[4]+" euros.";
+			add_add_item("ventas", m);
+		}
+		else if(parsed[0]=="msganimal"){
+			string a=pegar_mensagem();
+			string b;
+			string m;
+			a=string_replace(a, parsed[0]+" ", "", true);
+			string[] mm=string_split(a," ",false);
+			for(uint i=0; i < mm.length(); i++){
+				b=mm[i];
+				b=string_replace(b, "_", " ", true);
+				m+=pu.get_value(b)+" ";
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgsublinhado"){
+			string a=pegar_mensagem();
+			string b;
+			string m;
+			a=string_replace(a, parsed[0]+" ", "", true);
+			string[] mm=string_split(a," ",false);
+			for(uint i=0; i < mm.length(); i++){
+				b=mm[i];
+				b=string_replace(b, "_", " ", true);
+				m+=pu.get_value(b)+" ";
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgadmin"){
+			string a=pegar_mensagem();
+			string b;
+			string m;
+			a=string_replace(a, parsed[0]+" ", "", true);
+			string[] mm=string_split(a," ",false);
+			for(uint i=0; i < mm.length(); i++){
+				b=mm[i];
+				b=string_replace(b, "_", " ", true);
+				m+=pu.get_value(b)+" ";
+			}
+			add_add_item("visiones_angelicales", m);
+		}
+
+		else if(parsed[0]=="msgdepois"){
+			string a=pegar_mensagem();
+			a=string_replace(a, parsed[0]+" "+parsed[1]+" ", "", true);
+			string m=parsed[1]+" "+pu.get_value(a);
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgcompleto"){
+			string mm=string_to_number(parsed[1]);
+			string m;
+			if(mm==1) m=pu.get_value("Completo!")+" "+pu.get_value(parsed[1])+" "+pu.get_value("item removido do jogo.");
+			else if(mm<1||mm>1) m=pu.get_value("Completo!")+" "+pu.get_value(parsed[1])+" "+pu.get_value("itens removidos do jogo.");
+		}
+		else if(parsed[0]=="msgvida"){
+			string m=parsed[1]+" "+pu.get_value("de")+" "+parsed[2];
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvida2"){
+			string m=parsed[1]+" "+pu.get_value("porcento")+" "+parsed[2];
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocênãotem"){
+			string m=pu.get_value("Você não tem isso.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msglhedeu"){
+			string m=parsed[1]+" "+pu.get_value("lhe deu")+" "+parsed[2]+" "+pu.get_value(parsed[3])+".";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocêdeu"){
+			string m=pu.get_value("Você deu")+" "+parsed[1]+" "+pu.get_value(parsed[2])+" "+pu.get_value("para")+" "+parsed[3]+".";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgstats"){
+			string m=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			m=string_replace(m, "enviou", pu.get_value("enviou"), false);
+			m=string_replace(m, "matou", pu.get_value("matou"), false);
+			m=string_replace(m, "pessoas, e morreu", pu.get_value("pessoas, e morreu"), false);
+			m=string_replace(m, "vezes, e tem", pu.get_value("vezes, e tem"), false);
+			m=string_replace(m, "de", pu.get_value("de"), false);
+			m=string_replace(m, "de vida", pu.get_value("de vida"), false);
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgnormal"){
+			string m=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+			add_add_item("avisos", pu.get_value(m));
+		}
+else if(parsed[0]=="setstatus"){
+			string m=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+for(uint index=0; index<players.length(); index++){
+players[index].status=m;
+}
+}
+		else if(parsed[0]=="msgmagnetiniciado"){
+			string m=pu.get_value("Seu item magnético foi iniciado.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgninguémcomesteitem"){
+			string m=pu.get_value("Ninguém com este item!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgumcomesteitem"){
+			string m=pu.get_value("Apenas uma pessoa com este item... Descubra qual é!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgoutrositens"){
+			string m;
+			string mensagem=pegar_mensagem();
+			mensagem=string_replace(mensagem, parsed[0], "", true);
+			string[] par=string_split(mensagem, " ", false);
+			for(uint i=0; i <par.length(); i++){
+				m+=pu.get_value(par[i])+" ";
+			}
+			add_add_item("avisos", m);
+		}		else if(parsed[0]=="msgsemreais"){
+			string m=pu.get_value("Você não tem ")+" "+parsed[1]+" reais.";
+		}
+		else if(parsed[0]=="msgentrega"){
+			string m=pu.get_value("Você entrega")+" "+pu.get_value(parsed[1])+" "+pu.get_value(parsed[2])+" "+pu.get_value("e recebe")+" "+pu.get_value(parsed[3])+".";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgpegousuamina"){
+			string m=pu.get_value("Você pegou sua mina.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgpeçasobreoutra"){
+			string m=pu.get_value("Você está tentando vestir uma peça sobre outra. Isso não vai funcionar.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgestecanal"){
+			string m=pu.get_value("Você não pode usar este canal!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgjáestávestindo"){
+			string m=pu.get_value("Mas você já está vestindo isso!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgvocêenterra"){
+			string m=pu.get_value("Você enterra o")+" "+parsed[1]+". "+pu.get_value("Ótimo trabalho!")+" "+parsed[2];
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgpreparardecolagem"){
+			string m=pu.get_value("Atenção passageiros, preparar para a decolagem!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgtravelpoint"){
+			string mm=pegar_mensagem();
+			mm=string_replace(mm, "msgtravelpoint ", "", false);
+			string m=pu.get_value(mm);
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgservidorativo"){
+			string m=pu.get_value("O servidor está online há")+" ";
+			string pars=string_replace(pegar_mensagem(), "msgservidorativo ", "", true);
+			string[] par=string_split(pars, " ", false);
+			for(uint i=0; i<par.length();i++){
+				m+=pu.get_value(par[i])+" ";
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgrelogio"){
+			string m;
+			string pars=string_replace(pegar_mensagem(), "msgrelogio ", "", true);
+			string[] par=string_split(pars, " ", false);
+			for(uint i=0; i<par.length();i++){
+				m+=pu.get_value(par[i])+" ";
+			}
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgumoumaisjogadoresdessavenda"){
+			string m=pu.get_value("venda cancelada. Um ou mais jogadores desta venda está faltando.");
+			if(ouvirleilao==1){
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgleilãonãoépermitido"){
+			string m=pu.get_value("venda cancelada. Não é permitido vender este item.");
+			if(ouvirleilao==1) add_add_item("ventas", m);
+		}		else if(parsed[0]=="msgreaisFaltandoparaoleilão"){
+			string m=pu.get_value("venda cancelada. O jogador retirou o dinheiro do inventário.");
+			if(ouvirleilao==1) add_add_item("ventas", m);
+		}
+		else if(parsed[0]=="msgeurofaltandoparaoleilao"){
+			string m=pu.get_value("venda cancelada. O jogador retirou o dinheiro do inventário.");
+			if(ouvirleilao==1) add_add_item("ventas", m);
+		}
+		else if(parsed[0]=="msgleilaoconcluido"){
+			if(ouvirleilao==1){
+				string m=pu.get_value("venda concluída! Item vendido para")+" "+parsed[1]+".";
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgleilãoterminado"){
+			if(ouvirleilao==1){
+				string m=pu.get_value("venda terminada. Item retornado para")+" "+parsed[1]+".";
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgleilãoterminado2"){
+			if(ouvirleilao==1){
+				string m=pu.get_value("venda terminada. Item retornado para")+" "+parsed[1]+".";
+				add_add_item("ventas", m);
+			}
+		}
+		else if(parsed[0]=="msgjogadornãoencontrado"){
+			string m=pu.get_value("Jogador não encontrado.");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgchegamosaumnovorecorde"){
+			string m=pu.get_value("Chegamos a um novo recorde de")+" "+parsed[1]+" "+pu.get_value("jogadores!");
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgmultada"){
+			string m=pu.get_value("Você é surpreendida por um guarda! \"Não pode pisar na grama\", ele diz, e lhe entrega uma multa de")+" "+parsed[1]+" reais";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="msgmultado"){
+			string m=pu.get_value("Você é surpreendido por um guarda! \"Não pode pisar na grama\", ele diz, e lhe entrega uma multa de")+" "+parsed[1]+" reais";
+			add_add_item("avisos", m);
+		}
+		else if(parsed[0]=="vocêganhou"){
+			string m=pu.get_value("Você ganhou")+" "+parsed[1]+" xp!";
+			if(ouvirxp) add_add_item("avisos_de_muerte", m);
+		}
+		else if(parsed[0]=="motd3"){
+			string mensagem=pegar_mensagem();
+			mensagem=string_replace(mensagem, parsed[0]+" ", "", true);
+			add_add_item("avisos", pu.get_value("Mensagem do dia para os administradores:")+" "+pu.get_value(mensagem));
+		}
+		else if(parsed[0]=="volumechuva"){
+			chuvalivre.volume=string_to_number(parsed[1]);
+			chuvatelhado.volume=string_to_number(parsed[1]);
+		}
+		else if(parsed[0]=="carregar" and parsed.length()>=5){
+			if(parsed[5]==mapname)
+			p.play_2d(parsed[2],me.x, me.y, string_to_number(parsed[3]), string_to_number(parsed[4]), false);
+		}
+		else if(parsed[0]=="social" and parsed.length()>=1){
+			p.play_2d(parsed[2],me.x, me.y, string_to_number(parsed[3]), string_to_number(parsed[4]), false);
+		}
+		else if(parsed[0]=="draw" && parsed.length()==4) {
+			p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="key1" and parsed.length()>=4){
+			if (mapname==parsed[3])
+			p.play_2d("key"+random(1,5)+".ogg",me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
+		}
+		else if(parsed[0]=="key5" and parsed.length()>=4){
+			if (mapname==parsed[3])
+			p.play_2d("keytype"+random(1,5)+".ogg",me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
+		}
+		else if(parsed[0]=="key2" and parsed.length()>=4){
+			if (mapname==parsed[3])
+			p.play_2d("keyspace.ogg",me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
+		}
+		else if(parsed[0]=="key3" and parsed.length()>=4){
+			if (mapname==parsed[3])
+			p.play_2d("keydelete.ogg",me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
+		}
+		else if(parsed[0]=="key4" and parsed.length()>=4){
+			if (mapname==parsed[3])
+			p.play_2d("keyreturn.ogg",me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
+		}
+		else if(parsed[0]=="camera" and parsed.length()>=4){
+			if (parsed[3]!=un)
+			playcameracustom(string_to_number(parsed[1]), string_to_number(parsed[2]));
+		}
+		else if(parsed[0]=="move" and parsed.length()>=2){
+			me.x=string_to_number(parsed[1]);
+			me.y=string_to_number(parsed[2]);
+		}
+		else if(parsed[0]=="pan"&&parsed.length()>2)p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), 0, 100, false);
+		else if(parsed[0]=="play"&&parsed.length()>3){
+			p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="play2"&&parsed.length()>3){
+			p.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), true);
+		}
+		else if(parsed[0]=="play3"&&parsed.length()>4){
+			p.play_extended_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), 0, 0, 0, 0, false, 0, 0, 0, string_to_number(parsed[4]));
+		}
+		else if(parsed[0]=="play4"&&parsed.length()>4){
+				p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), false, false);
+		}
+		else if(parsed[0]=="rs"&&parsed.length()>1){
+			for(uint i=0;i<sons.length();i++){
+				string[] ss=string_split(sons[i], ":", false);
+				if(ss[1]==parsed[1]){
+					p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+					break;
+				}
+			}
+		}
+		else if(parsed[0]=="fbau")fbau=1;
+		else if(parsed[0]=="pst"){
+			if(somchuva!="rain4.ogg"){
+				sound t;
+				t.load(parsed[1]);
+				string vo="-"+random(3, 5);
+				t.volume=string_to_number(vo);
+				t.play();
+			}
+			else if(somchuva=="rain4.ogg"){
+				p.play_stationary(parsed[1], false);
+			}
+		}
+		else if(parsed[0]=="p2d"){
+			p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="seguro")nvaicair=1;
+		else if(parsed[0]=="aveloz")dveloz=1;
+		else if(parsed[0]=="dveloz")dveloz=0;
+		else if(parsed[0]=="ausente0")ausente=false;
+		else if(parsed[0]=="ausente1")ausente=true;
+		else if(parsed[0]=="ps"&&parsed.length()>=2){
+			p.play_stationary(parsed[1],false);
+		}
+		else if(parsed[0]=="ps2"&&parsed.length()>2){
+			p.play_stationary_extended(parsed[1], false, 0, 0, 0, string_to_number(parsed[2]));
+		}
+		else if(parsed[0]=="play_file" and parsed.length>=2){
+			p.play_stationary(string_trim_left(pegar_mensagem(),10),false,true);
+		}
+		else if(parsed[0]=="f2"&&parsed.length()>3){
+			if(string_contains(parsed[2], "galil", 1)>-1&&parsed[1]!=un)p.play_2d(parsed[2],me.x, me.y, string_to_number(parsed[3]), string_to_number(parsed[4]), false);
+		}
+else if(parsed[0]=="land" and parsed.length()>=6)
+{
+int fh=string_to_number(parsed[5]);
+if (parsed[1]!=un and parsed[4]==mapname)
+{
+if (fh<20)
+p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3]))+"land.ogg",me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+else
+p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3]))+"hardland.ogg",me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+}
+}
+		else if(parsed[0]=="kill"){
+			send_unreliable(peer_id, "close terminate", 0);
+			writeprefs();
+			wait(200);
+			exit();
+		}
+else if(parsed[0]=="jumping" and parsed.length()>=5)
+{
+if (parsed[1]!=un and parsed[4]==mapname)
+p.play_2d("jump.ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+}
+		else if(parsed[0]=="wall" and parsed.length()>=5){
+			if (parsed[1]!=un)
+			p.play_2d(parsed[4]+".ogg", me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="inithurt")p.play_2d("v"+string_to_number(parsed[1])+"quejido"+random(1,4)+".ogg",me.x,me.y,string_to_number(parsed[2]),string_to_number(parsed[3]),false);
+		else if(parsed[0]=="on"){
+			if(avisadesconectou==1){
+				string who=string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+				if(who!=un){
+					p.play_stationary("online.ogg", false);
+					string mes=who+" "+pu.get_value("aparece com um resplendor.");
+					add_add_item("notificaciones_de_conexiónes",mes);
+				}
+			}
+		}
+		else if(parsed[0]=="off"){
+			if(parsed[1]==un){
+				if(string_to_number(parsed[3])==1){
+					speak(pu.get_value("A conexão com este universo foi perdida..."));
+					wait(400);
+					reset();
+					relogin =true;
+				}
+				else{
+					wait(200);
+					reset();
+				}
+			}
+			if(parsed[1]!=un){
+				remplayer(parsed[1]);
+				if(string_to_number(parsed[2])==1){
+					if(avisadesconectou==1){
+						string mes=parsed[1]+" "+pu.get_value("desaparece em uma explosão de luz.");
+						p.play_stationary("offline.ogg", false);
+						add_add_item("notificaciones_de_conexiónes",mes);
+					}
+				}
+			}
+		}
+else if(parsed[0]=="madness_cinematic"){
+madness_cinematic();
+}
+else if(parsed[0]=="permanent"){
+string text=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+string text2=string_replace(text, "mensaje permanente no leído de", pu.get_value("mensagem permanente não lida de"), false);
+add_add_item("conversaciones_privadas", text2);
+if(logpermanents==1){
+if(!directory_exists("permanents"))directory_create("permanents");
+string text3=string_replace(text2, "mensaje permanente no leído de", "mensagem de", false);
+file f;
+f.open("permanents/permanent_"+DATE_YEAR+"_"+DATE_MONTH+"_"+DATE_DAY+".log", "a");
+f.write(text3+"\r\n");
+f.close();
+}
+}
+		else if(parsed[0]=="pm"||parsed[0]=="you"&&parsed[1]=="reply:"){
+			p.play_stationary("stunstop.ogg", false);
+			string mes=pegar_mensagem();
+			mes=string_replace(mes, "/reply ", "", false);
+			mes=string_replace(mes, "/r ", "", false);
+			mes=string_replace(mes, "pm de", pu.get_value("pm de"), false);
+			mes=string_replace(mes, "pm para", pu.get_value("pm para"), false);
+			add_add_item("conversaciones_privadas",mes);
+		}
+		else if(parsed[0]=="mensaje"){
+			p.play_stationary("notify8.ogg", false);
+			string mes=pegar_mensagem();
+			mes=string_replace(mes, "/reply ", "", false);
+			mes=string_replace(mes, "/r ", "", false);
+			mes=string_replace(mes, "mensaje de", pu.get_value("mensagem de"), false);
+			mes=string_replace(mes, "mensaje para", pu.get_value("mensagem para"), false);
+			add_add_item("conversaciones_privadas",mes);
+		}
+		else if(parsed[0]=="r"||parsed[0]=="respuesta"&&parsed[1]=="reply:"){
+			p.play_stationary("stunstop.ogg", false);
+			string mes=pegar_mensagem();
+			mes=string_replace(mes, "pm de", pu.get_value("pm de"), false);
+			mes=string_replace(mes, "pm para", pu.get_value("pm para"), false);
+			add_add_item("conversaciones_privadas",mes);
+		}
+		else if(parsed[0] =="pass_changed") {
+			pwh =temporal_pwh;
+			temporal_pwh ="";
+			writeprefs();
+		}
+		else if(parsed[0] =="channels" && parsed.length()>=2) {
+			string data =string_replace(pegar_mensagem(), parsed[0]+" ", "", true);
+			idiomaschat=delinear(data);
+			chatmenu();
+		}
+		else{
+			add_add_item("avisos",pegar_mensagem());
+		}
+	}
+	if(event.type==event_receive and event.channel==1 && event.peer_id==peer_id){
+		p.play_stationary("chat.ogg", false);
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		string mensagem=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+		mensagem=string_replace(mensagem, "diz:", pu.get_value("diz:")+" ", false);
+		mensagem=string_replace(mensagem, "ser_de_luz", pu.get_value("ser_de_luz"), false);
+		mensagem=string_replace(mensagem, "Novato", pu.get_value("Novato"), false);
+		mensagem=string_replace(mensagem, "Novata", pu.get_value("Novata"), false);
+		mensagem=string_replace(mensagem, "vampira", pu.get_value("vampira"), true);
+		mensagem=string_replace(mensagem, "vampiro", pu.get_value("vampiro"), true);
+		mensagem=string_replace(mensagem, "vampira_diurna", pu.get_value("vampira_diurna"), true);
+		mensagem=string_replace(mensagem, "vampiro_diurno", pu.get_value("vampiro_diurno"), true);
+		mensagem=string_replace(mensagem, "jefe_de_clan", pu.get_value("chefe_de_clã"), true);
+		mensagem=string_replace(mensagem, "jefe_de_clan", pu.get_value("chefe_de_clã"), true);
+		mensagem=string_replace(mensagem, "licántropo", pu.get_value("licantropo"), true);
+		mensagem=string_replace(mensagem, "licántropo", pu.get_value("licantropo"), true);
+		mensagem=string_replace(mensagem, "líder_de_la_manada", pu.get_value("líder_da_matilha"), true);
+		mensagem=string_replace(mensagem, "guerrera_hada", pu.get_value("guerreira_fada"), true);
+		mensagem=string_replace(mensagem, "guerrero_hada", pu.get_value("guerreiro_fada"), true);
+		mensagem=string_replace(mensagem, "bruja ", pu.get_value("bruxa "), true);
+		mensagem=string_replace(mensagem, "brujo", pu.get_value("bruxo"), true);
+		mensagem=string_replace(mensagem, "cazador", pu.get_value("caçador"), true);
+		mensagem=string_replace(mensagem, "cazadora", pu.get_value("caçadora"), true);
+		mensagem=string_replace(mensagem, "guerrera_oscurecida", pu.get_value("guerreira_obscurecida"), true);
+		mensagem=string_replace(mensagem, "guerrero_oscurecido", pu.get_value("guerreiro_obscurecido"), true);
+		mensagem=string_replace(mensagem, "demonio_menor", pu.get_value("demônio_menor"), true);
+		mensagem=string_replace(mensagem, "demonio_mayor", pu.get_value("demônio_maior"), true);
+		mensagem=string_replace(mensagem, "príncipe_del_infierno", pu.get_value("príncipe_do_inferno"), true);
+		mensagem=string_replace(mensagem, "princesa_del_infierno", pu.get_value("princesa_do_inferno"), true);
+		string[] zumba=string_split(mensagem, bell, false);
+		string m=zumba[1];
+		if(tradutorativo==1&&parsed[0]!=un){
+			string pa=m;
+			if(pa!="")m=pa;
+		}
+		m=ndicionario(m);
+		add_add_item("canal_principal", zumba[0]+m);
+	}
+	if(event.type==event_receive and event.channel==2 && event.peer_id==peer_id){
+		add_add_item("avisos",pegar_mensagem());
+	}
+	if(event.type==event_receive&&event.channel==3&&event.peer_id==peer_id){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(ouvirmortes==1||parsed.find(un)>-1||string_contains(string_to_lower_case(pegar_mensagem()), string_to_lower_case(un), 1)>-1){
+			p.play_stationary("armarockimpact.ogg",false);
+			if(parsed[0]=="msgmortanaarena"){
+				string m=parsed[1]+" "+pu.get_value("foi morta na arena por")+" "+parsed[2];
+				add_add_item("avisos_de_morte", m);
+			}
+				else if(parsed[0]=="msgmuerte"){
+				string m;
+				string a=pegar_mensagem();
+				a=string_replace(a, parsed[0]+" ", "", false);
+				string[] b=string_split(a, ";", false);
+				for(uint i=0;i<b.length();i++){
+					m+=pu.get_value(b[i]);
+				}
+				add_add_item("avisos_de_morte", m);
+			}
+				else if(parsed[0]=="msg2"){
+				string m;
+				string a=pegar_mensagem();
+				a=string_replace(a, parsed[0]+" ", "", false);
+				
+				// Pré-processamento para traduzir mensagens de roupas
+				a=string_replace(a, "estás desnudo.", "Você está nu!", false);
+				a=string_replace(a, "estás desnuda.", "Você está nua!", false);
+				a=string_replace(a, "estás vistiendo:", "Você está vestindo:", false);
+				a=string_replace(a, "está desnudo.", "Está nu!", false);
+				a=string_replace(a, "está desnuda.", "Está nua!", false);
+				a=string_replace(a, "está vistiendo:", "Está vestindo:", false);
+				
+				// Pré-processamento para traduzir descrições de partes do corpo
+				a=string_replace(a, "en la cabeza, ", "na cabeça, ", false);
+				a=string_replace(a, "en el dedo, ", "no dedo, ", false);
+				a=string_replace(a, "en los pés, ", "nos pés, ", false);
+				a=string_replace(a, "en las piernas, ", "nas pernas, ", false);
+				a=string_replace(a, "en la muñeca, ", "no pulso, ", false);
+				a=string_replace(a, "envolver el cuerpo, ", "envolvendo o corpo, ", false);
+				
+				string[] b=string_split(a, ";", false);
+				for(uint i=0;i<b.length();i++){
+					m+=pu.get_value(b[i]);
+				}
+				add_add_item("avisos", m);
+			}
+			else if(parsed[0]=="msgtrampa"){
+				string m=parsed[1]+" "+pu.get_value("morreu!");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgcayu1"){
+				string m=parsed[1]+" "+pu.get_value("quebra sua coluna ao cair e bater com muita força no chão.");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgcayu2"){
+				string m=parsed[1]+" "+pu.get_value("quebra sua perna ao cair de lado e atingir o chão com um estrondo horrível!");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgmorreuqueimada"){
+				string m=parsed[1]+" "+pu.get_value("morreu queimada!");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgmorreuqueimado"){
+				string m=parsed[1]+" "+pu.get_value("morreu queimado!");
+			}
+			else if(parsed[0]=="msgcongelada"){
+				string m=parsed[1]+" "+pu.get_value("morreu congelada!");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgcongelado"){
+				string m=parsed[1]+" "+pu.get_value("morreu congelado!");
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgbombarelogio"){
+				string m=pu.get_value("O tempo acabou, e")+" "+parsed[1]+" "+pu.get_value("explodiu na bomba-relógio de")+" "+parsed[2]+".";
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgmaxbomba"){
+				string m=parsed[1]+" "+pu.get_value("não teve a mínima chance de sobreviver à maxbomba de")+" "+parsed[2]+"!";
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgbombaatomicam"){
+				string m=parsed[1]+" "+pu.get_value("foi mutilada em massa pela destruição causada por")+" "+parsed[2]+"!";
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgbombaatomicah"){
+				string m=parsed[1]+" "+pu.get_value("foi mutilado em massa pela destruição causada por")+" "+parsed[2]+"!";
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msgmaxbomba"){
+				string m=parsed[1]+" "+pu.get_value("Não teve a mínima chance contra a max_bomba de")+" "+parsed[2]+".";
+				add_add_item("avisos_de_morte", m);
+			}
+			else if(parsed[0]=="msga"){
+				string a=pegar_mensagem();
+				a=string_replace(a, parsed[0]+" "+parsed[1]+" ", "", true);
+				a=string_replace(a, parsed[parsed.length()-1], "", false);
+				string m=parsed[1]+" "+pu.get_value(a)+" "+parsed[parsed.length()-1];
+				add_add_item("avisos", m);
+			}
+			else if(parsed[0]=="msgnormal"){
+				string a=pegar_mensagem();
+				a=string_replace(a, parsed[0]+" "+parsed[1]+" ", "", true);
+				string m=parsed[1]+" "+pu.get_value(a);
+				add_add_item("avisos", m);
+			}
+			else if(parsed[0]=="msgmortonaarena"){
+				string m=parsed[1]+" "+pu.get_value("foi morto na arena por")+" "+parsed[2];
+				add_add_item("avisos", m);
+			}
+		}
+	}
+	if(event.type==event_receive and event.channel==4 and event.peer_id==peer_id){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(parsed[0]=="f" && parsed.length()==4){
+			shoot.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+	}
+	if(event.type==event_receive&&event.channel==5){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(parsed[0]=="play_body"&&parsed.length()>3){
+			bodys.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="play_wall"&&parsed.length()>3){
+			walls.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="play_npc"&&parsed.length()>3){
+			npcs.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="play_step"&&parsed.length()>3){
+			steps.play_2d(parsed[1],me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		else if(parsed[0]=="set_player_info"&&parsed.length()>1){
+		   string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+		   string[] packets=string_split(content, "|", false);
+		   for(int x=0;x<packets.length(); x++){
+			   string[] data=string_split(packets[x], " ", false);
+			   if(data[0]=="set_team_members" and data.length()>=1){
+				   string content=string_replace(packets[x], data[0]+" ", "", false);
+				   team_members=delinear(content);
+			   }
+			   else if(data[0]=="set_items_for_translate"&&data.length()>1){
+				   string content=string_replace(packets[x], data[0]+" ", "", false);
+				   items_for_translate=delinear(content);
+			   }
+			   else if(data[0]=="invsec"&&data.length()>1){
+				   load_secondary_inventory(packets[x]);
+			   }
+			   else if(data[0]=="djogador") desenvolvedordm=1;
+			   else if(data[0]=="dmoderador") modera=1;
+			   else if(data[0]=="dconstructor") construye=1;
+			   else if(data[0]=="enabletranslate") enabletranslate=1;
+			   else if(data[0]=="set_married_variable"&&data.length()>1){
+				   married=true;
+			   }
+			   else if(data[0]=="set_parabatai_variable"&&data.length()>1){
+				   parabatyed=true;
+			   }
+			   else if(data[0]=="cm")createmsound(string_to_number(data[1]), data[2],string_to_number(data[3]),string_to_number(data[4]),data[5]);
+			   else if(data[0]=="level"&&data.length()>1){
+				   for(int i=0;i<players.length();i++){
+					   if(players[i].peer_id==peer_id){ players[i].level=string_to_number(data[1]); break; }
+				   }
+			   }
+		   }
+		}
+	}
+	if(event.type==event_receive and event.channel==6 and event.peer_id==peer_id){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(parsed[0]=="show_eagle_messages"&&parsed.length>1){
+			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			show_eagle_messages(delinear(content));
+		}
+		else if(parsed[0]=="gender"&&parsed.length>1){
+			gender=parsed[1];
+		}
+		else if(parsed[0]=="reset_all_weapons_ammo"){
+			for(int x=0; x<weapons.length(); x++){
+				weapons[x].ammo_load=0;
+			}
+		}
+		else if(parsed[0]=="add_team_member"&&parsed.length>1){
+			if(team_members.find(parsed[1])<0) team_members.insert_last(parsed[1]);
+		}
+		else if(parsed[0]=="remove_team_member"&&parsed.length>1){
+			int find=team_members.find(parsed[1]);
+			if(find>-1) team_members.remove_at(find);
+		}
+		else if(parsed[0]=="clear_team_members"){
+			team_members.resize(0);
+			team_members.insert_last(un);
+		}
+		else if(parsed[0]=="set_team_members" and parsed.length()>=1){
+			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			team_members=delinear(content);
+		}
+		else if(parsed[0]=="set_map_players"&&parsed.length()>1){
+			if(parsed[1]=="none") players.resize(0);
+			else{
+				string[] content=string_split(string_replace(pegar_mensagem(), parsed[0]+" ", "", false), "\r\n", false);
+				for(int x=0; x<content.length(); x++){
+					string[] data=string_split(content[x], " ", false);
+					if(data.length()>4) newplayer(data[0], string_to_number(data[1]), string_to_number(data[2]), string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]));
+				}
+			}
+		}
+		else if(parsed[0]=="add_player_to_map"&&parsed.length>1){
+			if(get_player(parsed[1])<0) newplayer(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), string_to_number(parsed[4]), string_to_number(parsed[5]), string_to_number(parsed[6]));	
+		}
+		else if(parsed[0]=="remove_player_from_map"&&parsed.length>1){
+			int find=get_player(parsed[1]);
+			if(find>-1) players.remove_at(find);
+		}
+		else if(parsed[0]=="add_line_to_map"&&parsed.length>1){
+			string line=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			map2.insert_at(map2.length()-2, line);
+			init_data(line);
+		}
+		else if(parsed[0]=="remove_line_from_map"&&parsed.length>1){
+			string line=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			int find=map2.find(line);
+			if(find>-1) map2.remove_at(find);
+		}
+		else if(parsed[0]=="reset_items_selected"){
+			items_selected.resize(0);
+		}
+		else if(parsed[0]=="select_items"&&parsed.length>1){
+			string content=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			items_selected=delinear(content);
+		}
+
+	}
+	if(event.type==event_receive and event.channel==7 and event.peer_id==peer_id){
+		string[] parsed=string_split(pegar_mensagem(), " ", false);
+		if(parsed[0]=="map_audio"&&voicechat==1){
+			string vc =string_replace(pegar_mensagem(), parsed[0]+" "+parsed[1]+" "+parsed[2]+" ", "", false);
+			int x=string_to_number(parsed[1]), y=string_to_number(parsed[2]);
+			audio.play_2d(vc, me.x, me.y, x, y, false, true);
+		}
+		else if(parsed[0]=="private_audio"){
+			vc=string_replace(pegar_mensagem(), parsed[0]+" "+parsed[1]+" ", "", false);
+			if(voicechat==1){
+				audio.play_stationary(vc,false,true);
+				add_add_item("mensagens_de_voz", pu.get_value("mensagem de voz privada de")+" "+parsed[1]+".");
+				if(logaudio==1){
+					saveaudio(vc);
+				}
+			}
+		}
+		else if(parsed[0]=="team_audio"){
+			vc=string_replace(pegar_mensagem(), parsed[0]+" ", "", false);
+			if(voicechat==1){
+				audio.play_stationary(vc,false,true);
+				if(logaudio==1){
+					saveaudio(vc);
+				}
+			}
+		}
+	}
+
+}
+
+void create(){
+	string us=v.input(pu.get_value("Por favor, digite o nome para seu novo personagem (espaços não são aceitos)."));
+	if(msginvalida(us)){
+		creating=false;
+		main_menu();
+	}
+	string e_mail=v.input(pu.get_value("Por favor, digite seu e-mail."));
+	if(e_mail==""||msginvalida(e_mail)||string_contains(e_mail, "@", 1)<0){
+		dlg(pu.get_value("E-mail em branco ou inválido."));
+		creating=false;
+		main_menu();
+	}
+	string seap=v.input(pu.get_value("Por favor, digite a senha para este personagem, espaços não são aceitos.")+" "+pu.get_value("Ela tem que ter, no mínimo, oito caracteres entre letras e números."));
+	if(msginvalida(seap)||seap.length()<8){
+		creating=false;
+		dlg(pu.get_value("Senha inválida. Isso pode ser porque ela contém menos de 8 caracteres, tenha símbolos especiais ou espaços."));
+		main_menu();
+	}
+	seap =string_hash(seap, 2, false);
+	clipboard_copy_text(seap);
+	setupmenu2();
+	m.add_item_tts(pu.get_value("Mulher"), "0");
+	m.add_item_tts(pu.get_value("Homem"), "1");
+	int mres=m.run(pu.get_value("Você é homem ou mulher?"), true);
+	if(m.get_item_name(mres)>=0){
+		speak(pu.get_value("Conectando..."));
+		p.play_stationary("conectando.ogg", false);
+		network net2;
+		network_event event2;
+		net2.setup_client(20, 1);
+		net2.connect(serveraddress, serverport);
+		connecttimer.restart();
+		while(true){
+			event2=net2.request();
+			if (key_pressed(KEY_ESCAPE)){
+				reset();
+				main_menu();
+			}
+			if(event2.type==event_connect&&connected==false){
+				peer_id=event2.peer_id;
+				send_reliable(0,"iamoriginal1234567890",0);
+				net2.send_reliable(peer_id, enviar("xt55 "+us+" "+seap+" "+e_mail+" "+m.get_item_name(mres)+" "+banned), 0);
+			}
+			else if(event2.type==event_receive&&receber(event2.message)=="created"){
+				creating=false;
+p.play_stationary("cuentacreada.ogg", false);
+				dlg(pu.get_value("Conta criada com sucesso! Pressione Enter para logar."));
+				un=us;
+				pwh=seap;
+				writeprefs();
+				reset();
+				login;
+			}
+			else if(event2.type==event_receive&&string_contains(receber(event2.message),"Erro",1)>-1){
+dlg(receber(event2.message));
+				reset();
+				creating=false;
+				main_menu();
+			}
+			if(connecttimer.elapsed>=connecttime){
+				dlg(pu.get_value("Servidor indisponível"));
+				reset();
+				main_menu();
+			}
+		}
+	}
+}
+
+bool login(bool localhost=false){
+	if (un=="" or pwh==""){
+		un=v.input(pu.get_value("Digite seu nome de usuário:"));
+		pwh=v.input(pu.get_value("Digite a senha da sua conta:"));
+		pwh =string_hash(pwh, 2, false);
+		writeprefs();
+	}
+	connecttimer.restart();
+	net.connect(serveraddress, serverport);
+	while(true) {
+		wait(5);
+		event=net.request();
+		if (key_pressed(KEY_ESCAPE)){
+			term =true;
+			relogin =false;
+			return false;
+		}		if(!connected && connecttimer.elapsed>=connecttime){
+			connecttimer.pause();
+			string reason = "Servidor indisponível. Tente novamente mais tarde ou entre em contato com a administração.";
+			speak(pu.get_value(reason));
+			reset();
+			relogin =true;
+			return false;
+		}
+		if(event.type==event_connect && !connected){
+			peer_id=event.peer_id;
+			send_reliable(peer_id, "h33j "+un+" "+pwh+" "+ver+" "+banned, 0);
+			relogin =false;
+			connected=true;
+		}
+		if(event.type==event_receive){
+			string[] parsed=string_split(pegar_mensagem(), " ", false);
+			if(parsed[0]=="block") {
+				net.disconnect_peer_forcefully(peer_id);
+				dlg(string_trim_left(pegar_mensagem(),6));
+				reset();
+				relogin =false;
+				return false;
+			}
+			/*if(parsed[0]=="x") me.x=string_to_number(parsed[1]);
+			if(parsed[0]=="y") me.y=string_to_number(parsed[1]);
+			if(parsed[0]=="changemap"){
+				load_map(string_replace(pegar_mensagem(), "changemap ", "", false));
+			}*/
+			if(parsed[0]=="updatenow"){
+				net.disconnect_peer_forcefully(peer_id);
+				dlg(pu.get_value("Erro: Você precisa da última versão para poder jogar. Por favor, atualize para a última versão em 'checar por atualizações', ou visite")+" "+SITE_GAME);
+				reset();
+				relogin =false;
+				return false;
+			}
+			if(parsed[0] =="erro:"||parsed[0]=="Error:") {
+				net.disconnect_peer_forcefully(peer_id);
+				dlg(receber(event.message));
+				reset();
+				relogin =false;
+				return false;
+			}
+			if(parsed[0] =="loggedin") {
+				username=un;
+				connecttimer.pause();
+				connected =true;
+				relogin =false;
+				return connected;
+			}
+		}
+	}
+	return false;
+}

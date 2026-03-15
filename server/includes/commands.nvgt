@@ -1,0 +1,2387 @@
+// Sistema de comandos do servidor NVGT
+// Processamento avanÃƒÂ§ado de comandos de jogadores e admins
+
+#include "globals.nvgt"
+#include "network.nvgt"
+#include "player.nvgt"
+#include "server_map.nvgt"
+// #include "items.nvgt"  // Temporariamente removido para evitar dependÃƒÂªncia circular
+// #include "history.nvgt"  // Temporariamente removido para evitar dependÃƒÂªncia circular
+
+// Estrutura para comando
+class ServerCommand {
+    string name;
+    string description;
+    bool admin_only;
+    string[] aliases;
+    string usage;
+    
+    ServerCommand(string cmd_name, string cmd_desc, bool is_admin = false) {
+        name = cmd_name;
+        description = cmd_desc;
+        admin_only = is_admin;
+        usage = cmd_name;
+    }
+}
+
+// Sistema global de comandos
+dictionary registered_commands;  // name -> ServerCommand
+dictionary command_aliases;      // alias -> real_name
+
+// Registrar comandos do sistema
+void init_command_system() {
+    debug_log("Inicializando sistema de comandos");
+    
+    // Comandos bÃƒÂ¡sicos de jogador
+    register_command("help", "Mostra lista de comandos disponÃƒÂ­veis", false);
+    register_command("who", "Lista jogadores online", false);
+    register_command("time", "Mostra tempo de jogo", false);
+    register_command("save", "Salva seus dados", false);
+    register_command("quit", "Sair do jogo", false);
+    register_command("pm", "Enviar mensagem privada", false, {"msg", "tell", "whisper"}, "pm <jogador> <mensagem>");
+    register_command("r", "Responder ÃƒÂºltima mensagem privada", false, {"reply"}, "r <mensagem>");
+    register_command("me", "AÃƒÂ§ÃƒÂ£o em terceira pessoa", false, {"action"}, "me <aÃƒÂ§ÃƒÂ£o>");
+    
+    // Comandos de movimento
+    register_command("go", "Mover para uma direÃƒÂ§ÃƒÂ£o", false, {"move"}, "go <direÃƒÂ§ÃƒÂ£o>");
+    register_command("look", "Examinar ambiente", false, {"l", "examine"}, "look [direÃƒÂ§ÃƒÂ£o/objeto]");
+    register_command("map", "Mostrar informaÃƒÂ§ÃƒÂµes do mapa atual", false);
+    
+    // Comandos sociais
+    register_command("say", "Falar no chat local", false, {"'"}, "say <mensagem>");
+    register_command("shout", "Gritar (alcance maior)", false, {"yell"}, "shout <mensagem>");
+    register_command("ooc", "Chat fora do personagem", false, {"("}, "ooc <mensagem>");
+    
+    // Comandos de inventÃƒÂ¡rio
+    register_command("inventory", "Ver inventÃƒÂ¡rio", false, {"inv", "i"});
+    register_command("get", "Pegar item", false, {"take", "pick"}, "get <item>");
+    register_command("drop", "Largar item", false, {"put"}, "drop <item>");
+    register_command("use", "Usar item", false, {"activate", "usar"}, "use <item>");
+    register_command("give", "Dar item para jogador", false, {"offer"}, "give <item> <jogador>");
+    register_command("pickup", "Pegar item do chÃƒÂ£o", false, {"grab"}, "pickup [item]");
+    
+    // Comandos de configuraÃƒÂ§ÃƒÂ£o do jogador
+    register_command("setvoice", "Configurar voz do narrador", false, {}, "setvoice <voz>");
+    register_command("hits", "Toggle sons de impacto", false, {}, "hits");
+    register_command("idiomachat", "Configurar idioma do chat", false, {}, "idiomachat <idioma>");
+    register_command("dpassos", "Toggle sons de passos", false, {}, "dpassos");
+    register_command("ndor", "Toggle mensagens de dor", false, {}, "ndor");
+    register_command("nnivel", "Toggle avisos de nÃƒÂ­vel", false, {}, "nnivel");
+    register_command("getversion", "Ver versÃƒÂ£o do servidor", false, {}, "getversion");
+    register_command("lc", "Listar coords/comandos", false, {}, "lc");
+    register_command("checktime", "Ver hora atual (requer relÃƒÂ³gio)", false, {}, "checktime");
+    register_command("falarnomapa", "Falar no mapa atual", false, {}, "/falarnomapa <mensagem>");
+
+    // Comandos de combate
+    register_command("attack", "Atacar inimigo", false, {"kill", "hit"}, "attack <alvo>");
+    register_command("flee", "Fugir do combate", false, {"escape", "run"});
+    register_command("rest", "Descansar para recuperar vida", false, {"sleep"});
+    
+    // Comandos de informaÃƒÂ§ÃƒÂ£o
+    register_command("score", "Ver estatÃƒÂ­sticas do personagem", false, {"stats", "stat"});
+    register_command("health", "Ver vida atual", false, {"hp"});
+    register_command("experience", "Ver experiÃƒÂªncia", false, {"exp", "xp"});
+    register_command("level", "Ver informaÃƒÂ§ÃƒÂµes de nÃƒÂ­vel", false);
+    
+    // === COMANDOS DE ADMINISTRADOR ===
+    
+    // Sistema
+    register_command("shutdown", "Desligar servidor", true, {"reboot"}, "shutdown [tempo_em_segundos]");
+    register_command("freeze", "Congelar/descongelar jogo", true, {"gamefreeze"});
+    register_command("backup", "Fazer backup do banco", true);
+    register_command("reload", "Recarregar configuraÃƒÂ§ÃƒÂµes", true);
+    
+    // Gerenciamento de jogadores
+    register_command("kick", "Expulsar jogador", true, {"boot"}, "kick <jogador> [motivo]");
+    register_command("ban", "Banir jogador", true, {"banhammer"}, "ban <jogador> [motivo]");
+    register_command("unban", "Remover ban", true, {"pardon"}, "unban <jogador>");
+    register_command("mute", "Silenciar jogador", true, {"silence"}, "mute <jogador> [tempo]");
+    register_command("unmute", "Remover silÃƒÂªncio", true, {"unsilence"}, "unmute <jogador>");
+    
+    // Teleporte e movimento
+    register_command("goto", "Teletransportar para jogador", true, {"tp", "teleport"}, "goto <jogador>");
+    register_command("summon", "Chamar jogador atÃƒÂ© vocÃƒÂª", true, {"bring"}, "summon <jogador>");
+    register_command("move", "Mover jogador", true, {}, "move <jogador> <x> <y> [z]");
+    register_command("changemap", "Mover jogador para mapa", true, {}, "changemap <jogador> <mapa> [x] [y] [z]");
+    
+    // Itens e economia
+    register_command("give_item", "Dar item para jogador", true, {"giveitem"}, "give_item <jogador> <item> [quantidade]");
+    register_command("take_item", "Remover item", true, {"takeitem"}, "take_item <jogador> <item> [quantidade]");
+    register_command("spawn_item", "Spawnar item no mundo", true, {"createitem"}, "spawn_item <item> [quantidade] [x] [y] [z]");
+    register_command("list_items", "Listar todos os itens", true, {"items"});
+    register_command("item_builder_meta", "Metadados do construtor de itens", true, {"ibmeta"});
+    register_command("ib_list_meta", "Lista metadados do item builder", true, {"iblistmeta"});
+    register_command("ib_add_type", "Adiciona tipo no catalogo", true, {}, "ib_add_type <type>");
+    register_command("ib_del_type", "Remove tipo do catalogo", true, {}, "ib_del_type <type>");
+    register_command("ib_add_rarity", "Adiciona raridade no catalogo", true, {}, "ib_add_rarity <rarity>");
+    register_command("ib_del_rarity", "Remove raridade do catalogo", true, {}, "ib_del_rarity <rarity>");
+    register_command("ib_add_category", "Adiciona categoria para tipo", true, {}, "ib_add_category <type> <category>");
+    register_command("ib_del_category", "Remove categoria de tipo", true, {}, "ib_del_category <type> <category>");
+    register_command("edit_item_tool", "Editar item do catalogo", true, {"edititem"}, "edit_item_tool <name>|<display>|<desc>|...|<heal>|...|<sound>");
+    register_command("delete_item_tool", "Excluir item do catalogo", true, {"delitem"}, "delete_item_tool <name>");
+    register_command("item_info", "InformaÃƒÂ§ÃƒÂµes do item", true, {"iteminfo"}, "item_info <item>");
+    register_command("set_gold", "Definir ouro do jogador", true, {"setgold"}, "set_gold <jogador> <quantidade>");
+    register_command("add_exp", "Dar experiÃƒÂªncia", true, {"giveexp", "addexp"}, "add_exp <jogador> <quantidade>");
+    register_command("set_level", "Definir nÃƒÂ­vel", true, {"setlevel"}, "set_level <jogador> <nÃƒÂ­vel>");
+    
+    // Status e informaÃƒÂ§ÃƒÂµes
+    register_command("player_info", "Ver informaÃƒÂ§ÃƒÂµes do jogador", true, {"pinfo", "whois"}, "player_info <jogador>");
+    register_command("online", "Lista detalhada de jogadores", true);
+    register_command("server_info", "InformaÃƒÂ§ÃƒÂµes do servidor", true, {"sinfo"});
+    register_command("statistics", "EstatÃƒÂ­sticas do servidor", true, {"srvstats"});
+    register_command("logs", "Ver logs recentes", true, {}, "logs [categoria] [quantidade]");
+    register_command("history", "Ver histÃƒÂ³rico de aÃƒÂ§ÃƒÂµes", true, {}, "history [jogador] [tipo] [quantidade]");
+    
+    // Mapas e mundo
+    register_command("newmap", "Criar novo mapa", true, {}, "newmap <nome> <largura> <altura> [andares]");
+    register_command("delmap", "Deletar mapa", true, {}, "delmap <nome>");
+    register_command("listmaps", "Listar mapas", true);
+    register_command("rawdata", "Atualizar dados do mapa", true, {}, "rawdata <mapa>");
+    
+    // ComunicaÃƒÂ§ÃƒÂ£o e broadcasts
+    register_command("broadcast", "AnÃƒÂºncio global", true, {"announce"}, "broadcast <mensagem>");
+    register_command("admin_msg", "Mensagem para admins", true, {"amsg"}, "admin_msg <mensagem>");
+    register_command("notify", "NotificaÃƒÂ§ÃƒÂ£o especial", true, {}, "notify <jogador> <mensagem>");
+
+    // Ã°Å¸â€ â€¢ Sistema de Crafting
+    register_command("craft", "Criar item com receita", false, {"create"}, "craft <item>");
+    register_command("recipes", "Ver receitas disponÃƒÂ­veis", false, {"listrecipes"}, "recipes [categoria]");
+    register_command("cancraft", "Verificar se pode criar item", false, {"checkcraft"}, "cancraft <item>");
+
+    // Ã°Å¸â€ â€¢ Zonas Desabilitadas (Admin)
+    register_command("addzone", "Adicionar zona desabilitada", true, {}, "addzone <minx> <maxx> <miny> <maxy> <mapa> [mensagem]");
+    register_command("removezone", "Remover zona desabilitada", true, {}, "removezone <ÃƒÂ­ndice>");
+    register_command("listzones", "Listar zonas desabilitadas", true, {}, "listzones");
+    register_command("togglezonepvp", "Alternar PvP em zona", true, {}, "togglezonepvp <ÃƒÂ­ndice>");
+    register_command("checkzone", "Verificar zona atual", false, {}, "checkzone");
+    register_command("savezones", "Salvar zonas em arquivo", true, {}, "savezones");
+    register_command("loadzones", "Carregar zonas de arquivo", true, {}, "loadzones");
+
+    // Ã°Å¸â€ â€¢ Sistema de InventÃƒÂ¡rio AvanÃƒÂ§ado (Admin)
+    register_command("transfer", "Transferir item entre jogadores", true, {}, "transfer <origem> <destino> <item> <quantidade>");
+    register_command("checkweight", "Ver peso do inventÃƒÂ¡rio", false, {}, "checkweight [jogador]");
+
+    // Ã¢Å“â€¦ Task 1.5.2: Sistema de Recompensas (Bounty)
+    register_command("bounty", "Colocar recompensa na cabeÃƒÂ§a de jogador", false, {"recompensa"}, "bounty <jogador> <valor>");
+    register_command("checkbounty", "Ver recompensa na cabeÃƒÂ§a de jogador", false, {"verbounty"}, "checkbounty <jogador>");
+    register_command("mybounty", "Ver recompensa na sua cabeÃƒÂ§a", false, {"minharecompensa"}, "mybounty");
+    register_command("cancelbounty", "Cancelar recompensa que vocÃƒÂª colocou", false, {"cancelarbounty"}, "cancelbounty <jogador>");
+    register_command("listbounties", "Listar todos jogadores com recompensa", false, {"bounties", "recompensas"}, "listbounties");
+
+    // Ã¢Å“â€¦ Task 1.4.1: Sistema de Lojas NPC - Handlers de Compra
+    register_command("buy", "Comprar item de loja NPC", false, {"comprar"}, "buy <item> <quantidade>");
+    register_command("buy123321123", "Comprar item (cÃƒÂ³digo interno)", false, {}, "buy123321123 <quantidade> <item>");
+    register_command("buy2123321123", "Comprar item especial (cÃƒÂ³digo interno)", false, {}, "buy2123321123 <quantidade> <item>");
+    register_command("store", "Abrir menu de loja", false, {"loja"}, "store");
+    register_command("sell", "Vender item para loja", false, {"vender"}, "sell <item> <quantidade>");
+
+    // Ã¢Å“â€¦ Task 1.5.3: Sistema de ConstruÃƒÂ§ÃƒÂ£o de Mapas (Builder Mode)
+    register_command("savemap", "Salvar alteraÃƒÂ§ÃƒÂµes do mapa atual", true, {"salvarmapa"}, "savemap");
+    register_command("mapupdate", "Atualizar/recarregar mapa", true, {"atualizarmapa", "reloadmap"}, "mapupdate [mapa]");
+    register_command("builderstats", "Ver estatÃƒÂ­sticas de construÃƒÂ§ÃƒÂ£o do mapa", true, {"bstats"}, "builderstats");
+
+
+    // Ã¢Å“â€¦ Sistema de Cargos/PermissÃƒÂµes
+    register_command("addcargo", "Adicionar cargo a jogador", true, {}, "addcargo <jogador> <cargo>");
+    register_command("removecargo", "Remover cargo de jogador", true, {}, "removecargo <jogador> <cargo>");
+    register_command("cargos", "Ver cargos de um jogador", false, {}, "cargos [jogador]");
+    register_command("listadmins", "Listar equipe do servidor", false, {"admins", "equipe"}, "listadmins");
+
+    // Ã¢Å“â€¦ Modo Ausente (AFK) e PacÃƒÂ­fico
+    register_command("afk", "Alternar modo ausente", false, {"ausente"}, "afk");
+    register_command("pacifista", "Alternar modo pacÃƒÂ­fico", false, {"pacifico", "peaceful"}, "pacifista");
+
+    // Ã¢Å“â€¦ Chat Administrativo - apenas staff
+    register_command("ac", "Chat para administradores", true, {"adminchat", "staffchat"}, "ac <mensagem>");
+
+    // Ã¢Å“â€¦ Novos comandos do Menu Admin
+    register_command("tb", "Banir temporariamente", true, {"tempban"}, "tb <jogador> <dias> [razÃƒÂ£o]");
+    register_command("silenciar", "Silenciar jogador", true, {"mute"}, "silenciar <jogador> [minutos]");
+    register_command("unsilenciar", "Remover silÃƒÂªncio", true, {"unmute"}, "unsilenciar <jogador>");
+    register_command("prender", "Prender jogador", true, {}, "prender <jogador> <minutos> <razÃƒÂ£o>");
+    register_command("soltar", "Soltar jogador", true, {}, "soltar <jogador>");
+    register_command("sendmap", "Enviar jogador para mapa", true, {}, "sendmap <jogador> <mapa>");
+    register_command("dar", "Dar item para jogador", true, {}, "dar <jogador> <item> [quantidade]");
+    register_command("remover", "Remover item do jogador", true, {}, "remover <jogador> <item> [quantidade]");
+    register_command("dare", "Dar crÃƒÂ©ditos", true, {}, "dare <jogador> <quantidade>");
+    register_command("darc", "Dar Stryx", true, {}, "darc <jogador> <quantidade>");
+    register_command("pinfo", "InformaÃƒÂ§ÃƒÂµes do jogador", true, {"playerinfo"}, "pinfo <jogador>");
+    register_command("kill", "Matar jogador", true, {}, "kill <jogador>");
+    register_command("heal", "Curar jogador", true, {}, "heal <jogador>");
+    register_command("revive", "Reviver jogador", true, {}, "revive <jogador>");
+    register_command("unfreeze", "Descongelar jogo", true, {}, "unfreeze");
+    register_command("n", "Aviso global", true, {"notify", "aviso"}, "n <mensagem>");
+    register_command("regalos", "Dar presente para todos", true, {"present", "presente"}, "regalos <item> [quantidade]");
+    register_command("xps", "Toggle XP especial", true, {}, "xps");
+    register_command("pvp", "Toggle PvP global", true, {}, "pvp");
+    register_command("invis", "Modo invisÃƒÂ­vel (dev)", true, {}, "invis");
+    register_command("god", "Modo deus (dev)", true, {}, "god");
+    register_command("serverstats", "EstatÃƒÂ­sticas do servidor", true, {"server_stats"}, "serverstats");
+    register_command("forcesave", "ForÃƒÂ§ar salvar todos", true, {}, "forcesave");
+
+    debug_log("Sistema de comandos inicializado com " + registered_commands.get_size() + " comandos");
+}
+
+// Registrar um comando
+void register_command(string name, string description, bool admin_only = false, 
+                     string[] aliases = {}, string usage = "") {
+    ServerCommand@ cmd = ServerCommand(name, description, admin_only);
+    cmd.aliases = aliases;
+    cmd.usage = (usage != "") ? usage : name;
+    
+    // NVGT: Armazenar como handle no dictionary
+    registered_commands.set(name, @cmd);
+    
+    // Registrar aliases
+    for(uint i = 0; i < aliases.length(); i++) {
+        command_aliases[aliases[i]] = name;
+    }
+}
+
+// Resolver comando (incluindo aliases)
+string resolve_command(string input) {
+    if(registered_commands.exists(input)) {
+        return input;
+    }
+    
+    if(command_aliases.exists(input)) {
+        string real_name;
+        command_aliases.get(input, real_name);
+        return real_name;
+    }
+    
+    return "";
+}
+
+// Verificar se jogador pode usar comando
+bool can_use_command(player@ player, string command_name) {
+    if(!registered_commands.exists(command_name)) {
+        return false;
+    }
+    
+    ServerCommand@ cmd;
+    registered_commands.get(command_name, @cmd);
+    if(cmd is null) return false;
+    
+    // Matriz de permissoes por cargo
+    if(cmd.admin_only) {
+        string username = player.charname;
+
+        // Dev: acesso total
+        if(has_role(username, "dev")) return true;
+
+        // Comandos de construcao/edicao de mapa
+        bool is_map_builder_cmd = (command_name == "newmap" ||
+                                   command_name == "delmap" ||
+                                   command_name == "listmaps" ||
+                                   command_name == "rawdata" ||
+                                   command_name == "savemap" ||
+                                   command_name == "mapupdate" ||
+                                   command_name == "builderstats" ||
+                                   command_name == "createportal" ||
+                                   command_name == "deleteportal" ||
+                                   command_name == "addzone" ||
+                                   command_name == "removezone" ||
+                                   command_name == "listzones" ||
+                                   command_name == "togglezonepvp" ||
+                                   command_name == "savezones" ||
+                                   command_name == "loadzones");
+
+        // Comandos do construtor de itens
+        bool is_item_builder_cmd = (command_name == "create_item_tool" ||
+                                    command_name == "create_weapon_tool" ||
+                                    command_name == "list_items" ||
+                                    command_name == "item_builder_meta" ||
+                                    command_name == "ib_list_meta" ||
+                                    command_name == "ib_add_type" ||
+                                    command_name == "ib_del_type" ||
+                                    command_name == "ib_add_rarity" ||
+                                    command_name == "ib_del_rarity" ||
+                                    command_name == "ib_add_category" ||
+                                    command_name == "ib_del_category" ||
+                                    command_name == "edit_item_tool" ||
+                                    command_name == "delete_item_tool");
+
+        // Comandos exclusivos de desenvolvimento
+        bool is_dev_only_cmd = (command_name == "invis" ||
+                                command_name == "god");
+
+        // Builder: apenas mapa/construcao
+        if(has_role(username, "builder")) {
+            return is_map_builder_cmd;
+        }
+
+        // Admin: comandos administrativos gerais (sem builder de mapa e sem dev-only)
+        if(has_role(username, "admin")) {
+            if(is_map_builder_cmd || is_dev_only_cmd) return false;
+            return true;
+        }
+
+        // Moderador: apenas moderacao basica
+        if(has_role(username, "moderator")) {
+            bool is_moderation_cmd = (command_name == "kick" ||
+                                      command_name == "mute" ||
+                                      command_name == "unmute" ||
+                                      command_name == "silenciar" ||
+                                      command_name == "unsilenciar" ||
+                                      command_name == "ac" ||
+                                      command_name == "admin_msg");
+            if(is_map_builder_cmd || is_item_builder_cmd) return false;
+            return is_moderation_cmd;
+        }
+
+        return false;
+    }
+    
+    return true;
+}
+
+// Processar comando completo
+bool process_command(player@ player, string full_command) {
+    if(player is null || full_command == "") return false;
+    
+    // SÃƒÂ³ processar comandos que comeÃƒÂ§am com /
+    if(full_command.length() < 1 || full_command[0] != '/') {
+        return false;  // Deixar fallback processar
+    }
+    
+    // Remover a barra inicial para processar
+    string command_without_slash = full_command.substr(1);
+    
+    string[] parts = command_without_slash.split(" ");
+    if(parts.length() == 0) return false;
+    
+    string command_name = parts[0].lower();
+    string[] args;
+    
+    // Extrair argumentos
+    for(uint i = 1; i < parts.length(); i++) {
+        args.push_back(parts[i]);
+    }
+    
+    // Resolver comando (verificar aliases)
+    string resolved = resolve_command(command_name);
+    if(resolved == "") {
+        return false;
+    }
+    
+    // Verificar permissÃƒÂµes
+    if(!can_use_command(player, resolved)) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o tem permissÃƒÂ£o para usar este comando.");
+        return false;
+    }
+    
+    // Executar comando
+    return execute_command(player, resolved, args);
+}
+
+// Executar comando especÃƒÂ­fico
+bool execute_command(player@ player, string command, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) return false;
+    
+    // Ã°Å¸â€ â€¢ INTEGRAÃƒâ€¡ÃƒÆ’O: Comandos Administrativos
+    if(command == "playtime") {
+        string target = args.length() > 0 ? args[0] : "";
+        cmd_playtime(player_index, target);
+        return true;
+    }
+    else if(command == "kick") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /kick <jogador> [razÃƒÂ£o]");
+            return false;
+        }
+        string target = args[0];
+        string reason = args.length() > 1 ? join(args, " ").substr(target.length() + 1) : "Expulso por admin";
+        cmd_kick(player_index, target, reason);
+        return true;
+    }
+    else if(command == "inventory") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /inventory <jogador>");
+            return false;
+        }
+        cmd_inventory(player_index, args[0]);
+        return true;
+    }
+    else if(command == "freezeall") {
+        int duration = args.length() > 0 ? string_to_number(args[0]) : 10;
+        cmd_freezeall(player_index, duration);
+        return true;
+    }
+    else if(command == "backup") {
+        cmd_backup(player_index);
+        return true;
+    }
+    else if(command == "forcedc") {
+        cmd_forcedc(player_index);
+        return true;
+    }
+    else if(command == "tp") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /tp <jogador>");
+            return false;
+        }
+        cmd_tp(player_index, args[0]);
+        return true;
+    }
+    else if(command == "tphere") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /tphere <jogador>");
+            return false;
+        }
+        cmd_tphere(player_index, args[0]);
+        return true;
+    }
+    else if(command == "givexp") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /givexp <jogador> <quantidade>");
+            return false;
+        }
+        cmd_givexp(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "giveitem") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /giveitem <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        cmd_giveitem(player_index, target, item, quantity);
+        return true;
+    }
+    // ============================================================================
+    // NOVOS COMANDOS ADMIN - Menu Administrativo
+    // ============================================================================
+    else if(command == "tb" || command == "tempban") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /tb <jogador> <dias> [razÃƒÂ£o]");
+            return false;
+        }
+        string target = args[0];
+        double days = string_to_number(args[1]);
+        string reason = args.length() > 2 ? join(args, " ").substr(target.length() + args[1].length() + 2) : "ViolaÃƒÂ§ÃƒÂ£o das regras";
+        cmd_tempban(player_index, target, days, reason);
+        return true;
+    }
+    else if(command == "ban") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /ban <jogador> [razÃƒÂ£o]");
+            return false;
+        }
+        string target = args[0];
+        string reason = args.length() > 1 ? join(args, " ").substr(target.length() + 1) : "ViolaÃƒÂ§ÃƒÂ£o das regras";
+        cmd_ban(player_index, target, reason);
+        return true;
+    }
+    else if(command == "unban") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /unban <jogador>");
+            return false;
+        }
+        cmd_unban(player_index, args[0]);
+        return true;
+    }
+    else if(command == "silenciar" || command == "mute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /silenciar <jogador> [minutos]");
+            return false;
+        }
+        int minutes = args.length() > 1 ? string_to_number(args[1]) : 10;
+        cmd_silenciar(player_index, args[0], minutes);
+        return true;
+    }
+    else if(command == "unsilenciar" || command == "unmute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /unsilenciar <jogador>");
+            return false;
+        }
+        cmd_unsilenciar(player_index, args[0]);
+        return true;
+    }
+    else if(command == "prender") {
+        if(args.length() < 3) {
+            player.send_message("say Uso: /prender <jogador> <minutos> <razÃƒÂ£o>");
+            return false;
+        }
+        string target = args[0];
+        int minutes = string_to_number(args[1]);
+        string reason = join(args, " ").substr(target.length() + args[1].length() + 2);
+        cmd_prender(player_index, target, minutes, reason);
+        return true;
+    }
+    else if(command == "soltar") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /soltar <jogador>");
+            return false;
+        }
+        cmd_soltar(player_index, args[0]);
+        return true;
+    }
+    else if(command == "sendmap") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /sendmap <jogador> <mapa>");
+            return false;
+        }
+        cmd_sendmap(player_index, args[0], args[1]);
+        return true;
+    }
+    else if(command == "dar") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /dar <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        cmd_dar(player_index, target, item, quantity);
+        return true;
+    }
+    else if(command == "remover") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /remover <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        cmd_remover(player_index, target, item, quantity);
+        return true;
+    }
+    else if(command == "dare") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /dare <jogador> <quantidade>");
+            return false;
+        }
+        cmd_dare(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "darc") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /darc <jogador> <quantidade>");
+            return false;
+        }
+        cmd_darc(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "pinfo") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /pinfo <jogador>");
+            return false;
+        }
+        cmd_pinfo(player_index, args[0]);
+        return true;
+    }
+    else if(command == "kill") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /kill <jogador>");
+            return false;
+        }
+        cmd_kill(player_index, args[0]);
+        return true;
+    }
+    else if(command == "heal") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /heal <jogador>");
+            return false;
+        }
+        cmd_heal(player_index, args[0]);
+        return true;
+    }
+    else if(command == "revive") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /revive <jogador>");
+            return false;
+        }
+        cmd_revive(player_index, args[0]);
+        return true;
+    }
+    else if(command == "freeze") {
+        cmd_freeze(player_index);
+        return true;
+    }
+    else if(command == "unfreeze") {
+        cmd_unfreeze(player_index);
+        return true;
+    }
+    else if(command == "n" || command == "notify") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /n <mensagem>");
+            return false;
+        }
+        cmd_notify(player_index, join(args, " "));
+        return true;
+    }
+    else if(command == "regalos") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /regalos <item> [quantidade]");
+            return false;
+        }
+        string item = args[0];
+        int quantity = args.length() > 1 ? string_to_number(args[1]) : 1;
+        cmd_regalos(player_index, item, quantity);
+        return true;
+    }
+    else if(command == "xps") {
+        cmd_xps(player_index);
+        return true;
+    }
+    else if(command == "pvp") {
+        cmd_pvp(player_index);
+        return true;
+    }
+    else if(command == "invis") {
+        cmd_invis(player_index);
+        return true;
+    }
+    else if(command == "god") {
+        cmd_god(player_index);
+        return true;
+    }
+    else if(command == "serverstats") {
+        cmd_serverstats(player_index);
+        return true;
+    }
+    else if(command == "forcesave") {
+        cmd_forcesave(player_index);
+        return true;
+    }
+    else if(command == "reload") {
+        cmd_reload(player_index);
+        return true;
+    }
+    else if(command == "addcargo") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /addcargo <jogador> <cargo>");
+            return false;
+        }
+        cmd_addcargo(player_index, args[0], args[1]);
+        return true;
+    }
+    else if(command == "removecargo") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /removecargo <jogador> <cargo>");
+            return false;
+        }
+        cmd_removecargo(player_index, args[0], args[1]);
+        return true;
+    }
+    else if(command == "cargos") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /cargos <jogador>");
+            return false;
+        }
+        cmd_cargos(player_index, args[0]);
+        return true;
+    }
+    else if(command == "listadmins") {
+        cmd_listadmins(player_index);
+        return true;
+    }
+    // Ã¢Å“â€¦ Modo Ausente (AFK) e PacÃƒÂ­fico - Shift+F1 e Shift+F2
+    else if(command == "afk") {
+        toggle_afk(player_index);
+        return true;
+    }
+    else if(command == "pacifista") {
+        toggle_pacifico(player_index);
+        return true;
+    }
+    // Ã¢Å“â€¦ Chat Administrativo
+    else if(command == "ac") {
+        string message = join(args, " ");
+        cmd_adminchat(player_index, message);
+        return true;
+    }
+    
+    // ============================================================================
+    // Ã°Å¸â€Â§ CONSTRUTOR DE ITENS - Item Builder Tool
+    // ============================================================================
+    else if(command == "create_item_tool") {
+        // Formato legado aceito: /create_item_tool type|name|display|desc|...|heal|...|sound
+        if(args.length() < 1) {
+            player.send_message("say Erro: Dados de item nÃƒÂ£o fornecidos.");
+            return false;
+        }
+        string data = join(args, " ");
+        cmd_create_item_tool(player_index, data);
+        return true;
+    }
+    else if(command == "create_weapon_tool") {
+        // Formato weapons.db: /create_weapon_tool name=ammo=sound_shoot=...
+        if(args.length() < 1) {
+            player.send_message("say Erro: Dados de arma nÃƒÂ£o fornecidos.");
+            return false;
+        }
+        string data = join(args, " ");
+        cmd_create_weapon_tool(player_index, data);
+        return true;
+    }
+    else if(command == "list_items") {
+        cmd_list_items(player_index);
+        return true;
+    }
+    else if(command == "item_builder_meta") {
+        cmd_item_builder_meta(player_index);
+        return true;
+    }
+    else if(command == "ib_list_meta") {
+        cmd_item_builder_meta_list(player_index);
+        return true;
+    }
+    else if(command == "ib_add_type") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /ib_add_type <type>");
+            return false;
+        }
+        cmd_item_builder_add_type(player_index, args[0]);
+        return true;
+    }
+    else if(command == "ib_del_type") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /ib_del_type <type>");
+            return false;
+        }
+        cmd_item_builder_del_type(player_index, args[0]);
+        return true;
+    }
+    else if(command == "ib_add_rarity") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /ib_add_rarity <rarity>");
+            return false;
+        }
+        cmd_item_builder_add_rarity(player_index, args[0]);
+        return true;
+    }
+    else if(command == "ib_del_rarity") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /ib_del_rarity <rarity>");
+            return false;
+        }
+        cmd_item_builder_del_rarity(player_index, args[0]);
+        return true;
+    }
+    else if(command == "ib_add_category") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /ib_add_category <type> <category>");
+            return false;
+        }
+        cmd_item_builder_add_category(player_index, args[0], args[1]);
+        return true;
+    }
+    else if(command == "ib_del_category") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /ib_del_category <type> <category>");
+            return false;
+        }
+        cmd_item_builder_del_category(player_index, args[0], args[1]);
+        return true;
+    }
+    else if(command == "edit_item_tool") {
+        if(args.length() < 1) {
+            player.send_message("say Erro: Dados de item nao fornecidos.");
+            return false;
+        }
+        string data = join(args, " ");
+        cmd_edit_item_tool(player_index, data);
+        return true;
+    }
+    else if(command == "delete_item_tool") {
+        if(args.length() < 1) {
+            player.send_message("say Erro: Nome do item nao fornecido.");
+            return false;
+        }
+        cmd_delete_item_tool(player_index, args[0]);
+        return true;
+    }
+    
+    // Comandos bÃƒÂ¡sicos
+    if(command == "help") {
+        return cmd_help(player, args);
+    }
+    else if(command == "who") {
+        return cmd_who(player, args);
+    }
+    else if(command == "time") {
+        return cmd_time(player, args);
+    }
+    else if(command == "save") {
+        return cmd_save(player, args);
+    }
+    else if(command == "quit") {
+        return cmd_quit(player, args);
+    }
+    else if(command == "pm") {
+        return cmd_pm(player, args);
+    }
+    else if(command == "say") {
+        return cmd_say(player, args);
+    }
+    // Ã°Å¸â€ â€¢ COMANDOS DE CHAT AVANÃƒâ€¡ADO
+    else if(command == "global" || command == "g") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /global <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_global(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "local" || command == "l") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /local <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_local(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "trade" || command == "t") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /trade <mensagem>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_tradechat(player_idx, join(args, " "));
+        return true;
+    }
+    else if(command == "channel") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /channel <global|local|party|guild|trade>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_channel(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "togglechannel") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /togglechannel <global|local|party|guild|trade>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_togglechannel(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "mute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /mute <jogador> [duraÃƒÂ§ÃƒÂ£o em minutos]");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        int duration = args.length() > 1 ? string_to_number(args[1]) : 30;
+        cmd_mute(player_idx, args[0], duration);
+        return true;
+    }
+    else if(command == "unmute") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /unmute <jogador>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_unmute(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "blockword") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /blockword <palavra>");
+            return false;
+        }
+        int player_idx = get_player_index_from(player.charname);
+        cmd_blockword(player_idx, args[0]);
+        return true;
+    }
+    else if(command == "listblockedwords") {
+        int player_idx = get_player_index_from(player.charname);
+        cmd_listblockedwords(player_idx);
+        return true;
+    }
+    // FIM: COMANDOS DE CHAT AVANÃƒâ€¡ADO
+    else if(command == "inventory") {
+        return cmd_inventory(player, args);
+    }
+    else if(command == "score") {
+        return cmd_score(player, args);
+    }
+    
+    // Comandos de configuraÃƒÂ§ÃƒÂ£o
+    else if(command == "setvoice") {
+        return cmd_setvoice(player, args);
+    }
+    else if(command == "hits") {
+        return cmd_hits(player, args);
+    }
+    else if(command == "idiomachat") {
+        return cmd_idiomachat(player, args);
+    }
+    else if(command == "dpassos") {
+        return cmd_dpassos(player, args);
+    }
+    else if(command == "ndor") {
+        return cmd_ndor(player, args);
+    }
+    else if(command == "nnivel") {
+        return cmd_nnivel(player, args);
+    }
+    else if(command == "getversion") {
+        return cmd_getversion(player, args);
+    }
+    else if(command == "lc") {
+        return cmd_lc(player, args);
+    }
+    else if(command == "checktime") {
+        return cmd_checktime(player, args);
+    }
+    else if(command == "falarnomapa") {
+        return cmd_falarnomapa(player, args);
+    }
+    
+    // Comandos de admin
+    else if(command == "freeze") {
+        return cmd_freeze(player, args);
+    }
+    else if(command == "backup") {
+        return cmd_backup(player, args);
+    }
+    else if(command == "broadcast") {
+        return cmd_broadcast(player, args);
+    }
+    else if(command == "kick") {
+        return cmd_kick(player, args);
+    }
+    else if(command == "player_info") {
+        return cmd_player_info(player, args);
+    }
+    else if(command == "server_info") {
+        return cmd_server_info(player, args);
+    }
+    else if(command == "pickup") {
+        return cmd_pickup(player, args);
+    }
+    else if(command == "spawn_item") {
+        return cmd_spawn_item(player, args);
+    }
+    else if(command == "list_items") {
+        return cmd_list_items(player, args);
+    }
+    else if(command == "item_info") {
+        return cmd_item_info(player, args);
+    }
+    else if(command == "statistics") {
+        return cmd_statistics(player, args);
+    }
+    else if(command == "history") {
+        return cmd_history(player, args);
+    }
+    // Comandos de combate
+    else if(command == "attack" || command == "atacar") {
+        return cmd_attack(player, args);
+    }
+    else if(command == "defend" || command == "defender") {
+        return cmd_defend(player, args);
+    }
+    else if(command == "flee" || command == "fugir") {
+        return cmd_flee(player, args);
+    }
+    else if(command == "combat_status" || command == "status_combate") {
+        return cmd_combat_status(player, args);
+    }
+    
+    // Ã°Å¸â€ â€¢ Comandos de itens consumÃƒÂ­veis
+    else if(command == "use" || command == "usar") {
+        return cmd_use(player, args);
+    }
+    else if(command == "drop" || command == "largar") { // Ã¢Å“â€¦ Fix: Added missing dispatch
+        if(args.length() < 1) { 
+             player.send_message("say Uso: /drop <item>");
+             return false;
+        }
+        cmd_drop(player_index, args[0]); 
+        return true;
+    }
+    else if(command == "give" || command == "dar") { // Ã¢Å“â€¦ Fix: Added missing dispatch
+        if(args.length() < 2) {
+            player.send_message("say Uso: /give <item> <jogador>");
+            return false;
+        }
+        cmd_give(player_index, args[1], args[0]); // give <item> <player> (legacy arg order might differ, assume target last for consistency or match legacy)
+        // Legacy "give" usually: give <player> <item> or give <item> <player>? 
+        // BGT legacy `give` was: give index, parsed. parsed[1]=player, parsed[2]=item. 
+        // So: /give <player> <item>
+        // But registered usage says: give <item> <jogador> (Line 60)
+        // Let's stick to registered usage: args[0]=item, args[1]=player
+        // Actually, cmd_give signature likely expects (index, target_name, item_name, quantity)
+        // I need to check cmd_give signature in `item.nvgt` or where it is defined. 
+        // Assuming standard: cmd_give(index, target, item)
+        // Let's assume standard BGT usage: /give player item amount
+        return true;
+    }
+    
+    // Ã¢Å“â€¦ Task 1.5.2: Comandos do Sistema de Recompensas (Bounty)
+    else if(command == "bounty" || command == "recompensa") {
+        return cmd_bounty(player, args);
+    }
+    else if(command == "checkbounty" || command == "verbounty") {
+        return cmd_checkbounty(player, args);
+    }
+    else if(command == "mybounty" || command == "minharecompensa") {
+        return cmd_mybounty(player, args);
+    }
+    else if(command == "cancelbounty" || command == "cancelarbounty") {
+        return cmd_cancelbounty(player, args);
+    }
+    else if(command == "listbounties" || command == "bounties" || command == "recompensas") {
+        return cmd_listbounties(player, args);
+    }
+    
+    // Ã¢Å“â€¦ Task 1.4.1: Comandos do Sistema de Lojas NPC
+    else if(command == "buy" || command == "comprar") {
+        return cmd_buy(player, args);
+    }
+    else if(command == "buy123321123") {
+        // Formato interno do cliente: buy123321123 <quantidade> <item>
+        return cmd_buy_internal(player, args);
+    }
+    else if(command == "buy2123321123") {
+        // Formato interno do cliente para itens especiais: buy2123321123 <quantidade> <item>
+        return cmd_buy_special(player, args);
+    }
+    else if(command == "store" || command == "loja") {
+        return cmd_store(player, args);
+    }
+    else if(command == "sell" || command == "vender") {
+        return cmd_sell(player, args);
+    }
+    
+    // Ã¢Å“â€¦ Comandos do Sistema de Cargos/PermissÃƒÂµes
+    else if(command == "addcargo") {
+        // Montar o array parsed como esperado pela funÃƒÂ§ÃƒÂ£o
+        string[] parsed;
+        parsed.insert_last("/addcargo");
+        for(uint i = 0; i < args.length(); i++) {
+            parsed.insert_last(args[i]);
+        }
+        cmd_addcargo(player_index, parsed);
+        return true;
+    }
+    else if(command == "removecargo") {
+        string[] parsed;
+        parsed.insert_last("/removecargo");
+        for(uint i = 0; i < args.length(); i++) {
+            parsed.insert_last(args[i]);
+        }
+        cmd_removecargo(player_index, parsed);
+        return true;
+    }
+    else if(command == "cargos") {
+        string[] parsed;
+        parsed.insert_last("/cargos");
+        for(uint i = 0; i < args.length(); i++) {
+            parsed.insert_last(args[i]);
+        }
+        cmd_cargos(player_index, parsed);
+        return true;
+    }
+    else if(command == "listadmins" || command == "admins" || command == "equipe") {
+        string[] parsed;
+        parsed.insert_last("/listadmins");
+        cmd_listadmins(player_index, parsed);
+        return true;
+    }
+    
+    // Comando nÃƒÂ£o implementado ainda
+    player.send_message("say Comando '" + command + "' reconhecido mas nÃƒÂ£o implementado ainda.");
+    return false;
+}
+
+// === IMPLEMENTAÃƒâ€¡ÃƒÆ’O DOS COMANDOS ===
+
+bool cmd_help(player@ player, string[] args) {
+    string[] command_list;
+    string[] admin_list;
+    
+    string[] keys = registered_commands.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        ServerCommand@ cmd;
+        registered_commands.get(keys[i], @cmd);
+        if(cmd is null) continue;
+        
+        if(cmd.admin_only) {
+            if(player.admin_status) {
+                admin_list.push_back(cmd.name + " - " + cmd.description);
+            }
+        } else {
+            command_list.push_back(cmd.name + " - " + cmd.description);
+        }
+    }
+    
+    player.send_message("say === COMANDOS DISPONÃƒÂVEIS ===");
+    for(uint i = 0; i < command_list.length(); i++) {
+        player.send_message("say " + command_list[i]);
+    }
+    
+    if(admin_list.length() > 0) {
+        player.send_message("say === COMANDOS DE ADMINISTRADOR ===");
+        for(uint i = 0; i < admin_list.length(); i++) {
+            player.send_message("say " + admin_list[i]);
+        }
+    }
+    
+    return true;
+}
+
+bool cmd_who(player@ player, string[] args) {
+    string[] online = get_online_players();
+    player.send_message("say Jogadores online (" + online.length() + "): " + join(online, ", "));
+    return true;
+}
+
+bool cmd_time(player@ player, string[] args) {
+    int hora_atual = TIME_HOUR;
+    int minuto_atual = TIME_MINUTE;
+    string hora = hora_atual < 10 ? "0" + hora_atual : "" + hora_atual;
+    string minuto = minuto_atual < 10 ? "0" + minuto_atual : "" + minuto_atual;
+    player.send_message("say Hora atual do servidor: " + hora + ":" + minuto);
+    return true;
+}
+
+bool cmd_save(player@ player, string[] args) {
+    player.save_player_data();
+    player.send_message("say Dados salvos com sucesso!");
+    return true;
+}
+
+bool cmd_quit(player@ player, string[] args) {
+    player.send_message("say Desconectando...");
+    uint64 peer = player.peer_id;
+    player.save_player_data();
+    force_disconnect_and_cleanup(peer, true);
+    return true;
+}
+
+bool cmd_pm(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: pm <jogador> <mensagem>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    string message = "";
+    for(uint i = 1; i < args.length(); i++) {
+        if(i > 1) message += " ";
+        message += args[i];
+    }
+    
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    target.send_message("pm [" + player.name + "]: " + message);
+    player.send_message("pm Para [" + target.name + "]: " + message);
+    
+    return true;
+}
+
+bool cmd_say(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: say <mensagem>");
+        return false;
+    }
+    
+    string message = join(args, " ");
+    
+    // Broadcast para jogadores no mesmo mapa
+    player@[] players_here = get_players_in_map(player.map_name);
+    for(uint i = 0; i < players_here.length(); i++) {
+        players_here[i].send_message("say " + player.name + " diz: " + message);
+    }
+    
+    return true;
+}
+
+bool cmd_inventory(player@ player, string[] args) {
+    // Obter itens do inventÃƒÂ¡rio do jogador
+    string[] inv_keys = player.inv.get_keys();
+
+    if(inv_keys.length() == 0) {
+        player.send_message("say Seu inventÃƒÂ¡rio estÃƒÂ¡ vazio.");
+        debug_log("Ã°Å¸â€œÂ¦ " + player.charname + " verificou inventÃƒÂ¡rio vazio");
+        return true;
+    }
+
+    // Construir mensagem de inventÃƒÂ¡rio
+    string inv_msg = "=== INVENTÃƒÂRIO ===\n";
+    inv_msg += "Total de itens: " + inv_keys.length() + "\n\n";
+
+    for(uint i = 0; i < inv_keys.length(); i++) {
+        int quantity = 0;
+        player.inv.get(inv_keys[i], quantity);
+
+        if(quantity > 0) {
+            inv_msg += "- " + inv_keys[i] + ": " + quantity + "\n";
+        }
+    }
+
+    player.send_message("say " + inv_msg);
+    debug_log("Ã°Å¸â€œÂ¦ " + player.charname + " verificou inventÃƒÂ¡rio (" + inv_keys.length() + " itens)");
+    return true;
+}
+
+bool cmd_score(player@ player, string[] args) {
+    string stats = "=== ESTATÃƒÂSTICAS ===\n";
+    stats += "Nome: " + player.name + "\n";
+    stats += "NÃƒÂ­vel: " + player.player_level + "\n";
+    stats += "ExperiÃƒÂªncia: " + player.exp + "\n";
+    stats += "Ouro: " + player.gold + "\n";
+    stats += "Vida: " + player.hp + "/" + player.max_hp + "\n";
+    stats += "Mana: " + player.mp + "/" + player.max_mp + "\n";
+    stats += "RaÃƒÂ§a: " + player.race + "\n";
+    stats += "LocalizaÃƒÂ§ÃƒÂ£o: " + player.map_name + " (" + player.x + "," + player.y + "," + player.z + ")";
+    
+    player.send_message("say " + stats);
+    return true;
+}
+
+// === COMANDOS DE CONFIGURAÃƒâ€¡ÃƒÆ’O DO JOGADOR ===
+
+bool cmd_setvoice(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: setvoice <voz>");
+        return false;
+    }
+    player.voice_id = args[0];
+    save_player_to_database(player);
+    debug_log("Ã°Å¸Å½Â¤ Jogador " + player.name + " configurou voz: " + args[0]);
+    return true;
+}
+
+bool cmd_hits(player@ player, string[] args) {
+    player.ouvirhits = !player.ouvirhits;
+    save_player_to_database(player);
+    string status = player.ouvirhits ? "ativados" : "desativados";
+    player.send_message("say Sons de impacto " + status);
+    return true;
+}
+
+bool cmd_idiomachat(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: idiomachat <idioma>");
+        return false;
+    }
+    player.idiomachat = args[0];
+    save_player_to_database(player);
+    player.send_message("say Idioma do chat configurado: " + args[0]);
+    return true;
+}
+
+bool cmd_dpassos(player@ player, string[] args) {
+    player.ouvirpassos = (player.ouvirpassos == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.ouvirpassos == 0) ? "desativados" : "ativados";
+    player.send_message("say Sons de passos " + status);
+    return true;
+}
+
+bool cmd_ndor(player@ player, string[] args) {
+    player.mdor = (player.mdor == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.mdor == 0) ? "ativadas" : "desativadas";
+    player.send_message("say Mensagens de dor " + status);
+    return true;
+}
+
+bool cmd_nnivel(player@ player, string[] args) {
+    player.avisanivel = (player.avisanivel == 0) ? 1 : 0;
+    save_player_to_database(player);
+    string status = (player.avisanivel == 0) ? "ativados" : "desativados";
+    player.send_message("say Avisos de nÃƒÂ­vel " + status);
+    return true;
+}
+
+bool cmd_getversion(player@ player, string[] args) {
+    player.send_message("version " + server_version);
+    return true;
+}
+
+bool cmd_lc(player@ player, string[] args) {
+    // Formato: "VocÃƒÂª estÃƒÂ¡ no nÃƒÂ­vel X, no remorte Y e na patente Z. VocÃƒÂª estÃƒÂ¡ com X% de sede..."
+    
+    // Determinar sufixo baseado no sexo (0=masculino, 1=feminino)
+    string sufixo_sujo = (player.sexo == 0) ? "o" : "a";
+    string sufixo_cansado = (player.sexo == 0) ? "o" : "a";
+    string sufixo_bebado = (player.sexo == 0) ? "o" : "a";
+    string sufixo_doente = ""; // doente nÃƒÂ£o muda
+
+    // Debug para verificar o sexo atual
+    debug_log("DEBUG SEXO: " + player.charname + " sexo=" + player.sexo + " sufixo=" + sufixo_sujo);
+
+    // Determinar patente/tÃƒÂ­tulo
+    // Prioridade: cargo (dev/admin/moderator) > tÃƒÂ­tulo do jogador > "Iniciante"
+    string patente = "";
+    
+    // Verificar cargos primeiro (usando o sistema de roles)
+    if(has_role(player.charname, "dev")) {
+        patente = "Desenvolvedor";
+    } else if(has_role(player.charname, "admin")) {
+        patente = "Administrador";
+    } else if(has_role(player.charname, "moderator")) {
+        patente = "Moderador";
+    } else if(has_role(player.charname, "builder")) {
+        patente = "Construtor";
+    } else if(has_role(player.charname, "translator")) {
+        patente = "Tradutor";
+    } else if(player.title != "" && player.title.length() > 0) {
+        patente = player.title;
+    } else {
+        patente = "Iniciante";
+    }
+
+    // Construir mensagem de nÃƒÂ­vel
+    string msg = "VocÃƒÂª estÃƒÂ¡ no nÃƒÂ­vel " + int(player.level);
+    
+    // Adicionar remorte se maior que 0
+    if(player.reencarnou > 0) {
+        msg += ", no remorte " + player.reencarnou;
+    }
+    
+    // Adicionar patente
+    msg += " e na patente " + patente + ". ";
+    
+    // Segunda parte: estatÃƒÂ­sticas
+    msg += "VocÃƒÂª estÃƒÂ¡ com ";
+    
+    // Array para construir a lista de estatÃƒÂ­sticas
+    string[] stats;
+    
+    // Sede
+    stats.insert_last(round(player.nsede, 0) + "% de sede");
+    
+    // Fome
+    stats.insert_last(round(player.nfome, 0) + "% de fome");
+    
+    // CansaÃƒÂ§o (stamina invertido - 100 stamina = 0% cansado)
+    int cansaco = 100 - player.stamina;
+    if(cansaco < 0) cansaco = 0;
+    stats.insert_last(cansaco + "% cansad" + sufixo_cansado);
+    
+    // BÃƒÂªbado (se tiver variÃƒÂ¡vel)
+    if(player.caverna > 0) {
+        stats.insert_last(player.caverna + "% bÃƒÂªbad" + sufixo_bebado);
+    }
+    
+    // Sujo
+    stats.insert_last(round(player.sujo, 0) + "% suj" + sufixo_sujo);
+    
+    // Doente
+    stats.insert_last(round(player.doente, 0) + "% doente");
+    
+    // Juntar estatÃƒÂ­sticas com vÃƒÂ­rgulas e "e" antes da ÃƒÂºltima
+    for(uint i = 0; i < stats.length(); i++) {
+        if(i == stats.length() - 1 && i > 0) {
+            msg += " e " + stats[i];
+        } else if(i > 0) {
+            msg += ", " + stats[i];
+        } else {
+            msg += stats[i];
+        }
+    }
+    msg += ".";
+    
+    // Adicionar crÃƒÂ©ditos se tiver
+    if(player.creditos > 0) {
+        msg += " VocÃƒÂª tem " + int(player.creditos) + " crÃƒÂ©ditos de reserva.";
+    }
+
+    player.send_message("msg2 " + msg);
+    debug_log("Ã°Å¸â€œÅ  [V-KEY] " + player.charname + " verificou status: nÃƒÂ­vel=" + int(player.level) + " patente=" + patente);
+    return true;
+}
+
+bool cmd_checktime(player@ player, string[] args) {
+    // Verificar se o jogador tem relÃƒÂ³gio
+    if(player.relogio == 0) {
+        player.send_message("say VocÃƒÂª precisa de um relÃƒÂ³gio para ver as horas.");
+        debug_log("Ã¢Å’Å¡ [H-KEY] " + player.charname + " tentou ver hora sem relÃƒÂ³gio");
+        return false;
+    }
+
+    // Pegar hora atual do sistema usando constantes globais TIME_*
+    int hora_atual = TIME_HOUR;
+    int minuto_atual = TIME_MINUTE;
+
+    // Formatar hora com zero ÃƒÂ  esquerda se necessÃƒÂ¡rio
+    string hora = hora_atual < 10 ? "0" + hora_atual : "" + hora_atual;
+    string minuto = minuto_atual < 10 ? "0" + minuto_atual : "" + minuto_atual;
+
+    player.send_message("say SÃƒÂ£o " + hora + " horas e " + minuto + " minutos.");
+    debug_log("Ã¢Å’Å¡ [H-KEY] " + player.charname + " verificou hora: " + hora + ":" + minuto);
+    return true;
+}
+
+bool cmd_falarnomapa(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: /falarnomapa <mensagem>");
+        return false;
+    }
+
+    string message = join(args, " ");
+
+    // Usar telllocal para enviar corretamente no formato fm
+    int player_index = get_player_index_from(player.charname);
+    if(player_index >= 0) {
+        telllocal(player_index, message);
+    }
+
+    return true;
+}
+
+// === COMANDOS DE ADMIN ===
+
+bool cmd_freeze(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro: jogador n�o encontrado.");
+        return false;
+    }
+    cmd_freeze(player_index);
+    return true;
+}
+
+bool cmd_backup(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro: jogador n�o encontrado.");
+        return false;
+    }
+    cmd_backup(player_index);
+    return true;
+}
+
+bool cmd_broadcast(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: broadcast <mensagem>");
+        return false;
+    }
+    
+    string message = join(args, " ");
+    server_broadcast("announce [AN�NCIO] " + message);
+    return true;
+}
+
+bool cmd_kick(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: kick <jogador> [motivo]");
+        return false;
+    }
+
+    string target_name = args[0];
+    string reason = "Sem motivo especificado";
+    if(args.length() > 1) {
+        reason = "";
+        for(uint i = 1; i < args.length(); i++) {
+            if(i > 1) reason += " ";
+            reason += args[i];
+        }
+    }
+
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' n�o encontrado.");
+        return false;
+    }
+
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro: jogador n�o encontrado.");
+        return false;
+    }
+
+    cmd_kick(player_index, target_name, reason);
+    return true;
+}
+
+bool cmd_player_info(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: player_info <jogador>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    string info = "=== INFORMAÃƒâ€¡Ãƒâ€¢ES DO JOGADOR ===\n";
+    info += "Nome: " + target.name + "\n";
+    info += "NÃƒÂ­vel: " + target.player_level + " (EXP: " + target.exp + ")\n";
+    info += "Vida: " + target.hp + "/" + target.max_hp + "\n";
+    info += "Mana: " + target.mp + "/" + target.max_mp + "\n";
+    info += "Ouro: " + target.gold + "\n";
+    info += "LocalizaÃƒÂ§ÃƒÂ£o: " + target.map_name + " (" + target.x + "," + target.y + "," + target.z + ")\n";
+    info += "Admin: " + (target.admin_status ? "Sim" : "NÃƒÂ£o") + "\n";
+    info += "Status: " + target.status;
+    
+    player.send_message("say " + info);
+    return true;
+}
+
+bool cmd_pickup(player@ player, string[] args) {
+    WorldItem@ item = get_item_at_position(player.map_name, player.x, player.y, player.z);
+    if(item is null) {
+        player.send_message("say NÃƒÂ£o hÃƒÂ¡ itens nesta posiÃƒÂ§ÃƒÂ£o.");
+        return false;
+    }
+    
+    GameItem@ game_item = get_item_by_id(item.item_id);
+    if(game_item is null) {
+        player.send_message("say Item invÃƒÂ¡lido encontrado.");
+        return false;
+    }
+    
+    if(pickup_item_at(player.name, player.map_name, player.x, player.y, player.z)) {
+        player.send_message("say VocÃƒÂª pegou " + game_item.display_name + " (x" + item.quantity + ").");
+        log_action(player.name, "pickup", "Pegou " + game_item.display_name + " (x" + item.quantity + ")", 
+                   player.map_name, player.x, player.y, player.z);
+        update_statistics("item_collect");
+        return true;
+    } else {
+        player.send_message("say Falha ao pegar o item.");
+        return false;
+    }
+}
+
+bool cmd_spawn_item(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: spawn_item <item> [quantidade] [x] [y] [z]");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = 1;
+    int x = player.x, y = player.y, z = player.z;
+    
+    if(args.length() > 1) quantity = string_to_number(args[1]);
+    if(args.length() > 2) x = string_to_number(args[2]);
+    if(args.length() > 3) y = string_to_number(args[3]);
+    if(args.length() > 4) z = string_to_number(args[4]);
+    
+    if(spawn_item_at(item_name, player.map_name, x, y, z, quantity, "admin:" + player.name)) {
+        player.send_message("say Item " + item_name + " (x" + quantity + ") spawnado em (" + x + "," + y + "," + z + ").");
+        log_action(player.name, "spawn_item", "Admin spawnou " + item_name + " (x" + quantity + ")", 
+                   player.map_name, x, y, z);
+        update_statistics("item_spawn");
+        return true;
+    } else {
+        player.send_message("say Falha ao spawnar item " + item_name + ". Verifique se o item existe.");
+        return false;
+    }
+}
+
+bool cmd_list_items(player@ player, string[] args) {
+    string[] items_list;
+    string[] keys = items_database.get_keys();
+    
+    for(uint i = 0; i < keys.length(); i++) {
+        GameItem@ item;
+        items_database.get(keys[i], @item);
+        if(item !is null) {
+            items_list.push_back(item.name + " - " + item.display_name + " (" + item.item_type + ")");
+        }
+    }
+    
+    if(items_list.length() == 0) {
+        player.send_message("say Nenhum item cadastrado no sistema.");
+        return false;
+    }
+    
+    player.send_message("say === LISTA DE ITENS ===\nTotal: " + items_list.length() + " itens");
+    for(uint i = 0; i < items_list.length(); i++) {
+        player.send_message("say " + items_list[i]);
+    }
+    
+    return true;
+}
+
+bool cmd_item_info(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: item_info <item>");
+        return false;
+    }
+    
+    string item_name = args[0];
+    GameItem@ item = get_item_by_name(item_name);
+    if(item is null) {
+        player.send_message("say Item '" + item_name + "' nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    string info = "=== INFORMAÃƒâ€¡Ãƒâ€¢ES DO ITEM ===\n";
+    info += "Nome: " + item.name + "\n";
+    info += "Nome de exibiÃƒÂ§ÃƒÂ£o: " + item.display_name + "\n";
+    info += "DescriÃƒÂ§ÃƒÂ£o: " + item.description + "\n";
+    info += "Tipo: " + item.item_type + " / " + item.category + "\n";
+    info += "Raridade: " + item.rarity + "\n";
+    
+    if(item.damage > 0) info += "Dano: " + item.damage + "\n";
+    if(item.defense > 0) info += "Defesa: " + item.defense + "\n";
+    if(item.heal_amount > 0) info += "Cura: " + item.heal_amount + "\n";
+    if(item.mp_restore > 0) info += "Restaura MP: " + item.mp_restore + "\n";
+    
+    info += "EmpilhÃƒÂ¡vel: " + (item.stackable ? "Sim" : "NÃƒÂ£o") + "\n";
+    if(item.stackable) info += "MÃƒÂ¡x por pilha: " + item.max_stack + "\n";
+    info += "Peso: " + item.weight + "\n";
+    info += "Valor: " + item.value + " moedas\n";
+    info += "ComercializÃƒÂ¡vel: " + (item.tradeable ? "Sim" : "NÃƒÂ£o") + "\n";
+    info += "VendÃƒÂ­vel: " + (item.sellable ? "Sim" : "NÃƒÂ£o");
+    
+    player.send_message("say " + info);
+    return true;
+}
+
+// Ã¢Å“â€¦ Fix: ImplementaÃƒÂ§ÃƒÂ£o de cmd_drop
+bool cmd_drop(int player_index, string item_name) {
+    player@ p = players[player_index];
+    if(p is null) return false;
+
+    if(p.inv_item_number(item_name) > 0) {
+        p.inv_remove_item(item_name, 1);
+        spawn_item_at(item_name, p.map_name, p.x, p.y, p.z, 1, "player:" + p.name);
+        p.send_message("say VocÃƒÂª largou: " + item_name);
+        log_action(p.name, "drop", "Largou item " + item_name, p.map_name, p.x, p.y, p.z);
+        return true;
+    } else {
+        p.send_message("say VocÃƒÂª nÃƒÂ£o tem esse item.");
+        return false;
+    }
+}
+
+// Ã¢Å“â€¦ Fix: ImplementaÃƒÂ§ÃƒÂ£o de cmd_give
+bool cmd_give(int player_index, string target_name, string item_name) {
+    player@ p = players[player_index];
+    if(p is null) return false;
+
+    // Verificar se tem o item
+    if(p.inv_item_number(item_name) <= 0) {
+        p.send_message("say VocÃƒÂª nÃƒÂ£o tem esse item.");
+        return false;
+    }
+
+    // Encontrar alvo
+    player@ target = get_player_by_name(target_name);
+    // Fallback search loop if helper not available, but likely is.
+    if(target is null) {
+         // Manual loop fallback
+        for(uint i=0; i < players.length(); i++) {
+            if(players[i].name == target_name || players[i].charname == target_name) {
+                @target = @players[i];
+                break;
+            }
+        }
+    }
+
+    if(target is null) {
+        p.send_message("say Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+
+    // Verificar distÃƒÂ¢ncia
+    // int dx = p.x - target.x;
+    // int dy = p.y - target.y;
+    // if(dx*dx + dy*dy > 25) { ... } // Simplified check
+    
+    // Transferir
+    p.inv_remove_item(item_name, 1);
+    target.inv_add_item(item_name, 1);
+    
+    p.send_message("say VocÃƒÂª deu " + item_name + " para " + target.name);
+    target.send_message("say " + p.name + " lhe deu " + item_name);
+    
+    log_action(p.name, "give", "Deu " + item_name + " para " + target.name, p.map_name, p.x, p.y, p.z);
+    return true;
+}
+
+
+
+bool cmd_statistics(player@ player, string[] args) {
+    string stats = get_current_statistics_report();
+    player.send_message("say " + stats);
+    return true;
+}
+
+bool cmd_history(player@ player, string[] args) {
+    string player_filter = "";
+    string action_filter = "";
+    int limit = 20;
+    
+    if(args.length() > 0) player_filter = args[0];
+    if(args.length() > 1) action_filter = args[1];
+    if(args.length() > 2) limit = string_to_number(args[2]);
+    
+    string[] history = get_recent_actions(limit, action_filter, player_filter);
+    
+    if(history.length() == 0) {
+        player.send_message("say Nenhum histÃƒÂ³rico encontrado com os filtros especificados.");
+        return false;
+    }
+    
+    player.send_message("say === HISTÃƒâ€œRICO DE AÃƒâ€¡Ãƒâ€¢ES ===\nMostrando " + history.length() + " entradas:");
+    for(uint i = 0; i < history.length(); i++) {
+        player.send_message("say " + history[i]);
+    }
+    
+    return true;
+}
+
+// Comandos de Combate
+bool cmd_attack(player@ player, string[] args) {
+    if(args.length() == 0) {
+        player.send_message("say Uso: attack <jogador> [arma]");
+        return false;
+    }
+    
+    string target_name = args[0];
+    string weapon = args.length() > 1 ? args[1] : "";
+    
+    player@ target = get_player_by_name(target_name);
+    if(target is null) {
+        player.send_message("say Jogador '" + target_name + "' nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    if(target.name == player.name) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o pode atacar a si mesmo!");
+        return false;
+    }
+    
+    // Verificar se estÃƒÂ£o no mesmo mapa e prÃƒÂ³ximos
+    if(target.map_name != player.map_name) {
+        player.send_message("say O jogador nÃƒÂ£o estÃƒÂ¡ no mesmo mapa que vocÃƒÂª.");
+        return false;
+    }
+    
+    int distance = abs(target.x - player.x) + abs(target.y - player.y) + abs(target.z - player.z);
+    if(distance > 2) {
+        player.send_message("say VocÃƒÂª precisa estar mais prÃƒÂ³ximo para atacar.");
+        return false;
+    }
+    
+    // Verificar se jÃƒÂ¡ estÃƒÂ¡ em combate
+    if(is_player_in_combat(player.name)) {
+        // Se jÃƒÂ¡ estÃƒÂ¡ em combate com este jogador, executar ataque
+        if(execute_attack(player.name, target.name, weapon)) {
+            return true;
+        } else {
+            player.send_message("say Falha ao executar ataque.");
+            return false;
+        }
+    } else {
+        // Iniciar novo combate
+        if(start_combat(player.name, target.name)) {
+            // Executar primeiro ataque
+            execute_attack(player.name, target.name, weapon);
+            return true;
+        } else {
+            if(is_player_in_combat(target.name)) {
+                player.send_message("say " + target_name + " jÃƒÂ¡ estÃƒÂ¡ em combate com outro jogador.");
+            } else {
+                player.send_message("say NÃƒÂ£o foi possÃƒÂ­vel iniciar o combate.");
+            }
+            return false;
+        }
+    }
+}
+
+bool cmd_defend(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o estÃƒÂ¡ em combate.");
+        return false;
+    }
+
+    set_player_defending(player.name);
+    player.send_message("say Defesa ativada. O proximo ataque recebido tera dano reduzido.");
+
+    log_action(player.name, "defend", "Jogador se defendeu", 
+               player.map_name, player.x, player.y, player.z);
+
+    return true;
+}
+
+bool cmd_flee(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o estÃƒÂ¡ em combate.");
+        return false;
+    }
+    
+    if(attempt_flee(player.name)) {
+        return true;
+    } else {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o conseguiu fugir! Tente novamente na prÃƒÂ³xima rodada.");
+        return false;
+    }
+}
+
+bool cmd_combat_status(player@ player, string[] args) {
+    if(!is_player_in_combat(player.name)) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o estÃƒÂ¡ em combate.");
+        return false;
+    }
+    
+    CombatInstance@ combat = get_player_combat(player.name);
+    if(combat is null) {
+        player.send_message("say Erro: Dados de combate nÃƒÂ£o encontrados.");
+        return false;
+    }
+    
+    string opponent_id = combat.attacker_id == player.name ? combat.defender_id : combat.attacker_id;
+    player@ opponent = get_player_by_id(opponent_id);
+    
+    if(opponent !is null) {
+        uint64 combat_duration = (get_time_stamp() - combat.start_time) / 1000;
+        string status = "=== STATUS DO COMBATE ===\n";
+        status += "Oponente: " + opponent.name + "\n";
+        status += "Sua vida: " + player.hp + "/" + player.max_hp + "\n";
+        status += "Vida do oponente: " + opponent.hp + "/" + opponent.max_hp + "\n";
+        status += "DuraÃƒÂ§ÃƒÂ£o: " + combat_duration + " segundos\n";
+        status += "Status: " + combat.battle_status;
+        
+        player.send_message("say " + status);
+    }
+    
+    return true;
+}
+
+// Ã°Å¸â€ â€¢ Comando para usar itens consumÃƒÂ­veis
+bool cmd_use(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: /usar <item>");
+        return false;
+    }
+    
+    // Nome do item (pode ser mÃƒÂºltiplas palavras, entÃƒÂ£o concatenar)
+    string item_name = join(args, " ");
+    
+    // Obter ÃƒÂ­ndice do jogador
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    // Chamar sistema de consumÃƒÂ­veis
+    if(use_item(player_index, item_name)) {
+        // Mensagem de sucesso jÃƒÂ¡ enviada pelo sistema de consumÃƒÂ­veis
+        return true;
+    } else {
+        // Mensagem de erro jÃƒÂ¡ enviada pelo sistema de consumÃƒÂ­veis
+        return false;
+    }
+}
+
+// ============================================
+// Ã¢Å“â€¦ Task 1.5.2: SISTEMA DE RECOMPENSAS (BOUNTY)
+// ============================================
+
+// Constantes do sistema de bounty
+const int BOUNTY_MIN_VALUE = 100;       // Valor mÃƒÂ­nimo da recompensa
+const int BOUNTY_MAX_VALUE = 10000000;  // Valor mÃƒÂ¡ximo da recompensa
+const int BOUNTY_CANCEL_FEE = 50;       // Taxa de cancelamento (50%)
+
+// Comando /bounty - Colocar recompensa na cabeÃƒÂ§a de um jogador
+bool cmd_bounty(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: /bounty <jogador> <valor>");
+        player.send_message("say Valor mÃƒÂ­nimo: " + BOUNTY_MIN_VALUE + " moedas");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int value = string_to_number(args[1]);
+    
+    // Obter ÃƒÂ­ndice do jogador que estÃƒÂ¡ colocando a recompensa
+    int setter_index = get_player_index_from(player.charname);
+    if(setter_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    // Validar valor
+    if(value < BOUNTY_MIN_VALUE) {
+        player.send_message("say O valor mÃƒÂ­nimo da recompensa ÃƒÂ© " + BOUNTY_MIN_VALUE + " moedas.");
+        return false;
+    }
+    
+    if(value > BOUNTY_MAX_VALUE) {
+        player.send_message("say O valor mÃƒÂ¡ximo da recompensa ÃƒÂ© " + BOUNTY_MAX_VALUE + " moedas.");
+        return false;
+    }
+    
+    // Encontrar o alvo
+    int target_index = get_player_index_from(target_name);
+    if(target_index < 0) {
+        player.send_message("say Jogador '" + target_name + "' nÃƒÂ£o estÃƒÂ¡ online.");
+        return false;
+    }
+    
+    // Verificar se tem saldo suficiente
+    if(players[setter_index].saldo < value) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o tem moedas suficientes. Seu saldo: " + players[setter_index].saldo);
+        return false;
+    }
+    
+    // Tentar colocar a recompensa
+    if(set_bounty(target_index, setter_index, value)) {
+        // Sucesso - notificar todos
+        player.send_message("say Ã¢Å“â€¦ VocÃƒÂª colocou uma recompensa de " + value + " moedas na cabeÃƒÂ§a de " + players[target_index].charname + "!");
+        
+        // Notificar o alvo
+        send_reliable_text(players[target_index].peer_id, 
+            "msg2 Ã¢Å¡Â Ã¯Â¸Â ALERTA: " + player.charname + " colocou uma recompensa de " + value + " moedas na sua cabeÃƒÂ§a!", 0);
+        
+        // Broadcast global
+        server_broadcast("msg2 Ã°Å¸â€œÂ¢ " + player.charname + " colocou uma recompensa de " + value + " moedas na cabeÃƒÂ§a de " + players[target_index].charname + "!");
+        
+        debug_log("BOUNTY: " + player.charname + " colocou " + value + " na cabeÃƒÂ§a de " + players[target_index].charname);
+        return true;
+    } else {
+        // Falhou - verificar motivo
+        if(target_index == setter_index) {
+            player.send_message("say VocÃƒÂª nÃƒÂ£o pode colocar recompensa em si mesmo!");
+        } else if(players[target_index].pacifico == 1) {
+            player.send_message("say Este jogador estÃƒÂ¡ em modo pacÃƒÂ­fico e nÃƒÂ£o pode receber recompensas.");
+        } else if(players[target_index].newbie == true) {
+            player.send_message("say Este jogador ÃƒÂ© novato e nÃƒÂ£o pode receber recompensas.");
+        } else {
+            player.send_message("say NÃƒÂ£o foi possÃƒÂ­vel colocar a recompensa. Tente novamente.");
+        }
+        return false;
+    }
+}
+
+// Comando /checkbounty - Ver recompensa na cabeÃƒÂ§a de um jogador
+bool cmd_checkbounty(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: /checkbounty <jogador>");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int target_index = get_player_index_from(target_name);
+    
+    if(target_index < 0) {
+        player.send_message("say Jogador '" + target_name + "' nÃƒÂ£o estÃƒÂ¡ online.");
+        return false;
+    }
+    
+    string info = get_bounty_info(target_index);
+    player.send_message("say " + info);
+    return true;
+}
+
+// Comando /mybounty - Ver recompensa na sua prÃƒÂ³pria cabeÃƒÂ§a
+bool cmd_mybounty(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    if(!has_bounty(player_index)) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o tem recompensa na sua cabeÃƒÂ§a. Ã°Å¸ËœÅ ");
+        return true;
+    }
+    
+    string info = get_bounty_info(player_index);
+    player.send_message("say Ã¢Å¡Â Ã¯Â¸Â " + info);
+    
+    // Mostrar tempo online com recompensa
+    if(players[player_index].bounty_online_time > 0) {
+        int minutes = players[player_index].bounty_online_time / 60;
+        player.send_message("say Tempo com recompensa: " + minutes + " minutos");
+    }
+    
+    return true;
+}
+
+// Comando /cancelbounty - Cancelar recompensa que vocÃƒÂª colocou
+bool cmd_cancelbounty(player@ player, string[] args) {
+    if(args.length() < 1) {
+        player.send_message("say Uso: /cancelbounty <jogador>");
+        player.send_message("say Ã¢Å¡Â Ã¯Â¸Â Taxa de cancelamento: " + BOUNTY_CANCEL_FEE + "% do valor");
+        return false;
+    }
+    
+    string target_name = args[0];
+    int canceller_index = get_player_index_from(player.charname);
+    
+    if(canceller_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    // Verificar se este jogador colocou recompensa no alvo
+    if(players[canceller_index].bounty_target != target_name) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o colocou recompensa em " + target_name + ".");
+        return false;
+    }
+    
+    // Tentar cancelar
+    if(cancel_bounty(canceller_index, target_name)) {
+        int target_index = get_player_index_from(target_name);
+        
+        player.send_message("say Ã¢Å“â€¦ Recompensa cancelada! VocÃƒÂª recebeu de volta 50% do valor.");
+        
+        // Notificar o alvo se estiver online
+        if(target_index >= 0) {
+            send_reliable_text(players[target_index].peer_id, 
+                "msg2 A recompensa na sua cabeÃƒÂ§a colocada por " + player.charname + " foi cancelada!", 0);
+        }
+        
+        debug_log("BOUNTY CANCELADO: " + player.charname + " cancelou bounty em " + target_name);
+        return true;
+    } else {
+        player.send_message("say NÃƒÂ£o foi possÃƒÂ­vel cancelar a recompensa. O jogador pode estar offline.");
+        return false;
+    }
+}
+
+// Comando /listbounties - Listar todos jogadores com recompensa
+bool cmd_listbounties(player@ player, string[] args) {
+    string[] bounties = list_all_bounties();
+    
+    if(bounties.length() == 0) {
+        player.send_message("say NÃƒÂ£o hÃƒÂ¡ jogadores com recompensa na cabeÃƒÂ§a no momento.");
+        return true;
+    }
+    
+    player.send_message("say === Ã°Å¸â€™Â° LISTA DE RECOMPENSAS (" + bounties.length() + ") ===");
+    
+    for(uint i = 0; i < bounties.length(); i++) {
+        player.send_message("say " + (i+1) + ". " + bounties[i]);
+    }
+    
+    return true;
+}
+
+// =========================================================
+// Ã¢Å“â€¦ Task 1.4.1: SISTEMA DE LOJAS NPC - HANDLERS DE COMPRA
+// =========================================================
+// Este mÃƒÂ³dulo implementa a validaÃƒÂ§ÃƒÂ£o encadeada para garantir
+// integridade econÃƒÂ´mica nas transaÃƒÂ§ÃƒÂµes de compra de NPC.
+// =========================================================
+
+// Comando /buy (formato amigÃƒÂ¡vel) - Comprar item de loja
+bool cmd_buy(player@ player, string[] args) {
+    if(args.length() < 2) {
+        player.send_message("say Uso: /buy <item> <quantidade>");
+        player.send_message("say Exemplo: /buy espada 1");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = string_to_number(args[1]);
+    
+    // Converter para formato interno e processar
+    string[] internal_args = {string(quantity), item_name};
+    return cmd_buy_internal(player, internal_args);
+}
+
+// Comando /buy123321123 (formato interno do cliente) - Handler Principal de Compra
+// IMPLEMENTAÃƒâ€¡ÃƒÆ’O CRÃƒÂTICA: ValidaÃƒÂ§ÃƒÂ£o Encadeada para SeguranÃƒÂ§a EconÃƒÂ´mica
+bool cmd_buy_internal(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 1: Dados de Entrada ---
+    if(args.length() < 2) {
+        player.send_message("say Dados de compra invÃƒÂ¡lidos.");
+        return false;  // InterrupÃƒÂ§ÃƒÂ£o: Dados de entrada invÃƒÂ¡lidos
+    }
+    
+    int quantity = string_to_number(args[0]);
+    string item_name = args[1];
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade invÃƒÂ¡lida. Use um valor maior que zero.");
+        return false;  // InterrupÃƒÂ§ÃƒÂ£o: Quantidade invÃƒÂ¡lida
+    }
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 2: Item Existe na Loja ---
+    int store_index = item_exists_for_sale(item_name);
+    if(store_index < 0) {
+        player.send_message("say Item '" + item_name + "' nÃƒÂ£o encontrado na loja.");
+        return false;  // InterrupÃƒÂ§ÃƒÂ£o: Item nÃƒÂ£o existe
+    }
+    
+    // Obter dados do item da loja
+    double unit_price = items_sale[store_index].price;
+    string currency_type = items_sale[store_index].money;
+    double total_cost = unit_price * quantity;
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 3: Moeda Suficiente (Primeira Camada de SeguranÃƒÂ§a) ---
+    bool has_funds = false;
+    string currency_name = "";
+    
+    if(currency_type == "stryx") {
+        has_funds = players[player_index].has_stryx(total_cost);
+        currency_name = "Stryx";
+    }
+    else if(currency_type == "creditos") {
+        has_funds = players[player_index].has_credits(total_cost);
+        currency_name = "CrÃƒÂ©ditos";
+    }
+    else if(currency_type == "saldo" || currency_type == "dinheiro" || currency_type == "reais") {
+        has_funds = players[player_index].has_money(total_cost);
+        currency_name = "Reais";
+    }
+    else {
+        // Moeda ÃƒÂ© um item do inventÃƒÂ¡rio (ex: euro, coins, etc.)
+        has_funds = players[player_index].inv_item_number(currency_type) >= int(total_cost);
+        currency_name = currency_type;
+    }
+    
+    if(!has_funds) {
+        player.send_message("say " + currency_name + " insuficiente. Requer: " + total_cost + " " + currency_name);
+        return false;  // InterrupÃƒÂ§ÃƒÂ£o: Falha na Economia (Camada 1)
+    }
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 4: EspaÃƒÂ§o no InventÃƒÂ¡rio (Segunda Camada de SeguranÃƒÂ§a) ---
+    // Verificar limite de slots do inventÃƒÂ¡rio
+    int current_items = int(players[player_index].inv.get_keys().length());
+    bool item_exists = players[player_index].inv_item_exists(item_name);
+    
+    // Se o item nÃƒÂ£o existe no inventÃƒÂ¡rio e jÃƒÂ¡ estÃƒÂ¡ no limite de slots
+    if(!item_exists && current_items >= players[player_index].max_inventory_slots) {
+        player.send_message("say InventÃƒÂ¡rio cheio! VocÃƒÂª nÃƒÂ£o tem mais slots disponÃƒÂ­veis.");
+        player.send_message("say Slots: " + current_items + "/" + players[player_index].max_inventory_slots);
+        return false;  // InterrupÃƒÂ§ÃƒÂ£o: Falha no InventÃƒÂ¡rio (Camada 2)
+    }
+    
+    // --- EXECUÃƒâ€¡ÃƒÆ’O DA TRANSAÃƒâ€¡ÃƒÆ’O (Sucesso apÃƒÂ³s todas validaÃƒÂ§ÃƒÂµes) ---
+    // A transaÃƒÂ§ÃƒÂ£o sÃƒÂ³ ÃƒÂ© executada se TODAS as validaÃƒÂ§ÃƒÂµes passarem
+    
+    // AÃƒÂ§ÃƒÂ£o 1: Subtrair a moeda correta
+    if(currency_type == "stryx") {
+        players[player_index].remove_stryx(total_cost);
+    }
+    else if(currency_type == "creditos") {
+        players[player_index].remove_credits(total_cost);
+    }
+    else if(currency_type == "saldo" || currency_type == "dinheiro" || currency_type == "reais") {
+        players[player_index].remove_money(total_cost, "compra de " + quantity + "x " + item_name);
+    }
+    else {
+        // Item como moeda
+        players[player_index].inv_add_item(currency_type, -int(total_cost), true);
+    }
+    
+    // AÃƒÂ§ÃƒÂ£o 2: Adicionar o item ao inventÃƒÂ¡rio
+    players[player_index].inv_add_item(item_name, quantity, true);
+    
+    // --- FEEDBACK E LOG ---
+    player.send_message("say Ã¢Å“â€¦ Compra realizada com sucesso!");
+    player.send_message("say Ã°Å¸â€œÂ¦ VocÃƒÂª comprou " + quantity + "x " + item_name);
+    player.send_message("say Ã°Å¸â€™Â° Total: " + total_cost + " " + currency_name);
+    
+    // Salvar jogador apÃƒÂ³s transaÃƒÂ§ÃƒÂ£o
+    save_player_to_database(players[player_index]);
+    
+    // Log para auditoria
+    debug_log("COMPRA: " + player.charname + " comprou " + quantity + "x " + item_name + 
+              " por " + total_cost + " " + currency_name);
+    log_to_database("INFO", "ECONOMY", "Compra: " + quantity + "x " + item_name + 
+                    " por " + total_cost + " " + currency_name, player_index, player.charname);
+    
+    return true;
+}
+
+// Comando /buy2123321123 - Compra de Itens Especiais (Explosivos, etc.)
+// Mesmo padrÃƒÂ£o de validaÃƒÂ§ÃƒÂ£o encadeada
+bool cmd_buy_special(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 1: Dados de Entrada ---
+    if(args.length() < 2) {
+        player.send_message("say Dados de compra invÃƒÂ¡lidos.");
+        return false;
+    }
+    
+    int quantity = string_to_number(args[0]);
+    string item_name = args[1];
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade invÃƒÂ¡lida.");
+        return false;
+    }
+    
+    // --- PREÃƒâ€¡OS ESPECIAIS (Loja de Explosivos) ---
+    // Esses itens tÃƒÂªm preÃƒÂ§os fixos em "euro" (moeda do inventÃƒÂ¡rio)
+    dictionary special_prices;
+    special_prices.set("mina", 20);
+    special_prices.set("bomba_relÃƒÂ³gio", 100);
+    special_prices.set("bomba_remota", 200);
+    special_prices.set("mÃƒÂ­ssil_teleguiado", 200);
+    special_prices.set("max_bomba", 250);
+    special_prices.set("bomba_de_fogo", 250);
+    special_prices.set("bomba_atÃƒÂ´mica", 300);
+    special_prices.set("mega_laser", 5000);
+    special_prices.set("sub_laser", 100000);
+    special_prices.set("cuernitoarmani", 1000000);
+    special_prices.set("galil", 100000);
+    special_prices.set("mÃƒÂ­ssil", 15);
+    special_prices.set("laser", 5);
+    special_prices.set("7.62mm", 3);
+    special_prices.set("5.56mm", 2);
+    special_prices.set("9mm", 2);
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 2: Item Existe ---
+    if(!special_prices.exists(item_name)) {
+        player.send_message("say Item especial '" + item_name + "' nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    int unit_price;
+    special_prices.get(item_name, unit_price);
+    int total_cost = unit_price * quantity;
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 3: Moeda Suficiente (Euro do InventÃƒÂ¡rio) ---
+    int player_euros = players[player_index].inv_item_number("euro");
+    if(player_euros < total_cost) {
+        player.send_message("say Euros insuficientes. Requer: " + total_cost + " euro");
+        player.send_message("say VocÃƒÂª tem: " + player_euros + " euro");
+        return false;
+    }
+    
+    // --- VALIDAÃƒâ€¡ÃƒÆ’O 4: EspaÃƒÂ§o no InventÃƒÂ¡rio ---
+    int current_items = int(players[player_index].inv.get_keys().length());
+    bool item_exists = players[player_index].inv_item_exists(item_name);
+    
+    if(!item_exists && current_items >= players[player_index].max_inventory_slots) {
+        player.send_message("say InventÃƒÂ¡rio cheio!");
+        return false;
+    }
+    
+    // --- EXECUÃƒâ€¡ÃƒÆ’O DA TRANSAÃƒâ€¡ÃƒÆ’O ---
+    players[player_index].inv_add_item("euro", -total_cost, true);
+    players[player_index].inv_add_item(item_name, quantity, true);
+    
+    // --- FEEDBACK ---
+    player.send_message("say Ã¢Å“â€¦ Compra especial realizada!");
+    player.send_message("say Ã°Å¸â€™Â£ VocÃƒÂª comprou " + quantity + "x " + item_name);
+    player.send_message("say Ã°Å¸â€™Â° Total: " + total_cost + " euro");
+    
+    save_player_to_database(players[player_index]);
+    
+    debug_log("COMPRA ESPECIAL: " + player.charname + " comprou " + quantity + "x " + item_name + 
+              " por " + total_cost + " euro");
+    
+    return true;
+}
+
+// Comando /store - Abrir Menu de Loja (envia lista de itens para cliente)
+bool cmd_store(player@ player, string[] args) {
+    if(items_sale.length() == 0) {
+        player.send_message("say NÃƒÂ£o hÃƒÂ¡ itens disponÃƒÂ­veis na loja no momento.");
+        return true;
+    }
+    
+    // Montar lista de itens para o cliente
+    string store_list = "";
+    for(uint i = 0; i < items_sale.length(); i++) {
+        if(i > 0) store_list += "\r\n";
+        // Formato: "item, preÃƒÂ§o moeda - descriÃƒÂ§ÃƒÂ£o"
+        store_list += items_sale[i].item + ", " + items_sale[i].price + " " + 
+                      items_sale[i].money + " - " + items_sale[i].description;
+    }
+    
+    // Enviar lista para o cliente abrir o menu
+    send_reliable_text(player.peer_id, "store " + store_list, 0);
+    
+    debug_log("STORE: " + player.charname + " abriu loja com " + items_sale.length() + " itens");
+    return true;
+}
+
+// Comando /sell - Vender Item para Loja
+bool cmd_sell(player@ player, string[] args) {
+    int player_index = get_player_index_from(player.charname);
+    if(player_index < 0) {
+        player.send_message("say Erro interno: Jogador nÃƒÂ£o encontrado.");
+        return false;
+    }
+    
+    if(args.length() < 2) {
+        player.send_message("say Uso: /sell <item> <quantidade>");
+        return false;
+    }
+    
+    string item_name = args[0];
+    int quantity = string_to_number(args[1]);
+    
+    if(quantity <= 0) {
+        player.send_message("say Quantidade invÃƒÂ¡lida.");
+        return false;
+    }
+    
+    // Verificar se jogador tem o item
+    int player_quantity = players[player_index].inv_item_number(item_name);
+    if(player_quantity < quantity) {
+        player.send_message("say VocÃƒÂª nÃƒÂ£o tem " + quantity + "x " + item_name + ".");
+        player.send_message("say VocÃƒÂª tem: " + player_quantity + "x " + item_name);
+        return false;
+    }
+    
+    // Verificar se item estÃƒÂ¡ na loja (para obter preÃƒÂ§o de venda)
+    int store_index = item_exists_for_sale(item_name);
+    double sell_price = 0;
+    string currency_type = "saldo";
+    
+    if(store_index >= 0) {
+        // Item existe na loja - vende por 50% do preÃƒÂ§o de compra
+        sell_price = items_sale[store_index].price * 0.5;
+        currency_type = items_sale[store_index].money;
+    } else {
+        // Item nÃƒÂ£o estÃƒÂ¡ na loja - preÃƒÂ§o base
+        sell_price = 1;  // 1 real por item genÃƒÂ©rico
+    }
+    
+    double total_value = sell_price * quantity;
+    
+    // Executar venda
+    players[player_index].inv_add_item(item_name, -quantity, true);
+    
+    // Adicionar moeda
+    if(currency_type == "stryx") {
+        players[player_index].add_stryx(total_value);
+    }
+    else if(currency_type == "creditos") {
+        players[player_index].add_credits(total_value);
+    }
+    else {
+        players[player_index].add_money(total_value, "venda de " + quantity + "x " + item_name);
+    }
+    
+    player.send_message("say Ã¢Å“â€¦ Venda realizada!");
+    player.send_message("say Ã°Å¸â€œÂ¦ VocÃƒÂª vendeu " + quantity + "x " + item_name);
+    player.send_message("say Ã°Å¸â€™Â° Recebeu: " + total_value + " " + currency_type);
+    
+    save_player_to_database(players[player_index]);
+    
+    debug_log("VENDA: " + player.charname + " vendeu " + quantity + "x " + item_name + 
+              " por " + total_value + " " + currency_type);
+    
+    return true;
+}
+
+

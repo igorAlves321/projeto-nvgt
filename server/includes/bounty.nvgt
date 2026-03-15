@@ -1,0 +1,238 @@
+// bounty.nvgt - Sistema de Recompensas do EVM Server
+// Convertido para NVGT
+// Sistema completo de colocar/remover recompensas na cabeça de jogadores
+
+// Função para colocar recompensa na cabeça de um jogador
+bool set_bounty(int target_index, int setter_index, int value) {
+	// Validações
+	if(target_index < 0 || target_index >= int(players.length())) {
+		return false;
+	}
+	
+	if(setter_index < 0 || setter_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Não pode colocar recompensa em si mesmo
+	if(target_index == setter_index) {
+		return false;
+	}
+	
+	// Não pode colocar recompensa em jogador pacífico
+	if(players[target_index].pacifico == 1) {
+		return false;
+	}
+	
+	// Não pode colocar recompensa em jogador ausente (AFK)
+	if(players[target_index].afk) {
+		return false;
+	}
+	
+	// Não pode colocar recompensa em novato
+	if(players[target_index].newbie == true) {
+		return false;
+	}
+	
+	// Valor mínimo da recompensa
+	if(value < 100) {
+		return false;
+	}
+	
+	// Verificar se quem está colocando tem dinheiro suficiente
+	if(players[setter_index].saldo < value) {
+		return false;
+	}
+	
+	// Remover dinheiro de quem colocou a recompensa
+	players[setter_index].saldo -= value;
+	
+	// Se já tinha recompensa, adicionar ao valor existente
+	if(players[target_index].bounty_on_head == 1) {
+		players[target_index].bounty_value += value;
+	} else {
+		// Nova recompensa
+		players[target_index].bounty_on_head = 1;
+		players[target_index].bounty_value = value;
+		players[target_index].bounty_owner = players[setter_index].charname;
+		players[target_index].bounty_active = 1;
+		players[target_index].bounty_online_time = 0;
+	}
+	
+	// Atualizar título do alvo
+	settitle(target_index);
+	
+	// Marcar que este jogador colocou recompensa em alguém
+	players[setter_index].bounty_target = players[target_index].charname;
+	
+	return true;
+}
+
+// Função para remover recompensa da cabeça de um jogador
+bool remove_bounty(int target_index) {
+	if(target_index < 0 || target_index >= int(players.length())) {
+		return false;
+	}
+	
+	if(players[target_index].bounty_on_head == 0) {
+		return false; // Não tem recompensa
+	}
+	
+	// Limpar dados da recompensa
+	players[target_index].bounty_on_head = 0;
+	players[target_index].bounty_value = 0;
+	players[target_index].bounty_owner = "";
+	players[target_index].bounty_active = 0;
+	players[target_index].bounty_online_time = 0;
+	
+	// Atualizar título
+	settitle(target_index);
+	
+	return true;
+}
+
+// Função para processar quando um jogador com recompensa é morto
+void process_bounty_kill(int killer_index, int victim_index) {
+	// Validações
+	if(killer_index < 0 || killer_index >= int(players.length())) {
+		return;
+	}
+	
+	if(victim_index < 0 || victim_index >= int(players.length())) {
+		return;
+	}
+	
+	// Verificar se a vítima tinha recompensa
+	if(players[victim_index].bounty_on_head == 0) {
+		return;
+	}
+	
+	// Dar a recompensa ao matador
+	int reward = players[victim_index].bounty_value;
+	players[killer_index].saldo += reward;
+	
+	// Notificar o matador
+	send_reliable_text(players[killer_index].peer_id, 
+		"msg2 Você matou " + players[victim_index].charname + 
+		" que tinha recompensa na cabeça e ganhou " + reward + " moedas!", 0);
+	
+	// Notificar a vítima
+	send_reliable_text(players[victim_index].peer_id, 
+		"msg2 Você foi morto por " + players[killer_index].charname + 
+		" que recebeu a recompensa de " + reward + " moedas.", 0);
+	
+	// Notificar quem colocou a recompensa (se estiver online)
+	int owner_index = get_player_index_from(players[victim_index].bounty_owner);
+	if(owner_index > -1) {
+		send_reliable_text(players[owner_index].peer_id, 
+			"msg2 " + players[killer_index].charname + " matou " + 
+			players[victim_index].charname + " e recebeu a recompensa que você colocou!", 0);
+	}
+	
+	// Remover a recompensa
+	remove_bounty(victim_index);
+}
+
+// Função para verificar se um jogador tem recompensa na cabeça
+bool has_bounty(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return false;
+	}
+	
+	return players[player_index].bounty_on_head == 1;
+}
+
+// Função para obter o valor da recompensa
+int get_bounty_value(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return 0;
+	}
+	
+	return players[player_index].bounty_value;
+}
+
+// Função para obter informações sobre a recompensa
+string get_bounty_info(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return "Jogador inválido";
+	}
+	
+	if(players[player_index].bounty_on_head == 0) {
+		return players[player_index].charname + " não tem recompensa na cabeça.";
+	}
+	
+	string info = players[player_index].charname + " tem recompensa de " + 
+		players[player_index].bounty_value + " moedas";
+	
+	if(players[player_index].bounty_owner != "") {
+		info += " colocada por " + players[player_index].bounty_owner;
+	}
+	
+	return info;
+}
+
+// Função para listar todos os jogadores com recompensa
+string[] list_all_bounties() {
+	string[] bounty_list;
+	
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].bounty_on_head == 1) {
+			string entry = players[i].charname + ": " + 
+				players[i].bounty_value + " moedas";
+			
+			if(players[i].bounty_owner != "") {
+				entry += " (por " + players[i].bounty_owner + ")";
+			}
+			
+			bounty_list.insert_last(entry);
+		}
+	}
+	
+	return bounty_list;
+}
+
+// Função para aumentar tempo online com recompensa (chamar periodicamente)
+void update_bounty_online_time(int player_index, int seconds) {
+	if(player_index < 0 || player_index >= int(players.length())) {
+		return;
+	}
+	
+	if(players[player_index].bounty_on_head == 1) {
+		players[player_index].bounty_online_time += seconds;
+	}
+}
+
+// Função para cancelar recompensa que você colocou (apenas quem colocou pode cancelar)
+bool cancel_bounty(int canceller_index, string target_name) {
+	if(canceller_index < 0 || canceller_index >= int(players.length())) {
+		return false;
+	}
+	
+	// Verificar se este jogador colocou recompensa neste alvo
+	if(players[canceller_index].bounty_target != target_name) {
+		return false;
+	}
+	
+	// Encontrar o alvo
+	int target_index = get_player_index_from(target_name);
+	if(target_index == -1) {
+		return false; // Alvo não está online
+	}
+	
+	// Verificar se o alvo ainda tem a recompensa deste jogador
+	if(players[target_index].bounty_owner != players[canceller_index].charname) {
+		return false;
+	}
+	
+	// Devolver metade do valor (taxa de cancelamento de 50%)
+	int refund = players[target_index].bounty_value / 2;
+	players[canceller_index].saldo += refund;
+	
+	// Remover recompensa
+	remove_bounty(target_index);
+	
+	// Limpar o target do cancelador
+	players[canceller_index].bounty_target = "";
+	
+	return true;
+}
+

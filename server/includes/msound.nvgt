@@ -1,0 +1,315 @@
+// msound.nvgt - Sistema de Sons Móveis 3D do EVM Server (convertido de BGT)
+// Conversão completa: BGT → NVGT com Steam Audio (HRTF)
+
+#include "globals.nvgt"
+
+// Classe para sons móveis 3D
+class moving_sound {
+	sound@ snd; // Handle do som
+	string sound_file; // Arquivo de som
+	int x, y, z; // Posição do som no espaço 3D
+	string map; // Mapa onde o som está
+	bool looping; // Se o som está em loop
+	bool active; // Se o som está ativo
+	timer lifetime; // Tempo de vida do som
+	int max_lifetime; // Tempo máximo de vida (ms), 0 = infinito
+	
+	// Propriedades de atenuação
+	float pan_step; // Intensidade do pan esquerda/direita com distância
+	float volume_step; // Intensidade da redução de volume com distância
+	int max_distance; // Distância máxima audível
+	
+	// Construtor
+	moving_sound(int sx, int sy, int sz, string smap, string sfile, bool sloop = true, int slifetime = 0) {
+		x = sx;
+		y = sy;
+		z = sz;
+		map = smap;
+		sound_file = sfile;
+		looping = sloop;
+		active = false;
+		max_lifetime = slifetime;
+		
+		// Valores padrão de atenuação (ajustar conforme necessário)
+		pan_step = 0.5; // Pan moderado
+		volume_step = 0.1; // Redução de volume gradual
+		max_distance = 100; // Distância máxima de 100 unidades
+		
+		// Criar handle de som
+		@snd = sound();
+		
+		lifetime.restart();
+	}
+	
+	// Iniciar som
+	bool start() {
+		if (@snd == null) return false;
+		
+		// Carregar som
+		if (!snd.load(sound_file)) {
+			debug_log("ERRO ao carregar som móvel: " + sound_file);
+			return false;
+		}
+		
+		// Configurar loop
+		snd.loop = looping;
+		
+		// Tocar som
+		if (!snd.play()) {
+			debug_log("ERRO ao tocar som móvel: " + sound_file);
+			return false;
+		}
+		
+		active = true;
+		return true;
+	}
+	
+	// Parar som
+	void stop() {
+		if (@snd != null) {
+			snd.close();
+		}
+		active = false;
+	}
+	
+	// Atualizar posição 3D para um jogador específico
+	void update_for_player(int player_index) {
+		if (!active || @snd == null) return;
+		if (player_index < 0 || player_index >= int(players.length())) return;
+		
+		// Verificar se jogador está no mesmo mapa
+		if (players[player_index].map != map) {
+			// Som não audível em outro mapa, volume 0
+			snd.volume = 0;
+			return;
+		}
+		
+		// Obter posição do jogador (listener)
+		float listener_x = players[player_index].x;
+		float listener_y = players[player_index].y;
+		float listener_z = players[player_index].z;
+		
+		// Obter rotação do jogador (0-360 graus)
+		float rotation = players[player_index].direction; // Assumindo que existe
+		
+		// Posição do som
+		float sound_x = x;
+		float sound_y = y;
+		float sound_z = z;
+		
+		// Atualizar posição 3D usando Steam Audio (HRTF)
+		snd.set_position(listener_x, listener_y, listener_z, 
+		                 sound_x, sound_y, sound_z, 
+		                 rotation, pan_step, volume_step);
+		
+		// Verificar distância para limitar alcance
+		float dx = sound_x - listener_x;
+		float dy = sound_y - listener_y;
+		float dz = sound_z - listener_z;
+		float distance = sqrt(dx*dx + dy*dy + dz*dz);
+		
+		// Se muito longe, silenciar
+		if (distance > max_distance) {
+			snd.volume = 0;
+		}
+	}
+	
+	// Verificar se som deve ser removido
+	bool should_remove() {
+		// Remover se não está ativo
+		if (!active) return true;
+		
+		// Remover se lifetime expirou (se configurado)
+		if (max_lifetime > 0 && lifetime.elapsed >= max_lifetime * 1000) {
+			stop();
+			return true;
+		}
+		
+		// Remover se som terminou de tocar (não-looping)
+		if (@snd != null && !looping && !snd.playing) {
+			active = false;
+			return true;
+		}
+		
+		return false;
+	}
+	
+	// Destrutor
+	~moving_sound() {
+		stop();
+	}
+}
+
+// Array global de sons móveis
+moving_sound@[] moving_sounds;
+
+// Habilitar HRTF global (Steam Audio)
+bool hrtf_initialized = false;
+
+// Inicializar sistema de sons 3D
+void init_moving_sounds() {
+	// Habilitar HRTF global do Steam Audio
+	sound_global_hrtf = true;
+	hrtf_initialized = true;
+	
+	debug_log("Sistema de sons móveis 3D inicializado (Steam Audio HRTF)");
+}
+
+// Spawnar som móvel 3D
+void spawn_moving_sound(int x, int y, int z, string map, string sound_file, bool loop = true, int lifetime = 0) {
+	if (!hrtf_initialized) {
+		debug_log("AVISO: HRTF não inicializado, chamando init_moving_sounds()");
+		init_moving_sounds();
+	}
+	
+	// Criar som móvel
+	moving_sound@ ms = moving_sound(x, y, z, map, sound_file, loop, lifetime);
+	
+	// Iniciar som
+	if (ms.start()) {
+		moving_sounds.insert_last(ms);
+		debug_log("Som móvel spawnado: " + sound_file + " em (" + x + ", " + y + ", " + z + ") no mapa " + map);
+	} else {
+		debug_log("ERRO ao spawnar som móvel: " + sound_file);
+	}
+}
+
+// Spawnar som móvel com atenuação customizada
+void spawn_moving_sound_custom(int x, int y, int z, string map, string sound_file, 
+                               bool loop, int lifetime, float pan_step, float volume_step, int max_distance) {
+	if (!hrtf_initialized) {
+		init_moving_sounds();
+	}
+	
+	moving_sound@ ms = moving_sound(x, y, z, map, sound_file, loop, lifetime);
+	
+	// Configurar atenuação customizada
+	ms.pan_step = pan_step;
+	ms.volume_step = volume_step;
+	ms.max_distance = max_distance;
+	
+	if (ms.start()) {
+		moving_sounds.insert_last(ms);
+	}
+}
+
+// Mover som existente para nova posição
+void move_sound(uint sound_index, int new_x, int new_y, int new_z) {
+	if (sound_index >= moving_sounds.length()) return;
+	
+	moving_sounds[sound_index].x = new_x;
+	moving_sounds[sound_index].y = new_y;
+	moving_sounds[sound_index].z = new_z;
+}
+
+// Remover som móvel específico
+void remove_moving_sound(uint sound_index) {
+	if (sound_index >= moving_sounds.length()) return;
+	
+	moving_sounds[sound_index].stop();
+	@moving_sounds[sound_index] = null;
+	moving_sounds.remove_at(sound_index);
+}
+
+// Remover todos os sons móveis de um mapa
+void clear_moving_sounds_in_map(string map) {
+	for (uint i = 0; i < moving_sounds.length(); i++) {
+		if (moving_sounds[i].map == map) {
+			moving_sounds[i].stop();
+			@moving_sounds[i] = null;
+			moving_sounds.remove_at(i);
+			i--; // Ajustar índice após remoção
+		}
+	}
+}
+
+// Remover todos os sons móveis
+void clear_all_moving_sounds() {
+	for (uint i = 0; i < moving_sounds.length(); i++) {
+		moving_sounds[i].stop();
+		@moving_sounds[i] = null;
+	}
+	moving_sounds.resize(0);
+}
+
+// Loop principal de atualização de sons móveis
+void moving_sounds_loop() {
+	// Atualizar cada som para cada jogador
+	for (uint i = 0; i < moving_sounds.length(); i++) {
+		// Verificar se som deve ser removido
+		if (moving_sounds[i].should_remove()) {
+			@moving_sounds[i] = null;
+			moving_sounds.remove_at(i);
+			i--; // Ajustar índice
+			continue;
+		}
+		
+		// Atualizar posição 3D para todos os jogadores
+		for (uint p = 0; p < players.length(); p++) {
+			moving_sounds[i].update_for_player(p);
+		}
+	}
+}
+
+// ============================================================================
+// FUNÇÕES DE CONVENIÊNCIA - Sons Comuns do Jogo
+// ============================================================================
+
+// Som de helicóptero
+void spawn_helicopter_sound(int x, int y, string map) {
+	spawn_moving_sound_custom(x, y, 50, map, "sounds/helicopter.ogg", 
+	                         true, 0, 0.8, 0.15, 150);
+}
+
+// Som de carro
+void spawn_vehicle_sound(int x, int y, string map) {
+	spawn_moving_sound_custom(x, y, 0, map, "sounds/vehicle.ogg", 
+	                         true, 0, 0.6, 0.12, 100);
+}
+
+// Som de explosão (curta duração)
+void spawn_explosion_sound_3d(int x, int y, int z, string map) {
+	spawn_moving_sound_custom(x, y, z, map, "sounds/explosion.ogg", 
+	                         false, 3, 0.9, 0.2, 200);
+}
+
+// Som de tiro (curta duração)
+void spawn_gunshot_sound_3d(int x, int y, string map, string weapon_sound) {
+	spawn_moving_sound_custom(x, y, 0, map, weapon_sound, 
+	                         false, 1, 0.7, 0.18, 80);
+}
+
+// Som ambiente (longa duração)
+void spawn_ambient_sound(int x, int y, string map, string sound_file) {
+	spawn_moving_sound_custom(x, y, 0, map, sound_file, 
+	                         true, 0, 0.3, 0.08, 50);
+}
+
+// Som de porta/objeto
+void spawn_object_sound(int x, int y, string map, string sound_file) {
+	spawn_moving_sound_custom(x, y, 0, map, sound_file, 
+	                         false, 2, 0.5, 0.15, 60);
+}
+
+// ============================================================================
+// FUNÇÕES DE DEBUGGING
+// ============================================================================
+
+// Obter número de sons ativos
+int get_active_sounds_count() {
+	return moving_sounds.length();
+}
+
+// Obter informações de sons ativos
+string get_sounds_info() {
+	string info = "Sons móveis ativos: " + moving_sounds.length() + "\n";
+	
+	for (uint i = 0; i < moving_sounds.length(); i++) {
+		info += "  [" + i + "] " + moving_sounds[i].sound_file + 
+		        " @ (" + moving_sounds[i].x + ", " + moving_sounds[i].y + ", " + moving_sounds[i].z + ")" +
+		        " - Mapa: " + moving_sounds[i].map + 
+		        " - Ativo: " + (moving_sounds[i].active ? "SIM" : "NÃO") + "\n";
+	}
+	
+	return info;
+}

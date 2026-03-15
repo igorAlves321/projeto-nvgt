@@ -1,0 +1,83 @@
+// guardacofre.nvgt - Sistema de Guarda do Cofre do EVM Server (convertido de BGT)
+// Conversão: BGT → NVGT
+// NPC que protege cofres, usa armas de fogo
+
+guardacofre@[] guardacofres;
+
+class guardacofre {
+	int x, y;
+	uint tiros = 30;
+	int vida = 5000;
+	string golpeado;
+	string map;
+	timer guardacofretimer;
+	timer tempoatirar;
+	int guardacofretime = 500;
+	
+	guardacofre(int cx, int cy, string cmap) {
+		x = cx;
+		y = cy;
+		map = cmap;
+	}
+}
+
+// Calcula distância entre guardacofre e jogador
+int get_guardacofre_distance(guardacofre@ g, player@ p) {
+	if (g.map != p.map) return -1;
+	return get_distance(g.x, p.x, g.y, p.y);
+}
+
+void guardacofreloop() {
+	for (uint i = 0; i < guardacofres.length(); i++) {
+		if (guardacofres[i].guardacofretimer.elapsed >= guardacofres[i].guardacofretime) {
+			for (uint i2 = 0; i2 < players.length(); i2++) {
+				// Sistema de ataque (alcance 15, dano 100-130)
+				if (get_guardacofre_distance(guardacofres[i], players[i2]) > -1 && get_guardacofre_distance(guardacofres[i], players[i2]) <= 15 && players[i2].newbie == false && guardacofres[i].tempoatirar.elapsed >= 100 && guardacofres[i].tiros > 0 && players[i2].insz == false) {
+					guardacofres[i].tempoatirar.restart();
+					net.send_packet(0, "play m4a1s.ogg " + guardacofres[i].x + " " + guardacofres[i].y, guardacofres[i].map);
+					players[i2].health -= random(100, 130);
+					net.send_packet(0, "inithurt " + players[i2].charname + " " + players[i2].x + " " + players[i2].y + " " + players[i2].voice + " " + players[i2].pitch, players[i2].map);
+					players[i2].lasthit = "guardacofre";
+					guardacofres[i].tiros--;
+					break;
+				}
+				
+				// Recarregar
+				if (guardacofres[i].tiros <= 0) {
+					guardacofres[i].tiros = 30;
+					guardacofres[i].tempoatirar.restart();
+					net.send_packet(0, "play carregar_m4a1.ogg " + guardacofres[i].x + " " + guardacofres[i].y, guardacofres[i].map);
+				}
+				
+				// Sistema de morte
+				if (guardacofres[i].vida <= 0) {
+					net.send_packet(0, "play notifykills.ogg " + guardacofres[i].x + " " + guardacofres[i].y, guardacofres[i].map);
+					send_reliable(0, "msg2 " + guardacofres[i].golpeado + "; ;matou um; ;guarda_do_cofre;!", 3);
+					
+					// Drop de M4A1
+					spawn_obj(guardacofres[i].x, guardacofres[i].y, "m4a1", 1, guardacofres[i].map);
+					
+					// XP para o matador
+					int xx = get_player_index_from(guardacofres[i].golpeado);
+					if (xx > -1) {
+						ganhaxp(players[xx].charname, random(500, 1000));
+						
+						// 🆕 INTEGRAÇÃO: Atualizar quests e achievements
+						quest_update_kill(players[xx].charname, "guardacofre");
+						update_achievement_progress(players[xx].charname, "kills", 1);
+					}
+					
+					guardacofres.remove_at(i);
+					break;
+				}
+			}
+		}
+	}
+	netloop();
+}
+
+void spawn_guardacofre(int x, int y, string map) {
+	if (!pvp) return;
+	guardacofre g(x, y, map);
+	guardacofres.insert_last(g);
+}

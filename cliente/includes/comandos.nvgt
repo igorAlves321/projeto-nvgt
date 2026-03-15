@@ -1,0 +1,1436 @@
+// Sistema de comandos convertido para NVGT
+// Usando APIs 100% nativas NVGT
+
+// NVGT tem string.split() nativo - não precisamos de implementação manual
+
+bool ouvirxp=true;
+// emchat removido - já declarado em dialogos.nvgt
+string nomejogador;
+sound s1;
+timer olharx;
+timer tempoconectado;
+timer temponaoevoce;
+int fbau=0;
+bool onwall = false;  // Flag para colisão com parede
+
+bool shift_pressionado(){
+	if(key_down(KEY_RSHIFT)||key_down(KEY_LSHIFT))return true;
+	return false;
+}
+
+bool alt_pressionado(){
+	if(key_down(KEY_LMENU)||key_down(KEY_RMENU))return true;
+	return false;
+}
+
+// ✅ Chat Administrativo - Abre input e envia para o servidor
+void chat_administrativo() {
+	string msg = v.input(pu.get_value("Digite sua mensagem para o chat admin."));
+	if(msg != "") {
+		send_reliable(peer_id, "adm " + msg, 0);
+	}
+}
+
+// Função de verificação de movimento por direção (do BGT original)
+bool abletomove_direction(int direction){
+	string locate = get_zone_at(me.x, me.y);
+	if(locate == "Elevador." || dmoving || !moveable || paraquedas == 1) {
+		debug_log("🚫 [abletomove_direction] Bloqueado: zone=" + locate + " dmoving=" + dmoving + " moveable=" + moveable + " paraquedas=" + paraquedas);
+		return false;
+	}
+	
+	if(direction == Left){
+		if(string_contains(get_tile_at((me.x-1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x-1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	else if(direction == Right){
+		if(string_contains(get_tile_at((me.x+1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x+1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	return onwall ? false : true;
+}
+
+// Função abletomove() - verifica se pode se mover (do BGT original)
+bool abletomove(){
+	string locate = get_zone_at(me.x, me.y);
+	if(locate == "Elevador." || dmoving || !moveable || paraquedas == 1) return false;
+	
+	if(facing == Left){
+		if(string_contains(get_tile_at((me.x-1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x-1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	else if(facing == Right){
+		if(string_contains(get_tile_at((me.x+1), me.y), "wall", 1) > -1){
+			if(cloaked == false){
+				string walltype;
+				string tile = get_tile_at((me.x+1), me.y);
+				walltype = string_replace(tile, "wall", "", true);
+				if(onwall == false){
+					p.play_stationary("wall" + walltype + ".ogg", false);
+					send_unreliable(peer_id, "draw wall" + walltype + ".ogg", 0);
+					onwall = true;
+					return false;
+				}
+			}
+			else{
+				p.play_stationary("spell_cloak_throughwall.ogg", false);
+				send_unreliable(peer_id, "draw spell_cloak_throughwall.ogg", 0);
+				return true;
+			}
+		}
+		else{
+			onwall = false;
+			return true;
+		}
+	}
+	return onwall ? false : true;
+}
+
+// Função is_disabled() - verifica se posição está em área desabilitada
+// Nota: Na versão atual, disableds é array de strings (IDs de elementos)
+// TODO: Implementar lógica completa quando necessário
+bool is_disabled(int x, int y){
+	// Por agora, retorna false já que a estrutura mudou de objetos para strings
+	// A verificação real depende de como os elementos são marcados como disabled
+	return false;
+}
+
+// ============================================================================
+// MENU DE JOGADORES ONLINE (F5) - Lista global de todos jogadores conectados
+// ============================================================================
+// Recebe dados do servidor no formato: nome|titulo|status||nome2|titulo2|status2||...
+// MIGRADO PARA SISTEMA NATIVO: Redução de 166 → 70 linhas (-58%)
+void playersmenu(string data) {
+	debug_log("📋 playersmenu chamado (versão nativa)");
+	
+	if(ausente) return;
+	
+	// Validar dados
+	if(data == "" || data.length() < 3) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	// Parse data (mantém lógica original)
+	string[] lines = data.split("||");
+	dictionary player_info;  // nome -> "titulo|status"
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		if(lines[i] == "" || lines[i].length() < 1) continue;
+		
+		string[] parsed = lines[i].split("|");
+		if(parsed.length() >= 1 && parsed[0] != "") {
+			string name = parsed[0];
+			string title = parsed.length() >= 2 ? parsed[1] : "";
+			string status = parsed.length() >= 3 ? parsed[2] : "";
+			
+			// Armazenar info
+			player_info.set(name, title + "|" + status);
+		}
+	}
+	
+	if(player_info.size() == 0) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	// Configurar menu nativo
+	menu pm;
+	@pm.pack_file = @sound_default_pack;
+	pm.click_sound = "invmove6.ogg";
+	pm.select_sound = "-old-menuchecked.ogg";
+	pm.open_sound = "notify37.ogg";
+	pm.wrap = false;
+	pm.focus_first_item = false;
+	
+	// Adicionar jogadores ao menu
+	string[] player_names = player_info.get_keys();
+	player_names.sort_ascending();
+	
+	for(uint i = 0; i < player_names.length(); i++) {
+		string name = player_names[i];
+		string info = "";
+		player_info.get(name, info);
+		string[] parts = info.split("|");
+		string title = parts.length() > 0 ? parts[0] : "";
+		string status = parts.length() > 1 ? parts[1] : "";
+		
+		// Display: "Nome (Título): Status"
+		string display = name;
+		if(title != "") display += " (" + pu.get_value(title) + ")";
+		if(status != "") display += ": " + status;
+		
+		pm.add_item(display, name);
+	}
+	
+	pm.intro_text = pu.get_value("Mostrando lista de jogadores.") + " " + player_names.length() + " " + pu.get_value("online.");
+	
+	// Callback para atalhos (ALT+I, F1-F4, etc)
+	@pm.background_callback = menu::menu_callback(playersmenu_shortcuts);
+	pm.background_callback_data = "";
+	
+	emchat = true;
+	
+	// Run menu
+	int selected_index = pm.run();
+	emchat = false;
+	
+	if(selected_index < 0) return;  // ESC pressionado
+	
+	// Obter jogador selecionado
+	string selected_name = pm.get_item_id(selected_index);
+	
+	// Pedir mensagem PM
+	string msg = v.input(pu.get_value("Digite sua mensagem para") + " " + selected_name);
+	if(msg != "") {
+		send_reliable(peer_id, "/pm " + selected_name + " " + msg, 1);
+		emchat = true;
+	}
+}
+
+// Callback para atalhos do playersmenu
+void playersmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_name = m.get_item_id(m.focused_item);
+	
+	// ALT + teclas
+	if(key_down(KEY_LMENU)) {
+		if(key_pressed(KEY_I)) send_reliable(peer_id, "/ign " + selected_name, 1);
+		if(key_pressed(KEY_U)) send_reliable(peer_id, "/deign " + selected_name, 1);
+		if(key_pressed(KEY_E)) send_reliable(peer_id, "/eqr " + selected_name, 1);
+		if(key_pressed(KEY_D)) send_reliable(peer_id, "/dqr " + selected_name, 1);
+		if(key_pressed(KEY_S)) send_reliable(peer_id, "/eqs " + selected_name, 1);
+	}
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 " + selected_name, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 " + selected_name, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 " + selected_name, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 " + selected_name, 0);
+	
+	// Processar rede
+	netloop();
+}
+
+// ============================================================================
+// MENU DE JOGADORES NO MAPA (usado internamente)
+// ============================================================================
+// ============================================================================
+// MENU DE JOGADORES NO MAPA - Lista jogadores no mesmo mapa que você
+// ============================================================================
+// MIGRADO PARA SISTEMA NATIVO: Redução de 120 → 45 linhas (-62%)
+void jogadoresmenu(){
+	if(players.length()==0||ausente)return;
+	
+	// Configurar menu nativo
+	menu jm;
+	@jm.pack_file = @sound_default_pack;
+	jm.click_sound = "";
+	jm.select_sound = "";
+	jm.wrap = false;
+	jm.focus_first_item = true;
+	
+	// Adiciona jogadores (filtra por beeping ou DM)
+	for(uint i=0; i<players.length(); i++){
+		if(players[i].beeping==1||desenvolvedordm==1){
+			jm.add_item(players[i].charname, players[i].charname);
+		}
+	}
+	
+	if(jm.item_count == 0) return;
+	
+	jm.intro_text = "";
+	
+	// Callback para atalhos
+	@jm.background_callback = menu::menu_callback(jogadoresmenu_shortcuts);
+	
+	emchat=true;
+	int selected_index = jm.run();
+	emchat=false;
+	
+	if(selected_index < 0) return;  // ESC
+	
+	string selected_player = jm.get_item_id(selected_index);
+	
+	// Enviar PM
+	string msg=v.input(pu.get_value("Digite sua mensagem para")+" "+selected_player);
+	if(msg!="") send_reliable(peer_id, "/pm "+selected_player+" "+msg, 1);
+}
+
+// Callback para atalhos do jogadoresmenu
+void jogadoresmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_player = m.get_item_id(m.focused_item);
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 "+selected_player, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 "+selected_player, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 "+selected_player, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 "+selected_player, 0);
+	
+	// CTRL + teclas
+	if(key_down(KEY_LCTRL)||key_down(KEY_RCTRL)){
+		if(key_pressed(KEY_C)){
+			clipboard_copy_text(selected_player);
+			speak(selected_player+" "+pu.get_value("copiado."));
+		}
+		if(desenvolvedordm==1){
+			if(key_pressed(KEY_M)) send_reliable(peer_id, "/killplayer "+selected_player, 1);
+			if(key_pressed(KEY_E)) send_reliable(peer_id, "/expulsar "+selected_player, 1);
+			if(key_pressed(KEY_B)) send_reliable(peer_id, "/ban "+selected_player, 1);
+			if(key_pressed(KEY_Z)){
+				nolhar=selected_player;
+				int n=get_player(nolhar);
+				if(n>-1){
+					speak(pu.get_value("Pronto."));
+					olhar_x=players[n].x;
+					olhar_y=players[n].y;
+					send_reliable(peer_id, "olhar "+nolhar, 0);
+					moveable=false;
+					inansz=true;
+				}
+			}
+		}
+	}
+}
+
+
+void computadormenu(){
+	if(ausente)return;
+	int counter=0;
+	string[] peramitors = opcoespc.split("\r\n"); // NVGT nativo
+	string[] peramitors2;
+	for(uint i=0; i<peramitors.length(); i++){
+		string[] parts = peramitors[i].split("="); // NVGT nativo
+		if(parts.length() > 0) {
+			peramitors[i] = parts[0]; // Convertido para NVGT
+		}
+	}
+	speak(pu.get_value(peramitors[0]));
+	while(true){
+		wait(5);
+		// mainloop() removido - não existe em NVGT
+		if(ausente||mapname=="túnel")break;
+		peramitors.resize(0);
+		peramitors2.resize(0);
+		peramitors2 = opcoespc.split("\r\n"); // NVGT nativo
+		for(uint i=0; i<peramitors2.length(); i++){
+			string[] split_result = peramitors2[i].split("="); // NVGT nativo
+			peramitors2[i] = split_result.length() > 0 ? split_result[0] : ""; // Usando split() nativo do NVGT
+			int pwn=0;
+			peramitors.insert_last(peramitors2[i]);
+		}
+		if(counter > peramitors.length()){
+			counter=peramitors.length()-1;
+		}
+		if(key_pressed(KEY_RETURN)){
+			copiaragora="";
+			send_reliable(peer_id, "pc "+peramitors[counter], 0); // Convertido para NVGT
+		}
+		if(key_pressed(KEY_HOME) and peramitors.length()>0&&cavando==0){
+			counter=0;
+			speak(pu.get_value(peramitors[counter]));
+			copiaragora=pu.get_value(peramitors[counter]);
+		}
+		if(key_pressed(KEY_END) and peramitors.length()>0&&cavando==0){
+			counter=peramitors.length()-1;
+			speak(pu.get_value(peramitors[counter]));
+			copiaragora=pu.get_value(peramitors[counter]);
+		}
+		if(key_pressed(KEY_UP)){
+			if(peramitors.length()==1){
+				counter=0;
+				speak(pu.get_value(peramitors[counter]));
+				copiaragora=pu.get_value(peramitors[counter]);
+			}
+			else if(counter > 0){
+				counter--;
+				speak(pu.get_value(peramitors[counter]));
+				copiaragora=pu.get_value(peramitors[counter]);
+			}
+		}
+		if(key_pressed(KEY_DOWN)){
+			if(peramitors.length()==1){
+				counter=0;
+				speak(pu.get_value(peramitors[counter]));
+				copiaragora=pu.get_value(peramitors[counter]);
+			}
+			else if(counter < peramitors.length()-1){
+				counter++;
+				speak(pu.get_value(peramitors[counter]));
+				copiaragora=pu.get_value(peramitors[counter]);
+			}
+		}
+		if(key_pressed(KEY_ESCAPE)){
+			copiaragora="";
+			return;
+		}
+	}
+}
+
+void apartamentomenu(){
+	if(ausente)return;
+	get_characters();
+	string cl;
+	int counter=0;
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] peramitors2;
+	for(uint i=0; i<peramitors.length(); i++){
+		peramitors[i]=peramitors[i].split("=")[0]; // Convertido para NVGT
+	}
+	if(fbau==1)fbau=0;
+	while(true){
+		wait(5);
+		// mainloop() removido - não existe em NVGT
+		if(ausente||mapname=="túnel")break;
+		peramitors.resize(0);
+		peramitors2.resize(0);
+		content=apartamentoinv;
+		peramitors2=content.split("\r\n"); // Convertido para NVGT
+		for(uint i=0; i<peramitors2.length(); i++){
+			peramitors2[i]=peramitors2[i].split("=")[0]; // Convertido para NVGT
+			int pwn=0;
+			peramitors.insert_last(peramitors2[i]);
+		}
+		if(counter > peramitors.length())counter=peramitors.length()-1;
+		if(fbau==1){
+			fbau=0;
+			break;
+		}
+		if(key_pressed(KEY_RETURN)){
+			int n=string_to_number(v.input(pu.get_value("Quantos você quer pegar?")));
+			if(n>apartamentoinv_item_number(peramitors[counter])||n<=0)p.play_stationary("erro.ogg", false);
+			else send_reliable(peer_id, "papartamento "+peramitors[counter]+" "+n, 0); // Convertido para NVGT
+		}
+		if(key_pressed(KEY_HOME) and peramitors.length()>0&&cavando==0){
+			counter=0;
+			p.play_stationary("invclick.ogg",false);
+			speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+		}
+		if(key_pressed(KEY_END) and peramitors.length()>0&&cavando==0){
+			counter=peramitors.length()-1;
+			p.play_stationary("invclick.ogg",false);
+			speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+		}
+		if(key_pressed(KEY_UP)){
+			if(peramitors.length()==1){
+				counter=0;
+				p.play_stationary("invclick.ogg",false);
+				speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+			}
+			else if(counter > 0){
+				counter--;
+				p.play_stationary("invclick.ogg",false);
+				speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+			}
+		}
+		if(key_pressed(KEY_DOWN)){
+			if(peramitors.length()==1){
+				counter=0;
+				p.play_stationary("invclick.ogg",false);
+				speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+			}
+			else if(counter < peramitors.length()-1){
+				counter++;
+				p.play_stationary("invclick.ogg",false);
+				speak(pu.get_value(peramitors[counter])+", "+apartamentoinv_item_number(peramitors[counter]));
+			}
+		}
+		if(key_pressed(KEY_ESCAPE)){
+			p.play_stationary("fbaú.ogg", false);
+			send_reliable(peer_id, "draw fbaú.ogg", 0); // Convertido para NVGT
+			send_reliable(peer_id, "fbaú", 0); // Convertido para NVGT
+			return;
+		}
+	}
+}
+
+void readprefs(){
+	string path;
+	if(portable) path = PREFSFILE;
+	else {
+		if(!directory_exists(prefsdir)) directory_create(prefsdir);
+		path = prefsdir + "\\" + PREFSFILE;
+	}
+
+	if(!file_exists(path)) {
+		return;
+	}
+
+	file pref_file;
+	if(!pref_file.open(path, "rb")) {
+		return;
+	}
+	string raw = pref_file.read();
+	pref_file.close();
+	if(raw == "") {
+		return;
+	}
+
+	string content = string_decrypt(raw, PREFS_ENCRYPTION_KEY);
+	content = content.replace("\r\n", "\n");
+	content = content.replace("\r", "\n");
+	string[] lines = content.split("\n");
+	dictionary values;
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim_string(lines[i]);
+		if(line == "" || line.substr(0, 1) == "#" || line.substr(0, 2) == "//") continue;
+		int eq = line.find("=");
+		if(eq <= 0) continue;
+		string key = trim_string(line.substr(0, eq));
+		string value = trim_string(line.substr(eq + 1));
+		if(key == "") continue;
+		values.set(key, value);
+	}
+
+	string svalue;
+	if(values.get("mlang", svalue)) mainlang = svalue;
+	if(values.get("ouvirhits", svalue)) ouvirhits = parse_int(svalue);
+	if(values.get("ouvirpassos", svalue)) ouvirpassos = parse_int(svalue);
+	if(values.get("ouviremoutrasjanelas", svalue)) ouviremoutrasjanelas = parse_int(svalue);
+	if(values.get("musicamenu", svalue)) musicamenu = parse_float(svalue);
+	if(values.get("idiomaorigem", svalue)) idiomaorigem = svalue;
+	if(values.get("tradutorativo", svalue)) tradutorativo = parse_int(svalue);
+	if(values.get("primeiravez", svalue)) primeiravez = parse_int(svalue);
+	if(values.get("cmfinal", svalue)) cmfinal = svalue;
+	if(values.get("idiomachat", svalue)) idiomachat = svalue;
+	if(values.get("atu", svalue)) atu = parse_int(svalue);
+	if(values.get("rcontrol", svalue)) rcontrol = parse_int(svalue);
+	if(values.get("ouvirmortes", svalue)) ouvirmortes = parse_int(svalue);
+	if(values.get("nalancha", svalue)) game_lan.nalancha = parse_int(svalue);
+	if(values.get("un", svalue)) {
+		un = svalue;
+		net_un = svalue;
+	}
+	if(values.get("pw", svalue)) {
+		pw = svalue;
+		net_pw = svalue;
+	}
+	if(values.get("ttsrate", svalue)) {
+		ttsrate = parse_int(svalue);
+		if(game_tts.rate != ttsrate) game_tts.set_rate(ttsrate);
+		if(tts.rate != ttsrate) tts.set_rate(ttsrate);
+	}
+	if(values.get("voice", svalue)) {
+		voice = parse_int(svalue);
+		if(voice >= 0) {
+			if(game_tts.voice != voice) game_tts.set_voice(voice);
+			if(tts.voice != voice) tts.set_voice(voice);
+		}
+	}
+	if(values.get("wineask", svalue)) wineask = parse_int(svalue);
+	if(values.get("beaconing", svalue)) beaconing = parse_int(svalue);
+	if(values.get("interrupt", svalue)) interrupt = parse_int(svalue);
+	if(values.get("avisadesconectou", svalue)) avisadesconectou = parse_int(svalue);
+	if(values.get("usalogo", svalue)) usalogo = parse_int(svalue);
+	if(values.get("numero_dispositivo", svalue)) numero_dispositivo = parse_int(svalue);
+	if(values.get("atualizar", svalue)) atualizar = parse_int(svalue);
+	if(values.get("volumejogo", svalue)) volumejogo = parse_float(svalue);
+	if(values.get("asktoexit", svalue)) asktoexit = parse_int(svalue);
+	if(values.get("avisanivel", svalue)) avisanivel = parse_int(svalue);
+	if(values.get("f1", svalue)) f1 = parse_int(svalue);
+	if(values.get("f2", svalue)) f2 = parse_int(svalue);
+	if(values.get("f3", svalue)) f3 = parse_int(svalue);
+	if(values.get("f4", svalue)) f4 = parse_int(svalue);
+	if(values.get("f5", svalue)) f5 = parse_int(svalue);
+	if(values.get("f6", svalue)) f6 = parse_int(svalue);
+	if(values.get("f7", svalue)) f7 = parse_int(svalue);
+	if(values.get("f8", svalue)) f8 = parse_int(svalue);
+	if(values.get("f9", svalue)) f9 = parse_int(svalue);
+	if(values.get("f0", svalue)) f0 = parse_int(svalue);
+	if(values.get("sidescrolling", svalue)) sidescrolling = parse_int(svalue);
+	if(values.get("autosave", svalue)) autosave = parse_int(svalue);
+	if(values.get("fps", svalue)) fps = parse_int(svalue);
+
+	if(cmfinal != "") {
+		pu.set_arquivo(cmfinal);
+	}
+}
+
+
+// Descrição de item
+void descitem(string itemname) {
+	send_reliable(peer_id, "desc " + itemname, 2);
+}
+
+void copiar(){
+	if(copiaragora!=""){
+		clipboard_copy_text(copiaragora);
+		copiaragora="";
+		speak(pu.get_value("Texto copiado."));
+	}
+	else if(adds[addpos].items.length()>0){
+		clipboard_copy_text(adds[addpos].items[adds[addpos].pos]);
+		speak(pu.get_value("Texto copiado."));
+	}
+}
+
+void localloop(){
+	string locate=get_zone_at(me.x,me.y);
+	if(locate=="Gramado"&&grama==0){
+		send_reliable(peer_id, "/multar", 2); // Convertido para NVGT
+		grama=1;
+	}
+	else if(locate!="Gramado"&&grama==1){
+		grama=0;
+	}
+	else if(locate=="Refrigerador."&&congelando==0){
+		tempocongelando.restart();
+		congelando=1;
+	}
+	else if(locate!="Refrigerador."&&congelando==1){
+		congelando=0;
+	}
+	if(locate=="Rio"||locate=="Parte funda do lago."){
+		if(salvavida==0&&mapname!="pesqueiro"||mapname=="pesqueiro"&&lan.nalancha==0){
+			if(afogando==0&&!bolhadear&&lan.nalancha==0){
+				afogando=1;
+				somafogando.load(get_sound_path("afogando.ogg"));
+				somafogando.play_wait();
+				send_reliable(peer_id, "terminouafogando", 0); // Convertido para NVGT
+			}
+		}
+	}
+	else if(cavar.playing==false&&cavando==1){
+		cavando=0;
+		send_reliable(peer_id, "enterrar "+opa, 0); // Convertido para NVGT
+	}
+	else if(tempocongelando.elapsed>numerocongelando&&locate=="Refrigerador."){
+		tempocongelando.restart();
+		send_reliable(peer_id, "congelou", 0); // Convertido para NVGT
+	}
+	else if (carregartimer.elapsed>=carregartime&&carregando==1){
+		carregartimer.restart();
+		carregando=0;
+	}
+	else if (atirando==1&&weapontimer.elapsed>=weapontime){
+		weapontimer.restart();
+		atirando=0;
+	}
+}
+
+void checarenter(){
+	string locate=get_zone_at(me.x,me.y);
+	if(locate=="Guichê para compras de passagens."&&mapname.find("aeroporto")>-1){ // Convertido para NVGT
+		string m=comprarpa();
+		if(m!=""){
+			send_reliable(peer_id, "passagema "+m,2); // Convertido para NVGT
+		}
+	}
+	else if(locate=="painel de destino, selecione seu destino e tecle enter."){
+		string nn=v.input("Digite o número do andar");
+		if(nn=="")return;
+		int n=string_to_number(nn);
+		int atual=(me.y/20);
+		if(atual==20&&n==0)atual=0;
+		if(n>50){
+			speak("O andar é auto demais para este prédio. Procure em outro lugar!");
+			return;
+		}
+		if(n==atual){
+			speak(pu.get_value("Você já está neste andar!"));
+			return;
+		}
+		else nandar=n;
+	}
+	if(locate=="Guichê para compras de passagens."&&mapname.find("estação")>-1){ // Convertido para NVGT
+		string m=comprarpa2();
+		if(m!=""){
+			send_reliable(peer_id, "passagemb "+m,2); // Convertido para NVGT
+		}
+	}
+	else if(locate=="Guichê para compras de passagens."&&mapname.find("rodoviária")>-1){ // Convertido para NVGT
+		send_reliable(peer_id, "passagemo", 2); // Convertido para NVGT
+	}
+	else if(locate=="Roleta dos animais!") roleta_animais.jogar();
+	else if(locate=="Par ou ímpar!")parouimpar.jogar();
+	else if(locate=="Black Jack, ou 21!")blackjack.jogar();
+	else if(locate=="Pedra, papel, tesoura!")poker.jogar();
+	else if(locate=="Farkle!") farkle.jogar();
+	else if(locate=="Dado da sorte.") dadosorte.jogar();
+	else if(locate=="Orelhão."||locate=="Cabine telefônica."){
+		bool jatem=false;
+		for(uint i=0;i<players.length();i++){
+			if(players[i].charname!=un&&players[i].x==me.x&&players[i].y==me.y){
+				jatem=true;
+				break;
+			}
+		}
+		if(jatem==true){
+			add_add_item("variado", pu.get_value("Já tem alguém usando o telefone!"));
+		}
+		else if(jatem==false){
+			string telefonar=tel.input("");
+			if(telefonar=="95941354"){
+				moveable=false;
+				sound s;
+				s.load(get_sound_path("telefone.ogg"));
+				int a=random(2, 9);
+				for(int i=0;i<a;i++){
+					s.play();
+					while(s.playing){
+						// mainloop() removido - não existe em NVGT
+						wait(5);
+					}
+				}
+				s.load(get_sound_path("v" + voice + "questcapacete.ogg"));
+				s.play();
+				while(s.playing){
+					wait(5);
+					// mainloop() removido - não existe em NVGT
+				}
+				moveable=true;
+				send_reliable(peer_id, "/quest filha_desaparecida", 1); // Convertido para NVGT
+			}
+			send_reliable(peer_id, "tocar telefonecolocandogancho.ogg", 0); // Convertido para NVGT
+		}
+	}
+	else if(locate=="Tomada.") send_reliable(peer_id, "checarcarregar "+tirostaser, 2); // Convertido para NVGT
+	else if(mapname=="imobiliária"&&locate=="Balcão de atendimento.") send_reliable(peer_id, "comprarcasa", 0); // Convertido para NVGT
+	else if(mapname=="casa_de_intercâmbio"&&locate=="Balcão de atendimento.") convertermenu();
+	else if(mapname=="departamento_da_polícia_federal"&&locate=="Balcão de atendimento.") send_reliable(peer_id, "tirarpassaporte", 0); // Convertido para NVGT
+}
+
+void checarlo(){
+	string locate=get_zone_at(me.x,me.y);
+	if(locate=="Loja de roupas.") roupas();
+	else if(mapname=="loja_de_explosivos") explosivos();
+	else if(locate=="Cessão de equipamentos para caça.")armasbertalina();
+	else if(locate=="Cessão de equipamentos para pesca.")pesca();
+	else if(mapname.find("farmácia")>-1)farmacia(); // Convertido para NVGT
+	else if(mapname=="loja_de_eletrônicos") comprareletronicos();
+	else if(mapname=="zona_de_segurança") send_reliable(peer_id, "store", 0); // Convertido para NVGT
+	else if(mapname=="joalheria") joalheria();
+	else if(locate.lower().find("lanchonete.")>-1||locate=="Praça de alimentação") lanchonete(); // Convertido para NVGT
+}
+
+void retirar (string itemname){
+	if(itemname=="bicicleta"){
+		send_reliable(peer_id, "draw bicicletadraw.ogg", 0); // Convertido para NVGT
+		p.play_stationary("bicicletadraw.ogg", false);
+		bicicleta=0;
+	}
+	if(itemname=="paraquedas"&&get_tile_at(me.x, me.y)!=""&&get_zone_at(me.x, me.y)!="")paraquedas=0;
+	send_reliable(peer_id,"retirar "+itemname,0); // Convertido para NVGT
+}
+
+void outrosloop(){
+	if(!outras&&branca(tempweap)==false||tempweap!=0&&tempweap!=27&&!inv_item_exists(weapons[tempweap])){
+		tempweap=0;
+	}
+	if(olharx.elapsed>=3000){
+		if(me.x<=0){
+			me.x=1;
+			send_reliable(peer_id,"move "+me.x+" "+me.y,0); // Convertido para NVGT
+		}
+		else if(me.x>=max.x){
+			me.x=max.x-1;
+			send_reliable(peer_id,"move "+me.x+" "+me.y,0); // Convertido para NVGT
+		}
+		else if(me.y<0){
+			me.y=1;
+			send_reliable(peer_id,"move "+me.x+" "+me.y,0); // Convertido para NVGT
+		}
+		else if(me.y>=max.y){
+			me.y=max.y-2;
+			send_reliable(peer_id,"move "+me.x+" "+me.y,0); // Convertido para NVGT
+		}
+	}
+	if(echotimer.elapsed>=echotime&&echo==true){
+		echocheck(facing);
+	}
+}
+
+
+void abrir(){
+	p.play_stationary("door1open.ogg", false);
+}
+
+// setupmenu removida - implementação principal está em menu.nvgt
+
+
+void tprincipais(){
+	safeloop();
+	travel_point_loop(); // Detectar travel points
+	npc_loop(); // Gerenciar NPCs no mapa
+
+
+	// Debug removido - estava consumindo os eventos key_pressed()!
+	
+	// 🔧 CORREÇÃO: Usar IFs independentes também no bloco COM Shift
+	if(shift_pressionado()){
+		// Debug foi removido - estava consumindo os eventos key_pressed()!
+
+		// NOTA: Shift+F1 (AFK) e Shift+F2 (Pacífico) são tratados no loop principal
+		// do client.nvgt para funcionar mesmo em modo ausente
+		
+		if(key_pressed(KEY_F3)){
+			if(ouviremoutrasjanelas==1){
+				speak(pu.get_value("Não anunciando mensagens quando estiver em outras janelas."));
+				ouviremoutrasjanelas=0;
+			}
+			else if(ouviremoutrasjanelas==0){
+				speak(pu.get_value("Ouvindo mensagens em outras janelas."));
+				ouviremoutrasjanelas=1;
+			}
+			writeprefs();
+		}
+		if(key_pressed(KEY_SLASH)&&mapname!="quadro") send_reliable(peer_id, "whoonline", 0);
+		if (key_pressed(KEY_RIGHTBRACKET))lastadd();
+		if (key_pressed(KEY_LEFTBRACKET))firstadd();
+		if (key_pressed(KEY_COMMA))topadditem();
+		if (key_pressed(KEY_PERIOD))bottomadditem();
+		if(key_pressed(KEY_EQUALS)){
+			string colocar=v.input("Entre com um comando.");
+			if(colocar!="") send_reliable(peer_id, "/"+colocar, 1);
+		}
+	}  // Fecha bloco COM Shift - controles de volume REMOVIDOS daqui
+
+	// 🔧 CORREÇÃO: Remover else-if e usar IFs independentes
+	// Isso permite que múltiplas teclas sejam detectadas no mesmo frame
+	// Bloco SEM Shift - comandos de jogador (agora com IFs independentes)
+	if(!shift_pressionado()) {
+		if(key_pressed(KEY_F1)) {
+			debug_log("✅ [V6-FIXED] F1 SEM SHIFT - enviando 'uptime'");
+			send_reliable(peer_id, "uptime", 0);
+		}
+		if(key_pressed(KEY_F2)) {
+			debug_log("✅ [V6-FIXED] F2 SEM SHIFT - enviando 'getmotd'");
+			send_reliable(peer_id, "getmotd", 0);
+		}
+		if(key_pressed(KEY_F3)&&forcepinging==false){
+			debug_log("✅ [V6-FIXED] F3 SEM SHIFT - ping");
+			forcepinging=true;
+			p.play_stationary("pingstart.ogg",false);
+			ping=true;
+			send_reliable(peer_id,"ping",pingchannel);
+			pingtimer.restart();
+		}
+		if(key_pressed(KEY_F4)){
+			debug_log("✅ [V6-FIXED] F4 SEM SHIFT - track");
+			if(playertrack==""){
+				// Verificar se há jogadores no mapa antes de abrir o menu
+				int players_in_map = 0;
+				for(uint i = 0; i < players.length(); i++) {
+					if(players[i].charname == un) continue; // Pular o próprio jogador
+					if(players[i].map == mapname && players[i].beeping == 1) {
+						players_in_map++;
+					}
+				}
+
+				if(players_in_map == 0) {
+					speak(pu.get_value("Ninguém no mapa."), true);
+					debug_log("⚠️ F4 Track: Nenhum jogador disponível no mapa");
+				}
+				else {
+					playertrack=select_player(pu.get_value("Rastrear quem?"));
+					if(playertrack!="") {
+						speak(pu.get_value("Rastreando")+" "+playertrack);
+						looping = true;  // ✅ Ativar rastreamento contínuo
+						looptimer.restart();
+						debug_log("🎯 Rastreando: " + playertrack);
+					}
+				}
+			}
+			else{
+				playertrack="";
+				looping = false;  // ✅ Desativar rastreamento
+				speak(pu.get_value("Não rastreando."));
+				debug_log("🎯 Rastreamento desativado");
+			}
+		}
+		// F4: Rastrear jogadores no mesmo mapa (usa array local players)
+		if(key_pressed(KEY_F4) && mapname != "portal_espiritual" && !ausente) {
+			if(playertrack == "") {
+				// Verificar se há jogadores disponíveis para rastrear
+				int available_players = 0;
+				for(uint i = 0; i < players.length(); i++) {
+					if(players[i].charname != un && players[i].beeping == 1) {
+						available_players++;
+					}
+				}
+				
+				if(available_players == 0) {
+					speak(pu.get_value("Ninguém no mapa"));
+				} else {
+					playertrack = select_player(pu.get_value("Rastrear quem?"));
+					if(playertrack != "") {
+						looping = true;
+						speak(pu.get_value("Rastreando") + " " + playertrack);
+					}
+				}
+			} else {
+				playertrack = "";
+				looping = false;
+				speak(pu.get_value("Não rastreando."));
+			}
+			debug_log("🎯 F4 - Rastreamento: " + playertrack);
+		}
+		// F5: Lista de todos os jogadores online (pede ao servidor)
+		if(key_pressed(KEY_F5) && !ausente) {
+			debug_log("📋 F5 - Solicitando lista de jogadores online");
+			send_reliable(peer_id, "getplayers", 0);
+		}
+		if(key_pressed(KEY_F6)) {
+			debug_log("⌨️ F6 pressionado - funcionalidade desativada");
+			speak(pu.get_value("Funcionalidade desativada no momento."));
+		}
+		// ===== ✅ TASK 2.6: Tecla O - Ver posição do jogador rastreado =====
+		if(key_pressed(KEY_O) && !ausente) {
+			if(playertrack == "") {
+				speak(pu.get_value("Ninguém selecionado."));
+			}
+			else {
+				int index = get_player(playertrack);
+				if(index > -1) {
+					if(players[index].beeping == 0) {
+						speak(pu.get_value("Este jogador não foi encontrado."));
+					}
+					else {
+						// Falar coordenadas do jogador rastreado
+						string pos_msg = playertrack + ": " + players[index].x + ", " + players[index].y;
+						speak(pos_msg);
+						debug_log("🎯 Posição de " + playertrack + ": " + players[index].x + ", " + players[index].y);
+					}
+				}
+				else {
+					speak(pu.get_value("Este jogador não foi encontrado."));
+				}
+			}
+		}
+		if(key_pressed(KEY_H)&&!ausente) {
+			debug_log("⌨️ H pressionado - verificando relógio/hora");
+			send_unreliable(peer_id, "uitem r2", 0);  // Igual ao BGT - verifica relógio
+		}
+		if(key_pressed(KEY_I)&&!ausente){
+			debug_log("📦 Tecla I pressionada - abrindo inventário");
+			if(get_inventory_real_count() == 0) {
+				speak(pu.get_value("Inventário vazio."));
+			} else {
+				invmenu(inv_categories[cindex].name);
+			}
+		}
+		if (key_pressed(KEY_F8)){
+			if (beaconing==1){
+				speak(pu.get_value("Bipes desligados."));
+				beaconing=0;
+			}
+			else if (beaconing==0){
+				speak(pu.get_value("Bipes ligados."));
+				beaconing=1;
+			}
+			writeprefs();
+		}
+		if (key_pressed(KEY_LEFTBRACKET))addleft();
+		if(key_pressed(KEY_RIGHTBRACKET))addright();
+		if(key_pressed(KEY_COMMA))prevadditem();
+		if(key_pressed(KEY_PERIOD))nextadditem();
+		// KEY_V, KEY_M, KEY_P, KEY_S movidos para client.nvgt (loop principal)
+		if (key_pressed(KEY_BACKSLASH)){
+			string colocar=v.input("Digite sua mensagem.");
+			if(colocar!="") send_reliable(peer_id,"/falarnomapa "+colocar, 0); // Convertido para NVGT
+		}
+		if(key_pressed(KEY_SLASH)){
+			string colocar=v.input("Digite sua mensagem.");
+			if(colocar!=""){
+				if(colocar.find("::")>-1&&desenvolvedordm==1){ // Convertido para NVGT
+					string[] z=colocar.split("::"); // Convertido para NVGT
+					for(uint i=0;i<z.length();i++){
+						send_reliable(peer_id, z[i], 1); // Convertido para NVGT
+					}
+					return;
+				}
+				string enviar=colocar;
+				if(tradutorativo==1){
+					enviar=colocar;
+				}
+				if(enviar!="") send_reliable(peer_id, enviar, 1); // Convertido para NVGT
+			}
+		}
+	}
+	if(tempweap!=tempweap2){
+		if (tempweap==0||tempweap==27){
+			tempweap2=tempweap;
+			current_weapon_name=tempweap+1;
+			speak(pu.get_value(weapons[tempweap]));
+			p.play_stationary(weapons[tempweap]+"draw.ogg",false);
+			send_reliable(peer_id,"draw "+weapons[tempweap]+"draw.ogg",0); // Convertido para NVGT
+		}
+		else if(inv_item_exists(weapons[tempweap])&&branca(tempweap)==true&&outras==false||inv_item_exists(weapons[tempweap])&&outras==true){
+			tempweap2=tempweap;
+			current_weapon_name=tempweap+1;
+			speak(pu.get_value(weapons[tempweap]));
+			p.play_stationary(weapons[tempweap]+"draw.ogg",false);
+			send_reliable(peer_id,"draw "+weapons[tempweap]+"draw.ogg",0); // Convertido para NVGT
+		}
+	}
+}
+
+void chutad(){
+	s1.load(get_sound_path("chutad.ogg"));
+	s1.play();
+	send_reliable(peer_id, "chutad2", 0); // Convertido para NVGT
+	while(s1.playing){
+		wait(5);
+		// mainloop() removido - não existe em NVGT
+	}
+}
+
+// tone_synth progress_synth; // Não disponível no NVGT - substituir por sound se necessário
+sound@ progress_sound;
+
+
+
+string pegar_mensagem(){
+	return string_decrypt(event.message, NETWORK_ENCRYPTION_KEY);
+}
+
+// REMOVIDO: send_reliable() e send_unreliable() movidas para globals.nvgt
+// Agora usam a API nativa network.send() diretamente
+
+void verificando(){
+	instance cheat("cheatengine-x86_64");
+	if(cheat.is_already_running)exit();
+	if(tverificar.elapsed>=5000){
+		tverificar.restart();
+		bool achou=false;
+		if(directory_exists(DIRECTORY_TEMP+"\\Cheat Engine")){
+			achou=true;
+		}
+		if(achou==true&&!s1.playing){
+			chutad();
+			wait(200);
+			exit();
+		}
+	}
+}
+
+// Função centar - Sentar/Levantar (baseado no BGT original)
+// Tecla Q no loop principal
+void centar(){
+	// Verificar se está em área desabilitada
+	if(is_disabled(me.x, me.y)){
+		return;
+	}
+	
+	if(!centado){
+		// Sentar
+		centado = true;
+		send_unreliable(peer_id, "draw centar.ogg", 0);
+		p.play_stationary("centar.ogg", false);
+		add_add_item("avisos", pu.get_value("Você se senta para descansar."));
+	}
+	else {
+		// Levantar
+		centado = false;
+		send_unreliable(peer_id, "draw levantar.ogg", 0);
+		p.play_stationary("levantar.ogg", false);
+		add_add_item("avisos", pu.get_value("Você se levanta."));
+	}
+}
+
+int valoritem(string nome, string iii){
+	string content2=iii;
+	string[] peramitorss=content2.split("\r\n"); // Convertido para NVGT
+	string[] valuess;
+	for(uint ii=0; ii<peramitorss.length(); ii++){
+		valuess.insert_at(ii,peramitorss[ii].replace(peramitorss[ii].substr(0, peramitorss[ii].find("=")+1), "")); // Convertido para NVGT
+		peramitorss[ii]=peramitorss[ii].replace("="+valuess[ii], ""); // Convertido para NVGT
+	}
+	for(uint ii=0; ii<peramitorss.length(); ii++){
+		if(peramitorss[ii]==nome){
+			return string_to_number(valuess[ii]);
+		}
+	}
+	return 0;
+}
+
+void apartamentoinv_add_item(string itemname, int itemvalue){
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] values;
+	for(uint i=0; i<peramitors.length(); i++){
+		values.insert_at(i,peramitors[i].replace(peramitors[i].substr(0, peramitors[i].find("=")+1), "")); // Convertido para NVGT
+		peramitors[i]=peramitors[i].replace("="+values[i], ""); // Convertido para NVGT
+	}
+	if(apartamentoinv_item_exists(itemname)){
+		int orgval;
+		if(apartamentoinv_item_number(itemname) > -1){
+			orgval=string_to_number(values[apartamentoinv_item_number(itemname)]);
+		}
+		else{
+			return;
+		}
+		if(orgval+itemvalue < 1){
+			apartamentoinv_delete_item(itemname);
+		}
+		else{
+			values[apartamentoinv_item_number(itemname)]=(orgval+itemvalue);
+			string tempinv;
+			for(uint i=0; i<peramitors.length(); i++){
+				tempinv+=peramitors[i]+"="+values[i]+"\r\n";
+			}
+			apartamentoinv=tempinv;
+		}
+	}
+	else{
+		if(itemvalue > 0){
+			apartamentoinv+=itemname+"="+itemvalue+"\r\n";
+		}
+	}
+}
+
+bool apartamentoinv_item_exists(string itemname){
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] values;
+	for(uint i=0; i<peramitors.length(); i++){
+		values.insert_at(i,peramitors[i].replace(peramitors[i].substr(0, peramitors[i].find("=")+1), "")); // Convertido para NVGT
+		peramitors[i]=peramitors[i].replace("="+values[i], ""); // Convertido para NVGT
+	}
+	for(uint i=0; i<peramitors.length(); i++){
+		if(peramitors[i]==itemname){
+			return true;
+		}
+	}
+	return false;
+}
+
+int apartamentoinv_item_number(string itemname){
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] values;
+	for(uint i=0; i<peramitors.length(); i++){
+		values.insert_at(i,peramitors[i].replace(peramitors[i].substr(0, peramitors[i].find("=")+1), "")); // Convertido para NVGT
+		peramitors[i]=peramitors[i].replace("="+values[i], ""); // Convertido para NVGT
+	}
+	for(uint i=0; i<peramitors.length(); i++){
+		if(peramitors[i]==itemname){
+			return string_to_number(values[i]);
+		}
+	}
+	return 0;
+}
+
+int apartamentoinv_item(string itemname){
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] values;
+	for(uint i=0; i<peramitors.length(); i++){
+		values.insert_at(i,peramitors[i].replace(peramitors[i].substr(0, peramitors[i].find("=")+1), "")); // Convertido para NVGT
+		peramitors[i]=peramitors[i].replace("="+values[i], ""); // Convertido para NVGT
+	}
+	for(uint i=0; i<peramitors.length(); i++){
+		if(peramitors[i]==itemname){
+			return i;
+		}
+	}
+	return -1;
+}
+
+void apartamentoinv_delete_item(string itemname){
+	string content=apartamentoinv;
+	string[] peramitors=content.split("\r\n"); // Convertido para NVGT
+	string[] values;
+	for(uint i=0; i<peramitors.length(); i++){
+		values.insert_at(i,peramitors[i].replace(peramitors[i].substr(0, peramitors[i].find("=")+1), "")); // Convertido para NVGT
+		peramitors[i]=peramitors[i].replace("="+values[i], ""); // Convertido para NVGT
+	}
+	for(uint i=0; i<peramitors.length(); i++){
+		if(peramitors[i]==itemname){
+			apartamentoinv=apartamentoinv.replace(itemname+"="+values[i]+"\r\n", ""); // Convertido para NVGT
+		}
+	}
+}
+
+bool branca(int nome){
+	if(nome==0||nome==1||nome==5||nome==19||nome==27||nome==28||nome==29)return true;
+	else return false;
+}
+
+void secundario(){
+	if(lan.nalancha==0){
+		if(itenssecundarios.find("vara_de_pesca")>-1)itenssecundarios.remove_at(itenssecundarios.find("vara_de_pesca"));
+		if(itenssecundarios.find("galão_de_gasolina")>-1)itenssecundarios.remove_at(itenssecundarios.find("galão_de_gasolina"));
+		if(itenssecundarios.find("dardo_envenenado")<0&&inv_item_number("dardo_envenenado")>0)itenssecundarios.insert_last("dardo_envenenado");
+		if(itenssecundarios.find("dardo")<0&&inv_item_number("dardo")>0)itenssecundarios.insert_last("dardo");
+		if(itenssecundarios.find("fita_explosiva")<0&&inv_item_number("fita_explosiva")>0)itenssecundarios.insert_last("fita_explosiva");
+	}
+	else if(lan.nalancha==1){
+		if(itenssecundarios.find("vara_de_pesca")<0&&inv_item_number("vara_de_pesca")>0)itenssecundarios.insert_last("vara_de_pesca");
+		if(itenssecundarios.find("galão_de_gasolina")<0&&inv_item_number("galão_de_gasolina")>0)itenssecundarios.insert_last("galão_de_gasolina");
+		if(itenssecundarios.find("minhoca")<0&&inv_item_number("minhoca")>0)itenssecundarios.insert_last("minhoca");
+		if(itenssecundarios.find("peixe_pescado")<0&&inv_item_number("peixe_pescado")>0)itenssecundarios.insert_last("peixe_pescado");
+		if(itenssecundarios.find("dardo_envenenado")>-1)itenssecundarios.remove_at(itenssecundarios.find("dardo_envenenado"));
+		if(itenssecundarios.find("dardo")>-1)itenssecundarios.remove_at(itenssecundarios.find("dardo"));
+		if(itenssecundarios.find("fita_explosiva")>-1)itenssecundarios.remove_at(itenssecundarios.find("fita_explosiva"));
+	}
+	
+	// Adicionar celular à lista de secundários (Task do usuário)
+	// Se tiver celular no inventário ou se for um item padrão
+	// Assumindo que sempre deve aparecer se tiver o item ou sempre (como no BGT)
+	if(itenssecundarios.find("celular") < 0) {
+		// Se quiser restringir a ter o item: if(inv_item_exists("celular"))
+		itenssecundarios.insert_last("celular");
+	}
+
+	if(itenssecundarios.length()>0){
+		if(invsecundario>itenssecundarios.length()-1)invsecundario=itenssecundarios.length()-1;
+		
+		// Tecla Backspace para usar o item
+		if(key_pressed(KEY_BACK)&&(inv_item_number(itenssecundarios[invsecundario])>0 || itenssecundarios[invsecundario] == "celular")) {
+			interact(itenssecundarios[invsecundario]);
+		}
+		
+		// Tecla A para falar a quantidade
+		if(key_pressed(KEY_A)&&inv_item_number(itenssecundarios[invsecundario])>0) {
+			speak(inv_item_number(itenssecundarios[invsecundario]));
+		}
+		
+		if(!key_down(KEY_LALT)&&!key_down(KEY_RALT)){
+			if(key_down(KEY_RSHIFT)&&key_pressed(KEY_TAB)||key_down(KEY_LSHIFT)&&key_pressed(KEY_TAB)){
+				invsecundario--;
+				if(invsecundario<0)invsecundario=itenssecundarios.length()-1;
+				if(invsecundario>itenssecundarios.length()-1)invsecundario=itenssecundarios.length()-1;
+				speak(pu.get_value(itenssecundarios[invsecundario]));
+			}
+			if(key_pressed(KEY_TAB)){
+				if(itenssecundarios.length()>0){
+					invsecundario++;
+					if(invsecundario>itenssecundarios.length()-1)invsecundario=0;
+					speak(pu.get_value(itenssecundarios[invsecundario]));
+				}
+			}
+		}
+	}
+}
+
+string enviar(string mensagem){
+	return string_encrypt(mensagem, NETWORK_ENCRYPTION_KEY);
+}
+
+string receber(string mensagem){
+	return string_decrypt(mensagem, NETWORK_ENCRYPTION_KEY);
+}
+
+void interact(string itemname){
+	if(ausente||!moveable)return;
+	if(itemname=="item_magnético") send_reliable(peer_id,"usemagnet "+facing,0); // Convertido para NVGT
+	else if(itemname=="sugador"){
+		string djog=daritem();
+		if(djog!="") send_reliable(peer_id, "sugador vida "+djog, 0); // Convertido para NVGT
+	}
+	else if(itemname == "celular") {
+		// Abrir menu do celular
+		celularmenu();
+	}
+	else if(itemname=="paraquedas"&&paraquedas==0&&mapname.find("avião")>-1)paraquedas=1; // Convertido para NVGT
+	else if (itemname=="bicicleta"){
+		bicicleta=1;
+		send_reliable(peer_id, "draw bicicletadraw.ogg", 0); // Convertido para NVGT
+		p.play_stationary("bicicletadraw.ogg", false);
+	}
+	else if(itemname=="paraquedas"&&paraquedas==0&&mapname.find("avião")>-1)paraquedas=1; // Convertido para NVGT
+	else if(itemname=="teleporter"){
+		string tele=telemenu();
+		send_reliable(peer_id, "usetele "+tele, 0); // Convertido para NVGT
+	}
+	else if (itemname=="cerveja"){
+		bebendo="cerveja";
+	}
+	else if (itemname=="energético"){
+		bebendo="energético";
+	}
+	else if (itemname=="refrigerante"){
+		bebendo="refrigerante";
+	}
+	opa=itemname;
+	if(opa.find("corpo_de_")!=-1){ // Convertido para NVGT
+		string locate=get_zone_at(me.x,me.y);
+		if(locate=="Cuidado onde piza; há túmulos por toda parte."){
+			if(cavar.playing==true){
+				speak(pu.get_value("Mas você está enterrando um corpo")+"!");
+			}
+			else{
+				cavar.load(get_sound_path("cavar.ogg"));
+				cavar.play();
+				send_reliable(peer_id, "draw cavar.ogg", 0); // Convertido para NVGT
+				cavando=1;
+			}
+		}
+	}
+	else{
+		for (uint i2=0; i2<weapons.length(); i2++){
+			if (itemname==weapons[i2]){
+				tempweap=i2;
+				break;
+			}
+		}
+	}
+	int t=0;
+	if(itemname.find("bomba")>-1||itemname=="fita_explosiva"||itemname=="mina"||itemname=="projétil"||itemname=="míssil_teleguiado"||itemname=="dardo"||itemname=="dardo_envenenado"||itemname=="sugador"||itemname=="ovo_de_dragonsauro"){ // Convertido para NVGT
+		if(!outras)t=1;
+	}
+	if(t==0) send_reliable(peer_id, "uitem "+itemname, 0); // Convertido para NVGT
+}
+
+void doorcheck(){
+	for (uint i=0; i<doors.length(); i++){
+		if (me.x==doors[i].dx&&me.y==doors[i].dy&&!dmoving){
+			send_reliable(peer_id,"draw "+doors[i].ds3,0); // Convertido para NVGT
+			sound s;
+			s.load(doors[i].ds3);
+			s.play();
+			while(s.playing){
+				wait(5);
+				// mainloop() removido - não existe em NVGT
+			}
+			dmoving=true;
+			if(doors.length()==0){
+				dcheck=false;
+				dmoving=false;
+				break;
+			}
+			doors[i].doorsound2=p2.play_stationary(doors[i].ds2, true);
+			doors[i].moving=true;
+			dmoving=true;
+			dcheck=false;
+			send_reliable(peer_id, "iamdmoving", 0); // Convertido para NVGT
+		}
+		else if (i>=doors.length()-1){
+			dcheck=false;
+			break;
+		}
+	}
+}
+
+void elevadorcheck(){
+	for(uint i=0;i<elevadors.length();i++){
+		if (me.x==elevadors[i].x&&me.y==elevadors[i].y&&dmoving==false){
+			elevadors[i].s=p2.play_2d("elevador.ogg", me.x, me.y, elevadors[i].x, elevadors[i].y, true);
+			elevadors[i].moving=true;
+			emoving=true;
+			echeck=false;
+			moveable=false;
+		}
+		else if(i>=elevadors.length()-1){
+			echeck=false;
+			if(!ausente)moveable=true;
+		}
+	}
+}
+
+// ===== FÍSICA DE SALTO E QUEDA (do BGT original) =====
+// NOTA: Variáveis fallheight, fallvelocidade, deffallvelocidade, falltimer
+// estão declaradas em globals.nvgt
+
+// Verifica se aterrissou em uma plataforma durante salto/queda
+void checkforplatforms() {
+	if(have_tile_at(me.x, me.y) > -1) {
+		string step;
+		if(fallheight < 20) {
+			step = get_tile_at(me.x, me.y) + "land.ogg";
+			p.play_stationary(step, false);
+		}
+		if(fallheight >= 20) {
+			step = get_tile_at(me.x, me.y) + "hardland.ogg";
+			p.play_stationary(step, false);
+		}
+		jumping = false;
+		falling = false;
+		fallvelocidade = deffallvelocidade;
+		send_unreliable(peer_id, "move " + step + " " + me.x + " " + me.y, 0);
+		send_unreliable(peer_id, "land " + fallheight, 0);
+		fallheight = 0;
+		canijumptimer.restart();
+	}
+	send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
+}
+
+// Verifica se bateu em parede/teto durante salto
+void checkforwalls() {
+	int tileindex = have_tile_at(me.x, me.y);
+	if(tileindex > -1 && string_contains(platforms[tileindex].tiles, "wall", 1) > -1) {
+		p.play_stationary(platforms[tileindex].tiles + ".ogg", false);
+		ascending = false;
+		jumptimer.restart();
+		atapex = true;
+	}
+}
+
+// Loop de queda - executado enquanto falling == true
+void fallloop() {
+	if(falltimer.elapsed >= fallvelocidade) {
+		falltimer.restart();
+		me.y -= 1;
+		if(fallvelocidade > 12) {
+			fallvelocidade -= 1;
+		}
+		fallheight += 1;
+		checkforplatforms();
+	}
+}
+
+
+

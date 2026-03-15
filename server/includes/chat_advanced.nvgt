@@ -1,0 +1,810 @@
+// chat_advanced.nvgt - Sistema de Chat Avançado
+// Conversão: Novo sistema para NVGT
+// Fase 4: Sistemas Sociais
+
+// Canais de chat disponíveis
+enum chat_channel {
+	CHANNEL_GLOBAL,
+	CHANNEL_LOCAL,
+	CHANNEL_PARTY,
+	CHANNEL_GUILD,
+	CHANNEL_PM,
+	CHANNEL_TRADE,
+	CHANNEL_ADMIN
+}
+
+// Sistema de anti-spam
+class spam_tracker {
+	timer last_message;
+	int message_count;
+	int warnings;
+	bool is_muted;
+	timer mute_timer;
+	
+	spam_tracker() {
+		message_count = 0;
+		warnings = 0;
+		is_muted = false;
+		last_message.restart();
+		mute_timer.restart();
+	}
+	
+	bool can_send_message() {
+		// Se está mutado, verificar se o tempo passou
+		if(is_muted) {
+			if(mute_timer.elapsed >= 300000) {  // 5 minutos
+				is_muted = false;
+				warnings = 0;
+				message_count = 0;
+			} else {
+				return false;
+			}
+		}
+		
+		// Resetar contador a cada 10 segundos
+		if(last_message.elapsed >= 10000) {
+			message_count = 0;
+			last_message.restart();
+		}
+		
+		// Máximo 5 mensagens em 10 segundos
+		if(message_count >= 5) {
+			warnings++;
+			
+			// 3 avisos = mute automático
+			if(warnings >= 3) {
+				is_muted = true;
+				mute_timer.restart();
+				return false;
+			}
+			
+			return false;
+		}
+		
+		return true;
+	}
+	
+	void add_message() {
+		message_count++;
+		last_message.restart();
+	}
+	
+	int get_remaining_mute_time() {
+		if(!is_muted) return 0;
+		int remaining = 300000 - int(mute_timer.elapsed);
+		return remaining / 1000;  // Retornar em segundos
+	}
+}
+
+// Dictionary global de spam trackers
+dictionary player_spam_trackers;
+
+// Obter spam tracker de um jogador
+spam_tracker@ get_spam_tracker(string player_name) {
+	if(!player_spam_trackers.exists(player_name)) {
+		spam_tracker st;
+		player_spam_trackers.set(player_name, @st);
+		return st;
+	}
+	
+	return cast<spam_tracker@>(player_spam_trackers[player_name]);
+}
+
+// Palavras bloqueadas (filtro de palavrões)
+string[] blocked_words;
+
+// Inicializar lista de palavras bloqueadas
+void init_word_filter() {
+	blocked_words.resize(0);
+	
+	// Adicionar palavras bloqueadas (exemplo básico)
+	blocked_words.insert_last("palavra1");
+	blocked_words.insert_last("palavra2");
+	blocked_words.insert_last("palavra3");
+	// Adicione mais conforme necessário
+	
+	debug_log("CHAT: Filtro de palavras inicializado com " + blocked_words.length() + " palavras");
+}
+
+// Filtrar mensagem
+string filter_message(string message) {
+	string filtered = message;
+	
+	for(uint i = 0; i < blocked_words.length(); i++) {
+		// Substituir palavra por asteriscos (case-insensitive)
+		// NVGT não suporta string_compare_insensitive como flag, então fazemos manualmente
+		string msg_lower = filtered.lower();
+		string word_lower = blocked_words[i].lower();
+		
+		int pos = msg_lower.find_first(word_lower, 0);
+		while(pos >= 0) {
+			string replacement = "";
+			for(uint j = 0; j < blocked_words[i].length(); j++) {
+				replacement += "*";
+			}
+			filtered = filtered.substr(0, pos) + replacement + filtered.substr(pos + blocked_words[i].length());
+			msg_lower = filtered.lower();
+			pos = msg_lower.find_first(word_lower, pos + 1);
+		}
+	}
+	
+	return filtered;
+}
+
+// Sistema de mute manual (admin)
+dictionary muted_players;  // player_name -> timestamp de quando foi mutado
+
+// Verificar se jogador está mutado manualmente
+bool is_manually_muted(string player_name) {
+	return muted_players.exists(player_name);
+}
+
+// Mutar jogador manualmente
+void mute_player(string player_name, int duration_minutes) {
+	muted_players.set(player_name, "" + time_stamp());
+	
+	int idx = get_player_index_from(player_name);
+	if(idx >= 0) {
+		send_reliable_text(players[idx].peer_id, "msg2 Você foi mutado por " + duration_minutes + " minutos!", 0);
+	}
+	
+	debug_log("CHAT: " + player_name + " foi mutado por " + duration_minutes + " minutos");
+}
+
+// Desmutar jogador
+void unmute_player(string player_name) {
+	if(muted_players.exists(player_name)) {
+		muted_players.delete(player_name);
+		
+		int idx = get_player_index_from(player_name);
+		if(idx >= 0) {
+			send_reliable_text(players[idx].peer_id, "msg2 Você foi desmutado!", 0);
+		}
+		
+		debug_log("CHAT: " + player_name + " foi desmutado");
+	}
+}
+
+// Preferências de canal do jogador
+class chat_preferences {
+	chat_channel active_channel;
+	bool show_global;
+	bool show_local;
+	bool show_party;
+	bool show_guild;
+	bool show_trade;
+	
+	chat_preferences() {
+		active_channel = CHANNEL_GLOBAL;
+		show_global = true;
+		show_local = true;
+		show_party = true;
+		show_guild = true;
+		show_trade = true;
+	}
+}
+
+// Dictionary de preferências
+dictionary player_chat_prefs;
+
+// Obter preferências de chat
+chat_preferences@ get_chat_prefs(string player_name) {
+	if(!player_chat_prefs.exists(player_name)) {
+		chat_preferences cp;
+		player_chat_prefs.set(player_name, @cp);
+		return cp;
+	}
+	
+	return cast<chat_preferences@>(player_chat_prefs[player_name]);
+}
+
+// Enviar mensagem no canal global
+void send_global_message(int player_index, string message) {
+	spam_tracker@ st = get_spam_tracker(players[player_index].charname);
+	
+	if(!st.can_send_message()) {
+		if(st.is_muted) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado por spam! Tempo restante: " + st.get_remaining_mute_time() + "s", 0);
+		} else {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você está enviando mensagens muito rápido! Aviso " + st.warnings + "/3", 0);
+		}
+		return;
+	}
+	
+	if(is_manually_muted(players[player_index].charname)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Enviar para todos que aceitam global
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].active) {
+			chat_preferences@ prefs = get_chat_prefs(players[i].charname);
+			if(prefs.show_global) {
+				send_reliable_text(players[i].peer_id, "msg2 [Global] " + players[player_index].charname + ": " + filtered, 0);
+			}
+		}
+	}
+	
+	debug_log("CHAT GLOBAL: " + players[player_index].charname + ": " + message);
+}
+
+// Enviar mensagem no canal local (próximo)
+void send_local_message(int player_index, string message) {
+	spam_tracker@ st = get_spam_tracker(players[player_index].charname);
+	
+	if(!st.can_send_message()) {
+		if(st.is_muted) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado por spam! Tempo restante: " + st.get_remaining_mute_time() + "s", 0);
+		} else {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você está enviando mensagens muito rápido!", 0);
+		}
+		return;
+	}
+	
+	if(is_manually_muted(players[player_index].charname)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Enviar para jogadores próximos (50 tiles)
+	int range = 50;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].active && players[i].map == players[player_index].map) {
+			int dist = absolute(players[i].x - players[player_index].x) + absolute(players[i].y - players[player_index].y);
+			if(dist <= range) {
+				chat_preferences@ prefs = get_chat_prefs(players[i].charname);
+				if(prefs.show_local) {
+					send_reliable_text(players[i].peer_id, "msg2 [Local] " + players[player_index].charname + ": " + filtered, 0);
+				}
+			}
+		}
+	}
+}
+
+// Enviar mensagem no canal de trade
+void send_trade_message(int player_index, string message) {
+	spam_tracker@ st = get_spam_tracker(players[player_index].charname);
+	
+	if(!st.can_send_message()) {
+		if(st.is_muted) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado por spam! Tempo restante: " + st.get_remaining_mute_time() + "s", 0);
+		}
+		return;
+	}
+	
+	if(is_manually_muted(players[player_index].charname)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você está mutado!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Enviar para todos que aceitam trade
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].active) {
+			chat_preferences@ prefs = get_chat_prefs(players[i].charname);
+			if(prefs.show_trade) {
+				send_reliable_text(players[i].peer_id, "msg2 [Trade] " + players[player_index].charname + ": " + filtered, 0);
+			}
+		}
+	}
+}
+
+// Comando: Enviar mensagem global
+void cmd_global(int player_index, string message) {
+	send_global_message(player_index, message);
+}
+
+// Comando: Enviar mensagem local
+void cmd_local(int player_index, string message) {
+	send_local_message(player_index, message);
+}
+
+// Comando: Enviar mensagem de trade
+void cmd_tradechat(int player_index, string message) {
+	send_trade_message(player_index, message);
+}
+
+// Comando: Mudar canal ativo
+void cmd_channel(int player_index, string channel_name) {
+	chat_preferences@ prefs = get_chat_prefs(players[player_index].charname);
+	
+	if(channel_name == "global") {
+		prefs.active_channel = CHANNEL_GLOBAL;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal ativo: Global", 0);
+	} else if(channel_name == "local") {
+		prefs.active_channel = CHANNEL_LOCAL;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal ativo: Local", 0);
+	} else if(channel_name == "party") {
+		prefs.active_channel = CHANNEL_PARTY;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal ativo: Party", 0);
+	} else if(channel_name == "guild") {
+		prefs.active_channel = CHANNEL_GUILD;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal ativo: Guild", 0);
+	} else if(channel_name == "trade") {
+		prefs.active_channel = CHANNEL_TRADE;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal ativo: Trade", 0);
+	} else {
+		send_reliable_text(players[player_index].peer_id, "msg2 Canais: global, local, party, guild, trade", 0);
+	}
+}
+
+// Comando: Toggle visualização de canal
+void cmd_togglechannel(int player_index, string channel_name) {
+	chat_preferences@ prefs = get_chat_prefs(players[player_index].charname);
+	
+	if(channel_name == "global") {
+		prefs.show_global = !prefs.show_global;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal Global: " + (prefs.show_global ? "Ativado" : "Desativado"), 0);
+	} else if(channel_name == "local") {
+		prefs.show_local = !prefs.show_local;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal Local: " + (prefs.show_local ? "Ativado" : "Desativado"), 0);
+	} else if(channel_name == "party") {
+		prefs.show_party = !prefs.show_party;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal Party: " + (prefs.show_party ? "Ativado" : "Desativado"), 0);
+	} else if(channel_name == "guild") {
+		prefs.show_guild = !prefs.show_guild;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal Guild: " + (prefs.show_guild ? "Ativado" : "Desativado"), 0);
+	} else if(channel_name == "trade") {
+		prefs.show_trade = !prefs.show_trade;
+		send_reliable_text(players[player_index].peer_id, "msg2 Canal Trade: " + (prefs.show_trade ? "Ativado" : "Desativado"), 0);
+	} else {
+		send_reliable_text(players[player_index].peer_id, "msg2 Use: /togglechannel <global|local|party|guild|trade>", 0);
+	}
+}
+
+// Comando: Mutar jogador (ADMIN)
+void cmd_mute(int player_index, string target_name, int duration = 30) {
+	if(players[player_index].rank < 5) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+	
+	mute_player(target_name, duration);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi mutado por " + duration + " minutos", 0);
+}
+
+// Comando: Desmutar jogador (ADMIN)
+void cmd_unmute(int player_index, string target_name) {
+	if(players[player_index].rank < 5) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+	
+	unmute_player(target_name);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi desmutado", 0);
+}
+
+// Comando: Adicionar palavra bloqueada (ADMIN)
+void cmd_blockword(int player_index, string word) {
+	if(players[player_index].rank < 5) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+	
+	blocked_words.insert_last(word);
+	send_reliable_text(players[player_index].peer_id, "msg2 Palavra '" + word + "' adicionada ao filtro", 0);
+	debug_log("CHAT: Palavra bloqueada adicionada: " + word);
+}
+
+// Comando: Listar palavras bloqueadas (ADMIN)
+void cmd_listblockedwords(int player_index) {
+	if(players[player_index].rank < 5) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+	
+	send_reliable_text(players[player_index].peer_id, "msg2 === Palavras Bloqueadas (" + blocked_words.length() + ") ===", 0);
+	for(uint i = 0; i < blocked_words.length(); i++) {
+		send_reliable_text(players[player_index].peer_id, "msg2 " + (i+1) + ". " + blocked_words[i], 0);
+	}
+}
+
+// Loop de verificação de mutes manuais
+void chat_loop() {
+	// Verificar mutes expirados (implementar se necessário persistência com tempo)
+	// Por enquanto, mutes manuais são permanentes até unmute
+}
+
+// ============================================================================
+// 🆕 SISTEMA DE CHAT COMPLETO - REPLICAÇÃO DO BGT
+// ============================================================================
+
+// telllocal - Chat local (fala no mapa)
+// Envia mensagem para jogadores próximos (range 15 em X, mesmo mapa)
+// Formato BGT: fm |titulo| nome |diz:| mensagem
+void telllocal(int index, string message) {
+	if(index < 0 || index >= int(players.length())) return;
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[index].charname);
+	if(!st.can_send_message()) {
+		if(st.is_muted) {
+			send_reliable_text(players[index].peer_id, "msg2 Você está mutado por spam! Tempo restante: " + st.get_remaining_mute_time() + "s", 0);
+		} else {
+			send_reliable_text(players[index].peer_id, "msg2 Você está enviando mensagens muito rápido! Aviso " + st.warnings + "/3", 0);
+		}
+		return;
+	}
+	
+	// Verificar se está silenciado
+	if(file_exists("players/" + players[index].charname + "/silencio.usr") || players[index].silenciado == 1) {
+		send_reliable_text(players[index].peer_id, "msg2 Por alguma razão, algo te impede de falar...", 0);
+		return;
+	}
+	
+	// Verificar mute manual
+	if(is_manually_muted(players[index].charname)) {
+		send_reliable_text(players[index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Verificar comando /me para ações
+	bool is_action = false;
+	if(filtered.length() > 4 && filtered.substr(0, 4) == "/me ") {
+		is_action = true;
+		filtered = filtered.substr(4); // Remove "/me "
+	}
+	
+	// Enviar para jogadores no range 15 do mesmo mapa
+	int range = 15;
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		if(players[i].map_name != players[index].map_name) continue;
+		if(players[i].has_muted(players[index].charname)) continue;
+		
+		// Verificar distância em X
+		int dist = absolute(players[i].x - players[index].x);
+		if(dist <= range) {
+			string packet;
+			string titulo = get_player_rank(players[index].charname, players[index].title);  // Usar cargo (dev/admin) ao invés de título
+			string nome = players[index].charname;
+			
+			// Se invisível, mostrar como desconhecido
+			if(players[index].invs == 1) {
+				nome = "alguém";
+				titulo = "";
+			}
+			
+			if(is_action) {
+				// Ação /me
+				packet = "fm |" + titulo + "| " + nome + " " + filtered;
+			} else {
+				// Fala normal
+				packet = "fm |" + titulo + "| " + nome + " |diz:| " + filtered;
+			}
+			
+			send_reliable_text(players[i].peer_id, packet, 0);
+		}
+	}
+	
+	debug_log("💬 Chat Local de " + players[index].charname + ": " + message);
+}
+
+// tellteam - Chat de equipe
+// Envia mensagem para todos os membros da equipe
+// Formato BGT: msg3 nome ;disse:; mensagem
+void tellteam(int index, string message) {
+	if(index < 0 || index >= int(players.length())) return;
+	
+	// Verificar se tem equipe
+	if(players[index].nomesequipe.length() == 0) {
+		send_reliable_text(players[index].peer_id, "msg2 Você não está em nenhuma equipe!", 0);
+		return;
+	}
+	
+	// Verificar se chat de equipe está desativado
+	if(players[index].dequipo == 1) {
+		send_reliable_text(players[index].peer_id, "msg2 Você não pode enviar mensagens para um chat desativado.", 0);
+		return;
+	}
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[index].charname);
+	if(!st.can_send_message()) {
+		send_reliable_text(players[index].peer_id, "msg2 Você está enviando mensagens muito rápido!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Enviar para todos da equipe
+	for(uint i = 0; i < players[index].nomesequipe.length(); i++) {
+		int member_index = get_player_index_from(players[index].nomesequipe[i]);
+		if(member_index >= 0) {
+			// Verificar se membro tem chat de equipe ativado
+			if(players[member_index].dequipo == 0) {
+				send_reliable_text(players[member_index].peer_id, "msg3 " + players[index].charname + " ;disse:; " + filtered, 0);
+				send_reliable_text(players[member_index].peer_id, "ps notify_trumpet.ogg", 0);
+			}
+		}
+	}
+	
+	debug_log("💬 Chat Equipe de " + players[index].charname + ": " + message);
+}
+
+// send_pm - Mensagem privada
+// Envia mensagem direta para outro jogador
+// Formato BGT: pm de/para nome: mensagem
+void send_pm(int sender_index, string target_name, string message) {
+	if(sender_index < 0 || sender_index >= int(players.length())) return;
+	
+	// Verificar se está tentando mandar mensagem para si mesmo
+	if(target_name.lower() == players[sender_index].charname.lower()) {
+		send_reliable_text(players[sender_index].peer_id, "msg2 Por que está mandando mensagem pra si mesmo? É idiota?", 0);
+		return;
+	}
+	
+	// Verificar anti-spam
+	spam_tracker@ st = get_spam_tracker(players[sender_index].charname);
+	if(!st.can_send_message()) {
+		send_reliable_text(players[sender_index].peer_id, "msg2 Você está enviando mensagens muito rápido!", 0);
+		return;
+	}
+	
+	// Verificar mute
+	if(is_manually_muted(players[sender_index].charname)) {
+		send_reliable_text(players[sender_index].peer_id, "msg2 Você está mutado por um administrador!", 0);
+		return;
+	}
+	
+	st.add_message();
+	
+	// Filtrar mensagem
+	string filtered = filter_message(message);
+	
+	// Buscar jogador alvo
+	int target_index = get_player_index_from(target_name);
+	
+	if(target_index >= 0) {
+		// Jogador online
+		
+		// Verificar se está silenciado
+		if(file_exists("players/" + target_name + "/silencio.usr")) {
+			send_reliable_text(players[sender_index].peer_id, "msg2 " + target_name + " lamentavelmente não pode te ouvir.", 0);
+			return;
+		}
+		
+		// Verificar se tem PM desativado
+		if(players[target_index].dpm == 1) {
+			send_reliable_text(players[sender_index].peer_id, "msg2 " + target_name + " tem suas mensagens privadas desativadas.", 0);
+			return;
+		}
+		
+		// Verificar se foi mutado pelo alvo
+		if(players[target_index].has_muted(players[sender_index].charname)) {
+			send_reliable_text(players[sender_index].peer_id, "msg2 Você não pode fazer isto.", 0);
+			return;
+		}
+		
+		// Enviar mensagem
+		players[target_index].replyname = players[sender_index].charname;
+		send_reliable_text(players[target_index].peer_id, "pm de " + players[sender_index].charname + ": " + filtered, 0);
+		send_reliable_text(players[sender_index].peer_id, "pm para " + target_name + ": " + filtered, 0);
+		
+		debug_log("💬 PM de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
+	} else {
+		// Jogador offline - verificar se existe
+		if(!directory_exists("players/" + target_name)) {
+			send_reliable_text(players[sender_index].peer_id, "msg2 Que curioso, uma mensagem tentando ser enviada para uma pessoa inexistente.", 0);
+			return;
+		}
+		
+		// Salvar mensagem permanente para quando o jogador logar
+		send_reliable_text(players[sender_index].peer_id, "msg2 Sua mensagem foi enviada para " + target_name + "!", 0);
+		file f;
+		f.open("players/" + target_name + "/pm.md", "a");
+		f.write("Mensagem permanente não lida de " + players[sender_index].charname + ": " + filtered + "\r\n");
+		f.close();
+		
+		debug_log("💬 PM offline de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
+	}
+}
+
+// reply_pm - Responder última PM
+// Responde para o último jogador que enviou PM
+void reply_pm(int sender_index, string message) {
+	if(sender_index < 0 || sender_index >= int(players.length())) return;
+	
+	string reply_to = players[sender_index].replyname;
+	if(reply_to == "") {
+		send_reliable_text(players[sender_index].peer_id, "msg2 Você não tem ninguém para responder!", 0);
+		return;
+	}
+	
+	send_pm(sender_index, reply_to, message);
+}
+
+// ============================================================================
+// COMANDOS DE CHAT - Wrappers para handlers
+// ============================================================================
+
+// cmd_falarnomapa - Wrapper para /falarnomapa
+void cmd_falarnomapa(int player_index, string message) {
+	telllocal(player_index, message);
+}
+
+// cmd_team - Wrapper para /e ou /t
+void cmd_team(int player_index, string message) {
+	tellteam(player_index, message);
+}
+
+// Nota: cmd_pm está implementada em friends.nvgt
+
+// cmd_reply - Wrapper para /r ou /reply
+void cmd_reply(int player_index, string message) {
+	reply_pm(player_index, message);
+}
+
+// =====================================================
+// PROCESSAMENTO DE MENSAGENS DE CHAT (CANAL 1)
+// =====================================================
+// Processa mensagens recebidas no canal ENet 1 (chat global)
+// Baseado em net.bgt linhas 3046-4600
+
+// Caractere bell para separar nome de mensagem (ASCII 7)
+string bell_char = "\x07";
+
+void process_chat_message(uint64 peer_id, string message) {
+	debug_log("💬 process_chat_message chamado! peer=" + peer_id + ", msg='" + message + "'");
+	
+	// Obter jogador pelo peer
+	player@ p = get_player_by_peer(peer_id);
+	if(p is null) {
+		debug_log("⚠️ Chat de peer não logado: " + peer_id);
+		return;
+	}
+	
+	// Obter índice do jogador
+	int index = get_player_index_from(p.charname);
+	if(index < 0) return;
+	
+	// ===== SUPORTE A JSON (Abordagem Híbrida) =====
+	// Detectar se mensagem é JSON e extrair texto
+	// Formato: {"t":"chat","type":"local","text":"mensagem"}
+	string chat_type = "global";
+	string actual_message = message;
+	
+	if(message.length() > 0 && message[0] == '{') {
+		// Tentar processar como JSON
+		// Parser simples para extrair campos (sem dependência de biblioteca JSON)
+		int type_pos = message.find("\"type\":\"");
+		int text_pos = message.find("\"text\":\"");
+		
+		if(type_pos >= 0 && text_pos >= 0) {
+			// Extrair type
+			int type_start = type_pos + 8;
+			int type_end = message.find("\"", type_start);
+			if(type_end > type_start) {
+				chat_type = message.substr(type_start, type_end - type_start);
+			}
+			
+			// Extrair text
+			int text_start = text_pos + 8;
+			int text_end = message.find_last("\"");
+			if(text_end > text_start) {
+				actual_message = message.substr(text_start, text_end - text_start);
+				// Unescape JSON
+				actual_message = string_replace(actual_message, "\\\"", "\"", true);
+				actual_message = string_replace(actual_message, "\\n", "\n", true);
+				actual_message = string_replace(actual_message, "\\\\", "\\", true);
+			}
+			
+			debug_log("📦 JSON detectado! type=" + chat_type + ", text=" + actual_message);
+			
+			// Redirecionar para função correta baseado no tipo
+			if(chat_type == "local") {
+				telllocal(index, actual_message);
+				return;
+			} else if(chat_type == "team" || chat_type == "equipe") {
+				tellteam(index, actual_message);
+				return;
+			}
+			// "global" continua abaixo
+			message = actual_message;
+		}
+	}
+	// ===== FIM SUPORTE JSON =====
+	
+	// Verificações de bloqueio
+	if(message.length() <= 0) return;
+	if(p.afk && !p.is_admin) return;  // is_admin é um campo bool na classe player
+	if(p.silenciado == 1) {
+		send_reliable_text(peer_id, "msgnormal Por alguma razão, algo te impede de falar...", 0);
+		return;
+	}
+	
+	// Verificar anti-spam
+	spam_tracker@ tracker = get_spam_tracker(p.charname);
+	if(tracker !is null && !tracker.can_send_message()) {
+		int remaining = tracker.get_remaining_mute_time();
+		if(remaining > 0) {
+			send_reliable_text(peer_id, "msgnormal Você está mutado por spam. Aguarde " + remaining + " segundos.", 0);
+		} else {
+			send_reliable_text(peer_id, "msgnormal Muitas mensagens! Aguarde um momento.", 0);
+		}
+		return;
+	}
+	if(tracker !is null) tracker.add_message();
+	
+	// Verificar se chat está desativado (somente "Desativado" explicitamente)
+	if(p.idiomachat == "Desativado") {
+		send_reliable_text(peer_id, "msgnormal Seu chat está desativado.", 0);
+		return;
+	}
+	
+	// Se mensagem começa com /, processar como comando
+	if(message.length() > 0 && message[0] == '/') {
+		// Processar comandos de chat (/me, /local, /pm, etc.)
+		string[] parsed = message.split(" ");
+		string command = parsed[0].replace("/", "");
+		
+		if(command == "me" && parsed.length() > 1) {
+			// Emote: /me <ação>
+			string action = message.replace("/me ", "");
+			string emote_msg = p.charname + " " + action;
+			broadcast_to_chat_channel(p.idiomachat, p.charname, emote_msg);
+		}
+		else if(command == "local" || command == "l") {
+			// Chat local
+			string local_msg = message.replace("/" + command + " ", "");
+			telllocal(index, local_msg);
+		}
+		else if(command == "equipe" || command == "e" || command == "team" || command == "t") {
+			// Chat de equipe
+			string team_msg = message.replace("/" + command + " ", "");
+			tellteam(index, team_msg);
+		}
+		else {
+			// Comando não reconhecido - processar como comando normal
+			process_player_command(peer_id, message);
+		}
+		return;
+	}
+	
+	// Mensagem normal de chat global
+	// Formato correto: "titulo nome diz: mensagem" (igual ao local que funciona)
+	string titulo_ou_cargo = get_player_rank(p.charname, p.title);  // Usar cargo (dev/admin) ao invés de título
+	string sendmes = titulo_ou_cargo + " " + p.charname + " diz: " + bell_char + message;
+	
+	// Enviar para todos os jogadores no mesmo canal de chat
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].idiomachat == p.idiomachat && !players[i].has_muted(p.charname)) {
+			send_reliable_text(players[i].peer_id, sendmes, 1);  // Canal 1 = chat
+		}
+	}
+	
+	debug_log("💬 [CHAT] " + p.charname + ": " + message);
+}
+
+// Broadcast para canal de chat específico
+void broadcast_to_chat_channel(string channel, string sender_name, string message) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].idiomachat == channel && !players[i].has_muted(sender_name)) {
+			send_reliable_text(players[i].peer_id, sender_name + bell_char + message, 1);
+		}
+	}
+}
+
