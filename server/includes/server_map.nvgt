@@ -348,10 +348,24 @@ class map {
 				     parse_int(parsed[22]), parse_int(parsed[23]), 
 				     parsed[24], parse_int(parsed[25]));
 				npcs.insert_last(b);
+				// Sistema global (npc.nvgt): instancia ativa para IA/combate.
+				npcs_global.insert_last(b);
 				continue;
 			}
 			
-			// Monstros desabilitados aqui: usando sistema global em monstruo.nvgt
+			// Monstros (compat BGT e formato novo)
+			// BGT: monstruo:x:y
+			// NVGT: monstruo:x:y:tipo
+			if (parsed[0] == "monstruo" && parsed.length() >= 3) {
+				int mx = parse_int(parsed[1]);
+				int my = parse_int(parsed[2]);
+				string mtipo = "zumbi";
+				if (parsed.length() >= 4 && parsed[3].trim_whitespace() != "") {
+					mtipo = parsed[3].trim_whitespace().lower();
+				}
+				spawn_monstruo(mx, my, this.name, mtipo);
+				continue;
+			}
 			
 			// Banheiros (rt = restroom/toilet)
 			if (parsed[0] == "rt" && parsed.length() > 2) {
@@ -2596,3 +2610,251 @@ bool get_safezone_at(int x, int y, string mapname) {
 // PRÓXIMO: FASE 2 - Implementar loops de objetos coletáveis
 // ============================================================================
 
+
+bool map_try_parse_int_token(const string&in token, int&out value) {
+	string t = token.trim_whitespace();
+	if(t == "") return false;
+	bool neg = false;
+	uint start = 0;
+	if(t[0] == '-') {
+		neg = true;
+		start = 1;
+		if(t.length() == 1) return false;
+	}
+	for(uint i = start; i < t.length(); i++) {
+		if(t[i] < '0' || t[i] > '9') return false;
+	}
+	value = string_to_number(t);
+	if(neg && value > 0) value = -value;
+	return true;
+}
+
+void check_hazard_zones(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	// Nao aplica em jogador morto, pacifico ou desenvolvedor
+	if(p.health <= 0 || p.pacifico == 1 || has_role(p.charname, "dev")) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	bool in_danger = false;
+	bool hazard_is_progressive = false;
+	int hazard_death_time = 1000;
+	double hazard_damage = 15.0;
+	string hazard_reason = "hazard:zona perigosa";
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "") continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 3) continue;
+
+		string element_type = parsed[0].trim_whitespace().lower();
+
+		// death:x1:x2:y1:y2:time:progressive:damage:msg:required_item:require_item:item_qty
+		if(element_type == "death" && parsed.length() >= 6) {
+			int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+			if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+			int minx = x1 <= x2 ? x1 : x2;
+			int maxx = x1 <= x2 ? x2 : x1;
+			int miny = y1 <= y2 ? y1 : y2;
+			int maxy = y1 <= y2 ? y2 : y1;
+			if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+			in_danger = true;
+
+			int parsed_time = 1000;
+			if(parsed.length() >= 6) {
+				int t = 0;
+				if(map_try_parse_int_token(parsed[5], t) && t > 0) parsed_time = t;
+			}
+
+			int progressive_flag = 0;
+			if(parsed.length() >= 7) {
+				int pf = 0;
+				if(map_try_parse_int_token(parsed[6], pf)) progressive_flag = pf;
+			}
+
+			double parsed_damage = 15.0;
+			if(parsed.length() >= 8) {
+				int dmg = 0;
+				if(map_try_parse_int_token(parsed[7], dmg) && dmg > 0) parsed_damage = double(dmg);
+			}
+
+			string parsed_reason = "hazard:death_zone";
+			if(parsed.length() >= 9) {
+				string msg = parsed[8].trim_whitespace();
+				if(msg != "") parsed_reason = "hazard:" + msg;
+			}
+
+			hazard_is_progressive = (progressive_flag == 1);
+			hazard_death_time = parsed_time;
+			hazard_damage = parsed_damage;
+			hazard_reason = parsed_reason;
+			break;
+		}
+
+		// Formato legacy: deaths:x1:x2:y1:y2:time:msg
+		if(element_type == "deaths" && parsed.length() >= 5) {
+			int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+			if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+			int minx = x1 <= x2 ? x1 : x2;
+			int maxx = x1 <= x2 ? x2 : x1;
+			int miny = y1 <= y2 ? y1 : y2;
+			int maxy = y1 <= y2 ? y2 : y1;
+			if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+			in_danger = true;
+			hazard_is_progressive = true;
+			hazard_death_time = 1000;
+			hazard_damage = 15.0;
+			hazard_reason = "hazard:death_zone";
+			if(parsed.length() >= 6) {
+				int t = 0;
+				if(map_try_parse_int_token(parsed[5], t) && t > 0) hazard_death_time = t;
+			}
+			if(parsed.length() >= 7 && parsed[6].trim_whitespace() != "") {
+				hazard_reason = "hazard:" + parsed[6].trim_whitespace();
+			}
+			break;
+		}
+
+		// am:x:y (areia movediça)
+		if((element_type == "am" || element_type == "areia_movedissa") && parsed.length() >= 3) {
+			int ax = 0, ay = 0;
+			if(!map_try_parse_int_token(parsed[1], ax) || !map_try_parse_int_token(parsed[2], ay)) continue;
+			if(p.x != ax || p.y != ay) continue;
+
+			in_danger = true;
+			hazard_is_progressive = true;
+			hazard_death_time = 800;
+			hazard_damage = 25.0;
+			hazard_reason = "hazard:quicksand";
+			break;
+		}
+	}
+
+	if(in_danger) {
+		// Marca flag de zona de morte para manter compatibilidade com loops existentes
+		p.ndeath = 1;
+
+		if(hazard_is_progressive) {
+			if(p.progressive_death == 0 || p.death_reason.find("hazard:") != 0) {
+				start_progressive_death(player_index, DEATH_TYPE_SUFFOCATING, hazard_damage, hazard_death_time, hazard_reason);
+				send_reliable_text(p.peer_id, "say [SISTEMA] Voce entrou em uma zona de perigo!", 0);
+				if(hazard_reason == "hazard:quicksand") {
+					send_reliable_text(p.peer_id, "ps morrendo_areia.ogg", 0);
+				} else {
+					send_reliable_text(p.peer_id, "ps hazzard_enter.ogg", 0);
+				}
+			}
+		} else {
+			// Morte instantanea por zona nao progressiva
+			p.progressive_death = 0;
+			p.death_reason = hazard_reason;
+			p.death_time = hazard_death_time;
+		}
+		return;
+	}
+
+	// Saiu da zona de perigo dinamica
+	if(p.ndeath == 1 && p.death_reason.find("hazard:") == 0) {
+		if(p.progressive_death == 1) {
+			stop_progressive_death(player_index);
+		}
+		p.ndeath = 0;
+		p.death_reason = "";
+		p.death_time = 0;
+		send_reliable_text(p.peer_id, "say Voce conseguiu escapar da zona de perigo a tempo.", 0);
+	}
+}
+
+void process_map_step(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "" || line.find("portal:") != 0) continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 6) continue;
+
+		int px = 0, py = 0, dest_x = 0, dest_y = 0;
+		if(!map_try_parse_int_token(parsed[1], px) || !map_try_parse_int_token(parsed[2], py)) continue;
+		if(!map_try_parse_int_token(parsed[4], dest_x) || !map_try_parse_int_token(parsed[5], dest_y)) continue;
+
+		if(p.x != px || p.y != py) continue;
+
+		string dest_map = parsed[3].trim_whitespace().lower();
+		if(!builder_is_valid_map_name(dest_map)) {
+			send_reliable_text(p.peer_id, "say Portal com destino invalido.", 0);
+			return;
+		}
+		if(get_map_index_from(dest_map) < 0) {
+			send_reliable_text(p.peer_id, "say O mapa de destino deste portal nao existe.", 0);
+			return;
+		}
+
+		broadcast_to_map(p.map, "play teleport.ogg " + p.x + " " + p.y);
+		move_player_to_map(player_index, dest_map, dest_x, dest_y);
+		send_reliable_text(p.peer_id, "say Voce atravessou um portal magico!", 0);
+		return;
+	}
+
+	// Eventos de zonas dinamicas/perigosas (death/am)
+	check_hazard_zones(player_index);
+}
+
+void process_map_interaction(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "" || line.find("store:") != 0) continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 6) continue;
+
+		int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+		if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+		if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+		int minx = x1 <= x2 ? x1 : x2;
+		int maxx = x1 <= x2 ? x2 : x1;
+		int miny = y1 <= y2 ? y1 : y2;
+		int maxy = y1 <= y2 ? y2 : y1;
+
+		if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+		string store_type = parsed[5].trim_whitespace().lower();
+		if(store_type == "") store_type = "mista";
+		send_reliable_text(p.peer_id, "store_open " + store_type, 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "say Nao ha nada para interagir aqui.", 0);
+}

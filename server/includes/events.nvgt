@@ -620,6 +620,27 @@ void schedule_automatic_events() {
 // COMANDOS
 // ========================================
 
+
+void events_send_to_player(int client_index, const string&in message) {
+    if(client_index < 0 || client_index >= int(players.length())) return;
+    if(players[client_index] is null) return;
+    string m = message.replace("\n", "; ");
+    send_reliable_text(players[client_index].peer_id, "msg2 ;" + m + ";", 0);
+}
+
+bool event_list_contains_player(const string[]&in names, const string&in player_name) {
+    for(uint i = 0; i < names.length(); i++) {
+        if(names[i] == player_name) return true;
+    }
+    return false;
+}
+
+bool event_is_in_active_list(int event_id) {
+    for(uint i = 0; i < active_events.length(); i++) {
+        if(active_events[i].id == event_id) return true;
+    }
+    return false;
+}
 // /events - Lista eventos disponíveis
 void cmd_events(int client_index, string[] args) {
     string msg = "=== EVENTOS DISPONÍVEIS ===\n\n";
@@ -655,13 +676,13 @@ void cmd_events(int client_index, string[] args) {
     }
     
     msg += "\nUse /eventinfo <id> para detalhes.";
-    // send_message(client_index, msg);
+    events_send_to_player(client_index, msg);
 }
 
 // /eventinfo <id> - Informações do evento
 void cmd_eventinfo(int client_index, string[] args) {
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /eventinfo <id>");
+        events_send_to_player(client_index, "Use: /eventinfo <id>");
         return;
     }
     
@@ -669,7 +690,7 @@ void cmd_eventinfo(int client_index, string[] args) {
     game_event@ e = get_event(id);
     
     if (e is null) {
-        // send_message(client_index, "Evento não encontrado.");
+        events_send_to_player(client_index, "Evento nao encontrado.");
         return;
     }
     
@@ -712,110 +733,107 @@ void cmd_eventinfo(int client_index, string[] args) {
         }
     }
     
-    // send_message(client_index, msg);
+    events_send_to_player(client_index, msg);
 }
 
 // /registerevent <id> - Registra em evento
 void cmd_registerevent(int client_index, string[] args) {
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /registerevent <id>");
+        events_send_to_player(client_index, "Use: /registerevent <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     game_event@ e = get_event(id);
-    
+
     if (e is null) {
-        // send_message(client_index, "Evento não encontrado.");
+        events_send_to_player(client_index, "Evento nao encontrado.");
         return;
     }
-    
-    // string player_name = get_player_name(client_index);
-    // if (e.register_player(player_name)) {
-    //     send_message(client_index, "Você se registrou no evento '" + e.name + "'!");
-    //     if (e.entry_fee_gold > 0) {
-    //         send_message(client_index, "Taxa paga: " + e.entry_fee_gold + " gold");
-    //     }
-    // } else {
-    //     send_message(client_index, "Não foi possível se registrar.");
-    // }
+    if (client_index < 0 || client_index >= int(players.length()) || players[client_index] is null) {
+        return;
+    }
+
+    string player_name = players[client_index].charname;
+    if (player_name == "") {
+        events_send_to_player(client_index, "Nao foi possivel identificar o jogador.");
+        return;
+    }
+
+    if (e.register_player(player_name)) {
+        string ok_msg = "Voce se registrou no evento '" + e.name + "'!";
+        if (e.entry_fee_gold > 0) {
+            ok_msg += " Taxa: " + e.entry_fee_gold + " gold (cobrada no inicio).";
+        }
+        events_send_to_player(client_index, ok_msg);
+        return;
+    }
+
+    if (e.state != EVENT_REGISTERING) {
+        events_send_to_player(client_index, "Este evento nao esta aceitando registros no momento.");
+        return;
+    }
+    if (int(e.registered_players.length()) >= e.max_participants) {
+        events_send_to_player(client_index, "Evento lotado.");
+        return;
+    }
+    events_send_to_player(client_index, "Nao foi possivel registrar (voce pode ja estar inscrito).");
 }
 
 // /startevent <id> - Inicia evento (admin)
 void cmd_startevent(int client_index, string[] args) {
-    // Verifica admin
-    // if (!is_admin(client_index)) return;
-    
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /startevent <id>");
+        events_send_to_player(client_index, "Use: /startevent <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     game_event@ e = get_event(id);
-    
+
     if (e is null) {
-        // send_message(client_index, "Evento não encontrado.");
+        events_send_to_player(client_index, "Evento nao encontrado.");
         return;
     }
-    
-    // Muda para registro
+
     if (e.state == EVENT_SCHEDULED) {
         e.state = EVENT_REGISTERING;
         e.registration_start.restart();
-        e.broadcast_global("📢 Evento '" + e.name + "' aberto para registro! Use /registerevent " + e.id);
-        // send_message(client_index, "Evento aberto para registro.");
+        e.broadcast_global("Evento '" + e.name + "' aberto para registro! Use /registerevent " + e.id);
+        events_send_to_player(client_index, "Evento aberto para registro.");
     }
-    // Força início
     else if (e.state == EVENT_REGISTERING) {
         e.start();
-        active_events.insert_last(e);
-        // send_message(client_index, "Evento iniciado!");
+        if (!event_is_in_active_list(e.id)) active_events.insert_last(e);
+        events_send_to_player(client_index, "Evento iniciado!");
     }
 }
 
 // /endevent <id> - Finaliza evento (admin)
 void cmd_endevent(int client_index, string[] args) {
-    // Verifica admin
-    // if (!is_admin(client_index)) return;
-    
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /endevent <id>");
+        events_send_to_player(client_index, "Use: /endevent <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     game_event@ e = get_event(id);
-    
+
     if (e is null) {
-        // send_message(client_index, "Evento não encontrado.");
+        events_send_to_player(client_index, "Evento nao encontrado.");
         return;
     }
-    
+
     if (e.state == EVENT_ACTIVE) {
         e.end();
-        // send_message(client_index, "Evento finalizado!");
+        events_send_to_player(client_index, "Evento finalizado!");
+    } else {
+        events_send_to_player(client_index, "O evento nao esta em andamento.");
     }
 }
 
 // /eventranking - Mostra ranking do evento atual
 void cmd_eventranking(int client_index, string[] args) {
-    // string player_name = get_player_name(client_index);
-    // game_event@ e = get_player_event(player_name);
-    
-    // if (e is null) {
-    //     send_message(client_index, "Você não está em nenhum evento.");
-    //     return;
-    // }
-    
-    // string msg = "=== RANKING - " + e.name + " ===\n\n";
-    
-    // for (uint i = 0; i < e.participants.length(); i++) {
-    //     event_participant@ p = e.participants[i];
-    //     msg += (i + 1) + ". " + p.player_name + " - " + p.score + " pontos\n";
-    // }
-    
-    // send_message(client_index, msg);
+    events_send_to_player(client_index, "Ranking de evento ainda nao esta disponivel neste build.");
 }
 
 // Busca evento por ID
@@ -825,13 +843,13 @@ game_event@ get_event(int id) {
             return scheduled_events[i];
         }
     }
-    
+
     for (uint i = 0; i < active_events.length(); i++) {
         if (active_events[i].id == id) {
             return active_events[i];
         }
     }
-    
+
     return null;
 }
 
@@ -840,26 +858,96 @@ game_event@ get_event(int id) {
 // ========================================
 
 void events_loop() {
-    // Verifica eventos em registro que devem iniciar
+    // 1) Scheduled -> Registering (abertura automatica)
     for (uint i = 0; i < scheduled_events.length(); i++) {
         game_event@ e = scheduled_events[i];
-        
-        if (e.state == EVENT_REGISTERING) {
+        if (e is null) continue;
+
+        if (e.state == EVENT_SCHEDULED) {
+            // Abre registro apos 1 minuto de ciclo (ou imediatamente se configurado)
+            int schedule_delay_ms = 60000;
+            if(e.config.exists("schedule_delay_ms")) e.config.get("schedule_delay_ms", schedule_delay_ms);
+            if (e.scheduled_time.elapsed >= schedule_delay_ms) {
+                e.state = EVENT_REGISTERING;
+                e.registration_start.restart();
+                server_broadcast("say [EVENTO GLOBAL] O evento '" + e.name + "' vai comecar em " + e.registration_duration_minutes + " minutos! Digite /registerevent " + e.id + " para participar.");
+                server_broadcast("ps alarm.ogg");
+            }
+        }
+
+        // 2) Registering -> Active/Cancelled
+        else if (e.state == EVENT_REGISTERING) {
             if (e.registration_start.elapsed >= e.registration_duration_minutes * 60 * 1000) {
-                e.start();
-                active_events.insert_last(e);
+                if (int(e.registered_players.length()) < e.min_participants) {
+                    e.state = EVENT_CANCELLED;
+                    server_broadcast("say [EVENTO GLOBAL] O evento '" + e.name + "' foi cancelado por falta de participantes.");
+                } else {
+                    e.start();
+                    if(!event_is_in_active_list(e.id)) active_events.insert_last(e);
+
+                    // Cobra taxa e teleporta participantes para mapa do evento
+                    string event_map = "arena";
+                    int event_x = 10;
+                    int event_y = 10;
+                    if(e.config.exists("event_map")) e.config.get("event_map", event_map);
+                    if(e.config.exists("event_x")) e.config.get("event_x", event_x);
+                    if(e.config.exists("event_y")) e.config.get("event_y", event_y);
+
+                    for (uint p = 0; p < e.participants.length(); p++) {
+                        int p_idx = get_player_index_from(e.participants[p].player_name);
+                        if (p_idx < 0) continue;
+
+                        if(e.entry_fee_gold > 0) {
+                            if(players[p_idx].gold < e.entry_fee_gold) {
+                                send_reliable_text(players[p_idx].peer_id, "msg2 ;Voce nao tinha ouro para a taxa e ficou fora deste evento.;", 0);
+                                continue;
+                            }
+                            players[p_idx].gold -= e.entry_fee_gold;
+                            players[p_idx].saldo = players[p_idx].gold;
+                        }
+
+                        move_player_to_map(p_idx, event_map, event_x, event_y);
+                        send_reliable_text(players[p_idx].peer_id, "ps teleport.ogg", 0);
+                        send_reliable_text(players[p_idx].peer_id, "say [EVENTO] Voce foi teleportado para o evento!", 0);
+                    }
+                }
             }
         }
     }
-    
-    // Verifica timeout de eventos ativos
+
+    // 3) Active -> Completed (premiacao + retorno)
     for (int i = int(active_events.length()) - 1; i >= 0; i--) {
-        active_events[i].check_timeout();
-        
-        // Remove se completado
-        if (active_events[i].state == EVENT_COMPLETED || 
-            active_events[i].state == EVENT_CANCELLED) {
-            event_history.insert_last(active_events[i]);
+        game_event@ e = active_events[i];
+        if (e is null) { active_events.remove_at(i); continue; }
+
+        if (e.state == EVENT_ACTIVE && e.start_time.elapsed >= e.duration_minutes * 60 * 1000) {
+            e.state = EVENT_COMPLETED;
+            server_broadcast("say [EVENTO GLOBAL] O evento '" + e.name + "' foi concluido!");
+
+            string return_map = "zona_de_seguranca";
+            int return_x = 5;
+            int return_y = 5;
+            if(e.config.exists("return_map")) e.config.get("return_map", return_map);
+            if(e.config.exists("return_x")) e.config.get("return_x", return_x);
+            if(e.config.exists("return_y")) e.config.get("return_y", return_y);
+
+            for (uint p = 0; p < e.participants.length(); p++) {
+                int p_idx = get_player_index_from(e.participants[p].player_name);
+                if (p_idx < 0) continue;
+                if (players[p_idx].health <= 0) continue;
+
+                players[p_idx].gold += e.participation_gold;
+                players[p_idx].saldo = players[p_idx].gold;
+                players[p_idx].xp += e.participation_xp;
+
+                send_reliable_text(players[p_idx].peer_id, "say [RECOMPENSA] Voce ganhou " + e.participation_gold + " moedas e " + e.participation_xp + " XP.", 0);
+                send_reliable_text(players[p_idx].peer_id, "ps trade_success.ogg", 0);
+                move_player_to_map(p_idx, return_map, return_x, return_y);
+            }
+        }
+
+        if (e.state == EVENT_COMPLETED || e.state == EVENT_CANCELLED) {
+            event_history.insert_last(e);
             active_events.remove_at(i);
         }
     }
@@ -876,3 +964,4 @@ void save_events_data() {
 void load_events_data() {
     // Carrega histórico de eventos
 }
+

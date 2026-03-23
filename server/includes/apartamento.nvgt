@@ -153,3 +153,146 @@ void atapartamento(string map, string itens) {
 	}
 }
 
+
+// ============================================================================
+// SISTEMA DE IMOBILIARIA MODERNO (Mini-Task 17)
+// ============================================================================
+
+class player_house {
+	string owner;
+	string map_name;
+	bool is_locked;
+	dictionary chest;
+
+	player_house(string p_owner, string p_map) {
+		owner = p_owner;
+		map_name = p_map;
+		is_locked = true;
+	}
+}
+
+player_house@[] active_houses;
+
+int get_house_index_by_owner(const string&in owner_name) {
+	for(uint i = 0; i < active_houses.length(); i++) {
+		if(active_houses[i].owner == owner_name) return int(i);
+	}
+	return -1;
+}
+
+int get_house_index_by_map(const string&in map_name) {
+	for(uint i = 0; i < active_houses.length(); i++) {
+		if(active_houses[i].map_name == map_name) return int(i);
+	}
+	return -1;
+}
+
+bool house_is_locked_for_player(const string&in player_name, const string&in destination_map) {
+	int hidx = get_house_index_by_map(destination_map);
+	if(hidx < 0) return false;
+	if(active_houses[hidx].owner == player_name) return false;
+	return active_houses[hidx].is_locked;
+}
+
+void cmd_comprarcasa(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	const int preco_casa = 15000;
+	if(get_house_index_by_owner(p.charname) >= 0) {
+		send_reliable_text(p.peer_id, "say [SISTEMA] Voce ja possui uma propriedade!", 0);
+		return;
+	}
+
+	if(p.gold < preco_casa) {
+		send_reliable_text(p.peer_id, "say [SISTEMA] Voce precisa de " + preco_casa + " moedas para comprar uma casa.", 0);
+		return;
+	}
+
+	p.gold -= preco_casa;
+	p.saldo = p.gold;
+
+	string novo_mapa = "casa_" + p.charname;
+	player_house@ nova = player_house(p.charname, novo_mapa);
+	active_houses.insert_last(@nova);
+
+	add_role(p.charname, "builder", "system", "Dono de casa");
+	send_reliable_text(p.peer_id, "ps trade_success.ogg", 0);
+	send_reliable_text(p.peer_id, "say [CASA] Compra concluida. Sua casa e o mapa '" + novo_mapa + "'. Use /trancar e /bau.", 0);
+}
+
+void cmd_toggle_lock(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int hidx = get_house_index_by_owner(p.charname);
+	if(hidx < 0) {
+		send_reliable_text(p.peer_id, "say [CASA] Voce nao possui casa.", 0);
+		return;
+	}
+
+	active_houses[hidx].is_locked = !active_houses[hidx].is_locked;
+	string status = active_houses[hidx].is_locked ? "trancada" : "destrancada";
+	send_reliable_text(p.peer_id, "say [CASA] Sua casa agora esta " + status + ".", 0);
+}
+
+void cmd_guardar_bau(int player_index, string item_name, int qty) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(qty <= 0 || item_name == "") return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int hidx = get_house_index_by_owner(p.charname);
+	if(hidx < 0) {
+		send_reliable_text(p.peer_id, "say [ERRO] Voce nao possui casa.", 0);
+		return;
+	}
+	if(p.map != active_houses[hidx].map_name) {
+		send_reliable_text(p.peer_id, "say [ERRO] Voce precisa estar dentro da sua casa para usar o bau.", 0);
+		return;
+	}
+
+	if(!remove_item_with_sync(p, item_name, qty)) {
+		send_reliable_text(p.peer_id, "say [ERRO] Item/quantidade invalido no inventario.", 0);
+		return;
+	}
+
+	double current_qty = 0;
+	active_houses[hidx].chest.get(item_name, current_qty);
+	active_houses[hidx].chest.set(item_name, current_qty + qty);
+	send_reliable_text(p.peer_id, "say [BAU] Voce guardou " + qty + "x " + item_name + ".", 0);
+}
+
+void cmd_retirar_bau(int player_index, string item_name, int qty) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(qty <= 0 || item_name == "") return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int hidx = get_house_index_by_owner(p.charname);
+	if(hidx < 0) {
+		send_reliable_text(p.peer_id, "say [ERRO] Voce nao possui casa.", 0);
+		return;
+	}
+	if(p.map != active_houses[hidx].map_name) {
+		send_reliable_text(p.peer_id, "say [ERRO] Voce precisa estar dentro da sua casa para usar o bau.", 0);
+		return;
+	}
+
+	double current_qty = 0;
+	if(!active_houses[hidx].chest.get(item_name, current_qty) || current_qty < qty) {
+		send_reliable_text(p.peer_id, "say [ERRO] Quantidade insuficiente no bau.", 0);
+		return;
+	}
+
+	active_houses[hidx].chest.set(item_name, current_qty - qty);
+	if(!add_item_with_sync(p, item_name, qty)) {
+		active_houses[hidx].chest.set(item_name, current_qty);
+		send_reliable_text(p.peer_id, "say [ERRO] Nao foi possivel devolver o item ao inventario.", 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "say [BAU] Voce retirou " + qty + "x " + item_name + ".", 0);
+}

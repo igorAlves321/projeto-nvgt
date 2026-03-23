@@ -455,56 +455,49 @@ void bulletcheck(int b) {
 	}
 }
 
-// Função auxiliar para verificar colisões com NPCs
+void broadcast_map_audio_channel5(string packet, string mapname) {
+	for(uint i = 0; i < connected_peers.length(); i++) {
+		uint64 peer_id = connected_peers[i];
+		player@ p = get_player_by_peer(peer_id);
+		if(p is null) continue;
+		if(p.map != mapname) continue;
+		send_reliable_text(peer_id, packet, 5);
+	}
+}
+
+// Função auxiliar para verificar colisões com NPCs/monstros globais
 void check_npc_collisions(int b, int dano) {
-	// ❌ REMOVIDO: Dragonsauros antigos (usar npcs_global)
-	// for (uint bu = 0; bu < dragonsauros.length(); bu++) {
-	// 	if (bullets[b].x == dragonsauros[bu].x && bullets[b].y == dragonsauros[bu].y && bullets[b].mapname == dragonsauros[bu].map) {
-	// 		net.send_packet(0, "rico dragonsauroapanhando.ogg " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
-	// 		if (bu > dragonsauros.length()) return;
-	// 		net.send_packet(0, "rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y + " " + bullets[b].mapname, bullets[b].mapname);
-	// 		if (bu > dragonsauros.length()) return;
-	// 		dragonsauros[bu].vida -= dano;
-	// 		dragonsauros[bu].golpeado = bullets[b].owner;
-	// 		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
-	// 		bullets.remove_at(b);
-	// 		return;
-	// 	}
-	// }
-	
-	// ✅ NOVO: NPCs genéricos (sistema npc.nvgt)
-	for (uint bu = 0; bu < npcs_global.length(); bu++) {
-		if (bullets[b].x == npcs_global[bu].x && bullets[b].y == npcs_global[bu].y && bullets[b].mapname == npcs_global[bu].map) {
-			server_broadcast("play spell_electrobomb_hit.ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
-			server_broadcast("rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
-			npcs_global[bu].vida -= dano;
-			npcs_global[bu].golpeado = bullets[b].owner;
-			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
-			bullets.remove_at(b);
-			return;
-		}
+	if (b < 0 || b >= int(bullets.length())) return;
+
+	// NPCs genéricos (npc.nvgt)
+	for (uint i = 0; i < npcs_global.length(); i++) {
+		if (npcs_global[i].vida <= 0 || npcs_global[i].morreu) continue;
+		if (bullets[b].x != npcs_global[i].x || bullets[b].y != npcs_global[i].y) continue;
+		if (bullets[b].mapname != npcs_global[i].map) continue;
+
+		broadcast_map_audio_channel5("play_body " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+		npcs_global[i].vida -= dano;
+		npcs_global[i].golpeado = bullets[b].owner;
+
+		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+		bullets.remove_at(b);
+		return;
 	}
-	
-	// ✅ NOVO: Monstros genéricos (sistema monstruo.nvgt)
-	for (uint bu = 0; bu < monstruos_global.length(); bu++) {
-		if (bullets[b].x == monstruos_global[bu].x && bullets[b].y == monstruos_global[bu].y && bullets[b].mapname == monstruos_global[bu].map) {
-			// Som específico por tipo
-			if (monstruos_global[bu].tipo == "cachorro")
-				server_broadcast("play cachorroapanhando" + random(1, 2) + ".ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
-			else if (monstruos_global[bu].tipo == "lobo")
-				server_broadcast("play loboapanhando" + random(1, 2) + ".ogg " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
-			
-			server_broadcast("rs " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
-			monstruos_global[bu].vida -= dano;
-			monstruos_global[bu].golpeado = bullets[b].owner;
-			if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
-			bullets.remove_at(b);
-			return;
-		}
+
+	// Monstros genéricos (monstruo.nvgt)
+	for (uint i = 0; i < monstruos_global.length(); i++) {
+		if (monstruos_global[i].vida <= 0 || monstruos_global[i].morreu) continue;
+		if (bullets[b].x != monstruos_global[i].x || bullets[b].y != monstruos_global[i].y) continue;
+		if (bullets[b].mapname != monstruos_global[i].map) continue;
+
+		broadcast_map_audio_channel5("play_body " + bullets[b].somarma + " " + bullets[b].x + " " + bullets[b].y, bullets[b].mapname);
+		monstruos_global[i].vida -= dano;
+		monstruos_global[i].golpeado = bullets[b].owner;
+
+		if (bullets[b].loopid != "") destroy_moving_sound(bullets[b].loopid);
+		bullets.remove_at(b);
+		return;
 	}
-	
-	// Continue com outros NPCs...
-	// (Implementar conforme necessário: outros tipos futuros)
 }
 
 void spawn_bullet(int p1, int p2, int p3, int p4, int p5, string p6, int p7, string p8, int p9 = 20, string p11 = "", string p10 = "") {

@@ -103,7 +103,7 @@ class weapon {
 			
 			// Tocar som do tiro
 			p.play_stationary(this.sound_shoot + ".ogg", false);
-			send_unreliable(peer_id, "a " + selected, 4);
+			send_reliable(peer_id, "COMBAT:shoot|" + this.name + "|" + selected + "|" + facing, 4);
 			
 			// Gastar munição
 			if(this.require_ammo == 1) this.ammo_load -= int(this.ammo_cantity_descount);
@@ -121,7 +121,7 @@ class weapon {
 			
 			// Tocar som do tiro
 			p.play_stationary(this.sound_shoot + ".ogg", false);
-			send_unreliable(peer_id, "a " + selected, 4);
+			send_reliable(peer_id, "COMBAT:shoot|" + this.name + "|" + selected + "|" + facing, 4);
 			
 			// Gastar munição
 			if(this.require_ammo == 1) this.ammo_load -= int(this.ammo_cantity_descount);
@@ -132,16 +132,22 @@ class weapon {
 	 * Recarrega a arma
 	 */
 	void reload() {
-		switch(this.ammo_load) {
-			case 0:
-				if(inv_item_number(this.ammo) >= int(this.ammo_cantity)) {
-					this.tspeed_reloading.restart();
-					this.loading = 1;
-					this.ammo_load = int(this.ammo_cantity);
-					send_reliable(peer_id, "carregar " + this.sound_reload + ".ogg " + this.ammo + " " + int(this.ammo_cantity), 0);
-				}
-				break;
+		if(this.require_ammo == 0) return;
+		if(this.loading == 1) return;
+		if(this.ammo_load >= int(this.ammo_cantity)) return;
+
+		// Consome 1 unidade do item de munição por recarga no servidor.
+		if(inv_item_number(this.ammo) <= 0) {
+			p.play_stationary(this.sound_unload + ".ogg", false);
+			speak(pu.get_value("Sem municao: ") + pu.get_value(this.ammo));
+			return;
 		}
+
+		this.tspeed_reloading.restart();
+		this.loading = 1;
+		this.ammo_load = int(this.ammo_cantity);
+		p.play_stationary(this.sound_reload + ".ogg", false);
+		send_reliable(peer_id, "COMBAT:reload|" + this.name, 4);
 	}
 	
 	/**

@@ -349,13 +349,15 @@ void dispatch_network_message(player@ p, string message) {
 // ============================================================
 
 void handle_combat(player@ p, string data) {
-    // Formato: attack|target_name|weapon
+    // Formato: action|params
     // Exemplo: COMBAT:attack|goblin_1|espada_ferro
+    // Exemplo: COMBAT:shoot|m4a1|12|3
+    // Exemplo: COMBAT:reload|m4a1
 
     if(!network_require_non_empty(p, "handle_combat", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_combat", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_combat", "acao ausente", data);
         return;
     }
 
@@ -364,9 +366,6 @@ void handle_combat(player@ p, string data) {
     if(action == "attack" && parts.length() >= 3) {
         string target = parts[1];
         string weapon = parts[2];
-
-        debug_log("âš”ï¸ " + p.name + " atacando " + target + " com " + weapon);
-
         int player_index = get_player_index_from(p.charname);
         if(player_index >= 0) {
             string[] args;
@@ -374,14 +373,101 @@ void handle_combat(player@ p, string data) {
             args.insert_last(weapon);
             cmd_attack(p, args);
         } else {
-            send_reliable_text(p.peer_id, "say Erro interno: jogador nÃ£o encontrado.", 0);
+            send_reliable_text(p.peer_id, "say Erro interno: jogador nao encontrado.", 0);
         }
+        return;
     }
-    else if(action == "defend") {
-        p.crouched = true; // Agachar como defesa
-        debug_log("ðŸ›¡ï¸ " + p.name + " defendendo");
-        send_reliable_text(p.peer_id, "say VocÃª estÃ¡ defendendo", 0);
+
+    if(action == "shoot" && parts.length() >= 2) {
+        string weapon_name = parts[1];
+        int weapon_index = get_weapon_index(weapon_name);
+        if(weapon_index < 0 || weapon_index >= int(weapons_list.length())) {
+            network_log_invalid_payload(p, "handle_combat", "arma invalida em shoot: " + weapon_name, data);
+            return;
+        }
+
+        int facing_dir = p.lado;
+        if(parts.length() >= 4) {
+            int parsed_facing = 0;
+            if(network_try_parse_int(parts[3], parsed_facing)) facing_dir = parsed_facing;
+        } else if(parts.length() >= 3) {
+            int parsed_facing = 0;
+            if(network_try_parse_int(parts[2], parsed_facing)) facing_dir = parsed_facing;
+        }
+
+        weapon@ w = weapons_list[weapon_index];
+        if(w is null) return;
+
+        string shot_sound = w.sound_shoot;
+        if(shot_sound != "" && !shot_sound.ends_with(".ogg")) shot_sound += ".ogg";
+        if(shot_sound != "") {
+            broadcast_to_map(p.map_name, "play " + shot_sound + " " + p.x + " " + p.y, p.peer_id);
+        }
+
+        if(w.degradation_point > 0 && weapon_index > 0) {
+            int degrade_roll = random(1, int(w.degradation_point));
+            if(degrade_roll == int(w.degradation_point)) p.manage_degradation(w.name, 0.1);
+        }
+
+        int bullet_weapon_id = weapon_index + 1;
+        int bullet_damage = int(w.damage);
+        int bullet_range = int(w.distance);
+        if(bullet_range <= 0) bullet_range = 500;
+        if(bullet_damage <= 0) bullet_damage = 1;
+
+        spawn_bullet(
+            bullet_damage,
+            bullet_range,
+            p.x,
+            p.y,
+            facing_dir,
+            p.charname,
+            bullet_weapon_id,
+            p.map_name,
+            20,
+            shot_sound
+        );
+        return;
     }
+
+    if(action == "reload" && parts.length() >= 2) {
+        string weapon_name = parts[1];
+        int weapon_index = get_weapon_index(weapon_name);
+        if(weapon_index < 0 || weapon_index >= int(weapons_list.length())) {
+            network_log_invalid_payload(p, "handle_combat", "arma invalida em reload: " + weapon_name, data);
+            return;
+        }
+
+        weapon@ w = weapons_list[weapon_index];
+        if(w is null) return;
+
+        if(w.require_ammo == 1) {
+            int ammo_to_consume = 1;
+            if(w.ammo == "") {
+                send_reliable_text(p.peer_id, "say Falha ao recarregar: tipo de municao nao definido para a arma.", 0);
+                return;
+            }
+            if(!remove_item_with_sync(p, w.ammo, ammo_to_consume)) {
+                send_reliable_text(p.peer_id, "say Falha ao recarregar: faltam itens de municao.", 0);
+                return;
+            }
+        }
+
+        string reload_sound = w.sound_reload;
+        if(reload_sound != "" && !reload_sound.ends_with(".ogg")) reload_sound += ".ogg";
+        if(reload_sound != "") {
+            broadcast_to_map(p.map_name, "play " + reload_sound + " " + p.x + " " + p.y, p.peer_id);
+        }
+        return;
+    }
+
+    if(action == "defend") {
+        p.crouched = true;
+        send_reliable_text(p.peer_id, "say Voce esta defendendo", 0);
+        return;
+    }
+
+    network_send_action_error(p, "Combat", action);
 }
 
 void handle_skill(player@ p, string data) {
@@ -565,59 +651,84 @@ void handle_drop_item(player@ p, string data) {
         quantidade = parse_int(parts[1]);
     }
     if(quantidade <= 0) {
-        send_reliable_text(p.peer_id, "say Quantidade invÃ¡lida", 0);
+        send_reliable_text(p.peer_id, "say Quantidade invalida", 0);
         return;
     }
 
-    debug_log("ðŸ“¦ " + p.name + " dropando: " + item_name + " x" + quantidade);
+    debug_log("DROP_NET: " + p.name + " -> " + item_name + " x" + quantidade);
 
-    // Verificar se tem o item
-    if(!p.inv.exists(item_name)) {
-        send_reliable_text(p.peer_id, "say VocÃª nÃ£o tem este item", 0);
+    if(!remove_item_with_sync(p, item_name, quantidade)) {
+        send_reliable_text(p.peer_id, "say Voce nao possui essa quantidade.", 0);
         return;
     }
 
-    int current = 0;
-    p.inv.get(item_name, current);
-    if(current < quantidade) {
-        send_reliable_text(p.peer_id, "say Quantidade insuficiente", 0);
-        return;
-    }
-
-    // Remover do inventÃ¡rio e criar item no mundo
-    p.inv.set(item_name, current - quantidade);
-    if(!spawn_item_at(item_name, p.map_name, p.x, p.y, p.z, quantidade, p.charname)) {
-        // rollback em caso de falha ao persistir no mundo
-        p.inv.set(item_name, current);
+    string drop_id = spawn_drop(item_name, quantidade, p.map, p.x, p.y, 0);
+    if(drop_id == "") {
+        add_item_with_sync(p, item_name, quantidade);
         send_reliable_text(p.peer_id, "say Falha ao dropar item no mapa.", 0);
         return;
     }
-    send_reliable_text(p.peer_id, "say VocÃª dropou " + quantidade + "x " + item_name, 0);
+
+    string broadcast_msg = create_inv_broadcast_drop_json(p.name, item_name, p.x, p.y, quantidade);
+    broadcast_inventory_change(p, broadcast_msg);
+    send_reliable_text(p.peer_id, "say Voce dropou " + quantidade + "x " + item_name, 0);
 }
 
 void handle_pickup_item(player@ p, string data) {
     // Formato: item_id
-    // Exemplo: PICKUP:obj_123
+    // Exemplo: PICKUP:drop_123 ou PICKUP:chao
 
     string item_id = data.trim_whitespace();
-    if(item_id == "") {
-        network_log_invalid_payload(p, "handle_pickup_item", "item_id vazio", data);
-        return;
-    }
+    if(item_id == "") item_id = "chao";
 
-    debug_log("ðŸ¤ " + p.name + " pegando: " + item_id);
+    debug_log("PICKUP_NET: " + p.name + " -> " + item_id);
 
-    // Novo fluxo de drops UUID (loot_drops.nvgt)
+    // Pickup explicito por drop_id
     if(item_id.find("drop_") == 0) {
-        handle_pickup_drop(p, item_id);
+        drop_entity@ by_id = get_drop(item_id);
+        if(by_id is null) {
+            send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
+            return;
+        }
+
+        string picked_item = by_id.item_id;
+        int picked_qty = by_id.quantity;
+        int picked_x = by_id.x;
+        int picked_y = by_id.y;
+
+        if(pickup_drop(p, item_id)) {
+            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
+            broadcast_inventory_change(p, pickup_msg);
+            return;
+        }
+
+        send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
         return;
     }
 
-    // Fluxo unificado: pickup sempre pela posicao atual do jogador
-    bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
-    if(!ok) {
-        send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
+    // Pickup por posicao atual
+    string[] map_drops = get_drops_in_map(p.map);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != p.x || d.y != p.y) continue;
+
+        string picked_item = d.item_id;
+        int picked_qty = d.quantity;
+        int picked_x = d.x;
+        int picked_y = d.y;
+
+        if(pickup_drop(p, d.drop_id)) {
+            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
+            broadcast_inventory_change(p, pickup_msg);
+            return;
+        }
     }
+
+    send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
 }
 
 // ============================================================
@@ -719,6 +830,11 @@ void handle_move(player@ p, string data) {
     
     // Usar a funÃ§Ã£o move() da classe player (inclui minas, zonas de morte, etc.)
     p.move(tile_type, new_x, new_y, 0);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index >= 0) {
+        process_map_step(player_index);
+    }
     
     debug_log("ðŸš¶ " + p.name + " â†’ (" + new_x + ", " + new_y + ") [" + tile_type + "]");
 }
@@ -782,6 +898,13 @@ void handle_interact(player@ p, string data) {
     // Exemplo: INTERACT:door_123|open
     // Exemplo: INTERACT:npc_merchant|talk
 
+    if(data.trim_whitespace() == "") {
+        int player_index = get_player_index_from(p.charname);
+        if(player_index >= 0) {
+            process_map_interaction(player_index);
+        }
+        return;
+    }
     if(!network_require_non_empty(p, "handle_interact", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
@@ -798,6 +921,13 @@ void handle_interact(player@ p, string data) {
     if(object_id == "pickup" || action == "pickup") {
         bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
         if(!ok) send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
+        return;
+    }
+    if(object_id == "map" || object_id == "store" || action == "use" || action == "interact") {
+        int player_index = get_player_index_from(p.charname);
+        if(player_index >= 0) {
+            process_map_interaction(player_index);
+        }
         return;
     }
     send_reliable_text(p.peer_id, "say InteraÃ§Ã£o registrada: " + object_id + " (" + action + ")", 0);
@@ -1022,10 +1152,19 @@ void handle_trade(player@ p, string data) {
     if((action == "request" || action == "invite") && parts.length() >= 2) {
         cmd_trade(player_index, parts[1]);
     } else if((action == "additem" || action == "offer") && parts.length() >= 2) {
-        int qty = parts.length() >= 3 ? parse_int(parts[2]) : 1;
+        int qty = 1;
+        if(parts.length() >= 3 && !network_try_parse_int(parts[2], qty)) {
+            send_reliable_text(p.peer_id, "say Trade: quantidade invalida.", 0);
+            return;
+        }
         cmd_additem(player_index, parts[1], qty);
     } else if(action == "addgold" && parts.length() >= 2) {
-        cmd_addgold(player_index, parse_int(parts[1]));
+        int amount = 0;
+        if(!network_try_parse_int(parts[1], amount)) {
+            send_reliable_text(p.peer_id, "say Trade: valor de gold invalido.", 0);
+            return;
+        }
+        cmd_addgold(player_index, amount);
     } else if((action == "removeitem" || action == "remove") && parts.length() >= 2) {
         cmd_removeitem(player_index, parts[1]);
     } else if(action == "accept" || action == "ready") {

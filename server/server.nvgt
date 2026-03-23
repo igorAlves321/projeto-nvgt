@@ -870,6 +870,12 @@ void process_player_command(uint64 peer_id, string command) {
     command = command.trim_whitespace();
     if(command == "") return;
 
+    // Protocolo moderno (PREFIXO:payload) - delega para dispatcher novo
+    if(command.find(":") > 0 && command.find(":") < 15) {
+        process_network_message(peer_id, command);
+        return;
+    }
+
     // Log do comando
     log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
     
@@ -965,6 +971,96 @@ void process_player_command(uint64 peer_id, string command) {
         return;
     }
     
+    // ===== BOUNTY MENU FLOW (compatibilidade com cliente legado) =====
+    // 1) bounty_menu -> abre menu de jogadores elegiveis
+    // 2) bounty_select_player <nome> -> solicita valor
+    // 3) bounty value <valor> -> registra recompensa
+    if(command == "bounty_menu") {
+        int player_index = get_player_index_from(player.name);
+        if(player_index < 0 || player.afk) return;
+
+        string[] menu_items;
+        for(uint i = 0; i < players.length(); i++) {
+            if(int(i) == player_index) continue;
+            if(players[i].peer_id == 0) continue;
+            if(players[i].invs == 1) continue;
+            if(players[i].bounty_on_head == 1) continue;
+
+            string display_name = players[i].charname + " (Nivel " + int(players[i].level) + ")";
+            menu_items.insert_last(display_name + "=" + players[i].charname);
+        }
+
+        if(menu_items.length() == 0) {
+            send_reliable_text(peer_id, "msg2 ;Nao ha jogadores disponiveis para colocar recompensa.;", 0);
+            return;
+        }
+
+        string[] menu_sounds = {"menumove.ogg", "menuitem.ogg", "menuaccept.ogg", "menuback.ogg"};
+        string packet = "servermenu ;Escolha o jogador para colocar recompensa:|bounty_select_player|0|" + linear(menu_items) + "|" + linear(menu_sounds);
+        send_reliable_text(peer_id, packet, 0);
+        return;
+    }
+
+    string[] bounty_parts = split_non_empty_tokens(command);
+    if(bounty_parts.length() >= 2 && bounty_parts[0].lower() == "bounty_select_player") {
+        int player_index = get_player_index_from(player.name);
+        if(player_index < 0) return;
+
+        string target_name = bounty_parts[1];
+        int target_index = get_player_index_from(target_name);
+        if(target_index < 0) {
+            send_reliable_text(peer_id, "msg2 ;Jogador nao encontrado.;", 0);
+            return;
+        }
+        if(target_index == player_index) {
+            send_reliable_text(peer_id, "msg2 ;Voce nao pode colocar recompensa em si mesmo.;", 0);
+            return;
+        }
+        if(players[target_index].bounty_on_head == 1) {
+            send_reliable_text(peer_id, "msg2 ;Este jogador ja possui uma recompensa ativa.;", 0);
+            return;
+        }
+        if(players[target_index].pacifico == 1) {
+            send_reliable_text(peer_id, "msg2 ;Este jogador esta em modo pacifico e nao pode receber recompensa.;", 0);
+            return;
+        }
+        if(players[target_index].newbie) {
+            send_reliable_text(peer_id, "msg2 ;Este jogador e novato e nao pode receber recompensa.;", 0);
+            return;
+        }
+
+        players[player_index].bounty_target = target_name;
+        send_reliable_text(peer_id, "mtext ;Digite o valor da recompensa (minimo 100 moedas):|bounty value| |0", 0);
+        return;
+    }
+
+    if(bounty_parts.length() >= 3 && bounty_parts[0].lower() == "bounty" && bounty_parts[1].lower() == "value") {
+        int player_index = get_player_index_from(player.name);
+        if(player_index < 0) return;
+
+        if(players[player_index].bounty_target == "") {
+            send_reliable_text(peer_id, "msg2 ;Nenhum alvo de recompensa selecionado.;", 0);
+            return;
+        }
+
+        int bounty_value = 0;
+        if(!try_parse_int_token(bounty_parts[2], bounty_value)) {
+            send_reliable_text(peer_id, "msg2 ;Valor de recompensa invalido.;", 0);
+            return;
+        }
+
+        int target_index = get_player_index_from(players[player_index].bounty_target);
+        if(target_index < 0) {
+            send_reliable_text(peer_id, "msg2 ;O jogador alvo desconectou.;", 0);
+            return;
+        }
+
+        if(set_bounty(target_index, player_index, bounty_value)) {
+            send_reliable_text(peer_id, "msg2 ;Recompensa colocada com sucesso!;", 0);
+        }
+        return;
+    }
+
     // Usar sistema de comandos avançado
     if(!process_command(player, command)) {
         // Fallback para comandos básicos se n�o processado
@@ -1119,6 +1215,93 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
         
+        // ===== COMANDO DE SELECAO DE ARMA =====
+        // Formato: select_weapon <indice>
+        if(cmd == "select_weapon" && parts.length() >= 2) {
+            int weapon_index = 0;
+            if(!try_parse_int_token(parts[1], weapon_index)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            player.weapon_index = weapon_index;
+            return;
+        }
+
+        // ===== COMANDO DE TIRO (LEGADO BGT/NVGT) =====
+        // Formato: a <weapon_index>
+        if(cmd == "a" && parts.length() >= 2) {
+            if(!pvp) return;
+
+            int weapon_index = 0;
+            if(!try_parse_int_token(parts[1], weapon_index)) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+            if(weapon_index < 0 || weapon_index >= int(weapons_list.length())) {
+                return;
+            }
+
+            weapon@ w = weapons_list[weapon_index];
+            if(w is null) return;
+
+            if(w.degradation_point > 0 && weapon_index > 0) {
+                int degrade_roll = random(1, int(w.degradation_point));
+                if(degrade_roll == int(w.degradation_point)) {
+                    player.manage_degradation(w.name, 0.1);
+                }
+            }
+
+            string shot_sound = w.sound_shoot;
+            if(shot_sound != "" && !shot_sound.ends_with(".ogg")) {
+                shot_sound += ".ogg";
+            }
+            if(shot_sound != "") {
+                broadcast_to_map(player.map_name, "play " + shot_sound + " " + player.x + " " + player.y, peer_id);
+            }
+
+            int bullet_weapon_id = weapon_index + 1;
+            int bullet_damage = int(w.damage);
+            int bullet_range = int(w.distance);
+            if(bullet_range <= 0) bullet_range = 500;
+            if(bullet_damage <= 0) bullet_damage = 1;
+            spawn_bullet(
+                bullet_damage,
+                bullet_range,
+                player.x,
+                player.y,
+                player.lado,
+                player.charname,
+                bullet_weapon_id,
+                player.map_name,
+                20,
+                shot_sound
+            );
+            return;
+        }
+
+        // ===== COMANDO DE RECARGA (LEGADO BGT/NVGT) =====
+        // Formato: carregar <som_reload.ogg> <ammo_item> <quantidade>
+        if(cmd == "carregar" && parts.length() >= 4) {
+            string reload_sound = parts[1];
+            string ammo_item = parts[2];
+            int ammo_quantity = 0;
+
+            if(ammo_item.trim_whitespace() == "" || !try_parse_int_token(parts[3], ammo_quantity) || ammo_quantity <= 0) {
+                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                return;
+            }
+
+            if(!remove_item_with_sync(player, ammo_item, ammo_quantity)) {
+                send_reliable_text(peer_id, "say Falha ao recarregar: faltam itens de municao.", 0);
+                return;
+            }
+
+            if(reload_sound != "") {
+                broadcast_to_map(player.map_name, "play " + reload_sound + " " + player.x + " " + player.y, peer_id);
+            }
+            return;
+        }
+
         // ===== COMANDO DE SOM SOCIAL (playsocial) =====
         // Formato: playsocial som.ogg
         // Toca um som para outros jogadores no mesmo mapa (usado ao fechar invent�rio, etc.)
@@ -1813,42 +1996,37 @@ void process_player_command(uint64 peer_id, string command) {
         }
         
         
-        // r - Radar (tecla M sem Shift) - Mostrar inimigos/paredes próximos
+        // r - Radar de NPCs/Monstros proximos (tecla M sem Shift)
         if(cmd == "r") {
             int radar_range = 12;
             int found = 0;
             string radar_msg = "Voce avista:";
 
-            // Jogadores proximos
-            for(uint pi = 0; pi < players.length(); pi++) {
-                if(players[pi] is null) continue;
-                if(!players[pi].is_logged_in) continue;
-                if(players[pi].peer_id == player.peer_id) continue;
-                if(players[pi].map != player.map) continue;
+            // NPCs proximos
+            for(uint ni = 0; ni < npcs_global.length(); ni++) {
+                if(npcs_global[ni].morreu || npcs_global[ni].vida <= 0) continue;
+                if(npcs_global[ni].map != player.map_name) continue;
 
-                int dx = players[pi].x - player.x;
-                int dy = players[pi].y - player.y;
-                int dist = int(sqrt(double(dx * dx + dy * dy)));
-                if(dist > radar_range) continue;
+                int ndx = npcs_global[ni].x - player.x;
+                int ndy = npcs_global[ni].y - player.y;
+                int ndist = int(sqrt(double(ndx * ndx + ndy * ndy)));
+                if(ndist > radar_range) continue;
 
-                radar_msg += " jogador " + players[pi].charname + " a " + dist + "m;";
+                radar_msg += " npc " + npcs_global[ni].nombrenpc + " a " + ndist + "m;";
                 found++;
             }
 
-            // Drops proximos
-            string[] map_drops = get_drops_in_map(player.map);
-            for(uint di = 0; di < map_drops.length(); di++) {
-                drop_entity@ d = get_drop(map_drops[di]);
-                if(d is null) continue;
-                d.update_state();
-                if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+            // Monstros proximos
+            for(uint mi = 0; mi < monstruos_global.length(); mi++) {
+                if(monstruos_global[mi].morreu || monstruos_global[mi].vida <= 0) continue;
+                if(monstruos_global[mi].map != player.map_name) continue;
 
-                int ddx = d.x - player.x;
-                int ddy = d.y - player.y;
-                int ddist = int(sqrt(double(ddx * ddx + ddy * ddy)));
-                if(ddist > radar_range) continue;
+                int mdx = monstruos_global[mi].x - player.x;
+                int mdy = monstruos_global[mi].y - player.y;
+                int mdist = int(sqrt(double(mdx * mdx + mdy * mdy)));
+                if(mdist > radar_range) continue;
 
-                radar_msg += " drop " + d.item_id + " x" + d.quantity + " a " + ddist + "m;";
+                radar_msg += " monstro " + monstruos_global[mi].nombremonstruo + " a " + mdist + "m;";
                 found++;
             }
 
@@ -1857,11 +2035,10 @@ void process_player_command(uint64 peer_id, string command) {
             } else {
                 send_reliable_text(peer_id, "msg2 " + radar_msg, 0);
             }
-            debug_log("[radar] " + player.name + " encontrou " + found + " entidades proximas");
+            debug_log("[radar] " + player.name + " encontrou " + found + " npc(s)/monstro(s) proximos");
             return;
         }
-            
-        
+
         // check_items - Verificar itens no chão (tecla Shift+M)
         if(cmd == "check_items") {
             string[] map_drops = get_drops_in_map(player.map);
@@ -1957,6 +2134,149 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
 
+        // ============================================================================
+        // SISTEMA DE LEILAO (compatibilidade BGT + fluxo NVGT)
+        // ============================================================================
+        // /auction ou /leilao (sem args): listar leiloes
+        if(cmd == "/auction" || cmd == "auction" || cmd == "/leilao" || cmd == "leilao" ||
+           cmd == "/venda" || cmd == "venda" || cmd == "/venta" || cmd == "venta" ||
+           cmd == "/vente" || cmd == "vente") {
+            if(player_index < 0) {
+                send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+                return;
+            }
+
+            // Sem argumentos: listar no estilo BGT (com fallback para multi-leiloes)
+            if(parts.length() < 4) {
+                int active_count = 0;
+                int first_idx = -1;
+                auction_mutex.lock();
+                for(uint ai = 0; ai < active_auctions.length(); ai++) {
+                    if(active_auctions[ai].is_active && !active_auctions[ai].is_finalized && !active_auctions[ai].is_expired()) {
+                        active_count++;
+                        if(first_idx < 0) first_idx = int(ai);
+                    }
+                }
+
+                if(active_count == 0) {
+                    auction_mutex.unlock();
+                    send_reliable_text(peer_id, "msgnormal Nenhum item a venda.", 0);
+                    return;
+                }
+
+                if(active_count == 1 && first_idx >= 0) {
+                    Auction@ one = @active_auctions[first_idx];
+                    string noleilao = "noleilao " + one.item_name + " " + one.item_quantity + " " + one.current_bid;
+                    auction_mutex.unlock();
+                    send_reliable_text(peer_id, noleilao, 0);
+                    return;
+                }
+
+                auction_mutex.unlock();
+                cmd_list_auctions(player_index);
+                return;
+            }
+
+            // Com argumentos: /auction <quantidade> <item> <lance_inicial> [duracao_segundos]
+            int auction_qty = 0;
+            int auction_min_bid = 0;
+            int auction_duration = 120; // padrao curto para fluxo tipo BGT
+
+            if(!try_parse_int_token(parts[1], auction_qty) || auction_qty <= 0) {
+                send_reliable_text(peer_id, "msg2 Erro: Quantidade invalida.", 0);
+                return;
+            }
+
+            string auction_item = parts[2];
+            if(!try_parse_int_token(parts[3], auction_min_bid) || auction_min_bid <= 0) {
+                send_reliable_text(peer_id, "msg2 Erro: Lance inicial invalido.", 0);
+                return;
+            }
+
+            if(parts.length() >= 5) {
+                if(!try_parse_int_token(parts[4], auction_duration)) {
+                    send_reliable_text(peer_id, "msg2 Erro: Duracao invalida.", 0);
+                    return;
+                }
+            }
+
+            cmd_create_auction(player_index, auction_item, auction_qty, auction_min_bid, auction_duration);
+            return;
+        }
+
+        // /bid <valor> (BGT, assume leilao ativo unico) ou /bid <id> <valor> (NVGT)
+        if(cmd == "/bid" || cmd == "bid" || cmd == "/ofertar" || cmd == "ofertar") {
+            if(player_index < 0) {
+                send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+                return;
+            }
+
+            int bid_auction_id = -1;
+            int bid_amount = 0;
+
+            if(parts.length() >= 3) {
+                if(!try_parse_int_token(parts[1], bid_auction_id) || !try_parse_int_token(parts[2], bid_amount)) {
+                    send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+                    return;
+                }
+            } else if(parts.length() >= 2) {
+                if(!try_parse_int_token(parts[1], bid_amount)) {
+                    send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+                    return;
+                }
+
+                int active_count = 0;
+                int single_active_id = -1;
+                auction_mutex.lock();
+                for(uint i = 0; i < active_auctions.length(); i++) {
+                    if(active_auctions[i].is_active && !active_auctions[i].is_finalized && !active_auctions[i].is_expired()) {
+                        active_count++;
+                        single_active_id = active_auctions[i].id;
+                    }
+                }
+                auction_mutex.unlock();
+
+                if(active_count == 0) {
+                    send_reliable_text(peer_id, "msg2 Nao ha leiloes ativos no momento.", 0);
+                    return;
+                }
+                if(active_count > 1) {
+                    send_reliable_text(peer_id, "msg2 Ha mais de um leilao ativo. Use /bid <id> <valor>.", 0);
+                    return;
+                }
+                bid_auction_id = single_active_id;
+            } else {
+                send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+                return;
+            }
+
+            if(bid_amount <= 0) {
+                send_reliable_text(peer_id, "msg2 Erro: Valor do lance invalido.", 0);
+                return;
+            }
+
+            req_place_bid(player_index, bid_auction_id, bid_amount);
+            return;
+        }
+
+        // /cancelauction <id> (NVGT) e /cancelarl <id> (alias legado)
+        if(cmd == "/cancelauction" || cmd == "cancelauction" || cmd == "/cancelarl" || cmd == "cancelarl") {
+            if(player_index < 0) {
+                send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+                return;
+            }
+            if(parts.length() < 2) {
+                send_reliable_text(peer_id, "msg2 Uso: /cancelauction <id>", 0);
+                return;
+            }
+            int auction_id = 0;
+            if(!try_parse_int_token(parts[1], auction_id)) {
+                send_reliable_text(peer_id, "msg2 Erro: ID de leilao invalido.", 0);
+                return;
+            }
+            cmd_cancel_auction(player_index, auction_id);
+            return;
+        }
         if(cmd == "login") {
             send_reliable_text(get_player_peer_id(player), "say Sistema de login em desenvolvimento");
         }
@@ -2093,6 +2413,73 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
         
+        // ============================================================================
+        // SISTEMAS COMPLEMENTARES: IMOBILIARIA + EVENTOS
+        // ============================================================================
+
+        if(cmd == "/comprarcasa" || cmd == "comprarcasa") {
+            cmd_comprarcasa(player_index);
+            return;
+        }
+
+        if(cmd == "/trancar" || cmd == "trancar") {
+            cmd_toggle_lock(player_index);
+            return;
+        }
+
+        if(cmd == "/bau" || cmd == "bau") {
+            if(parts.length() < 4) {
+                send_reliable_text(peer_id, "say Uso: /bau <guardar|retirar> <item> <quantidade>", 0);
+                return;
+            }
+            int bau_qty = 0;
+            if(!try_parse_int_token(parts[3], bau_qty) || bau_qty <= 0) {
+                send_reliable_text(peer_id, "say Quantidade invalida.", 0);
+                return;
+            }
+            if(parts[1] == "guardar") cmd_guardar_bau(player_index, parts[2], bau_qty);
+            else if(parts[1] == "retirar") cmd_retirar_bau(player_index, parts[2], bau_qty);
+            else send_reliable_text(peer_id, "say Uso: /bau <guardar|retirar> <item> <quantidade>", 0);
+            return;
+        }
+
+        if(cmd == "/events" || cmd == "events") {
+            string[] no_args;
+            cmd_events(player_index, no_args);
+            return;
+        }
+
+        if((cmd == "/eventinfo" || cmd == "eventinfo") && parts.length() >= 2) {
+            string[] ev_args = {parts[1]};
+            cmd_eventinfo(player_index, ev_args);
+            return;
+        }
+
+        if((cmd == "/registerevent" || cmd == "registerevent") && parts.length() >= 2) {
+            string[] ev_args = {parts[1]};
+            cmd_registerevent(player_index, ev_args);
+            return;
+        }
+
+        if((cmd == "/startevent" || cmd == "startevent") && parts.length() >= 2) {
+            if(!has_role(player.charname, "admin") && !has_role(player.charname, "dev")) {
+                send_reliable_text(peer_id, "say Voce nao tem permissao para iniciar eventos.", 0);
+                return;
+            }
+            string[] ev_args = {parts[1]};
+            cmd_startevent(player_index, ev_args);
+            return;
+        }
+
+        if((cmd == "/endevent" || cmd == "endevent") && parts.length() >= 2) {
+            if(!has_role(player.charname, "admin") && !has_role(player.charname, "dev")) {
+                send_reliable_text(peer_id, "say Voce nao tem permissao para finalizar eventos.", 0);
+                return;
+            }
+            string[] ev_args = {parts[1]};
+            cmd_endevent(player_index, ev_args);
+            return;
+        }
         else {
             send_reliable_text(get_player_peer_id(player), "say Comando n�o reconhecido: " + cmd + ". Digite 'help' para ver comandos dispon�veis.");
         }
@@ -2601,6 +2988,9 @@ OBSERVAÇÕES:
 - Algumas funcionalidades aguardam implementação futura (Threading, History, Statistics)
 - Manter este bloco atualizado ao desativar/reativar funcionalidades
 */
+
+
+
 
 
 

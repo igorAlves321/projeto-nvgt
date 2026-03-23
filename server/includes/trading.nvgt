@@ -15,10 +15,11 @@ class trade_offer {
 	
 	void add_item(string item_name, int quantity) {
 		if(items.exists(item_name)) {
-			int current = parse_int(string(items[item_name]));
-			items.set(item_name, "" + (current + quantity));
+			int current = 0;
+			items.get(item_name, current);
+			items.set(item_name, current + quantity);
 		} else {
-			items.set(item_name, "" + quantity);
+			items.set(item_name, quantity);
 		}
 	}
 	
@@ -43,8 +44,10 @@ class trade_offer {
 		
 		string[]@ keys = items.get_keys();
 		for(uint i = 0; i < keys.length(); i++) {
+			int qty = 0;
+			items.get(keys[i], qty);
 			if(i > 0 || gold > 0) result += ", ";
-			result += keys[i] + " x" + string(items[keys[i]]);
+			result += keys[i] + " x" + qty;
 		}
 		
 		if(items.is_empty() && gold == 0) {
@@ -97,8 +100,27 @@ class trade_session {
 	}
 }
 
+class trade_invite {
+	string from_player;
+	string to_player;
+	timer created_at;
+	int timeout_seconds;
+
+	trade_invite(string from_player, string to_player) {
+		this.from_player = from_player;
+		this.to_player = to_player;
+		this.timeout_seconds = 30;
+		created_at.restart();
+	}
+
+	bool is_expired() {
+		return created_at.elapsed >= (timeout_seconds * 1000);
+	}
+}
+
 // Array global de trades ativas
 trade_session@[] active_trades;
+trade_invite@[] pending_trade_invites;
 
 // Obter índice de trade session
 int get_trade_index(string player_name) {
@@ -113,6 +135,51 @@ int get_trade_index(string player_name) {
 // Verificar se jogador está em trade
 bool is_in_trade(string player_name) {
 	return get_trade_index(player_name) >= 0;
+}
+
+int get_trade_invite_index_for_target(string target_name) {
+	for(uint i = 0; i < pending_trade_invites.length(); i++) {
+		if(pending_trade_invites[i].to_player == target_name) return i;
+	}
+	return -1;
+}
+
+int get_trade_invite_index(string from_player, string to_player) {
+	for(uint i = 0; i < pending_trade_invites.length(); i++) {
+		if(pending_trade_invites[i].from_player == from_player && pending_trade_invites[i].to_player == to_player) return i;
+	}
+	return -1;
+}
+
+void remove_trade_invites_between(string p1, string p2) {
+	for(int i = int(pending_trade_invites.length()) - 1; i >= 0; i--) {
+		if((pending_trade_invites[i].from_player == p1 && pending_trade_invites[i].to_player == p2) ||
+		   (pending_trade_invites[i].from_player == p2 && pending_trade_invites[i].to_player == p1)) {
+			pending_trade_invites.remove_at(i);
+		}
+	}
+}
+
+bool start_trade_session(int p1_idx, int p2_idx) {
+	if(p1_idx < 0 || p1_idx >= int(players.length())) return false;
+	if(p2_idx < 0 || p2_idx >= int(players.length())) return false;
+
+	if(is_in_trade(players[p1_idx].charname) || is_in_trade(players[p2_idx].charname)) return false;
+	if(players[p1_idx].map != players[p2_idx].map) return false;
+
+	int distance = int(get_distance(players[p1_idx].x, players[p1_idx].y, players[p2_idx].x, players[p2_idx].y));
+	if(distance > 10) return false;
+
+	trade_session ts(players[p1_idx].charname, players[p2_idx].charname);
+	ts.set_status("trading");
+	active_trades.insert_last(ts);
+	remove_trade_invites_between(players[p1_idx].charname, players[p2_idx].charname);
+
+	send_reliable_text(players[p1_idx].peer_id, "msg2 Troca iniciada com " + players[p2_idx].charname + "!", 0);
+	send_reliable_text(players[p2_idx].peer_id, "msg2 Troca iniciada com " + players[p1_idx].charname + "!", 0);
+	send_reliable_text(players[p1_idx].peer_id, "msg2 Use /additem, /addgold, /accept, /canceltrade", 0);
+	send_reliable_text(players[p2_idx].peer_id, "msg2 Use /additem, /addgold, /accept, /canceltrade", 0);
+	return true;
 }
 
 // Comando: Iniciar troca
@@ -139,32 +206,31 @@ void cmd_trade(int player_index, string target_name) {
 		send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " já está em uma negociação!", 0);
 		return;
 	}
-	
-	// Verificar distância (mesmo mapa e próximos)
-	if(players[player_index].map != players[target].map) {
-		send_reliable_text(players[player_index].peer_id, "msg2 Vocês precisam estar no mesmo mapa!", 0);
+
+	// Se já existe convite inverso, aceita e abre a sessão.
+	int inverse_invite = get_trade_invite_index(target_name, players[player_index].charname);
+	if(inverse_invite >= 0) {
+		if(start_trade_session(player_index, target)) {
+			debug_log("TRADE: " + players[player_index].charname + " aceitou convite de " + target_name);
+		} else {
+			send_reliable_text(players[player_index].peer_id, "msg2 Não foi possível iniciar a troca agora.", 0);
+		}
 		return;
 	}
-	
-	int distance = int(get_distance(players[player_index].x, players[player_index].y, 
-	                                  players[target].x, players[target].y));
-	if(distance > 10) {
-		send_reliable_text(players[player_index].peer_id, "msg2 Você está muito longe de " + target_name + "!", 0);
+
+	// Evitar duplicação de convite
+	if(get_trade_invite_index(players[player_index].charname, target_name) >= 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você já enviou um pedido de troca para " + target_name + ".", 0);
 		return;
 	}
-	
-	// Criar sessão de trade
-	trade_session ts(players[player_index].charname, target_name);
-	ts.set_status("trading");
-	active_trades.insert_last(ts);
-	
-	// Notificar ambos
-	send_reliable_text(players[player_index].peer_id, "msg2 Troca iniciada com " + target_name + "!", 0);
-	send_reliable_text(players[player_index].peer_id, "msg2 Use /additem, /addgold, /accept, /canceltrade", 0);
-	send_reliable_text(players[target].peer_id, "msg2 " + players[player_index].charname + " iniciou uma troca com você!", 0);
-	send_reliable_text(players[target].peer_id, "msg2 Use /additem, /addgold, /accept, /canceltrade", 0);
-	
-	debug_log("TRADE: " + players[player_index].charname + " <-> " + target_name + " iniciado");
+
+	// Registrar convite pendente
+	trade_invite ti(players[player_index].charname, target_name);
+	pending_trade_invites.insert_last(ti);
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Pedido de troca enviado para " + target_name + ".", 0);
+	send_reliable_text(players[target].peer_id, "msg2 " + players[player_index].charname + " quer trocar com você. Use /trade " + players[player_index].charname + " para aceitar.", 0);
+	debug_log("TRADE INVITE: " + players[player_index].charname + " -> " + target_name);
 }
 
 // Comando: Adicionar item à oferta
@@ -172,6 +238,11 @@ void cmd_additem(int player_index, string item_name, int quantity = 1) {
 	int trade_idx = get_trade_index(players[player_index].charname);
 	if(trade_idx == -1) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não está em uma negociação!", 0);
+		return;
+	}
+
+	if(quantity <= 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Quantidade inválida!", 0);
 		return;
 	}
 	
@@ -269,7 +340,30 @@ void cmd_removeitem(int player_index, string item_name) {
 void cmd_accept(int player_index) {
 	int trade_idx = get_trade_index(players[player_index].charname);
 	if(trade_idx == -1) {
-		send_reliable_text(players[player_index].peer_id, "msg2 Você não está em uma negociação!", 0);
+		// Fora da sessão: tenta aceitar convite pendente
+		int invite_idx = get_trade_invite_index_for_target(players[player_index].charname);
+		if(invite_idx < 0) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você não está em uma negociação!", 0);
+			return;
+		}
+
+		if(pending_trade_invites[invite_idx].is_expired()) {
+			pending_trade_invites.remove_at(invite_idx);
+			send_reliable_text(players[player_index].peer_id, "msg2 O pedido de troca expirou.", 0);
+			return;
+		}
+
+		string from_name = pending_trade_invites[invite_idx].from_player;
+		int from_idx = get_player_index_from(from_name);
+		if(from_idx < 0) {
+			pending_trade_invites.remove_at(invite_idx);
+			send_reliable_text(players[player_index].peer_id, "msg2 Quem te convidou já saiu do jogo.", 0);
+			return;
+		}
+
+		if(!start_trade_session(from_idx, player_index)) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Não foi possível iniciar a troca agora.", 0);
+		}
 		return;
 	}
 	
@@ -314,7 +408,8 @@ void execute_trade(int trade_idx) {
 	string[]@ keys1 = ts.offer1.items.get_keys();
 	for(uint i = 0; i < keys1.length(); i++) {
 		string item = keys1[i];
-		int qty = parse_int(string(ts.offer1.items[item]));
+		int qty = 0;
+		ts.offer1.items.get(item, qty);
 		
 		if(players[p1_idx].inv_item_number(item) < qty) {
 			cancel_trade(trade_idx, ts.player1 + " não tem mais os itens");
@@ -326,7 +421,8 @@ void execute_trade(int trade_idx) {
 	string[]@ keys2 = ts.offer2.items.get_keys();
 	for(uint i = 0; i < keys2.length(); i++) {
 		string item = keys2[i];
-		int qty = parse_int(string(ts.offer2.items[item]));
+		int qty = 0;
+		ts.offer2.items.get(item, qty);
 		
 		if(players[p2_idx].inv_item_number(item) < qty) {
 			cancel_trade(trade_idx, ts.player2 + " não tem mais os itens");
@@ -349,9 +445,19 @@ void execute_trade(int trade_idx) {
 	// P1 -> P2
 	for(uint i = 0; i < keys1.length(); i++) {
 		string item = keys1[i];
-		int qty = parse_int(string(ts.offer1.items[item]));
-		players[p1_idx].inv_add_item(item, -qty);
-		players[p2_idx].inv_add_item(item, qty);
+		int qty = 0;
+		ts.offer1.items.get(item, qty);
+		if(qty <= 0) continue;
+		if(!remove_item_with_sync(players[p1_idx], item, qty)) {
+			cancel_trade(trade_idx, "Falha ao remover itens de " + ts.player1);
+			return;
+		}
+		if(!add_item_with_sync(players[p2_idx], item, qty)) {
+			// rollback simples para evitar perda de item
+			add_item_with_sync(players[p1_idx], item, qty);
+			cancel_trade(trade_idx, "Falha ao entregar itens para " + ts.player2);
+			return;
+		}
 	}
 	players[p1_idx].gold -= ts.offer1.gold;
 	players[p2_idx].gold += ts.offer1.gold;
@@ -359,12 +465,25 @@ void execute_trade(int trade_idx) {
 	// P2 -> P1
 	for(uint i = 0; i < keys2.length(); i++) {
 		string item = keys2[i];
-		int qty = parse_int(string(ts.offer2.items[item]));
-		players[p2_idx].inv_add_item(item, -qty);
-		players[p1_idx].inv_add_item(item, qty);
+		int qty = 0;
+		ts.offer2.items.get(item, qty);
+		if(qty <= 0) continue;
+		if(!remove_item_with_sync(players[p2_idx], item, qty)) {
+			cancel_trade(trade_idx, "Falha ao remover itens de " + ts.player2);
+			return;
+		}
+		if(!add_item_with_sync(players[p1_idx], item, qty)) {
+			// rollback simples para evitar perda de item
+			add_item_with_sync(players[p2_idx], item, qty);
+			cancel_trade(trade_idx, "Falha ao entregar itens para " + ts.player1);
+			return;
+		}
 	}
 	players[p2_idx].gold -= ts.offer2.gold;
 	players[p1_idx].gold += ts.offer2.gold;
+
+	save_player_to_database(players[p1_idx]);
+	save_player_to_database(players[p2_idx]);
 	
 	// Notificar sucesso
 	send_reliable_text(players[p1_idx].peer_id, "msg2 Troca concluída com sucesso!", 0);
@@ -405,7 +524,19 @@ void cancel_trade(int trade_idx, string reason = "Cancelado") {
 void cmd_canceltrade(int player_index) {
 	int trade_idx = get_trade_index(players[player_index].charname);
 	if(trade_idx == -1) {
-		send_reliable_text(players[player_index].peer_id, "msg2 Você não está em uma negociação!", 0);
+		bool removed_invite = false;
+		for(int i = int(pending_trade_invites.length()) - 1; i >= 0; i--) {
+			if(pending_trade_invites[i].from_player == players[player_index].charname ||
+			   pending_trade_invites[i].to_player == players[player_index].charname) {
+				pending_trade_invites.remove_at(i);
+				removed_invite = true;
+			}
+		}
+		if(removed_invite) {
+			send_reliable_text(players[player_index].peer_id, "msg2 Pedido de troca cancelado.", 0);
+		} else {
+			send_reliable_text(players[player_index].peer_id, "msg2 Você não está em uma negociação!", 0);
+		}
 		return;
 	}
 	
@@ -414,6 +545,17 @@ void cmd_canceltrade(int player_index) {
 
 // Loop para verificar timeouts
 void trading_loop() {
+	for(uint i = 0; i < pending_trade_invites.length(); i++) {
+		if(pending_trade_invites[i].is_expired()) {
+			int to_idx = get_player_index_from(pending_trade_invites[i].to_player);
+			if(to_idx >= 0) {
+				send_reliable_text(players[to_idx].peer_id, "msg2 O pedido de troca expirou.", 0);
+			}
+			pending_trade_invites.remove_at(i);
+			i--;
+		}
+	}
+
 	for(uint i = 0; i < active_trades.length(); i++) {
 		if(active_trades[i].is_timeout()) {
 			cancel_trade(i, "Tempo esgotado (5 minutos)");

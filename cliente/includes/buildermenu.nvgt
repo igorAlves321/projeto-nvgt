@@ -1393,15 +1393,72 @@ void craftmenu() {
 }
 
 void weapons_menu() {
-	speak(pu.get_value("Menu de armas ainda não implementado"));
+	setupmenu();
+	game_menu.add_item(pu.get_value("Criar arma de fogo"), "weapon_gun");
+	game_menu.add_item(pu.get_value("Criar arma corpo a corpo"), "weapon_melee");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	game_menu.intro_text = pu.get_value("Menu de armas do construtor.");
+	int mres = game_menu.run();
+	if(mres < 0) return;
+	string selected = game_menu.get_item_id(mres);
+	if(selected == "weapon_gun") {
+		item_builder_weapon_gun();
+		return;
+	}
+	if(selected == "weapon_melee") {
+		item_builder_weapon_melee();
+		return;
+	}
 }
 
 void stores_building_menu() {
-	speak(pu.get_value("Menu de lojas ainda não implementado"));
+	input_form form(pu.get_value("Criar Loja / Estabelecimento"));
+	form.description = pu.get_value("Defina a area de balcao e o tipo da loja.");
+	form.add_number_field("x1", pu.get_value("Inicio da coordenada X"), 0, true);
+	form.add_number_field("x2", pu.get_value("Fim da coordenada X"), 0, true);
+	form.add_number_field("y1", pu.get_value("Inicio da coordenada Y"), 0, true);
+	form.add_number_field("y2", pu.get_value("Fim da coordenada Y"), 0, true);
+	form.add_text_field("store_type", pu.get_value("Tipo de loja (armas, roupas, farmacia, lanchonete)"), "", true);
+
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+
+	double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+	string store_type = "";
+	result.get("x1", x1);
+	result.get("x2", x2);
+	result.get("y1", y1);
+	result.get("y2", y2);
+	result.get("store_type", store_type);
+	store_type = store_type.trim_whitespace().lower();
+
+	if(store_type == "") {
+		speak(pu.get_value("Tipo de loja invalido."), true);
+		return;
+	}
+
+	int minx = int(x1);
+	int maxx = int(x2);
+	int miny = int(y1);
+	int maxy = int(y2);
+	if(maxx < minx) {
+		int temp = minx;
+		minx = maxx;
+		maxx = temp;
+	}
+	if(maxy < miny) {
+		int temp = miny;
+		miny = maxy;
+		maxy = temp;
+	}
+
+	string data = "store:" + minx + ":" + maxx + ":" + miny + ":" + maxy + ":" + store_type;
+	send_to_server("add_line::" + data, 13, true);
+	speak(pu.get_value("Comando de criacao de loja enviado ao servidor."), true);
 }
 
 void itemsmenu() {
-	speak(pu.get_value("Menu de itens ainda não implementado"));
+	item_builder_menu();
 }
 
 void clothesmenu() {
@@ -1413,7 +1470,34 @@ void booksmenu() {
 }
 
 void portalsmenu() {
-	speak(pu.get_value("Menu de portais ainda não implementado"));
+	input_form form(pu.get_value("Criar Portal Magico"));
+	form.description = pu.get_value("Preencha os dados para criar um portal no mapa atual.");
+	form.add_number_field("x", pu.get_value("Coordenada X do portal"), 0, true);
+	form.add_number_field("y", pu.get_value("Coordenada Y do portal"), 0, true);
+	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
+	form.add_number_field("dest_x", pu.get_value("Coordenada X de destino"), 0, true);
+	form.add_number_field("dest_y", pu.get_value("Coordenada Y de destino"), 0, true);
+
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+
+	double x = 0, y = 0, dest_x = 0, dest_y = 0;
+	string dest_map = "";
+	result.get("x", x);
+	result.get("y", y);
+	result.get("dest_x", dest_x);
+	result.get("dest_y", dest_y);
+	result.get("dest_map", dest_map);
+	dest_map = dest_map.trim_whitespace().lower();
+
+	if(dest_map == "") {
+		speak(pu.get_value("Mapa de destino invalido."), true);
+		return;
+	}
+
+	string data = "portal:" + int(x) + ":" + int(y) + ":" + dest_map + ":" + int(dest_x) + ":" + int(dest_y);
+	send_to_server("add_line::" + data, 13, true);
+	speak(pu.get_value("Comando de criacao de portal enviado ao servidor."), true);
 }
 
 void correccionmenu() {

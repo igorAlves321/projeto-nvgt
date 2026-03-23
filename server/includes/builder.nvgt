@@ -197,6 +197,18 @@ void req_builder_create_element(player@ p, string element_data) {
     else if(element_type == "tp" || element_type == "travelpoint") {
         success = builder_create_travelpoint(p, current_map, parsed);
     }
+    else if(element_type == "portal") {
+        success = builder_create_portal(p, current_map, parsed);
+    }
+    else if(element_type == "store") {
+        success = builder_create_store(p, current_map, parsed);
+    }
+    else if(element_type == "death" || element_type == "deaths") {
+        success = builder_create_death_area(p, current_map, parsed);
+    }
+    else if(element_type == "am" || element_type == "areia_movedissa") {
+        success = builder_create_quicksand(p, current_map, parsed);
+    }
     else if(element_type == "maxx") {
         success = builder_set_map_max_x(p, current_map, parsed);
     }
@@ -381,7 +393,7 @@ bool builder_undo_last_element(player@ p, string line_hint) {
     }
 
     string element_type = parsed[0].lower();
-    if(element_type == "maxx" || element_type == "maxy" || element_type == "teto" || element_type == "dv") {
+    if(element_type == "maxx" || element_type == "maxy" || element_type == "teto" || element_type == "dv" || element_type == "portal" || element_type == "store" || element_type == "death" || element_type == "deaths" || element_type == "am" || element_type == "areia_movedissa") {
         current_map.mapdata.remove_at(line_index);
         builder_rebuild_runtime_settings_from_mapdata(current_map);
         builder_send_success(p, "Ultimo elemento desfeito: " + element_type);
@@ -849,6 +861,122 @@ bool builder_create_travelpoint(player@ p, map@ current_map, string[] parsed) {
     current_map.travel_points.insert_last(new_tp);
     
     builder_send_success(p, "Travelpoint para '" + dest_map + "' criado na zona (" + zx1 + "," + zy1 + ")-(" + zx2 + "," + zy2 + ")");
+    return true;
+}
+// --- PORTAL MAGICO (portal) ---
+// Formato: portal:x:y:dest_map:dest_x:dest_y
+bool builder_create_portal(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 6) {
+        builder_send_error(p, "Portal requer: portal:x:y:dest_map:dest_x:dest_y");
+        return false;
+    }
+
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+    string dest_map = parsed[3].trim_whitespace().lower();
+    int dest_x = string_to_number(parsed[4]);
+    int dest_y = string_to_number(parsed[5]);
+
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas do portal fora dos limites do mapa atual.");
+        return false;
+    }
+
+    if(!builder_is_valid_map_name(dest_map)) {
+        builder_send_error(p, "Mapa de destino invalido.");
+        return false;
+    }
+
+    string map_file = builder_existing_map_path(dest_map);
+    if(map_file == "") {
+        builder_send_error(p, "Mapa de destino nao encontrado: " + dest_map);
+        return false;
+    }
+
+    builder_send_success(p, "Portal criado em (" + x + "," + y + ") para " + dest_map + " (" + dest_x + "," + dest_y + ")");
+    return true;
+}
+
+// --- LOJA (store) ---
+// Formato: store:x1:x2:y1:y2:store_type
+bool builder_create_store(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 6) {
+        builder_send_error(p, "Store requer: store:x1:x2:y1:y2:store_type");
+        return false;
+    }
+
+    int x1 = string_to_number(parsed[1]);
+    int x2 = string_to_number(parsed[2]);
+    int y1 = string_to_number(parsed[3]);
+    int y2 = string_to_number(parsed[4]);
+    string store_type = parsed[5].trim_whitespace().lower();
+
+    if(store_type == "") {
+        builder_send_error(p, "Tipo de loja invalido.");
+        return false;
+    }
+
+    int minx = x1 <= x2 ? x1 : x2;
+    int maxx = x1 <= x2 ? x2 : x1;
+    int miny = y1 <= y2 ? y1 : y2;
+    int maxy = y1 <= y2 ? y2 : y1;
+
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y) ||
+       !builder_validate_coords(maxx, maxy, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas da loja fora dos limites do mapa.");
+        return false;
+    }
+
+    builder_send_success(p, "Loja '" + store_type + "' criada na area (" + minx + "," + miny + ")-(" + maxx + "," + maxy + ")");
+    return true;
+}
+
+// --- AREA DE MORTE (death/deaths) ---
+// Formato principal: death:x1:x2:y1:y2:time:progressive:damage:msg:required_item:require_item:item_qty
+// Formato legacy:   deaths:x1:x2:y1:y2:time:msg
+bool builder_create_death_area(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 5) {
+        builder_send_error(p, "Death requer ao menos: death:x1:x2:y1:y2");
+        return false;
+    }
+
+    int x1 = string_to_number(parsed[1]);
+    int x2 = string_to_number(parsed[2]);
+    int y1 = string_to_number(parsed[3]);
+    int y2 = string_to_number(parsed[4]);
+
+    int minx = x1 <= x2 ? x1 : x2;
+    int maxx = x1 <= x2 ? x2 : x1;
+    int miny = y1 <= y2 ? y1 : y2;
+    int maxy = y1 <= y2 ? y2 : y1;
+
+    if(!builder_validate_coords(minx, miny, current_map.max_x, current_map.max_y) ||
+       !builder_validate_coords(maxx, maxy, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas da area de morte fora dos limites do mapa.");
+        return false;
+    }
+
+    builder_send_success(p, "Area de morte criada em (" + minx + "," + miny + ")-(" + maxx + "," + maxy + ")");
+    return true;
+}
+
+// --- AREIA MOVEDICA (am/areia_movedissa) ---
+// Formato: am:x:y
+bool builder_create_quicksand(player@ p, map@ current_map, string[] parsed) {
+    if(parsed.length() < 3) {
+        builder_send_error(p, "Areia movediça requer: am:x:y");
+        return false;
+    }
+
+    int x = string_to_number(parsed[1]);
+    int y = string_to_number(parsed[2]);
+
+    if(!builder_validate_coords(x, y, current_map.max_x, current_map.max_y)) {
+        builder_send_error(p, "Coordenadas da areia movediça fora dos limites do mapa.");
+        return false;
+    }
+
+    builder_send_success(p, "Areia movediça criada em (" + x + "," + y + ")");
     return true;
 }
 

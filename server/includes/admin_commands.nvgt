@@ -160,61 +160,47 @@ void cmd_playtime(int player_index, string target_name = "") {
 	debug_log("ADMIN: " + players[player_index].charname + " usou /playtime");
 }
 
-// Comando /kick
-// Task 1.2.1: Validacao completa de inputs
 void cmd_kick(int player_index, string target_name, string reason = "Expulso por admin") {
-	// 1. Validacao de Permissao
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "kick", "Voce nao tem permissao!");
 		return;
 	}
 	
-	// 2. Validacao de Nome do Jogador
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "kick", "Nome de jogador invalido!");
 		return;
 	}
 	
-	// 3. Validacao de Entidade (Jogador Existe?)
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_admin_error(player_index, "kick", "Jogador '" + target_name + "' nao encontrado ou offline.");
 		return;
 	}
 	
-	// 4. Protecao: Nao pode kickar outro admin
 	if(players[target].admin) {
 		send_admin_error(player_index, "kick", "Voce nao pode kickar este jogador (admin protegido)!");
 		return;
 	}
 	
-	// 5. Validacao do tamanho da razao
 	if(reason.length() > 256) {
-		reason = reason.substr(0, 256); // Truncar razao muito longa
+		reason = reason.substr(0, 256);
 	}
 	
-	// --- EXECUAAO DA LA"GICA ---
-	// Guardar peer_id antes de qualquer modificacao
 	uint64 target_peer = players[target].peer_id;
 	
-	// 1. Notificar o alvo ANTES de desconectar (para ele ver a mensagem)
 	send_reliable_text(target_peer, "msg2 Voce foi chutado do servidor! Motivo: " + reason, 0);
-	send_reliable_text(target_peer, "chutad", 0); // Toca som de chute no cliente
+	send_reliable_text(target_peer, "chutad", 0);
 	
-	// 2. Broadcast para todos os outros
 	for(uint i = 0; i < players.length(); i++) {
 		if(players[i].peer_id != target_peer) {
 			send_reliable_text(players[i].peer_id, "msg2 " + target_name + " foi chutado do servidor. Motivo: " + reason, 0);
 		}
 	}
 	
-	// 3. Log
 	debug_log("ADMIN: " + players[player_index].charname + " chutou " + target_name + " - Motivo: " + reason);
 	
-	// Pequena espera para entregar msg/som antes de fechar conexao
 	wait(500);
 	
-	// 4. Desconectar fisicamente o jogador
 	force_disconnect_and_cleanup(target_peer, true);
 }
 
@@ -288,17 +274,14 @@ void cmd_freezeall(int player_index, int duration = 10) {
 	}
 }
 
-// Comando /backup
-// Task 1.2.1: Validacao de permissao
 void cmd_backup(int player_index) {
 	if(!is_super_admin(player_index)) {
 		send_admin_error(player_index, "backup", "Voce precisa ser super admin!");
 		return;
 	}
 	
-	send_reliable_text(players[player_index].peer_id, "msg2 Iniciando backup do banco em backups/ ...", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Iniciando backup do banco em server/backups/ ...", 0);
 	
-	// Salvar tudo e disparar backup do banco (assAncrono)
 	auto_save_all_players();
 	perform_database_backup();
 	

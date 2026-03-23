@@ -1,4 +1,4 @@
-﻿// Sistema de rede modernizado para NVGT
+// Sistema de rede modernizado para NVGT
 
 // ============================================================================
 // FLAG DE DEBUG - Descomente para ativar speaks de debug
@@ -386,6 +386,7 @@ void net_logar(bool localhost = false) {
 					reconnect_attempts = 0;
 					reconnect_delay = MIN_RECONNECT_DELAY;
 					waiting_to_reconnect = false;
+					kicked_to_menu = false;
 					
 					speak(pu.get_value("Logado com sucesso! Carregando mundo..."));
 					// NAO chama game() aqui - aguarda changemap
@@ -444,6 +445,13 @@ void netloop() {
 			speak(pu.get_value("Conexao perdida com o servidor."));
 			is_connected = false; // Atualizar flag
 			reset();
+			if(kicked_to_menu) {
+				kicked_to_menu = false;
+				relogin_flag = false;
+				waiting_to_reconnect = false;
+				menuprincipal();
+				return;
+			}
 			relogin_flag = true;
 			return;
 		}
@@ -572,7 +580,64 @@ void show_items_list_menu(string raw_list) {
 	emchat = false;
 }
 
+bool net_json_try_get_int(const string &in json, const string &in field, int &out value) {
+	string marker = "\"" + field + "\":";
+	int pos = json.find(marker);
+	if(pos < 0) return false;
+	pos += marker.length();
+
+	while(pos < int(json.length()) && (json.substr(pos, 1) == " " || json.substr(pos, 1) == "\t")) pos++;
+	if(pos >= int(json.length())) return false;
+
+	int end = pos;
+	if(json.substr(end, 1) == "-") end++;
+	while(end < int(json.length())) {
+		string ch = json.substr(end, 1);
+		if(ch < "0" || ch > "9") break;
+		end++;
+	}
+	if(end <= pos) return false;
+
+	value = string_to_number(json.substr(pos, end - pos));
+	return true;
+}
+
+bool net_json_try_get_string(const string &in json, const string &in field, string &out value) {
+	string marker = "\"" + field + "\":\"";
+	int pos = json.find(marker);
+	if(pos < 0) return false;
+	pos += marker.length();
+
+	int end = json.find("\"", pos);
+	if(end < 0) return false;
+
+	value = json.substr(pos, end - pos);
+	return true;
+}
+
 void process_channel_0(string full_msg, string[] parsed, const network_event@ ev) {
+	// === EVENTOS JSON DE INVENTARIO FISICO (loot/drops) ===
+	if(full_msg.find("{\"type\":\"inv_broadcast_drop\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("drop.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		return;
+	}
+	if(full_msg.find("{\"type\":\"inv_broadcast_pickup\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		string picker = "";
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		if(net_json_try_get_string(full_msg, "player", picker) && picker == un) {
+			speak(pu.get_value("Voce pegou um item."), true);
+		}
+		return;
+	}
+
 	// === MOVIMENTO DE OUTROS JOGADORES (BROADCAST DO SERVIDOR) ===
 	if(parsed[0] == "xt01" && parsed.length() >= 4) {
 		// xt01 peer_id x y - Movimento de outro jogador
@@ -621,6 +686,24 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		}
 		debug_log("Recebido listplayers, dados: '" + data + "' (len=" + data.length() + ")");
 		playersmenu(data);
+	}
+	else if(parsed[0] == "store_open") {
+		string store_type = "";
+		if(full_msg.length() > 11) {
+			store_type = full_msg.substr(11).trim_whitespace();
+		}
+		open_generic_store(store_type);
+	}
+	else if(parsed[0] == "store") {
+		string store_payload = "";
+		if(full_msg.length() > 6) {
+			store_payload = full_msg.substr(6).trim_whitespace();
+		}
+		if(store_payload == "") {
+			speak(pu.get_value("Nenhum item disponivel na loja."), true);
+			return;
+		}
+		store(store_payload);
 	}
 	else if(parsed[0] == "msg2" && parsed.length() > 1) {
 		// Mensagem formatada do servidor com separadores ; (formato BGT)
@@ -1035,6 +1118,9 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	// (removido - ja processado no inicio da funcao)
 	
 	// === GRUPO 4: AUDIO ===
+	else if(parsed[0] == "play_body" && parsed.length() > 3) {
+		bodys.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
 	else if(parsed[0] == "play" && parsed.length() > 3) {
 		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 	}
@@ -1182,9 +1268,30 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "msg4") {
 		process_msg4(full_msg, parsed);
 	}
+	else if(parsed[0] == "msgnovoleilao" && parsed.length() >= 5) {
+		string m = pu.get_value("Novo item a venda por") + " " + parsed[1] + "! " + parsed[2] + " " + pu.get_value(parsed[3]) + ", " + pu.get_value("lance minimo de") + " " + parsed[4] + " reais.";
+		add_add_item("leiloes", m);
+	}
+	else if(parsed[0] == "msgfezaoferta" && parsed.length() >= 3) {
+		string m = parsed[1] + " " + pu.get_value("fez a oferta de") + " " + parsed[2] + " reais!";
+		add_add_item("leiloes", m);
+	}
+	else if(parsed[0] == "msgaproximaoferta" && parsed.length() >= 2) {
+		string m = pu.get_value("A proxima oferta deve ser de") + " " + parsed[1] + " reais.";
+		add_add_item("leiloes", m);
+	}
+	else if(parsed[0] == "noleilao" && parsed.length() >= 4) {
+		string m = pu.get_value("Na venda:") + " " + pu.get_value(parsed[1]) + ", " + pu.get_value("quantidade") + " " + parsed[2] + ", " + pu.get_value("valendo") + " " + parsed[3] + " reais.";
+		add_add_item("leiloes", m);
+	}
 	else if(parsed[0] == "msgnormal") {
 		string m = full_msg.replace(parsed[0] + " ", "");
-		add_add_item("avisos", pu.get_value(m));
+		string ml = m.lower();
+		if(ml.find("item a venda") >= 0 || ml.find("leilao") >= 0 || ml.find("oferta") >= 0) {
+			add_add_item("leiloes", pu.get_value(m));
+		} else {
+			add_add_item("avisos", pu.get_value(m));
+		}
 	}
 	//  CHAT LOCAL: fm |titulo| nome |acao| mensagem
 	else if(parsed[0] == "fm") {
@@ -1262,6 +1369,13 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		string content = full_msg.replace(parsed[0] + " ", "");
 		string[] data = content.split("|");
 		menuserver(data[0], data[1], string_to_number(data[2]), data[3].split("\r\n"), data[4].split("\r\n"));
+	}
+	else if(parsed[0] == "mtext") {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		string[] data = content.split("|");
+		if(data.length() > 3) {
+			mtext(data[0], data[1], data[2], string_to_number(data[3]));
+		}
 	}
 	else if(parsed[0] == "menutext" && parsed.length() > 1) {
 		string content = full_msg.replace(parsed[0] + " ", "");
@@ -1979,6 +2093,8 @@ void process_pinfo_data(string full_msg) {
 	// Nao precisa fazer nada com a selecao - e apenas informativo
 	debug_log("PINFO: Menu de " + info[0] + " exibido");
 }
+
+
 
 
 
