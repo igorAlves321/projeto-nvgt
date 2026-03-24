@@ -1,21 +1,21 @@
-// ============================================================
+﻿// ============================================================
 // SISTEMA DE EQUIPAMENTOS E BUFFS/DEBUFFS
 // ============================================================
-// ✅ Epic 1 Task 6: Sistema de Equipamentos e Buffs (Equip + Buff/Debuff)
+// âœ… Epic 1 Task 6: Sistema de Equipamentos e Buffs (Equip + Buff/Debuff)
 //
-// Implementa sistema completo de equipamentos e efeitos temporários/permanentes:
-// - Equipar/Desequipar itens em slots específicos
-// - Buffs/Debuffs com duração e stack behaviors
-// - Cálculo automático de stats finais
-// - Sincronização realtime com cliente (JSON)
-// - Scheduler para expiração de buffs temporários
-// - Persistência de equipamentos e buffs permanentes
+// Implementa sistema completo de equipamentos e efeitos temporÃ¡rios/permanentes:
+// - Equipar/Desequipar itens em slots especÃ­ficos
+// - Buffs/Debuffs com duraÃ§Ã£o e stack behaviors
+// - CÃ¡lculo automÃ¡tico de stats finais
+// - SincronizaÃ§Ã£o realtime com cliente (JSON)
+// - Scheduler para expiraÃ§Ã£o de buffs temporÃ¡rios
+// - PersistÃªncia de equipamentos e buffs permanentes
 
 // ============================================================
 // CONSTANTES
 // ============================================================
 
-// Slots de equipamento disponíveis
+// Slots de equipamento disponÃ­veis
 const string EQUIP_SLOT_HEAD = "head";
 const string EQUIP_SLOT_BODY = "body";
 const string EQUIP_SLOT_LEGS = "legs";
@@ -28,7 +28,7 @@ const string EQUIP_SLOT_ACCESSORY_2 = "accessory_2";
 
 // Stack behaviors
 const string STACK_BEHAVIOR_STACK = "stack";       // Empilha com outros buffs do mesmo tipo
-const string STACK_BEHAVIOR_REFRESH = "refresh";   // Renova duração se aplicado novamente
+const string STACK_BEHAVIOR_REFRESH = "refresh";   // Renova duraÃ§Ã£o se aplicado novamente
 const string STACK_BEHAVIOR_REPLACE = "replace";   // Substitui buff existente
 
 // Sources de buffs
@@ -42,12 +42,12 @@ const string BUFF_SOURCE_ENVIRONMENT = "environment";
 // ============================================================
 
 class buff {
-    string buff_id;             // UUID único do buff
+    string buff_id;             // UUID Ãºnico do buff
     string source;              // Origem: item, skill, consumable, environment
     string stat;                // Stat afetado: attack, defense, hp_max, speed, etc.
     float value;                // Valor do modificador (positivo = buff, negativo = debuff)
-    uint64 applied_at;          // Timestamp de aplicação (ms)
-    uint64 expires_at;          // Timestamp de expiração (0 = permanente)
+    uint64 applied_at;          // Timestamp de aplicaÃ§Ã£o (ms)
+    uint64 expires_at;          // Timestamp de expiraÃ§Ã£o (0 = permanente)
     string stack_behavior;      // stack, refresh, replace
     string source_id;           // ID do item/skill que aplicou (para tracking)
 
@@ -109,7 +109,7 @@ class player_stats {
     float speed = 1.0;
     float jump_height = 1.0;
 
-    // Resistências
+    // ResistÃªncias
     float fire_resist = 0.0;
     float ice_resist = 0.0;
     float poison_resist = 0.0;
@@ -153,7 +153,7 @@ class player_stats {
 }
 
 // ============================================================
-// FUNÇÕES DE SERIALIZAÇÃO JSON
+// FUNÃ‡Ã•ES DE SERIALIZAÃ‡ÃƒO JSON
 // ============================================================
 
 // Converter buff para JSON
@@ -250,10 +250,10 @@ string equipment_to_json(player@ p) {
 }
 
 // ============================================================
-// FUNÇÕES DE GERENCIAMENTO DE BUFFS
+// FUNÃ‡Ã•ES DE GERENCIAMENTO DE BUFFS
 // ============================================================
 
-// Gerar ID único para buff
+// Gerar ID Ãºnico para buff
 string generate_buff_id() {
     return "buff_" + ticks() + "_" + random(0, 999999);
 }
@@ -301,7 +301,7 @@ bool apply_buff(player@ p, buff@ b) {
 
     debug_log("BUFF: Aplicando " + b.buff_id + " a " + owner_name + " (" + b.stat + " +" + b.value + ")");
 
-    // stack behavior básico
+    // stack behavior bÃ¡sico
     if(b.stack_behavior == STACK_BEHAVIOR_REPLACE || b.stack_behavior == STACK_BEHAVIOR_REFRESH) {
         for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
             buff@ current = active_buffs_store[i];
@@ -356,7 +356,7 @@ bool remove_buff(player@ p, string buff_id) {
 void recalculate_player_stats(player@ p) {
     if(@p == null) return;
 
-    // Criar stats temporários para cálculo
+    // Criar stats temporÃ¡rios para cÃ¡lculo
     player_stats calculated_stats;
 
     string owner_name = p.charname;
@@ -374,135 +374,252 @@ void recalculate_player_stats(player@ p) {
 }
 
 // ============================================================
-// FUNÇÕES DE EQUIPAMENTOS
+// FUNÃ‡Ã•ES DE EQUIPAMENTOS
 // ============================================================
 
-// Equipar item de um slot do inventário
+// Equipar item de um slot do inventÃ¡rio
+string normalize_equipment_item_name(string item_name) {
+    return item_name.trim_whitespace().lower();
+}
+
+string get_equipped_item_in_slot(player@ p, const string&in slot) {
+    if(@p == null) return "";
+    if(slot == EQUIP_SLOT_SHIELD && p.escudo > 0) return "escudo";
+    if(slot == EQUIP_SLOT_HANDS && p.luvas > 0) return "luvas";
+    if(slot == EQUIP_SLOT_HEAD) {
+        if(p.capacetepolicia > 0) return "capacete_policia";
+        if(p.chapeupanama > 0) return "chapeu_panama";
+        if(p.bonemizuno > 0) return "bone_mizuno";
+    }
+    if(slot == EQUIP_SLOT_BODY) {
+        if(p.colete_aprova_de_balas > 0) return "colete_aprova_de_balas";
+        if(p.coletemilitar > 0) return "coletemilitar";
+        if(p.coletecamuflado > 0) return "coletecamuflado";
+        if(p.coletesalvavida > 0) return "coletesalvavida";
+        if(p.coletemizuno > 0) return "coletemizuno";
+    }
+    if(slot == EQUIP_SLOT_FEET) {
+        if(p.coturnomilitar > 0) return "coturno_militar";
+        if(p.tenisnike > 0) return "tenis_nike";
+        if(p.tenisadidas > 0) return "tenis_adidas";
+    }
+    if(slot == EQUIP_SLOT_ACCESSORY_1) {
+        if(p.pulseiraouro > 0) return "pulseira_ouro";
+        if(p.pulseiraprata > 0) return "pulseira_prata";
+        if(p.pulseirabronze > 0) return "pulseira_bronze";
+        if(p.pulseira > 0) return "pulseira";
+    }
+    if(slot == EQUIP_SLOT_ACCESSORY_2 && p.anel > 0) return "anel";
+    return "";
+}
+
+void set_equipped_item_in_slot(player@ p, const string&in slot, const string&in item_name) {
+    if(@p == null) return;
+    string item = normalize_equipment_item_name(item_name);
+
+    if(slot == EQUIP_SLOT_SHIELD && item == "escudo") {
+        p.escudo = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_HANDS && item == "luvas") {
+        p.luvas = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_HEAD) {
+        if(item == "capacete_policia" || item == "capacetepolicia") p.capacetepolicia = 1;
+        else if(item == "chapeu_panama" || item == "chapeupanama") p.chapeupanama = 1;
+        else if(item == "bone_mizuno" || item == "bonemizuno") p.bonemizuno = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_BODY) {
+        if(item == "colete_aprova_de_balas" || item == "coleteaprova_de_balas" || item == "coleteaprova_debalas") p.colete_aprova_de_balas = 1;
+        else if(item == "coletemilitar") p.coletemilitar = 1;
+        else if(item == "coletecamuflado") p.coletecamuflado = 1;
+        else if(item == "coletesalvavida") p.coletesalvavida = 1;
+        else if(item == "coletemizuno") p.coletemizuno = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_FEET) {
+        if(item == "coturno_militar" || item == "coturnomilitar") p.coturnomilitar = 1;
+        else if(item == "tenis_nike" || item == "tenisnike") p.tenisnike = 1;
+        else if(item == "tenis_adidas" || item == "tenisadidas") p.tenisadidas = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_ACCESSORY_1) {
+        if(item == "pulseira_ouro" || item == "pulseiraouro") p.pulseiraouro = 1;
+        else if(item == "pulseira_prata" || item == "pulseiraprata") p.pulseiraprata = 1;
+        else if(item == "pulseira_bronze" || item == "pulseirabronze") p.pulseirabronze = 1;
+        else if(item == "pulseira") p.pulseira = 1;
+        return;
+    }
+    if(slot == EQUIP_SLOT_ACCESSORY_2 && item == "anel") {
+        p.anel = 1;
+        return;
+    }
+}
+
+void remove_item_buffs(player@ p, const string&in item_name) {
+    if(@p == null) return;
+    string owner_name = p.charname;
+    if(owner_name == "") owner_name = p.name;
+    if(owner_name == "") return;
+    for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
+        buff@ b = active_buffs_store[i];
+        if(b is null) continue;
+        if(active_buff_owners[i] != owner_name) continue;
+        if(b.source != BUFF_SOURCE_ITEM) continue;
+        if(b.source_id != item_name) continue;
+        apply_buff_effect(p, b, false);
+        remove_active_buff_at(i);
+    }
+}
+
+bool equip_item_flag(player@ p, const string&in item_key, string&out equip_slot, int&out atk_bonus, int&out def_bonus) {
+    if(@p == null) return false;
+
+    equip_slot = "";
+    atk_bonus = 0;
+    def_bonus = 0;
+    string item = normalize_equipment_item_name(item_key);
+
+    if(item == "escudo") { equip_slot = EQUIP_SLOT_SHIELD; def_bonus = 8; return true; }
+    if(item == "luvas") { equip_slot = EQUIP_SLOT_HANDS; return true; }
+
+    if(item == "capacete_policia" || item == "capacetepolicia") { equip_slot = EQUIP_SLOT_HEAD; def_bonus = 3; return true; }
+    if(item == "chapeu_panama" || item == "chapeupanama") { equip_slot = EQUIP_SLOT_HEAD; def_bonus = 3; return true; }
+    if(item == "bone_mizuno" || item == "bonemizuno") { equip_slot = EQUIP_SLOT_HEAD; def_bonus = 3; return true; }
+
+    if(item == "colete_aprova_de_balas" || item == "coleteaprova_de_balas" || item == "coleteaprova_debalas") { equip_slot = EQUIP_SLOT_BODY; def_bonus = 10; return true; }
+    if(item == "coletemilitar") { equip_slot = EQUIP_SLOT_BODY; def_bonus = 10; return true; }
+    if(item == "coletecamuflado") { equip_slot = EQUIP_SLOT_BODY; def_bonus = 10; return true; }
+    if(item == "coletesalvavida") { equip_slot = EQUIP_SLOT_BODY; def_bonus = 10; return true; }
+    if(item == "coletemizuno") { equip_slot = EQUIP_SLOT_BODY; def_bonus = 10; return true; }
+
+    if(item == "coturno_militar" || item == "coturnomilitar") { equip_slot = EQUIP_SLOT_FEET; return true; }
+    if(item == "tenis_nike" || item == "tenisnike") { equip_slot = EQUIP_SLOT_FEET; return true; }
+    if(item == "tenis_adidas" || item == "tenisadidas") { equip_slot = EQUIP_SLOT_FEET; return true; }
+
+    if(item == "pulseira_ouro" || item == "pulseiraouro") { equip_slot = EQUIP_SLOT_ACCESSORY_1; return true; }
+    if(item == "pulseira_prata" || item == "pulseiraprata") { equip_slot = EQUIP_SLOT_ACCESSORY_1; return true; }
+    if(item == "pulseira_bronze" || item == "pulseirabronze") { equip_slot = EQUIP_SLOT_ACCESSORY_1; return true; }
+    if(item == "pulseira") { equip_slot = EQUIP_SLOT_ACCESSORY_1; return true; }
+
+    if(item == "anel") { equip_slot = EQUIP_SLOT_ACCESSORY_2; return true; }
+
+    if(item.find("espada") >= 0 || item.find("machado") >= 0 || item.find("pistol") >= 0) {
+        equip_slot = EQUIP_SLOT_WEAPON;
+        atk_bonus = 5;
+        return true;
+    }
+
+    return false;
+}
+
 bool equip_item(player@ p, string item_name) {
     if(@p == null) return false;
 
-    debug_log("🎽 EQUIP: " + p.name + " equipando " + item_name);
+    debug_log("EQUIP: " + p.name + " equipando " + item_name);
 
-    // Verificar se tem o item
     if(!p.inv.exists(item_name)) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não encontrado\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Item nao encontrado"), 0);
         return false;
     }
 
-    // TODO: Verificar tipo do item e slot apropriado
-    // Por enquanto, lógica simplificada baseada em nome
-
-    bool equipped = false;
-
-    // Armas (TODO: Adicionar campo arma na classe player)
-    if(item_name.find("espada") >= 0 || item_name.find("machado") >= 0 || item_name.find("pistol") >= 0) {
-        equipped = true;
-
-        // Aplicar buff de arma (+5 attack por exemplo)
-        buff@ weapon_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "attack", 5, 0, STACK_BEHAVIOR_REPLACE, item_name);
-        apply_buff(p, weapon_buff);
+    string key = normalize_equipment_item_name(item_name);
+    string slot = "";
+    int atk_bonus = 0;
+    int def_bonus = 0;
+    if(!equip_item_flag(p, key, slot, atk_bonus, def_bonus)) {
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Item nao equipavel"), 0);
+        return false;
     }
-    // Armaduras (TODO: Adicionar campo armadura na classe player)
-    else if(item_name.find("colete") >= 0 || item_name.find("armadura") >= 0) {
-        equipped = true;
 
-        // Aplicar buff de armadura (+10 defense)
-        buff@ armor_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "defense", 10, 0, STACK_BEHAVIOR_REPLACE, item_name);
-        apply_buff(p, armor_buff);
-    }
-    // Capacetes (TODO: Adicionar campo helmet na classe player)
-    else if(item_name.find("capacete") >= 0 || item_name.find("helmet") >= 0) {
-        equipped = true;
-
-        // Aplicar buff de capacete (+3 defense)
-        buff@ helmet_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "defense", 3, 0, STACK_BEHAVIOR_REPLACE, item_name);
-        apply_buff(p, helmet_buff);
-    }
-    // Escudos
-    else if(item_name.find("escudo") >= 0 || item_name.find("shield") >= 0) {
-        if(p.escudo > 0) {
-            send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Escudo ja equipado\"}", 0);
+    if(slot != EQUIP_SLOT_WEAPON) {
+        string occupied_item = get_equipped_item_in_slot(p, slot);
+        if(occupied_item != "") {
+            send_reliable_text(p.peer_id, create_equip_result_json(false, "Slot ocupado. Desequipe primeiro"), 0);
             return false;
         }
-        p.escudo = 1;
-        equipped = true;
-
-        // Aplicar buff de escudo (+8 defense)
-        buff@ shield_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "defense", 8, 0, STACK_BEHAVIOR_REPLACE, item_name);
-        apply_buff(p, shield_buff);
+        set_equipped_item_in_slot(p, slot, key);
     }
 
-    if(!equipped) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item não equipável\"}", 0);
-        return false;
-    }
-
-    // Remover do inventário (quantidade -1)
     int current = 0;
     p.inv.get(item_name, current);
-    if(current > 1) {
-        p.inv.set(item_name, current - 1);
-    } else {
-        p.inv.delete(item_name);
+    if(current > 1) p.inv.set(item_name, current - 1);
+    else p.inv.delete(item_name);
+
+    if(atk_bonus > 0) {
+        buff@ weapon_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "attack", atk_bonus, 0, STACK_BEHAVIOR_REPLACE, key);
+        apply_buff(p, weapon_buff);
+    }
+    if(def_bonus > 0) {
+        buff@ armor_buff = buff(generate_buff_id(), BUFF_SOURCE_ITEM, "defense", def_bonus, 0, STACK_BEHAVIOR_REPLACE, key);
+        apply_buff(p, armor_buff);
     }
 
-    // Salvar no banco
     save_player_to_database(p);
-
-    // Notificar sucesso
-    send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
-
-    // Enviar sincronização de equipamentos
+    send_reliable_text(p.peer_id, create_equip_result_json(true), 0);
     send_reliable_text(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
-
-    debug_log("  ✓ Item equipado com sucesso");
-
+    debug_log("EQUIP: sucesso para " + item_name + " em slot " + slot);
     return true;
 }
-
 // Desequipar item de um slot
 bool unequip_item(player@ p, string equip_slot) {
     if(@p == null) return false;
 
-    debug_log("🎽 UNEQUIP: " + p.name + " desequipando " + equip_slot);
+    debug_log("UNEQUIP: " + p.name + " desequipando " + equip_slot);
 
-    string item_name = "";
-    bool unequipped = false;
+    string slot = equip_slot.trim_whitespace().lower();
+    if(slot == "escudo") slot = EQUIP_SLOT_SHIELD;
+    else if(slot == "arma") slot = EQUIP_SLOT_WEAPON;
 
-    // Determinar qual item desequipar
-    if((equip_slot == EQUIP_SLOT_SHIELD || equip_slot == "escudo") && p.escudo > 0) {
-        p.escudo = 0;
-        item_name = "escudo";
-        unequipped = true;
-    }
-    // TODO: Adicionar outros slots quando campos forem adicionados na classe player
-
-    if(!unequipped) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Nenhum item neste slot\"}", 0);
+    string item_name = get_equipped_item_in_slot(p, slot);
+    if(item_name == "") {
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Nenhum item neste slot"), 0);
         return false;
     }
 
-    // Retornar item ao inventário
-    if(item_name != "") {
-        int current = 0;
-        if(p.inv.exists(item_name)) p.inv.get(item_name, current);
-        p.inv.set(item_name, current + 1);
+    if(slot == EQUIP_SLOT_SHIELD) p.escudo = 0;
+    else if(slot == EQUIP_SLOT_HANDS) p.luvas = 0;
+    else if(slot == EQUIP_SLOT_HEAD) {
+        p.capacetepolicia = 0;
+        p.chapeupanama = 0;
+        p.bonemizuno = 0;
+    }
+    else if(slot == EQUIP_SLOT_BODY) {
+        p.colete_aprova_de_balas = 0;
+        p.coletemilitar = 0;
+        p.coletecamuflado = 0;
+        p.coletesalvavida = 0;
+        p.coletemizuno = 0;
+    }
+    else if(slot == EQUIP_SLOT_FEET) {
+        p.coturnomilitar = 0;
+        p.tenisnike = 0;
+        p.tenisadidas = 0;
+    }
+    else if(slot == EQUIP_SLOT_ACCESSORY_1) {
+        p.pulseiraouro = 0;
+        p.pulseiraprata = 0;
+        p.pulseirabronze = 0;
+        p.pulseira = 0;
+    }
+    else if(slot == EQUIP_SLOT_ACCESSORY_2) {
+        p.anel = 0;
     }
 
-    // Salvar no banco
+    remove_item_buffs(p, normalize_equipment_item_name(item_name));
+
+    int current = 0;
+    if(p.inv.exists(item_name)) p.inv.get(item_name, current);
+    p.inv.set(item_name, current + 1);
+
     save_player_to_database(p);
-
-    // Notificar sucesso
-    send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"ok\"}", 0);
-
-    // Enviar sincronização
+    send_reliable_text(p.peer_id, create_equip_result_json(true), 0);
     send_reliable_text(p.peer_id, "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1), 0);
-
-    debug_log("  ✓ Item desequipado");
-
+    debug_log("UNEQUIP: sucesso de " + item_name + " no slot " + slot);
     return true;
 }
-
 // Sincronizar equipamentos e buffs com cliente
 void sync_equipment_and_buffs(player@ p) {
     if(@p == null) return;
@@ -510,7 +627,16 @@ void sync_equipment_and_buffs(player@ p) {
 string msg = "{\"type\":\"equipment_sync\"," + equipment_to_json(p).substr(1);
     send_reliable_text(p.peer_id, msg, 0);
 
-    debug_log("📤 Equipment sync enviado para " + p.name);
+    debug_log("ðŸ“¤ Equipment sync enviado para " + p.name);
+}
+
+string create_equip_result_json(bool success, string reason = "", string message = "") {
+    string json = "{\"type\":\"equip_result\",";
+    json += "\"status\":\"" + (success ? "ok" : "error") + "\"";
+    if(reason != "") json += ",\"reason\":\"" + reason + "\"";
+    if(message != "") json += ",\"message\":\"" + message + "\"";
+    json += "}";
+    return json;
 }
 
 // ============================================================
@@ -522,7 +648,7 @@ void handle_equip_request(player@ p, string item_name) {
     if(@p == null) return;
     item_name = item_name.trim_whitespace();
     if(item_name == "" || item_name.length() > 64) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item invalido\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Item invalido"), 0);
         return;
     }
     equip_item(p, item_name);
@@ -533,7 +659,7 @@ void handle_unequip_request(player@ p, string equip_slot) {
     if(@p == null) return;
     equip_slot = equip_slot.trim_whitespace();
     if(equip_slot == "" || equip_slot.length() > 32) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Slot invalido\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Slot invalido"), 0);
         return;
     }
     unequip_item(p, equip_slot);
@@ -557,7 +683,7 @@ bool equipment_json_has_only_safe_chars(const string&in value) {
     return true;
 }
 
-// Parser de JSON para extrair string de campo (suporta escape básico)
+// Parser de JSON para extrair string de campo (suporta escape bÃ¡sico)
 string json_get_string(string json, string field) {
     string search = "\"" + field + "\":\"";
     int pos = json.find(search);
@@ -596,19 +722,19 @@ string equipment_json_get_type(const string&in json_message) {
 void dispatch_equipment_json(player@ p, string json_message) {
     if(@p == null) return;
     if(json_message.length() == 0 || json_message.length() > 2048) {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Payload invalido\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Payload invalido"), 0);
         return;
     }
 
     string trimmed = json_message.trim_whitespace();
     if(trimmed.length() < 2 || trimmed[0] != '{' || trimmed[trimmed.length() - 1] != '}') {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"JSON invalido\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "JSON invalido"), 0);
         return;
     }
 
     string msg_type = equipment_json_get_type(json_message);
     if(msg_type == "") {
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Tipo ausente\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Tipo ausente"), 0);
         return;
     }
 
@@ -622,7 +748,7 @@ void dispatch_equipment_json(player@ p, string json_message) {
             }
         }
         if(item_name == "") {
-            send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Item invalido\"}", 0);
+            send_reliable_text(p.peer_id, create_equip_result_json(false, "Item invalido"), 0);
             return;
         }
         handle_equip_request(p, item_name);
@@ -636,12 +762,12 @@ void dispatch_equipment_json(player@ p, string json_message) {
     }
     else {
         debug_log("Tipo de mensagem de equipamento desconhecido: " + msg_type);
-        send_reliable_text(p.peer_id, "{\"type\":\"equip_result\",\"status\":\"error\",\"reason\":\"Unknown message type\"}", 0);
+        send_reliable_text(p.peer_id, create_equip_result_json(false, "Tipo de mensagem desconhecido"), 0);
     }
 }
 
 // ============================================================
-// SISTEMA DE EXPIRAÇÃO DE BUFFS (Scheduler)
+// SISTEMA DE EXPIRAÃ‡ÃƒO DE BUFFS (Scheduler)
 // ============================================================
 
 // Timer global para verificar buffs expirados
@@ -672,10 +798,10 @@ void check_expired_buffs() {
 }
 
 // ============================================================
-// FUNÇÕES AUXILIARES
+// FUNÃ‡Ã•ES AUXILIARES
 // ============================================================
 
-// Aplicar buff temporário de consumível
+// Aplicar buff temporÃ¡rio de consumÃ­vel
 bool apply_consumable_buff(player@ p, string stat, float value, uint64 duration_ms) {
     if(@p == null) return false;
 
@@ -729,4 +855,7 @@ void clear_all_buffs(player@ p) {
     // Notificar cliente
     send_reliable_text(p.peer_id, "{\"type\":\"buffs_cleared\"}", 0);
 }
+
+
+
 

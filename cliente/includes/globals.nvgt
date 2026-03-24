@@ -57,9 +57,9 @@ string trim_string(const string &in text) {
 // Substitui um caractere por outro (ex: ";" por "\n")
 string translate_with_char(const string &in text, const string &in char_to_replace) {
 	string result = text;
-	// Substituir o caractere especial por nova linha
-	if(char_to_replace == ";") {
-		result = result.replace(";", "\n");
+	if(char_to_replace != "") {
+		// Substitui o separador informado por quebra de linha.
+		result = result.replace(char_to_replace, "\n");
 	}
 	return result;
 }
@@ -476,7 +476,20 @@ class lancha_class {
 		saindo = 0;
 	}
 	void loop() {
-		// TODO: implementar loop da lancha
+		// Loop enxuto de compatibilidade: evita estado preso em "nalancha=1"
+		// e mantém os comandos básicos com o servidor.
+		if(nalancha != 1) return;
+
+		if(saindo == 1 || key_pressed(KEY_ESCAPE)) {
+			if(is_connected) game_net.send(server_peer_id, "lancha d", 0, true);
+			sair();
+			return;
+		}
+
+		// Comandos básicos de controle da lancha.
+		if(key_pressed(KEY_UP) && is_connected) game_net.send(server_peer_id, "lancha l", 0, true);
+		if(key_pressed(KEY_DOWN) && is_connected) game_net.send(server_peer_id, "lancha d", 0, true);
+		if(key_pressed(KEY_S) && is_connected) game_net.send(server_peer_id, "lancha s", 0, true);
 	}
 };
 lancha_class game_lan;
@@ -657,7 +670,13 @@ void writeprefs() {
 }
 
 void dlgplay(string filename, bool flag = false, int volume = 0) {
-	// TODO: implementar reprodução de diálogo
+	if(filename == "") return;
+	string full_path = get_sound_path(filename);
+	sound s;
+	if(!s.load(full_path)) return;
+	if(volume > 0) s.volume = volume;
+	if(flag) s.play_wait();
+	else s.play();
 }
 
 bool msginvalida(string msg) {

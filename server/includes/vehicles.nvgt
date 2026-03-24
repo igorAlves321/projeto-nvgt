@@ -146,6 +146,7 @@ void vehicles_loop() {
 
     for(uint i = 0; i < players.length(); i++) {
         if(players[i].charname == "") continue;
+        if(!players[i].is_logged_in) continue;
 
         // Resetar velocidade quando não estiver em veículo
         if(players[i].vehicle_type == "") {
@@ -185,6 +186,7 @@ void vehicles_loop() {
         if(vehicle_last_engine_sound.exists(owner)) vehicle_last_engine_sound.get(owner, last_sound);
         if(moved_tiles > 0 && (now_ticks - last_sound) >= VEHICLE_ENGINE_SOUND_INTERVAL_MS) {
             send_reliable_text(players[i].peer_id, "play vehicle_engine.ogg", 0);
+            broadcast_to_map(players[i].map, "play vehicle_engine.ogg " + players[i].x + " " + players[i].y, players[i].peer_id);
             vehicle_last_engine_sound.set(owner, now_ticks);
         }
 
@@ -193,6 +195,7 @@ void vehicles_loop() {
             players[i].MAX_WALK_SPEED = VEHICLE_BASE_WALK_SPEED;
             send_reliable_text(players[i].peer_id, "msg2 Seu veiculo ficou sem combustivel.", 0);
             send_reliable_text(players[i].peer_id, "play vehicle_exit.ogg", 0);
+            broadcast_to_map(players[i].map, "play vehicle_exit.ogg " + players[i].x + " " + players[i].y, players[i].peer_id);
             vehicle_runtime_fuel.delete(key);
             vehicle_last_x.delete(owner);
             vehicle_last_y.delete(owner);
@@ -268,6 +271,7 @@ void cmd_entrar(int player_index, string vehicle_type = "") {
 	send_reliable_text(players[player_index].peer_id, "msg2 VocÃª entrou no " + vehicle_type + "!", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 CombustÃ­vel: " + int(v.fuel) + "%", 0);
 	send_reliable_text(players[player_index].peer_id, "play vehicle_enter.ogg", 0);
+    broadcast_to_map(players[player_index].map, "play vehicle_enter.ogg " + players[player_index].x + " " + players[player_index].y, players[player_index].peer_id);
 	
 	debug_log(players[player_index].charname + " entrou em " + vehicle_type);
 }
@@ -283,21 +287,15 @@ void cmd_sair(int player_index) {
 	}
 	
 	string vtype = players[player_index].vehicle_type;
-	
-	// Criar veÃ­culo temporÃ¡rio para salvar
-	vehicle@ v;
-	if(vtype == "carro") {
-		@v = car(players[player_index].charname, "carro");
-	} else if(vtype == "moto") {
-		@v = moto(players[player_index].charname, "moto");
-	} else if(vtype == "lancha") {
-		@v = lancha(players[player_index].charname, "lancha");
-	} else if(vtype == "helicoptero") {
-		@v = helicopter(players[player_index].charname, "helicoptero");
-	}
-	
-	v.leave_vehicle();
-    vehicle_runtime_fuel.delete(vehicle_key(players[player_index].charname, vtype));
+
+    string owner = players[player_index].charname;
+    string key = vehicle_key(owner, vtype);
+    double current_fuel = vehicle_load_fuel(owner, vtype);
+    if(vehicle_runtime_fuel.exists(key)) vehicle_runtime_fuel.get(key, current_fuel);
+    vehicle_save_fuel(owner, vtype, current_fuel);
+
+    players[player_index].vehicle_type = "";
+    vehicle_runtime_fuel.delete(key);
     vehicle_last_x.delete(players[player_index].charname);
     vehicle_last_y.delete(players[player_index].charname);
     vehicle_last_engine_sound.delete(players[player_index].charname);
@@ -306,24 +304,18 @@ void cmd_sair(int player_index) {
 	
 	send_reliable_text(players[player_index].peer_id, "msg2 VocÃª saiu do " + vtype + "!", 0);
 	send_reliable_text(players[player_index].peer_id, "play vehicle_exit.ogg", 0);
+    broadcast_to_map(players[player_index].map, "play vehicle_exit.ogg " + players[player_index].x + " " + players[player_index].y, players[player_index].peer_id);
 	
 	debug_log(players[player_index].charname + " saiu de " + vtype);
 }
 
 // Comando: Abastecer veÃ­culo
-void cmd_abastecer(int player_index, int quantidade = 100) {
+void cmd_abastecer(int player_index, int quantidade = 1) {
     if(player_index < 0 || player_index >= int(players.length())) return;
     if(!players[player_index].is_logged_in) return;
 
 	if(players[player_index].vehicle_type == "") {
 		send_reliable_text(players[player_index].peer_id, "msg2 VocÃª nÃ£o estÃ¡ em nenhum veÃ­culo!", 0);
-		return;
-	}
-	
-	// Verificar se tem dinheiro suficiente
-	int custo = quantidade * 2; // 2 gold por 1% de combustÃ­vel
-	if(players[player_index].gold < custo) {
-		send_reliable_text(players[player_index].peer_id, "msg2 Dinheiro insuficiente! Custo: " + custo + " gold", 0);
 		return;
 	}
 	
@@ -334,44 +326,38 @@ void cmd_abastecer(int player_index, int quantidade = 100) {
 
 	string vtype = players[player_index].vehicle_type;
 	
-	// Criar veÃ­culo para abastecer
-	vehicle@ v;
-	if(vtype == "carro") {
-		@v = car(players[player_index].charname, "carro");
-	} else if(vtype == "moto") {
-		@v = moto(players[player_index].charname, "moto");
-	} else if(vtype == "lancha") {
-		@v = lancha(players[player_index].charname, "lancha");
-	} else if(vtype == "helicoptero") {
-		@v = helicopter(players[player_index].charname, "helicoptero");
-	}
-	
-	v.take_vehicle();
-	
+    string owner = players[player_index].charname;
+    string key = vehicle_key(owner, vtype);
+    double fuel = vehicle_load_fuel(owner, vtype);
+    if(vehicle_runtime_fuel.exists(key)) vehicle_runtime_fuel.get(key, fuel);
+
 	// Verificar se jÃ¡ estÃ¡ cheio
-	if(v.fuel >= 100.0) {
+	if(fuel >= 100.0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 O tanque jÃ¡ estÃ¡ cheio!", 0);
 		return;
 	}
-	
-	// Calcular quanto pode abastecer
-	double espaco_disponivel = 100.0 - v.fuel;
-	double abastecer = quantidade;
-	if(abastecer > espaco_disponivel) {
-		abastecer = espaco_disponivel;
-		custo = int(abastecer) * 2;
-	}
-	
-	// Abastecer
-	v.add_fuel(abastecer);
-	players[player_index].gold -= custo;
-	v.save_vehicle_config();
-    vehicle_runtime_fuel.set(vehicle_key(players[player_index].charname, vtype), v.fuel);
-	
-	send_reliable_text(players[player_index].peer_id, "msg2 Abastecido " + int(abastecer) + "% por " + custo + " gold", 0);
-	send_reliable_text(players[player_index].peer_id, "msg2 CombustÃ­vel atual: " + int(v.fuel) + "%", 0);
+
+    int usados = 0;
+    while(usados < quantidade && fuel < 100.0) {
+        if(!remove_item_with_sync(players[player_index], "gasolina", 1)) break;
+        fuel += 40.0;
+        if(fuel > 100.0) fuel = 100.0;
+        usados++;
+    }
+
+    if(usados <= 0) {
+        send_reliable_text(players[player_index].peer_id, "msg2 Voce nao tem gasolina no inventario.", 0);
+        return;
+    }
+
+    vehicle_save_fuel(owner, vtype, fuel);
+    vehicle_runtime_fuel.set(key, fuel);
+
+	send_reliable_text(players[player_index].peer_id, "msg2 Abastecido com " + usados + " gasolina.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 CombustÃ­vel atual: " + int(fuel) + "%", 0);
 	send_reliable_text(players[player_index].peer_id, "play refuel.ogg", 0);
+    broadcast_to_map(players[player_index].map, "play refuel.ogg " + players[player_index].x + " " + players[player_index].y, players[player_index].peer_id);
 	
-	debug_log(players[player_index].charname + " abasteceu " + vtype + " com " + int(abastecer) + "%");
+	debug_log(players[player_index].charname + " abasteceu " + vtype + " para " + int(fuel) + "% usando " + usados + " gasolina");
 }
 

@@ -312,15 +312,23 @@ bool use_item(int player_index, string item_name) {
 		return false;
 	}
 	
-	// Verificar se item existe no inventário
-	if (!players[player_index].inv_item_exists(item_name)) {
-		send_reliable_text(players[player_index].peer_id, "msg Você não possui este item!", 0);
+	player@ p = players[player_index];
+	
+	// Verificar se item existe no inventario
+	if (!p.inv_item_exists(item_name)) {
+		send_reliable_text(p.peer_id, "msg Voce nao possui este item!", 0);
 		return false;
 	}
 	
-	// Verificar se item é consumível
+	// Verificar se item e consumivel
 	if (!consumables.exists(item_name)) {
-		send_reliable_text(players[player_index].peer_id, "msg Este item não pode ser usado.", 0);
+		send_reliable_text(p.peer_id, "msg Este item nao pode ser usado.", 0);
+		return false;
+	}
+	
+	// Remover item com sincronizacao anti-dupe antes de aplicar efeito
+	if(!remove_item_with_sync(p, item_name, 1)) {
+		send_reliable_text(p.peer_id, "msg Falha ao consumir item. Tente novamente.", 0);
 		return false;
 	}
 	
@@ -331,21 +339,18 @@ bool use_item(int player_index, string item_name) {
 	// Aplicar efeito
 	apply_consumable_effect(player_index, effect);
 	
-	// Remover item do inventário
-	players[player_index].inv_add_item(item_name, -1);
-	
 	// Tocar som
 	if (effect.sound != "") {
-		server_broadcast("play " + effect.sound + " " + players[player_index].x + " " + players[player_index].y, players[player_index].map);
+		server_broadcast("play " + effect.sound + " " + p.x + " " + p.y, p.map);
 	}
 	
 	// Enviar mensagem
 	if (effect.message != "") {
-		send_reliable_text(players[player_index].peer_id, "msg " + effect.message, 0);
+		send_reliable_text(p.peer_id, "msg " + effect.message, 0);
 	}
 	
 	// Log
-	debug_log("CONSUMABLE: " + players[player_index].charname + " usou " + item_name + " (efeito: " + effect.effect_type + ")");
+	debug_log("CONSUMABLE: " + p.charname + " usou " + item_name + " (efeito: " + effect.effect_type + ")");
 	
 	return true;
 }
@@ -705,4 +710,5 @@ string list_all_consumables() {
 	
 	return result;
 }
+
 

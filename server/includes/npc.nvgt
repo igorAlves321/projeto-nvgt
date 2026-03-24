@@ -29,6 +29,7 @@ class npc {
 	// ATRIBUTOS DE COMBATE
 	// ============================================================================
 	int vida = 100;
+	int vida_inicial = 100; // Vida base para respawn
 	int xp_reward = 50; // XP que dá ao morrer
 	int gold_reward = 10; // Gold que dá ao morrer
 	int danoquerecibira = 50; // Dano que irá receber (por golpe)
@@ -73,6 +74,7 @@ class npc {
 	bool morreu = false;
 	bool morrendo = false;
 	bool nasceu = true;
+	bool pacifista = false; // NPC passivo: não persegue nem ataca jogadores
 	string asesino = ""; // Quem matou o NPC
 	string golpeado = ""; // Quem deu último golpe
 	timer tmorreu; // Timer de morte
@@ -113,6 +115,7 @@ class npc {
 	npc(int nx, int ny, string nmap, string ntype) {
 		x = nx;
 		y = ny;
+		vida_inicial = vida;
 		x_inicial = nx;
 		y_inicial = ny;
 		map = nmap;
@@ -139,6 +142,7 @@ class npc {
 		
 		// Atributos de combate
 		this.vida = nvida;
+		this.vida_inicial = nvida;
 		this.xp_reward = nxp;
 		this.danoquerecibira = ndanoquerecibira;
 		this.danoquedara = ndanoquedara;
@@ -218,6 +222,7 @@ class npc {
 	
 	// Verifica se existe algum jogador no mapa
 	bool exists_player_in_my_map() {
+		if(pacifista) return false;
 		for(uint i = 0; i < players.length(); i++) {
 			if(players[i].map == this.map && 
 			   !players[i].afk && 
@@ -231,6 +236,7 @@ class npc {
 	
 	// Seleciona jogador mais próximo para atacar
 	int select_player_to_attack() {
+		if(pacifista) return -1;
 		int closest_player = -1;
 		double closest_distance = 999999;
 		
@@ -240,6 +246,7 @@ class npc {
 			if(players[i].afk) continue;
 			if(players[i].pacifico == 1) continue;
 			if(players[i].newbie) continue;
+			if(players[i].health <= 0) continue;
 			
 			// Verificar se está em zona segura
 			if(get_safezone_at(players[i].x, players[i].y, players[i].map)) continue;
@@ -259,11 +266,13 @@ class npc {
 	
 	// Muda de jogador alvo se o atual não é mais válido
 	int change_player(int current_index) {
+		if(pacifista) return -1;
 		// Se jogador atual ainda é válido, manter
 		if(current_index > -1 && current_index < players.length()) {
 			if(players[current_index].map == this.map &&
 			   !players[current_index].afk &&
 			   players[current_index].pacifico == 0 &&
+			   players[current_index].health > 0 &&
 			   !get_safezone_at(players[current_index].x, players[current_index].y, players[current_index].map)) {
 				return current_index;
 			}
@@ -278,6 +287,7 @@ class npc {
 	// ============================================================================
 	
 	void move() {
+		if(pacifista) return;
 		// Atualizar alvo periodicamente
 		if(update_player.elapsed >= player_update_interval) {
 			update_player.restart();
@@ -336,6 +346,7 @@ class npc {
 	// ============================================================================
 	
 	void attack() {
+		if(pacifista) return;
 		// Verificar se tem alvo
 		if(p_index < 0 || p_index >= players.length()) return;
 		
@@ -498,6 +509,7 @@ class npc_data {
 	int tiempoaparicion = 0;
 	bool enablerespawn = true;
 	bool enablebombs = false;
+	bool pacifista = false;
 	int left_range = 0;
 	int right_range = 0;
 	
@@ -514,7 +526,7 @@ class npc_data {
 	         string nsonidomuerte, string nnombrenpc, string nmsgmuerte,
 	         int ntiempoaparicion, bool nenablerespawn, bool nenablebombs,
 	         string nmap, string npasosnpc, int nleft_range, int nright_range,
-	         string nimpactosbala, string ndegradation) {
+	         string nimpactosbala, string ndegradation, bool npacifista = false) {
 		x = nx;
 		y = ny;
 		vida = nvida;
@@ -535,6 +547,7 @@ class npc_data {
 		tiempoaparicion = ntiempoaparicion;
 		enablerespawn = nenablerespawn;
 		enablebombs = nenablebombs;
+		pacifista = npacifista;
 		map = nmap;
 		pasosnpc = npasosnpc;
 		left_range = nleft_range;
@@ -571,7 +584,7 @@ void npc_global_loop() {
 				npc_data nd(
 					npcs_global[i].x_inicial,
 					npcs_global[i].y_inicial,
-					npcs_global[i].vida,
+					npcs_global[i].vida_inicial,
 					npcs_global[i].xp_reward,
 					npcs_global[i].distanciaataques,
 					npcs_global[i].danoquerecibira,
@@ -594,7 +607,8 @@ void npc_global_loop() {
 					npcs_global[i].left_range,
 					npcs_global[i].right_range,
 					npcs_global[i].impactosbala,
-					npcs_global[i].degradation
+					npcs_global[i].degradation,
+					npcs_global[i].pacifista
 				);
 				npcs_data_global.insert_last(nd);
 			}
@@ -645,6 +659,8 @@ void npc_global_loop() {
 				npcs_data_global[i].impactosbala,
 				npcs_data_global[i].degradation
 			);
+			n.vida_inicial = npcs_data_global[i].vida;
+			n.pacifista = npcs_data_global[i].pacifista;
 			npcs_global.insert_last(n);
 			
 			// Remover data

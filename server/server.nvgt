@@ -1345,6 +1345,72 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
 
+        // Crafting: craft/forjar <item>
+        if((cmd == "craft" || cmd == "/craft" || cmd == "forjar" || cmd == "/forjar") && parts.length() >= 2) {
+            string item_name = command.substr(command.find(parts[1])).trim_whitespace();
+            if(item_name == "") {
+                send_reliable_text(peer_id, "say Uso: /craft <item>", 0);
+                return;
+            }
+            crafting_system.craft(player_index, item_name);
+            return;
+        }
+
+        // Crafting: recipes [item]
+        if(cmd == "recipes" || cmd == "/recipes") {
+            string output = "";
+            if(parts.length() >= 2) {
+                output = crafting_system.show_recipe(parts[1].trim_whitespace());
+            } else {
+                output = crafting_system.list_all_recipes();
+            }
+
+            string[] lines = output.split("\n");
+            for(uint i = 0; i < lines.length(); i++) {
+                if(lines[i].trim_whitespace() != "") {
+                    send_reliable_text(peer_id, "say " + lines[i], 0);
+                }
+            }
+            return;
+        }
+
+        // Crafting: cancraft <item>
+        if((cmd == "cancraft" || cmd == "/cancraft") && parts.length() >= 2) {
+            string item_name = parts[1].trim_whitespace();
+            if(item_name == "") {
+                send_reliable_text(peer_id, "say Uso: /cancraft <item>", 0);
+                return;
+            }
+            bool can = crafting_system.can_craft(player_index, item_name);
+            if(can) send_reliable_text(peer_id, "say Voce pode criar " + item_name + ".", 0);
+            else send_reliable_text(peer_id, "say Voce nao pode criar " + item_name + " agora.", 0);
+            return;
+        }
+
+        // Veiculos: entrar/sair/abastecer
+        if(cmd == "entrar" || cmd == "/entrar") {
+            string vtype = parts.length() >= 2 ? parts[1].trim_whitespace() : "";
+            cmd_entrar(player_index, vtype);
+            return;
+        }
+        if(cmd == "sair" || cmd == "/sair") {
+            if(player.vehicle_type != "") {
+                cmd_sair(player_index);
+                return;
+            }
+        }
+        if(cmd == "abastecer" || cmd == "/abastecer") {
+            int qtd = 1;
+            if(parts.length() >= 2) {
+                if(!try_parse_int_token(parts[1], qtd)) {
+                    send_reliable_text(peer_id, "say Quantidade invalida.", 0);
+                    return;
+                }
+            }
+            cmd_abastecer(player_index, qtd);
+            return;
+        }
+
         // Conversão de moedas (compatibilidade com menu cliente)
         // Regras iguais ao BGT: quantidade 1 é muito baixa, validar saldo do inventário
         if(cmd == "reaisparaeuro" && parts.length() >= 2) {

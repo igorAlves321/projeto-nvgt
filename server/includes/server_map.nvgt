@@ -764,8 +764,7 @@ class map {
 				     (parse_int(parsed[20]) != 0), this.name, parsed[21],
 				     parse_int(parsed[22]), parse_int(parsed[23]),
 				     parsed[24], parse_int(parsed[25]));
-				// Marcar como passivo (não ataca) - TODO: adicionar campo pacifista à classe npc
-				// b.pacifista = 1;
+				b.pacifista = true;
 				npcs.insert_last(b);
 				continue;
 			}
@@ -910,7 +909,7 @@ class map {
 	// ============================================================================
 	void update_moving_sound(int id, int x, int y) {
 		for (uint i = 0; i < msounds.length(); i++) {
-			if (msounds[i].id == id) {
+			if (msounds[i].id == "" + id) {
 				msounds[i].update_position(x, y);
 			}
 			for (uint j = 0; j < mapplayers.length(); j++) {
@@ -927,8 +926,8 @@ class map {
 	
 	void destroy_moving_sound(int id) {
 		for (uint i = 0; i < msounds.length(); i++) {
-			if (msounds[i].id == id) {
-				send_reliable_text(0, "destroymsound " + id, 0);
+			if (msounds[i].id == "" + id) {
+				send_packet(0, "destroymsound " + id, true);
 				@msounds[i] = null;
 				msounds.remove_at(i);
 			}
@@ -1065,8 +1064,8 @@ class map {
 		for (uint i = 0; i < arbols.length(); i++) {
 			// Árvore foi destruída (vida <= 0)
 			if (arbols[i].vida <= 0) {
-				// TODO: Atualizar arquivo do mapa com replace_line (timer não pode ser concatenado como string)
-				// replace_line(...);
+				replace_line("arbol:" + arbols[i].x + ":" + arbols[i].miny + ":" + arbols[i].maxy + ":",
+				            "arbol:" + arbols[i].x + ":-1:-1:");
 				update2(this.name);
 
 				// Som de árvore caindo
@@ -1119,15 +1118,8 @@ class map {
 					       arbols_data[i].items, arbols_data[i].name, this.name);
 					
 					// Atualizar arquivo do mapa (restaurar coordenadas)
-					// ✅ Serializar timer usando .elapsed (em milissegundos)
-					int64 trespawn_elapsed = arbols_data[i].respawn.elapsed / 1000; // Converter de microssegundos para ms
-					replace_line("arbol:" + arbols_data[i].x + ":-1:-1:" + arbols_data[i].vida + ":" +
-					            trespawn_elapsed + ":" + arbols_data[i].enableitems + ":" +
-					            join(arbols_data[i].items, ".") + ":" + arbols_data[i].name,
-					            "arbol:" + arbols_data[i].x + ":" + arbols_data[i].miny + ":" +
-					            arbols_data[i].maxy + ":" + arbols_data[i].vida + ":" +
-					            trespawn_elapsed + ":" + arbols_data[i].enableitems + ":" +
-					            join(arbols_data[i].items, ".") + ":" + arbols_data[i].name);
+					replace_line("arbol:" + arbols_data[i].x + ":-1:-1:",
+					            "arbol:" + arbols_data[i].x + ":" + arbols_data[i].miny + ":" + arbols_data[i].maxy + ":");
 					update2(this.name);
 					
 					@arbols_data[i] = null;
@@ -1367,10 +1359,9 @@ class map {
 			if (bullets[b].x == arbols[bu].x) {
 				if (bullets[b].y == arbols[bu].miny) {
 					arbols[bu].vida -= dano;
-					// Som de impacto na árvore
-					// TODO: Corrigir acesso a weapons - verificar se weapons é array de objetos weapon
-					//send_packet(5, "play_wall " + weapons[bullets[b].weapon - 1].sounds_impact[random(0, weapons[bullets[b].weapon - 1].sounds_impact.length() - 1)] + ".ogg",
-					//           bullets[b].x, bullets[b].y);
+					// Som de impacto na árvore (resolvido via helper central de armas)
+					send_packet(5, "play_wall " + get_weapon_wall_impact_sound(bullets[b].weapon) + ".ogg",
+					           bullets[b].x, bullets[b].y);
 					bullets.remove_at(b);
 					return;
 				}
@@ -1397,9 +1388,8 @@ class map {
 			if (bullets[b].x == walls[bu].x) {
 				if (bullets[b].y == walls[bu].miny) {
 					walls[bu].vida -= dano;
-					// TODO: Corrigir acesso a weapons
-					//send_packet(5, "play_wall " + weapons[bullets[b].weapon - 1].sounds_impact[random(0, weapons[bullets[b].weapon - 1].sounds_impact.length() - 1)] + ".ogg",
-					//           bullets[b].x, bullets[b].y);
+					send_packet(5, "play_wall " + get_weapon_wall_impact_sound(bullets[b].weapon) + ".ogg",
+					           bullets[b].x, bullets[b].y);
 					bullets.remove_at(b);
 					return;
 				}
@@ -1417,9 +1407,8 @@ class map {
 					           bullets[b].x, bullets[b].y);
 				}
 				else {
-					// TODO: Corrigir acesso a weapons
-					//send_packet(5, "play_body " + weapons[bullets[b].weapon - 1].sounds_impact_on_corpse[random(0, weapons[bullets[b].weapon - 1].sounds_impact_on_corpse.length() - 1)] + ".ogg",
-					//           bullets[b].x, bullets[b].y);
+					send_packet(5, "play_body " + get_weapon_body_impact_sound(bullets[b].weapon) + ".ogg",
+					           bullets[b].x, bullets[b].y);
 				}
 				
 				if (bu > npcs.length()) return;
@@ -1514,9 +1503,8 @@ class map {
 					}
 					
 					// Som de impacto no corpo
-					// TODO: Corrigir acesso a weapons
-					//send_packet(5, "play_body " + weapons[bullets[b].weapon - 1].sounds_impact_on_corpse[random(0, weapons[bullets[b].weapon - 1].sounds_impact_on_corpse.length() - 1)] + ".ogg",
-					//           bullets[b].x, bullets[b].y);
+					send_packet(5, "play_body " + get_weapon_body_impact_sound(bullets[b].weapon) + ".ogg",
+					           bullets[b].x, bullets[b].y);
 					
 					bullets.remove_at(b);
 					return;
@@ -1528,9 +1516,8 @@ class map {
 		// COLISÃO COM PAREDES DO MAPA
 		// ========================================================================
 		if (is_wall(bullets[b].x, bullets[b].y)) {
-			// TODO: Corrigir acesso a weapons
-			//send_packet(5, "play_wall " + weapons[bullets[b].weapon - 1].sounds_impact[random(0, weapons[bullets[b].weapon - 1].sounds_impact.length() - 1)] + ".ogg",
-			//           bullets[b].x, bullets[b].y, 20, true);
+			send_packet(5, "play_wall " + get_weapon_wall_impact_sound(bullets[b].weapon) + ".ogg",
+			           bullets[b].x, bullets[b].y);
 			bullets.remove_at(b);
 			return;
 		}
@@ -1658,6 +1645,36 @@ class map {
 			// Morte do NPC
 			if (npcs[i].vida <= 0) {
 				npcs[i].die();
+				npc_data nd(
+					npcs[i].x_inicial,
+					npcs[i].y_inicial,
+					npcs[i].vida_inicial,
+					npcs[i].xp_reward,
+					npcs[i].distanciaataques,
+					npcs[i].danoquerecibira,
+					npcs[i].danoquedara,
+					npcs[i].danodelespejo,
+					npcs[i].tiempoparaatacar,
+					npcs[i].tiempoparacaminar,
+					npcs[i].tiempodelossonidos,
+					npcs[i].itemsadar,
+					npcs[i].sonidoataque,
+					join(npcs[i].sonidosnervioso, ","),
+					npcs[i].sonidomuerte,
+					npcs[i].nombrenpc,
+					npcs[i].msgmuerte,
+					npcs[i].tiempoaparicion,
+					npcs[i].enablerespawn,
+					npcs[i].enablebombs,
+					this.name,
+					npcs[i].pasosnpc,
+					npcs[i].left_range,
+					npcs[i].right_range,
+					npcs[i].impactosbala,
+					npcs[i].degradation,
+					npcs[i].pacifista
+				);
+				npcs_data.insert_last(nd);
 				@npcs[i] = null;
 				npcs.remove_at(i);
 				break;
@@ -1666,8 +1683,10 @@ class map {
 			// Sons nervosos periódicos
 			if (npcs[i].ttiempodelossonidos.elapsed >= npcs[i].tiempodelossonidos) {
 				npcs[i].ttiempodelossonidos.restart();
-				send_packet(5, "play_npc " + npcs[i].sonidosnervioso[random(0, npcs[i].sonidosnervioso.length() - 1)] + ".ogg", 
-				           npcs[i].x, npcs[i].y);
+				if(npcs[i].sonidosnervioso.length() > 0) {
+					send_packet(5, "play_npc " + npcs[i].sonidosnervioso[random(0, npcs[i].sonidosnervioso.length() - 1)] + ".ogg",
+					           npcs[i].x, npcs[i].y);
+				}
 			}
 			
 			// Verificar se jogador alvo ainda existe no mapa
@@ -1685,7 +1704,10 @@ class map {
 			if (npcs[i].update_player.elapsed >= 50) {
 				npcs[i].update_player.restart();
 				if (mapplayers.length() > 1) {
-					if (npcs[i].p_index > -1 && 
+					if (npcs[i].p_index >= int(players.length())) {
+						npcs[i].p_index = -1;
+					}
+					else if (npcs[i].p_index > -1 && 
 					    (players[npcs[i].p_index].pacifico == 1 || players[npcs[i].p_index].afk)) {
 						npcs[i].p_index = npcs[i].change_player(npcs[i].p_index);
 					}
@@ -1707,6 +1729,10 @@ class map {
 				// - Está dentro da distância de ataque
 				// - Jogador não está AFK, watching ou pacífico
 				if (npcs[i].p_index > -1) {
+					if (npcs[i].p_index >= int(players.length())) {
+						npcs[i].p_index = -1;
+						continue;
+					}
 					int distance = get_distance(npcs[i].x, players[npcs[i].p_index].x, 
 					                           npcs[i].y, players[npcs[i].p_index].y);
 					
@@ -1748,6 +1774,7 @@ class map {
 					     npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc,
 					     npcs_data[i].left_range, npcs_data[i].right_range,
 					     npcs_data[i].impactosbala, npcs_data[i].degradation);
+					n.pacifista = npcs_data[i].pacifista;
 
 					@npcs_data[i] = null;
 					npcs_data.remove_at(i);
@@ -1769,6 +1796,7 @@ class map {
 					     npcs_data[i].enablebombs, this.name, npcs_data[i].pasosnpc,
 					     npcs_data[i].left_range, npcs_data[i].right_range,
 					     npcs_data[i].impactosbala, npcs_data[i].degradation);
+					n.pacifista = npcs_data[i].pacifista;
 
 					@npcs_data[i] = null;
 					npcs_data.remove_at(i);

@@ -133,7 +133,8 @@ class voice_message_recorder {
 		// Enviar via unreliable (canal 5) para baixa latência
 		if(@con != null && is_connected) {
 			string encrypted = encrypt_packet(packet);
-			con.send(peer_id, encrypted, VOICE_CHANNEL, false); // unreliable=false
+			uint64 target_peer = net_peer_id > 0 ? net_peer_id : uint64(peer_id);
+			con.send(target_peer, encrypted, VOICE_CHANNEL, false); // false = unreliable
 
 			debug_log("📤 Enviado voice_msg: " + un + " em (" + pos_x + "," + pos_y + ")");
 		}
@@ -168,19 +169,29 @@ class voice_message_player {
 
 	// Processar mensagem de voz recebida
 	void handle_voice_message(string message) {
-		// Parse: VOICE_PLAY|sender_id|x|y|z|audio_data
-		string[] parts = message.split("|");
+		// Aceita os dois formatos:
+		// 1) VOICE_PLAY|sender_id|x|y|z|audio_data
+		// 2) sender_id|x|y|z|audio_data
+		string payload = message;
+		if(payload.find("VOICE_PLAY|") == 0) {
+			payload = payload.substr(11);
+		}
 
-		if(parts.length() < 6) {
+		// Parse: sender_id|x|y|z|audio_data
+		string[] parts = payload.split("|");
+		if(parts.length() < 5) {
 			debug_log("⚠️ Voice message inválida: " + parts.length() + " partes");
 			return;
 		}
 
-		string sender_id = parts[1];
-		int sender_x = parse_int(parts[2]);
-		int sender_y = parse_int(parts[3]);
-		int sender_z = parse_int(parts[4]);
-		string audio_data = parts[5];
+		string sender_id = parts[0];
+		int sender_x = parse_int(parts[1]);
+		int sender_y = parse_int(parts[2]);
+		int sender_z = parse_int(parts[3]);
+		string audio_data = parts[4];
+		for(uint i = 5; i < parts.length(); i++) {
+			audio_data += "|" + parts[i];
+		}
 
 		debug_log("📥 Recebido voice de " + sender_id + " em (" + sender_x + "," + sender_y + "," + sender_z + ")");
 
@@ -337,8 +348,7 @@ void update_voice_chat() {
 void handle_voice_packet(string message) {
 	// Mensagens começam com "VOICE_PLAY|"
 	if(message.find("VOICE_PLAY|") == 0) {
-		string data = message.substr(11); // Remove "VOICE_PLAY|"
-		voice_player.handle_voice_message(data);
+		voice_player.handle_voice_message(message);
 	}
 }
 

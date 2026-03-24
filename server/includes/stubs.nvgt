@@ -135,7 +135,42 @@ void save_transfer(string origin, string destination, string itemname, string in
 // ==================== FUNÃ‡Ã•ES DE NPC (Ãšnicas aqui) ====================
 void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
 void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
-void move(int npc_index, int direction) {}
+void move(int npc_index, int direction) {
+    // Wrapper legado BGT -> NVGT:
+    // resolve um indice "flat" de NPC para a estrutura atual por mapa.
+    if(npc_index < 0) return;
+
+    int flat_index = 0;
+    for(uint m = 0; m < server_maps.length(); m++) {
+        int npc_count = int(server_maps[m].npcs.length());
+        if(npc_index < flat_index + npc_count) {
+            int local_index = npc_index - flat_index;
+            if(local_index < 0 || local_index >= npc_count) return;
+
+            npc@ n = server_maps[m].npcs[local_index];
+            if(n is null) return;
+
+            int nx = n.x;
+            int ny = n.y;
+
+            // Convencao de direcao herdada:
+            // 0=Forward, 1=Back, 2=Left, 3=Right.
+            if(direction == 0) ny--;
+            else if(direction == 1) ny++;
+            else if(direction == 2) nx--;
+            else if(direction == 3) nx++;
+            else return;
+
+            if(!is_walkable(nx, ny, n.map)) return;
+
+            n.x = nx;
+            n.y = ny;
+            server_broadcast("npc_move " + n.id + " " + n.x + " " + n.y, n.map);
+            return;
+        }
+        flat_index += npc_count;
+    }
+}
 bool exists_player_in_my_map(int npc_index) {
     // Compatibilidade BGT->NVGT:
     // em NVGT os NPCs ficam dentro de cada mapa (server_maps[i].npcs),
@@ -641,7 +676,14 @@ bool cmd_server_info(player@ player, string[] args) {
 }
 
 // FunÃ§Ã£o de helper para propriedade status
-void player_add_status_property() {}
+bool player_add_status_property_warned = false;
+void player_add_status_property() {
+    // No-op de compatibilidade: status ja esta integrado na classe player.
+    if(!player_add_status_property_warned) {
+        debug_log("player_add_status_property(): no-op de compatibilidade.");
+        player_add_status_property_warned = true;
+    }
+}
 
 // FunÃ§Ã£o de spawn de fogo do jogador (versÃ£o alternativa)
 void spawn_playerfire(int x, int y, string map_name, string owner = "") {

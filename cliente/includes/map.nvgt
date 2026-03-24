@@ -17,6 +17,25 @@ sound audio_stream;
 sound audio_stream2;
 bool stream_loaded = false;
 bool stream2_loaded = false;
+int active_ss2_zone_index = -1;
+
+class map_stream_zone {
+	int min_x = 0;
+	int max_x = 0;
+	int min_y = 0;
+	int max_y = 0;
+	string sound_file = "";
+	int volume = 0;
+}
+map_stream_zone@[] map_stream_zones;
+
+class disabled_game_zone {
+	int min_x = 0;
+	int max_x = 0;
+	int min_y = 0;
+	int max_y = 0;
+}
+disabled_game_zone@[] disabled_game_zones;
 
 // Variáveis de coordenadas e configurações
 class coordinate_limits {
@@ -72,6 +91,13 @@ void mapreset(bool complete = true) {
 		}
 		comurl = false;
 	}
+	if(stream2_loaded) {
+		audio_stream2.stop();
+		stream2_loaded = false;
+	}
+	active_ss2_zone_index = -1;
+	map_stream_zones.resize(0);
+	disabled_game_zones.resize(0);
 	
 	fail.delete_all();
 	
@@ -292,20 +318,17 @@ void init_data(string data_line, bool complete = true) {
 		spawn_dialog(message, x, y);
 	}
 	// Handler para Sound Streams (ss2) - música de fundo
-	else if(parsed[0] == "ss2" && parsed.length() >= 3) {
+	else if(parsed[0] == "ss2" && parsed.length() >= 6) {
 		// Formato: ss2:min_x:max_x:min_y:max_y:arquivo.ogg:volume
-		// Por enquanto, ignorar a zona e apenas tocar a música
-		string sound_file = parsed[5];
-		sound_file = sound_file.replace(".wav", ".ogg");
-		int volume = (parsed.length() >= 7) ? string_to_number(parsed[6]) : 0;
-		// TODO: Implementar suporte a múltiplos streams com zonas
-		// Por enquanto: apenas carregar a primeira ss2 encontrada
-		if(!stream_loaded) {
-			if(audio_stream.load(sound_file)) {
-				audio_stream.volume = volume;
-				audio_stream.play_looped();
-				stream_loaded = true;
-			}
+		if(parsed.length() >= 6) {
+			map_stream_zone@ sz = map_stream_zone();
+			sz.min_x = string_to_number(parsed[1]);
+			sz.max_x = string_to_number(parsed[2]);
+			sz.min_y = string_to_number(parsed[3]);
+			sz.max_y = string_to_number(parsed[4]);
+			sz.sound_file = parsed[5].replace(".wav", ".ogg");
+			sz.volume = (parsed.length() >= 7) ? string_to_number(parsed[6]) : 0;
+			map_stream_zones.insert_last(sz);
 		}
 	}
 	// TRAVEL POINT (tp): Teleportes entre mapas
@@ -463,13 +486,14 @@ void init_data(string data_line, bool complete = true) {
 		debug_log("⏱️ Portal CPM criado com tempo: " + travel_time + "ms");
 	}
 	// DISABLE_GAME: Desabilitar funcionalidades do jogo
-	else if(parsed[0] == "disable_game" && parsed.length() >= 4) {
-		int x1 = string_to_number(parsed[1]);
-		int y1 = string_to_number(parsed[2]);
-		int x2 = string_to_number(parsed[3]);
-		// Zona onde funcionalidades são desabilitadas
-		// TODO: Implementar sistema de zones desabilitadas
-		debug_log("⚠️ Disable_game zone criado");
+	else if(parsed[0] == "disable_game" && parsed.length() >= 5) {
+		disabled_game_zone@ dz = disabled_game_zone();
+		dz.min_x = string_to_number(parsed[1]);
+		dz.max_x = string_to_number(parsed[2]);
+		dz.min_y = string_to_number(parsed[3]);
+		dz.max_y = string_to_number(parsed[4]);
+		disabled_game_zones.insert_last(dz);
+		debug_log("⚠️ Disable_game zone criada: (" + dz.min_x + "," + dz.max_x + ") x (" + dz.min_y + "," + dz.max_y + ")");
 	}
 	// CONGELAR: Zona onde movimento é congelado
 	else if(parsed[0] == "congelar" && parsed.length() >= 4) {
@@ -487,7 +511,12 @@ void init_data(string data_line, bool complete = true) {
 	// DARMAS: Desabilitar armas específicas
 	else if(parsed[0] == "darmas" && parsed.length() >= 2) {
 		string weapon = parsed[1];
-		// TODO: Adicionar arma à lista de bloqueadas
+		if(weapon == "armas") {
+			darmas = 1;
+		}
+		else if(weapon != "") {
+			fail.set(weapon, weapon);
+		}
 		debug_log("🔒 Arma bloqueada: " + weapon);
 	}
 	// NPC: Inimigos/NPCs
@@ -593,13 +622,17 @@ void init_data(string data_line, bool complete = true) {
 		// Por enquanto apenas logar
 		debug_log("🔊 Sound spawn em (" + x + "," + y + "): " + arquivo);
 	}
+	else if(parsed[0] == "pnpc" && parsed.length() >= 4) {
+		int x = string_to_number(parsed[1]);
+		int y = string_to_number(parsed[2]);
+		string nome = parsed[3];
+		int npc_id = (parsed.length() > 4) ? string_to_number(parsed[4]) : (900000 + random(1, 99999));
+		spawn_npc(x, y, 100, nome, npc_id);
+		debug_log("👤 PNPC criado: " + nome + " em (" + x + "," + y + ")");
+	}
 	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb"
-	        || parsed[0] == "pm2" || parsed[0] == "w2"
-	        || parsed[0] == "pnpc") {
-		// Ignorar estes elementos por enquanto (TODO: implementar pnpc)
-		if(parsed[0] == "pnpc") {
-			debug_log("⚠️ PNPC encontrado (não implementado ainda)");
-		}
+	        || parsed[0] == "pm2" || parsed[0] == "w2") {
+		// Ignorar elementos legados não utilizados no cliente NVGT atual.
 	}
 	// STORE: Lojas no mapa (processamento no servidor, cliente só armazena posição)
 	else if(parsed[0] == "store" && parsed.length() >= 6) {
@@ -957,4 +990,65 @@ npc_client_class@ get_nearest_npc(int max_distance = 10) {
 	}
 	
 	return @nearest;
+}
+
+bool is_in_disable_game_zone(int x, int y) {
+	for(uint i = 0; i < disabled_game_zones.length(); i++) {
+		if(disabled_game_zones[i] is null) continue;
+		if(x < disabled_game_zones[i].min_x) continue;
+		if(x > disabled_game_zones[i].max_x) continue;
+		if(y < disabled_game_zones[i].min_y) continue;
+		if(y > disabled_game_zones[i].max_y) continue;
+		return true;
+	}
+	return false;
+}
+
+void update_ss2_stream_loop() {
+	if(map_stream_zones.length() == 0) {
+		if(stream2_loaded) {
+			audio_stream2.stop();
+			stream2_loaded = false;
+		}
+		active_ss2_zone_index = -1;
+		return;
+	}
+
+	int target_zone = -1;
+	for(uint i = 0; i < map_stream_zones.length(); i++) {
+		if(map_stream_zones[i] is null) continue;
+		if(me.x < map_stream_zones[i].min_x || me.x > map_stream_zones[i].max_x) continue;
+		if(me.y < map_stream_zones[i].min_y || me.y > map_stream_zones[i].max_y) continue;
+		target_zone = int(i);
+		break;
+	}
+
+	if(target_zone == -1) {
+		if(stream2_loaded) {
+			audio_stream2.stop();
+			stream2_loaded = false;
+		}
+		active_ss2_zone_index = -1;
+		return;
+	}
+
+	if(target_zone == active_ss2_zone_index && stream2_loaded) return;
+
+	if(stream2_loaded) {
+		audio_stream2.stop();
+		stream2_loaded = false;
+	}
+
+	map_stream_zone@ z = map_stream_zones[target_zone];
+	if(z is null || z.sound_file == "") {
+		active_ss2_zone_index = -1;
+		return;
+	}
+
+	if(audio_stream2.load(z.sound_file)) {
+		audio_stream2.volume = z.volume;
+		audio_stream2.play_looped();
+		stream2_loaded = true;
+		active_ss2_zone_index = target_zone;
+	}
 }

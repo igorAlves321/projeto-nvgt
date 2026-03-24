@@ -93,11 +93,14 @@ string create_inv_update_json(int slot, string item_name, int quantity) {
 }
 
 // Criar mensagem de resultado
-string create_inv_result_json(bool success, string reason = "") {
+string create_inv_result_json(bool success, string reason = "", string message = "") {
     string json = "{\"type\":\"inv_result\",";
     json += "\"status\":\"" + (success ? "ok" : "error") + "\"";
     if(reason != "") {
         json += ",\"reason\":\"" + reason + "\"";
+    }
+    if(message != "") {
+        json += ",\"message\":\"" + message + "\"";
     }
     json += "}";
     return json;
@@ -196,27 +199,29 @@ void handle_inv_use_json(player@ p, int slot) {
         return;
     }
 
-    // TODO: Aplicar efeito do item (cura, buff, etc.)
-    // Por enquanto, apenas remove 1 unidade
-    quantity--;
-
-    if(quantity > 0) {
-        p.inv.set(item_name, quantity);
-    } else {
-        p.inv.delete(item_name);
+    // Aplicar uso real do item via sistema central de consumiveis.
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) {
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Jogador invalido"), 0);
+        return;
     }
 
-    // AtualizaÃ§Ã£o incremental
-    string update_msg = create_inv_update_json(slot, quantity > 0 ? item_name : "", quantity);
-    send_reliable_text(p.peer_id, update_msg, 0);
+    bool used = use_item(player_index, item_name);
+    if(!used) {
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Nao foi possivel usar este item"), 0);
+        return;
+    }
 
-    // Resultado de sucesso
+    int updated_quantity = 0;
+    if(p.inv.exists(item_name)) {
+        p.inv.get(item_name, updated_quantity);
+    }
+
+    // Enviar inventario completo para evitar divergencia de slot apos consumo.
+    send_reliable_text(p.peer_id, inventory_to_json(p), 0);
     send_reliable_text(p.peer_id, create_inv_result_json(true), 0);
 
-    // Salvar no banco
-    save_player_to_database(p);
-
-    debug_log("  âœ“ Item usado: " + item_name + " (restam " + quantity + ")");
+    debug_log("INV_USE_JSON: item usado via consumables: " + item_name + " (restam " + updated_quantity + ")");
 }
 
 // Handler: Mover item entre slots
@@ -409,7 +414,7 @@ void dispatch_inventory_json(player@ p, string json_message) {
     }
     else {
         debug_log("Tipo de mensagem JSON desconhecido: " + msg_type);
-        send_reliable_text(p.peer_id, create_inv_result_json(false, "Unknown message type"), 0);
+        send_reliable_text(p.peer_id, create_inv_result_json(false, "Tipo de mensagem desconhecido"), 0);
     }
 }
 
