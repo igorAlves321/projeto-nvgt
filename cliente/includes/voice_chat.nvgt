@@ -18,6 +18,21 @@ const int MAX_RECORD_TIME = 5000;         // Tempo máximo de gravação (5 seg)
 const float VOICE_RANGE = 50.0;           // Alcance de voz em metros
 const string VOICE_TEMP_DIR = "temp/";    // Diretório para arquivos temporários
 
+string sanitize_voice_filename(const string&in raw) {
+	string name = raw.trim_whitespace();
+	if(name == "") return "unknown";
+	name = name.replace("\\", "_");
+	name = name.replace("/", "_");
+	name = name.replace(":", "_");
+	name = name.replace("*", "_");
+	name = name.replace("?", "_");
+	name = name.replace("\"", "_");
+	name = name.replace("<", "_");
+	name = name.replace(">", "_");
+	name = name.replace("|", "_");
+	return name;
+}
+
 // ============================================================
 // CLASSE: voice_message_recorder
 // ============================================================
@@ -205,26 +220,25 @@ class voice_message_player {
 		// Parar voz anterior deste sender (se existir)
 		stop_voice(sender_id);
 
-		// PLACEHOLDER: Usar som de notificação até API estar disponível
-		// Quando implementado, salvará audio_data em arquivo temporário e carregará
-
-		string temp_voice_file = VOICE_TEMP_DIR + "voice_" + sender_id + ".ogg";
-
-		// PLACEHOLDER: Salvar audio_data em arquivo (quando não for placeholder)
-		// if(!audio_data.find("[VOICE_PLACEHOLDER") >= 0) {
-		//     file f;
-		//     if(f.open(temp_voice_file, "wb")) {
-		//         f.write(audio_data);
-		//         f.close();
-		//     }
-		// }
+		string safe_sender = sanitize_voice_filename(sender_id);
+		string temp_voice_file = VOICE_TEMP_DIR + "voice_" + safe_sender + ".ogg";
+		bool has_real_audio = (audio_data.find("[VOICE_PLACEHOLDER") != 0 && audio_data.trim_whitespace() != "");
+		bool loaded = false;
 
 		// Criar som 3D com HRTF
 		sound@ voice = sound();
-
-		// PLACEHOLDER: Usar som de notificação
-		// Quando implementado: voice.load(temp_voice_file);
-		if(voice.load(get_sound_path("message.ogg"))) { // Som de notificação de mensagem
+		if(has_real_audio) {
+			file f;
+			if(f.open(temp_voice_file, "wb")) {
+				f.write(audio_data);
+				f.close();
+				loaded = voice.load(temp_voice_file);
+			}
+		}
+		if(!loaded) {
+			loaded = voice.load(get_sound_path("message.ogg"));
+		}
+		if(loaded) {
 
 			// Calcular posição relativa ao jogador (para HRTF)
 			float relative_x = sender_x - game_me.x;
