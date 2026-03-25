@@ -49,29 +49,6 @@ class voice_message_recorder {
 	int max_record_time = MAX_RECORD_TIME;
 	string temp_file = VOICE_TEMP_DIR + VOICE_TEST_FILE;
 	int selected_input_device = -1;
-	microphone@ mic = null;
-	audio_wav_encoder@ wav_encoder = null;
-
-	bool init_microphone_with_fallback() {
-		used_default_fallback = false;
-		if(selected_input_device >= 0) {
-			@mic = microphone(selected_input_device);
-			if(@mic != null) {
-				return true;
-			}
-		}
-
-		@mic = microphone();
-		if(@mic != null) {
-			if(selected_input_device >= 0) {
-				used_default_fallback = true;
-				debug_log("Microfone selecionado indisponível; usando dispositivo padrão do sistema");
-			}
-			return true;
-		}
-
-		return false;
-	}
 
 	// Instância de gravação (placeholder até API NVGT estar disponível)
 	// NOTA: NVGT ainda não tem API pública de gravação de microfone
@@ -119,40 +96,18 @@ class voice_message_recorder {
 		if(is_recording) return;
 		cleanup_recording_graph();
 		selected_input_device = voice_input_device;
-
-		@wav_encoder = audio_wav_encoder();
-		if(@wav_encoder == null) {
-			screen_reader_speak("Falha ao iniciar gravador local", true);
-			return;
+		used_default_fallback = false;
+		string[]@ devices = get_sound_input_devices();
+		if(@devices != null && selected_input_device >= int(devices.length())) {
+			selected_input_device = -1;
+			used_default_fallback = true;
 		}
-
-		if(!wav_encoder.open(temp_file, VOICE_TEST_SAMPLE_RATE, VOICE_TEST_CHANNELS, AUDIO_ENCODER_DEFAULTS)) {
-			screen_reader_speak("Nao foi possivel abrir arquivo de gravacao", true);
-			@wav_encoder = null;
-			return;
-		}
-
-		if(!init_microphone_with_fallback()) {
-			screen_reader_speak("Nao foi possivel iniciar microfone", true);
-			wav_encoder.close();
-			@wav_encoder = null;
-			return;
+		if(selected_input_device == 0) {
+			selected_input_device = -1;
+			used_default_fallback = true;
 		}
 		if(used_default_fallback) {
 			screen_reader_speak("Microfone selecionado indisponível, usando o padrão do sistema", true);
-		}
-
-		mic.set_volume(1.0);
-		if(!mic.attach_output_bus(0, wav_encoder, 0)) {
-			screen_reader_speak("Falha ao conectar microfone ao gravador", true);
-			cleanup_recording_graph();
-			return;
-		}
-
-		if(!mic.set_state(AUDIO_NODE_STATE_STARTED)) {
-			screen_reader_speak("Nao foi possivel iniciar captura de microfone", true);
-			cleanup_recording_graph();
-			return;
 		}
 
 		is_recording = true;
@@ -188,7 +143,7 @@ class voice_message_recorder {
 			screen_reader_speak("Mensagem enviada", true);
 		}
 		else {
-			screen_reader_speak("Gravacao salva em " + temp_file, true);
+			screen_reader_speak("Build atual sem captura nativa de microfone. Teste de push-to-talk concluído.", true);
 		}
 	}
 
@@ -233,15 +188,7 @@ class voice_message_recorder {
 	}
 
 	void cleanup_recording_graph() {
-		if(@mic != null) {
-			mic.set_state(AUDIO_NODE_STATE_STOPPED);
-			mic.detach_all_output_buses();
-		}
-		if(@wav_encoder != null) {
-			wav_encoder.close();
-		}
-		@mic = null;
-		@wav_encoder = null;
+		// Compat: nesta build não há API nativa de captura exposta para script.
 	}
 }
 
