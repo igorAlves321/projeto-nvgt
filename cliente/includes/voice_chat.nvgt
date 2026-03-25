@@ -17,6 +17,10 @@ const int VOICE_CHANNEL = 7;              // Canal de rede dedicado para voz (ca
 const int MAX_RECORD_TIME = 5000;         // Tempo máximo de gravação (5 seg)
 const float VOICE_RANGE = 50.0;           // Alcance de voz em metros
 const string VOICE_TEMP_DIR = "temp/";    // Diretório para arquivos temporários
+const string VOICE_TEST_FILE = "voice_test_last.wav";
+const uint VOICE_TEST_SAMPLE_RATE = 16000;
+const uint VOICE_TEST_CHANNELS = 1;
+const bool VOICE_ENABLE_NETWORK_SEND = false;
 
 string sanitize_voice_filename(const string&in raw) {
 	string name = raw.trim_whitespace();
@@ -42,7 +46,10 @@ class voice_message_recorder {
 	bool is_recording = false;
 	timer record_timer;
 	int max_record_time = MAX_RECORD_TIME;
-	string temp_file = VOICE_TEMP_DIR + "recording.ogg";
+	string temp_file = VOICE_TEMP_DIR + VOICE_TEST_FILE;
+	int selected_input_device = -1;
+	microphone@ mic = null;
+	audio_wav_encoder@ wav_encoder = null;
 
 	// Instância de gravação (placeholder até API NVGT estar disponível)
 	// NOTA: NVGT ainda não tem API pública de gravação de microfone
@@ -87,17 +94,57 @@ class voice_message_recorder {
 
 	// Iniciar gravação
 	void start_recording() {
+		if(is_recording) return;
+		cleanup_recording_graph();
+		selected_input_device = voice_input_device;
+
+		@wav_encoder = audio_wav_encoder();
+		if(@wav_encoder == null) {
+			screen_reader_speak("Falha ao iniciar gravador local", true);
+			return;
+		}
+
+		if(!wav_encoder.open(temp_file, VOICE_TEST_SAMPLE_RATE, VOICE_TEST_CHANNELS, AUDIO_ENCODER_DEFAULTS)) {
+			screen_reader_speak("Nao foi possivel abrir arquivo de gravacao", true);
+			@wav_encoder = null;
+			return;
+		}
+
+		if(selected_input_device >= 0) {
+			@mic = microphone(selected_input_device);
+		}
+		else {
+			@mic = microphone();
+		}
+		if(@mic == null) {
+			screen_reader_speak("Nao foi possivel iniciar microfone", true);
+			wav_encoder.close();
+			@wav_encoder = null;
+			return;
+		}
+
+		mic.set_volume(1.0);
+		if(!mic.attach_output_bus(0, wav_encoder, 0)) {
+			screen_reader_speak("Falha ao conectar microfone ao gravador", true);
+			cleanup_recording_graph();
+			return;
+		}
+
+		if(!mic.set_state(AUDIO_NODE_STATE_STARTED)) {
+			screen_reader_speak("Nao foi possivel iniciar captura de microfone", true);
+			cleanup_recording_graph();
+			return;
+		}
+
 		is_recording = true;
 		record_timer.restart();
 
-		// PLACEHOLDER: Iniciar gravação quando API NVGT estiver disponível
-		// @recorder = sound_recorder();
-		// recorder.start(temp_file);
-
 		// Feedback para o jogador
 		screen_reader_speak("Gravando mensagem de voz", true);
+	}
 
-		debug_log("🎤 Iniciando gravação de voz");
+	void set_input_device(int device_index) {
+		selected_input_device = device_index;
 	}
 
 	// Parar gravação e enviar
@@ -107,10 +154,7 @@ class voice_message_recorder {
 		is_recording = false;
 		uint64 duration = record_timer.elapsed;
 
-		// PLACEHOLDER: Parar gravação quando API NVGT estiver disponível
-		// if(@recorder != null) {
-		//     recorder.stop();
-		// }
+		cleanup_recording_graph();
 
 		debug_log("🎤 Finalizando gravação (" + duration + "ms)");
 
@@ -120,15 +164,19 @@ class voice_message_recorder {
 			return;
 		}
 
-		// Enviar arquivo via rede
-		send_voice_message();
-
-		// Feedback
-		screen_reader_speak("Mensagem enviada", true);
+		if(VOICE_ENABLE_NETWORK_SEND) {
+			send_voice_message();
+			screen_reader_speak("Mensagem enviada", true);
+		}
+		else {
+			screen_reader_speak("Gravacao salva em " + temp_file, true);
+		}
 	}
 
 	// Enviar mensagem de voz pela rede
 	void send_voice_message() {
+		if(!VOICE_ENABLE_NETWORK_SEND) return;
+
 		// NOTA: Esta versão envia um placeholder
 		// Quando a API de gravação estiver disponível, lerá o arquivo gravado
 
@@ -163,6 +211,18 @@ class voice_message_recorder {
 
 			debug_log("📤 Enviado voice_msg: " + un + " em (" + pos_x + "," + pos_y + ")");
 		}
+	}
+
+	void cleanup_recording_graph() {
+		if(@mic != null) {
+			mic.set_state(AUDIO_NODE_STATE_STOPPED);
+			mic.detach_all_output_buses();
+		}
+		if(@wav_encoder != null) {
+			wav_encoder.close();
+		}
+		@mic = null;
+		@wav_encoder = null;
 	}
 }
 
@@ -356,7 +416,54 @@ void init_voice_chat() {
 		directory_create(VOICE_TEMP_DIR);
 	}
 
+	voice_recorder.set_input_device(voice_input_device);
+
 	debug_log("✅ Sistema de voice chat inicializado (HRTF: ON)");
+}
+
+string voice_input_device_label() {
+	string[]@ devices = get_sound_input_devices();
+	if(@devices != null && voice_input_device >= 0 && voice_input_device < int(devices.length())) {
+		string name = devices[voice_input_device];
+		if(name != "") return name;
+	}
+	return pu.get_value("Padrão do sistema");
+}
+
+bool select_voice_input_device_menu() {
+	string[]@ devices = get_sound_input_devices();
+	if(@devices == null || devices.length() == 0) {
+		dlg(pu.get_value("Nenhum dispositivo de entrada de áudio foi encontrado."));
+		return false;
+	}
+
+	setupmenu();
+	game_menu.add_item(pu.get_value("Padrão do sistema"), "mic:-1");
+
+	for(uint i = 0; i < devices.length(); i++) {
+		if(i == 0) continue; // índice 0 costuma ser "sem som"
+		string device_name = devices[i];
+		if(device_name == "") continue;
+		game_menu.add_item(device_name, "mic:" + i);
+	}
+
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	game_menu.intro_text = pu.get_value("Selecione o microfone.");
+
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	if(mres <= 0 || selected_id == "back") {
+		return false;
+	}
+
+	if(selected_id.find("mic:") != 0) {
+		return false;
+	}
+
+	int new_device = parse_int(selected_id.substr(4));
+	voice_input_device = new_device;
+	voice_recorder.set_input_device(new_device);
+	return true;
 }
 
 // Atualizar sistema de voice chat (chamar no game loop)
