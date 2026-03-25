@@ -504,7 +504,14 @@ void handle_magic(player@ p, string data) {
 
     string magic_name = parts[0];
     string target = parts[1];
-    int mana_cost = parts.length() >= 3 && parts[2] != "" ? parse_int(parts[2]) : 0;
+    int mana_cost = 0;
+    if(parts.length() >= 3 && parts[2] != "") {
+        if(!network_try_parse_int(parts[2], mana_cost) || mana_cost < 0) {
+            network_log_invalid_payload(p, "handle_magic", "mana_cost invalido", data);
+            send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+            return;
+        }
+    }
 
     debug_log("ðŸ”® " + p.name + " conjurando: " + magic_name);
 
@@ -1123,7 +1130,13 @@ void handle_guild(player@ p, string data) {
     } else if(action == "demote" && parts.length() >= 2) {
         cmd_demoteguild(player_index, parts[1]);
     } else if(action == "donate" && parts.length() >= 2) {
-        cmd_donateguild(player_index, parse_int(parts[1]));
+        int donate_amount = 0;
+        if(!network_try_parse_int(parts[1], donate_amount) || donate_amount <= 0) {
+            network_log_invalid_payload(p, "handle_guild", "valor de doacao invalido", data);
+            send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+            return;
+        }
+        cmd_donateguild(player_index, donate_amount);
     } else {
         network_send_action_error(p, "Guild", action);
     }
