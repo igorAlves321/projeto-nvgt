@@ -5,6 +5,21 @@
 // Deixe false para priorizar exclusivamente o fluxo SQL.
 const bool AUTH_ENABLE_LEGACY_BAN_FALLBACK = false;
 
+bool update_player_last_login(string username) {
+    if(username.trim_whitespace() == "") return false;
+    sqlite3statement@ stmt = bancoJogo.prepare("UPDATE players SET last_login = CURRENT_TIMESTAMP WHERE username = ?;");
+    if(stmt is null) {
+        debug_log("AUTH: falha ao preparar update last_login para " + username + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    stmt.bind_text(1, username);
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("AUTH: falha ao atualizar last_login de " + username + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    return true;
+}
+
 // Criar nova conta de jogador
 // NOTA: password_hash pode ser a senha bruta ou hash do cliente
 // O salt é gerado no servidor em create_player_account()
@@ -195,6 +210,7 @@ void handle_login(uint64 peer_id, string username, string password_input, double
     }
 
     debug_log(username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");
+    update_player_last_login(username);
     log_to_database("INFO", "AUTH", "Login bem-sucedido", 0, username);
 }
 
