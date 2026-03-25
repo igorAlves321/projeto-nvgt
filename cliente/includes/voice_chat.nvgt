@@ -51,6 +51,25 @@ class voice_message_recorder {
 	microphone@ mic = null;
 	audio_wav_encoder@ wav_encoder = null;
 
+	bool init_microphone_with_fallback() {
+		if(selected_input_device >= 0) {
+			@mic = microphone(selected_input_device);
+			if(@mic != null) {
+				return true;
+			}
+		}
+
+		@mic = microphone();
+		if(@mic != null) {
+			if(selected_input_device >= 0) {
+				debug_log("Microfone selecionado indisponivel; usando dispositivo padrao do sistema");
+			}
+			return true;
+		}
+
+		return false;
+	}
+
 	// Instância de gravação (placeholder até API NVGT estar disponível)
 	// NOTA: NVGT ainda não tem API pública de gravação de microfone
 	// Esta implementação prepara a estrutura para quando a API estiver disponível
@@ -110,13 +129,7 @@ class voice_message_recorder {
 			return;
 		}
 
-		if(selected_input_device >= 0) {
-			@mic = microphone(selected_input_device);
-		}
-		else {
-			@mic = microphone();
-		}
-		if(@mic == null) {
+		if(!init_microphone_with_fallback()) {
 			screen_reader_speak("Nao foi possivel iniciar microfone", true);
 			wav_encoder.close();
 			@wav_encoder = null;
