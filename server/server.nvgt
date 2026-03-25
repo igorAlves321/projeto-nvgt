@@ -859,6 +859,16 @@ bool try_parse_float_token(const string&in token, double &out value) {
     return true;
 }
 
+void reject_invalid_network_packet(uint64 peer_id, const string&in context, const string&in payload, bool disconnect_peer = false) {
+    string safe_payload = payload;
+    if(safe_payload.length() > MAX_NETWORK_LOG_PACKET_CHARS) {
+        safe_payload = safe_payload.substr(0, MAX_NETWORK_LOG_PACKET_CHARS) + "... [TRUNCADO]";
+    }
+    debug_log("Pacote invalido [" + context + "] peer=" + peer_id + " payload=" + safe_payload);
+    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+    if(disconnect_peer) force_disconnect_and_cleanup(peer_id, true);
+}
+
 // Processamento de comando de jogador
 void process_player_command(uint64 peer_id, string command) {
     player@ player = get_player_by_peer(peer_id);
@@ -1110,14 +1120,14 @@ void process_player_command(uint64 peer_id, string command) {
             if(parts.length() == 3) {
                 // Formato: move X Y
                 if(!try_parse_int_token(parts[1], new_x) || !try_parse_int_token(parts[2], new_y)) {
-                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    reject_invalid_network_packet(peer_id, "process_player_command:move_xy", command);
                     return;
                 }
             } else {
                 // Formato: move step_sound X Y
                 step_sound = parts[1];
                 if(!try_parse_int_token(parts[2], new_x) || !try_parse_int_token(parts[3], new_y)) {
-                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    reject_invalid_network_packet(peer_id, "process_player_command:move_step_xy", command);
                     return;
                 }
             }
@@ -1158,7 +1168,7 @@ void process_player_command(uint64 peer_id, string command) {
             int new_x = 0;
             int new_y = 0;
             if(!try_parse_int_token(parts[1], new_x) || !try_parse_int_token(parts[2], new_y)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:move2_xy", command);
                 return;
             }
             
@@ -1184,7 +1194,7 @@ void process_player_command(uint64 peer_id, string command) {
             int fall_height = 0;
             if(parts.length() >= 2) {
                 if(!try_parse_int_token(parts[1], fall_height)) {
-                    send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                    reject_invalid_network_packet(peer_id, "process_player_command:land_height", command);
                     return;
                 }
             }
@@ -1220,7 +1230,7 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "select_weapon" && parts.length() >= 2) {
             int weapon_index = 0;
             if(!try_parse_int_token(parts[1], weapon_index)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:select_weapon_index", command);
                 return;
             }
             player.weapon_index = weapon_index;
@@ -1234,7 +1244,7 @@ void process_player_command(uint64 peer_id, string command) {
 
             int weapon_index = 0;
             if(!try_parse_int_token(parts[1], weapon_index)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:shoot_weapon_index", command);
                 return;
             }
             if(weapon_index < 0 || weapon_index >= int(weapons_list.length())) {
@@ -1287,7 +1297,7 @@ void process_player_command(uint64 peer_id, string command) {
             int ammo_quantity = 0;
 
             if(ammo_item.trim_whitespace() == "" || !try_parse_int_token(parts[3], ammo_quantity) || ammo_quantity <= 0) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:carregar_payload", command);
                 return;
             }
 
@@ -1349,7 +1359,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "craft" || cmd == "/craft" || cmd == "forjar" || cmd == "/forjar") && parts.length() >= 2) {
             int item_start = command.find(parts[1]);
             if(item_start < 0) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:craft_item_start", command);
                 return;
             }
             string item_name = command.substr(item_start).trim_whitespace();
@@ -1421,7 +1431,7 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "reaisparaeuro" && parts.length() >= 2) {
             int conversao = 0;
             if(!try_parse_int_token(parts[1], conversao)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:reaisparaeuro", command);
                 return;
             }
             if(conversao <= 0) return;
@@ -1445,7 +1455,7 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "europarareais" && parts.length() >= 2) {
             int conversao = 0;
             if(!try_parse_int_token(parts[1], conversao)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:europarareais", command);
                 return;
             }
             if(conversao <= 0) return;
@@ -1661,11 +1671,11 @@ void process_player_command(uint64 peer_id, string command) {
             int sound_x = player.x;
             int sound_y = player.y;
             if(parts.length() >= 3 && !try_parse_int_token(parts[2], sound_x)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:sound_x", command);
                 return;
             }
             if(parts.length() >= 4 && !try_parse_int_token(parts[3], sound_y)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:sound_y", command);
                 return;
             }
             broadcast_to_map(player.map_name, "sound " + sound_name + " " + sound_x + " " + sound_y, peer_id);
@@ -1830,7 +1840,7 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "turn" && parts.length() > 1) {
             int new_facing = 0;
             if(!try_parse_int_token(parts[1], new_facing)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:turn_facing", command);
                 return;
             }
             player.facing = new_facing;
@@ -1991,7 +2001,7 @@ void process_player_command(uint64 peer_id, string command) {
             // Reconstruir a mensagem (remove "/pm nome ")
             int target_pos = command.find(parts[1]);
             if(target_pos < 0) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:pm_target", command);
                 return;
             }
             int msg_start = target_pos + parts[1].length() + 1;
@@ -2024,7 +2034,7 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "frasesbarra" && parts.length() >= 3) {
             int nsom = 0;
             if(!try_parse_int_token(parts[1], nsom)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:frasesbarra_nsom", command);
                 return;
             }
             frasesbarra(player_index, nsom, parts[2]);
@@ -2372,7 +2382,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "/questinfo" || cmd == "questinfo") && parts.length() >= 2) {
             int quest_id = 0;
             if(!try_parse_int_token(parts[1], quest_id)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:questinfo_id", command);
                 return;
             }
             cmd_questinfo(player_index, quest_id);
@@ -2383,7 +2393,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "/acceptquest" || cmd == "acceptquest") && parts.length() >= 2) {
             int quest_id = 0;
             if(!try_parse_int_token(parts[1], quest_id)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:acceptquest_id", command);
                 return;
             }
             cmd_acceptquest(player_index, quest_id);
@@ -2394,7 +2404,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "/abandonquest" || cmd == "abandonquest") && parts.length() >= 2) {
             int quest_id = 0;
             if(!try_parse_int_token(parts[1], quest_id)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:abandonquest_id", command);
                 return;
             }
             cmd_abandonquest(player_index, quest_id);
@@ -2405,7 +2415,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "/completequest" || cmd == "completequest") && parts.length() >= 2) {
             int quest_id = 0;
             if(!try_parse_int_token(parts[1], quest_id)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:completequest_id", command);
                 return;
             }
             cmd_completequest(player_index, quest_id);
@@ -2485,7 +2495,7 @@ void process_player_command(uint64 peer_id, string command) {
         if((cmd == "/achievementinfo" || cmd == "achievementinfo") && parts.length() >= 2) {
             int ach_id = 0;
             if(!try_parse_int_token(parts[1], ach_id)) {
-                send_reliable_text(peer_id, "say Pacote invalido.", 0);
+                reject_invalid_network_packet(peer_id, "process_player_command:achievementinfo_id", command);
                 return;
             }
             cmd_achievementinfo(player_index, ach_id);
@@ -2695,24 +2705,18 @@ void server_handle_network_event_const(const network_event@ event) {
             }
 
             if(event.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
-                debug_log("Pacote bruto excessivo de peer " + event.peer_id + " (" + event.message.length() + " chars)");
-                send_reliable_text(event.peer_id, "say Pacote invalido: tamanho excedido.", 0);
-                force_disconnect_and_cleanup(event.peer_id, true);
+                reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:encrypted_oversize", event.message, true);
                 return;
             }
             
             string decrypted = decrypt_packet(event.message);
             if(decrypted.length() > MAX_PACKET_CHARS) {
-                debug_log("?? Pacote excessivo de peer " + event.peer_id + " (" + decrypted.length() + " chars)");
-                send_reliable_text(event.peer_id, "say Pacote invalido: tamanho excedido.", 0);
-                force_disconnect_and_cleanup(event.peer_id, true);
+                reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:decrypted_oversize", decrypted, true);
                 return;
             }
             if(decrypted.trim_whitespace() == "") return;
             if(!is_safe_packet_text(decrypted)) {
-                debug_log("Pacote invalido (caracter de controle) de peer " + event.peer_id);
-                send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                force_disconnect_and_cleanup(event.peer_id, true);
+                reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:unsafe_text", decrypted, true);
                 return;
             }
             debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + decrypted);
@@ -2737,8 +2741,7 @@ void server_handle_network_event_const(const network_event@ event) {
                 string seq_str = cmd.substr(4).trim_whitespace();  // Remove "seq:"
                 int seq_int = 0;
                 if(!try_parse_int_token(seq_str, seq_int) || seq_int < 0 || seq_int > 65535) {
-                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                    force_disconnect_and_cleanup(event.peer_id, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:seq_invalid", decrypted, true);
                     return;
                 }
                 uint16 packet_seq = uint16(seq_int);
@@ -2776,13 +2779,11 @@ void server_handle_network_event_const(const network_event@ event) {
                 string email = parts[3];
                 int gender = 0;
                 if(parts[1].length() > 32 || parts[2].length() > 256 || parts[3].length() > 128) {
-                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                    force_disconnect_and_cleanup(event.peer_id, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_field_len", decrypted, true);
                     return;
                 }
                 if(!try_parse_int_token(parts[4], gender)) {
-                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                    force_disconnect_and_cleanup(event.peer_id, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_gender", decrypted, true);
                     return;
                 }
                 handle_create_account(event.peer_id, username, password_hash, email, gender);
@@ -2795,13 +2796,11 @@ void server_handle_network_event_const(const network_event@ event) {
                 string password_hash = parts[2];
                 double version = 0.0;
                 if(parts[1].length() > 32 || parts[2].length() > 256 || parts[4].length() > 128) {
-                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                    force_disconnect_and_cleanup(event.peer_id, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_field_len", decrypted, true);
                     return;
                 }
                 if(!try_parse_float_token(parts[3], version)) {
-                    send_reliable_text(event.peer_id, "say Pacote invalido.", 0);
-                    force_disconnect_and_cleanup(event.peer_id, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_version", decrypted, true);
                     return;
                 }
                 string computer_id = parts[4];
