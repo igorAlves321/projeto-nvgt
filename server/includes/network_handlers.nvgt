@@ -79,9 +79,15 @@ void network_log_invalid_payload(player@ p, const string&in handler_name, const 
     debug_log("Payload invÃ¡lido [" + handler_name + "] de " + who + ": " + reason + " | dados=" + network_safe_preview(data));
 }
 
+void network_reject_invalid_payload(player@ p, const string&in handler_name, const string&in reason, const string&in data) {
+    network_log_invalid_payload(p, handler_name, reason, data);
+    if(p is null) return;
+    send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+}
+
 bool network_require_non_empty(player@ p, const string&in handler_name, const string&in data) {
     if(data.trim_whitespace() == "") {
-        network_log_invalid_payload(p, handler_name, "payload vazio", data);
+        network_reject_invalid_payload(p, handler_name, "payload vazio", data);
         return false;
     }
     return true;
@@ -169,6 +175,7 @@ void dispatch_network_message(player@ p, string message) {
     if(message.trim_whitespace() == "") return;
     if(message.length() > NETWORK_HANDLER_MAX_MESSAGE_CHARS) {
         network_log_invalid_payload(p, "dispatch_network_message", "mensagem acima do limite", message);
+        send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
         return;
     }
 
@@ -340,8 +347,7 @@ void dispatch_network_message(player@ p, string message) {
     }
 
     // === FALLBACK: Comando desconhecido ===
-    debug_log("âš ï¸ Mensagem desconhecida de " + p.name + ": " + message);
-    send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+    network_reject_invalid_payload(p, "dispatch_network_message", "mensagem desconhecida", message);
 }
 
 // ============================================================
@@ -507,8 +513,7 @@ void handle_magic(player@ p, string data) {
     int mana_cost = 0;
     if(parts.length() >= 3 && parts[2] != "") {
         if(!network_try_parse_int(parts[2], mana_cost) || mana_cost < 0) {
-            network_log_invalid_payload(p, "handle_magic", "mana_cost invalido", data);
-            send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+            network_reject_invalid_payload(p, "handle_magic", "mana_cost invalido", data);
             return;
         }
     }
@@ -1132,8 +1137,7 @@ void handle_guild(player@ p, string data) {
     } else if(action == "donate" && parts.length() >= 2) {
         int donate_amount = 0;
         if(!network_try_parse_int(parts[1], donate_amount) || donate_amount <= 0) {
-            network_log_invalid_payload(p, "handle_guild", "valor de doacao invalido", data);
-            send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+            network_reject_invalid_payload(p, "handle_guild", "valor de doacao invalido", data);
             return;
         }
         cmd_donateguild(player_index, donate_amount);
