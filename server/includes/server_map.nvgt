@@ -1024,18 +1024,23 @@ class map {
 	
 	void deathloop() {
 		for (uint i = 0; i < mapplayers.length(); i++) {
+			int pidx = mapplayers[i];
+			if(pidx < 0 || pidx >= int(players.length())) continue;
 			// Jogador está em zona de morte ativa
-			if (players[mapplayers[i]].ndeath == 1 && 
-			    players[mapplayers[i]].tdeath.elapsed >= players[mapplayers[i]].death_time) {
-				players[mapplayers[i]].tdeath.restart();
+			if (players[pidx].ndeath == 1 && 
+			    players[pidx].tdeath.elapsed >= players[pidx].death_time) {
+				players[pidx].tdeath.restart();
 				
 				// Jogador não está assistindo (watching)
-				if (players[mapplayers[i]].watching == 0) {
+				if (players[pidx].watching == 0) {
 					// Verificar se precisa de item e se jogador tem
 					bool can_die = false;
-					if (this.deaths[players[mapplayers[i]].death_index].require_item == 1) {
-						if (players[mapplayers[i]].inv_item_number(this.deaths[players[mapplayers[i]].death_index].item) < 
-						    this.deaths[players[mapplayers[i]].death_index].item_cantity) {
+					if (players[pidx].death_index < 0 || players[pidx].death_index >= int(this.deaths.length())) {
+						continue;
+					}
+					if (this.deaths[players[pidx].death_index].require_item == 1) {
+						if (players[pidx].inv_item_number(this.deaths[players[pidx].death_index].item) < 
+						    this.deaths[players[pidx].death_index].item_cantity) {
 							can_die = true;
 						}
 					}
@@ -1045,14 +1050,14 @@ class map {
 					
 					if (can_die) {
 						// Morte progressiva (dano contínuo)
-						if (players[mapplayers[i]].progressive_death == 1) {
-							players[mapplayers[i]].health -= players[mapplayers[i]].death_life;
-							players[mapplayers[i]].lasthit = players[mapplayers[i]].death_reason;
+						if (players[pidx].progressive_death == 1) {
+							players[pidx].health -= players[pidx].death_life;
+							players[pidx].lasthit = players[pidx].death_reason;
 						}
 						// Morte instantânea
-						else if (players[mapplayers[i]].progressive_death == 0) {
-							players[mapplayers[i]].health = -1;
-							players[mapplayers[i]].lasthit = players[mapplayers[i]].death_reason;
+						else if (players[pidx].progressive_death == 0) {
+							players[pidx].health = -1;
+							players[pidx].lasthit = players[pidx].death_reason;
 						}
 					}
 				}
@@ -1276,24 +1281,26 @@ class map {
 				
 				// Verificar colisão com jogadores
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					if (players[mapplayers[j]].x == boladefogos[i].x && 
-					    boladefogos[i].y == players[mapplayers[j]].y && 
-					    players[mapplayers[j]].watching == 0 && 
-					    players[mapplayers[j]].pacifico == 0 && 
-					    players[mapplayers[j]].afk == false && 
-					    !emequipe(boladefogos[i].nome, players[mapplayers[j]].charname)) {
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					if (players[pidx].x == boladefogos[i].x && 
+					    boladefogos[i].y == players[pidx].y && 
+					    players[pidx].watching == 0 && 
+					    players[pidx].pacifico == 0 && 
+					    players[pidx].afk == false && 
+					    !emequipe(boladefogos[i].nome, players[pidx].charname)) {
 						
 						// Aplicar dano
-						players[mapplayers[j]].health -= 2000;
-						players[mapplayers[j]].lasthit = "boladefogo_" + boladefogos[i].nome;
-						send_packet(0, "inithurt " + players[mapplayers[j]].voice, 
-						           players[mapplayers[j]].x, players[mapplayers[j]].y);
+						players[pidx].health -= 2000;
+						players[pidx].lasthit = "boladefogo_" + boladefogos[i].nome;
+						send_packet(0, "inithurt " + players[pidx].voice, 
+						           players[pidx].x, players[pidx].y);
 						destroy_moving_sound(boladefogos[i].s);
-						send_packet(5, "play_npc molotovatinge.ogg", players[mapplayers[j]].x, players[j].y);
+						send_packet(5, "play_npc molotovatinge.ogg", players[pidx].x, players[pidx].y);
 						
 						// Se jogador sobreviveu, aplicar fogo contínuo
-						if (players[mapplayers[j]].health > 0) 
-							players[mapplayers[j]].spawn_playerfire(boladefogos[i].nome);
+						if (players[pidx].health > 0) 
+							players[pidx].spawn_playerfire(boladefogos[i].nome);
 						
 						@boladefogos[i] = null;
 						boladefogos.remove_at(i);
@@ -1449,18 +1456,22 @@ class map {
 		j = get_player_index_from(bullets[b].owner);
 		
 		for (uint i = 0; i < mapplayers.length(); i++) {
+			int pidx = mapplayers[i];
+			if(pidx < 0 || pidx >= int(players.length())) continue;
 			// Condições para hit: mesma posição, não é o próprio jogador, não está invisível, não está AFK, não está pacífico
-			if (bullets[b].x == players[mapplayers[i]].x && 
-			    bullets[b].y == players[mapplayers[i]].y && 
-			    players[mapplayers[i]].invs == 0 && 
-			    !players[mapplayers[i]].afk && 
-			    players[mapplayers[i]].pacifico == 0 && 
+			if (bullets[b].x == players[pidx].x && 
+			    bullets[b].y == players[pidx].y && 
+			    players[pidx].invs == 0 && 
+			    !players[pidx].afk && 
+			    players[pidx].pacifico == 0 && 
 			    int(mapplayers[i]) != j) {
 				
 				// Verificar friendly fire (equipe)
-				for (uint bunda = 0; bunda < players[j].nomesequipe.length(); bunda++) {
-					if (players[j].nomesequipe[bunda] == players[mapplayers[i]].charname) {
-						return; // Não atirar em membros da equipe
+				if(j >= 0 && j < int(players.length())) {
+					for (uint bunda = 0; bunda < players[j].nomesequipe.length(); bunda++) {
+						if (players[j].nomesequipe[bunda] == players[pidx].charname) {
+							return; // Não atirar em membros da equipe
+						}
 					}
 				}
 				
@@ -1475,35 +1486,35 @@ class map {
 				}
 				
 				// Hit confirmado - aplicar dano
-				if (!players[mapplayers[i]].crouched &&
-				    players[mapplayers[i]].watching == 0 &&
-				    !players[mapplayers[i]].in_portal) {
+				if (!players[pidx].crouched &&
+				    players[pidx].watching == 0 &&
+				    !players[pidx].in_portal) {
 					
 					// Sistema de degradação de roupas
 					int c_i = -1;
-					if (players[mapplayers[i]].clothing_indexs.length() > 0) {
-						c_i = random(0, players[mapplayers[i]].clothing_indexs.length() - 1);
+					if (players[pidx].clothing_indexs.length() > 0) {
+						c_i = random(0, players[pidx].clothing_indexs.length() - 1);
 					}
 					
-					players[mapplayers[i]].lasthit = bullets[b].owner;
+					players[pidx].lasthit = bullets[b].owner;
 					
 					// Degradar roupa se houver
 					if (c_i > -1 && has_clothe(c_i, mapplayers[i]) &&
-					    clothes[players[mapplayers[i]].clothing_indexs[c_i]].enable_degradation) {
-						players[mapplayers[i]].manage_degradation(
-							clothes[players[mapplayers[i]].clothing_indexs[c_i]].name, 
-							clothes[players[mapplayers[i]].clothing_indexs[c_i]].degradation
+					    clothes[players[pidx].clothing_indexs[c_i]].enable_degradation) {
+						players[pidx].manage_degradation(
+							clothes[players[pidx].clothing_indexs[c_i]].name, 
+							clothes[players[pidx].clothing_indexs[c_i]].degradation
 						);
 					}
 					
 					// Aplicar proteção de roupa ao dano
-					if (players[mapplayers[i]].clothing_protection > 0) {
-						double new_amount = amount * players[mapplayers[i]].clothing_protection;
+					if (players[pidx].clothing_protection > 0) {
+						double new_amount = amount * players[pidx].clothing_protection;
 						double new_damage = amount - new_amount;
-						players[mapplayers[i]].health -= new_damage;
+						players[pidx].health -= new_damage;
 					}
 					else {
-						players[mapplayers[i]].health -= amount;
+						players[pidx].health -= amount;
 					}
 					
 					// Som de impacto no corpo
@@ -1539,14 +1550,16 @@ class map {
 				
 				// Aplicar dano a todos os jogadores no mapa (exceto quem está watching)
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					if (players[mapplayers[j]].health > 0 && players[mapplayers[j]].watching == 0) {
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					if (players[pidx].health > 0 && players[pidx].watching == 0) {
 						// Dano aleatório entre 30000-40000
-						players[mapplayers[j]].health -= random(30000, 40000);
-						players[mapplayers[j]].lasthit = "terremoto_ " + earthquakes[i].owner;
+						players[pidx].health -= random(30000, 40000);
+						players[pidx].lasthit = "terremoto_ " + earthquakes[i].owner;
 						
 						// Som de dor do jogador
-						send_packet(0, "inithurt " + players[mapplayers[j]].voice, 
-						           players[mapplayers[j]].x, players[mapplayers[j]].y);
+						send_packet(0, "inithurt " + players[pidx].voice, 
+						           players[pidx].x, players[pidx].y);
 					}
 				}
 			}
@@ -1580,20 +1593,22 @@ class map {
 				
 				// Dano em jogadores dentro do raio
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					distance = get_distance(mines[i].x, players[mapplayers[j]].x, 
-					                       mines[i].y, players[mapplayers[j]].y);
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					distance = get_distance(mines[i].x, players[pidx].x, 
+					                       mines[i].y, players[pidx].y);
 					
 					// Só aplica dano se: não pacífico, não AFK, não newbie, sem antimina, não em portal
-					if (players[mapplayers[j]].pacifico == 0 && 
-					    !players[mapplayers[j]].afk && 
-					    !players[mapplayers[j]].newbie && 
-					    players[mapplayers[j]].antimina == 0 && 
-					    !players[mapplayers[j]].in_portal) {
+					if (players[pidx].pacifico == 0 && 
+					    !players[pidx].afk && 
+					    !players[pidx].newbie && 
+					    players[pidx].antimina == 0 && 
+					    !players[pidx].in_portal) {
 						
-						send_packet(0, "inithurt " + players[mapplayers[j]].voice, 
-						           players[mapplayers[j]].x, players[mapplayers[j]].y);
-						players[mapplayers[j]].lasthit = mines[i].owner + "'s mina";
-						players[mapplayers[j]].health -= mines[i].get_damage(distance);
+						send_packet(0, "inithurt " + players[pidx].voice, 
+						           players[pidx].x, players[pidx].y);
+						players[pidx].lasthit = mines[i].owner + "'s mina";
+						players[pidx].health -= mines[i].get_damage(distance);
 					}
 				}
 				
@@ -1834,14 +1849,16 @@ class map {
 				
 				// Aplicar morte instantânea a todos os jogadores no mapa
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					if (!players[mapplayers[j]].afk && 
-					    !players[mapplayers[j]].newbie && 
-					    !players[mapplayers[j]].is_admin && 
-					    players[mapplayers[j]].watching == 0 && 
-					    players[mapplayers[j]].pacifico == 0) {
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					if (!players[pidx].afk && 
+					    !players[pidx].newbie && 
+					    !players[pidx].is_admin && 
+					    players[pidx].watching == 0 && 
+					    players[pidx].pacifico == 0) {
 						
-						players[mapplayers[j]].lasthit = plasmabombs[i].name + " " + "de" + " " + plasmabombs[i].owner;
-						players[mapplayers[j]].health = 0;
+						players[pidx].lasthit = plasmabombs[i].name + " " + "de" + " " + plasmabombs[i].owner;
+						players[pidx].health = 0;
 					}
 				}
 				
@@ -1872,10 +1889,12 @@ class map {
 			if (pias[i].aberta && pias[i].fechando.elapsed >= 250) {
 				pias[i].fechando.restart();
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					if (pias[i].x == players[mapplayers[j]].x && 
-					    pias[i].y == players[mapplayers[j]].y) {
-						players[mapplayers[j]].sujo -= 5;
-						if (players[mapplayers[j]].sujo < 0) players[mapplayers[j]].sujo = 0;
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					if (pias[i].x == players[pidx].x && 
+					    pias[i].y == players[pidx].y) {
+						players[pidx].sujo -= 5;
+						if (players[pidx].sujo < 0) players[pidx].sujo = 0;
 					}
 				}
 			}
@@ -1904,10 +1923,12 @@ class map {
 				
 				// Dano em jogadores
 				for (uint j = 0; j < mapplayers.length(); j++) {
-					distance = get_distance(portals[i].x, players[mapplayers[j]].x, 
-					                       portals[i].y, players[mapplayers[j]].y);
-					players[mapplayers[j]].lasthit = "portal_de_luz";
-					players[mapplayers[j]].health -= portals[i].get_damage(distance);
+					int pidx = mapplayers[j];
+					if(pidx < 0 || pidx >= int(players.length())) continue;
+					distance = get_distance(portals[i].x, players[pidx].x, 
+					                       portals[i].y, players[pidx].y);
+					players[pidx].lasthit = "portal_de_luz";
+					players[pidx].health -= portals[i].get_damage(distance);
 				}
 				
 				// Dano em árvores
