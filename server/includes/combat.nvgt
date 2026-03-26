@@ -8,10 +8,10 @@ class CombatInstance {
     string attacker_id;
     string defender_id;
     bool in_progress;
-    bool is_finished; // 🆕 Flag para indicar combate finalizado
+    bool is_finished; //  Flag para indicar combate finalizado
     uint64 start_time;
     uint64 last_action_time;
-    uint64 expiration_time; // 🆕 Tempo absoluto de expiração
+    uint64 expiration_time; //  Tempo absoluto de expiração
     string battle_status; // ongoing, victory, defeat, flee
 
     CombatInstance() {
@@ -45,7 +45,7 @@ class CombatInstance {
     }
 }
 
-// 🆕 Sistema global de combate com array e mutex
+//  Sistema global de combate com array e mutex
 mutex combat_mutex;
 CombatInstance@[] active_combats;
 dictionary combat_defense_flags; // player_id -> 1 (defesa ativa para o próximo ataque)
@@ -87,10 +87,10 @@ bool start_combat(string attacker_id, string defender_id) {
         return false;
     }
 
-    // 🆕 Criar instância única de combate (ambos jogadores compartilham a mesma instância)
+    //  Criar instância única de combate (ambos jogadores compartilham a mesma instância)
     CombatInstance@ combat = CombatInstance(attacker_id, defender_id);
 
-    // 🆕 Adicionar ao array com proteção de mutex
+    //  Adicionar ao array com proteção de mutex
     combat_mutex.lock();
     active_combats.insert_last(@combat);
     combat_mutex.unlock();
@@ -126,14 +126,14 @@ bool start_combat(string attacker_id, string defender_id) {
 void end_combat(string player_id, string reason) {
     combat_mutex.lock();
 
-    // 🆕 Buscar combate no array
+    //  Buscar combate no array
     for(uint i = 0; i < active_combats.length(); i++) {
         if(active_combats[i] !is null) {
             if(active_combats[i].attacker_id == player_id || active_combats[i].defender_id == player_id) {
                 CombatInstance@ combat = active_combats[i];
                 string opponent_id = combat.attacker_id == player_id ? combat.defender_id : combat.attacker_id;
 
-                // 🆕 Marcar como finalizado (cleanup_expired_combats removerá depois)
+                //  Marcar como finalizado (cleanup_expired_combats removerá depois)
                 combat.is_finished = true;
                 combat.in_progress = false;
                 combat.battle_status = reason;
@@ -242,7 +242,7 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
     
     if(attacker is null || defender is null) return false;
     
-    // 🆕 Verificar se está em zona segura
+    //  Verificar se está em zona segura
     if(is_in_safezone(defender.x, defender.y, defender.map)) {
         attacker.send_message("say Você não pode atacar em uma zona segura!");
         return false;
@@ -266,7 +266,7 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
     defender.hp -= damage;
     if(defender.hp < 0) defender.hp = 0;
 
-    // 🆕 Atualizar tempo de ação do combate
+    //  Atualizar tempo de ação do combate
     combat_mutex.lock();
     for(uint i = 0; i < active_combats.length(); i++) {
         if(active_combats[i] !is null) {
@@ -347,7 +347,7 @@ bool attempt_flee(string player_id) {
     int flee_chance = 30 + (player.player_level * 2);
     if(flee_chance > 80) flee_chance = 80;
 
-    // 🆕 Buscar combate no array
+    //  Buscar combate no array
     string opponent_id = "";
     combat_mutex.lock();
     for(uint i = 0; i < active_combats.length(); i++) {
@@ -397,7 +397,7 @@ bool attempt_flee(string player_id) {
     }
 }
 
-// 🆕 Função auxiliar: Buscar combate de um jogador
+//  Função auxiliar: Buscar combate de um jogador
 CombatInstance@ get_player_combat(string player_id) {
     combat_mutex.lock();
 
@@ -415,14 +415,14 @@ CombatInstance@ get_player_combat(string player_id) {
     return null;
 }
 
-// 🆕 PASSO 2: Função de Limpeza Assíncrona com Iteração Reversa
+//  PASSO 2: Função de Limpeza Assíncrona com Iteração Reversa
 // Esta função será executada em uma thread separada usando async
 void cleanup_expired_combats_task() {
-    combat_mutex.lock(); // 🔒 Travar o Mutex para acesso exclusivo
+    combat_mutex.lock(); //  Travar o Mutex para acesso exclusivo
 
     uint64 current_time = ticks(); // Captura o tempo atual usando a função 'ticks()' do NVGT
 
-    // 🆕 Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
+    //  Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
     // Itera de trás para frente para evitar pular elementos ao remover
     for(int i = int(active_combats.length()) - 1; i >= 0; i--) {
         CombatInstance@ combat = active_combats[i];
@@ -435,7 +435,7 @@ void cleanup_expired_combats_task() {
         }
     }
 
-    combat_mutex.unlock(); // 🔓 Libera o Mutex
+    combat_mutex.unlock(); //  Libera o Mutex
 }
 
 // Funções auxiliares que devem ser implementadas em outros módulos
