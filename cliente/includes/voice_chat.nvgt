@@ -1,22 +1,22 @@
-﻿// ============================================================
+// ============================================================
 // ðŸŽ¤ VOICE CHAT SYSTEM - Cliente
 // ============================================================
 // Implementa sistema de mensagens de voz com posicionamento 3D HRTF
-// Usa Push-to-Talk (PTT) com gravaÃ§Ã£o local e transmissÃ£o de arquivos
+// Usa Push-to-Talk (PTT) com gravação local e transmissão de arquivos
 //
-// Abordagem: Audio Messages (implementÃ¡vel agora com APIs NVGT disponÃ­veis)
+// Abordagem: Audio Messages (implementável agora com APIs NVGT disponíveis)
 // - PTT com KEY_V para gravar
-// - Grava Ã¡udio localmente (atÃ© 5 segundos)
+// - Grava áudio localmente (até 5 segundos)
 // - Envia arquivo via rede unreliable
 // - Receptor reproduz com HRTF 3D
 //
-// Status: âœ… ImplementÃ¡vel com APIs atuais do NVGT
+// Status: Implementavel com APIs atuais do NVGT
 
-// Constantes de configuraÃ§Ã£o
-const int VOICE_CHANNEL = 7;              // Canal de rede dedicado para voz (canal 7 = Ã¡udio)
-const int MAX_RECORD_TIME = 5000;         // Tempo mÃ¡ximo de gravaÃ§Ã£o (5 seg)
+// Constantes de configuração
+const int VOICE_CHANNEL = 7;              // Canal de rede dedicado para voz (canal 7 = áudio)
+const int MAX_RECORD_TIME = 5000;         // Tempo máximo de gravação (5 seg)
 const float VOICE_RANGE = 50.0;           // Alcance de voz em metros
-const string VOICE_TEMP_DIR = "temp/";    // DiretÃ³rio para arquivos temporÃ¡rios
+const string VOICE_TEMP_DIR = "temp/";    // Diretório para arquivos temporários
 const string VOICE_TEST_FILE = "voice_test_last.wav";
 const uint VOICE_TEST_SAMPLE_RATE = 16000;
 const uint VOICE_TEST_CHANNELS = 1;
@@ -40,7 +40,7 @@ string sanitize_voice_filename(const string&in raw) {
 // ============================================================
 // CLASSE: voice_message_recorder
 // ============================================================
-// Gerencia gravaÃ§Ã£o PTT e envio de mensagens de voz
+// Gerencia gravação PTT e envio de mensagens de voz
 
 class voice_message_recorder {
 	bool is_recording = false;
@@ -201,18 +201,18 @@ class voice_message_recorder {
 // ============================================================
 // CLASSE: voice_message_player
 // ============================================================
-// Gerencia reproduÃ§Ã£o de mensagens de voz com posicionamento 3D HRTF
+// Gerencia reprodução de mensagens de voz com posicionamento 3D HRTF
 
 class voice_message_player {
-	// Mapa de vozes ativas: sender_id â†’ sound@
+	// Mapa de vozes ativas: sender_id -> sound@
 	dictionary active_voices;
 
-	// Mapa de timers de limpeza: sender_id â†’ timer
+	// Mapa de timers de limpeza: sender_id -> timer
 	dictionary cleanup_timers;
 
 	// Construtor
 	voice_message_player() {
-		// Garantir que HRTF estÃ¡ ativado
+		// Garantir que HRTF está ativado
 		sound_global_hrtf = true;
 
 		debug_log("ðŸ”Š Voice message player inicializado (HRTF ativado)");
@@ -252,8 +252,8 @@ class voice_message_player {
 
 		debug_log("ðŸ“¥ Recebido voice de " + sender_id + " em (" + sender_x + "," + sender_y + "," + sender_z + ")");
 
-		// PLACEHOLDER: Por enquanto, apenas toca um som de notificaÃ§Ã£o
-		// Quando API de gravaÃ§Ã£o estiver disponÃ­vel, reproduzirÃ¡ o Ã¡udio real
+		// PLACEHOLDER: Por enquanto, apenas toca um som de notificação
+		// Quando API de gravação estiver disponível, reproduzirá o áudio real
 		play_voice_message(sender_id, sender_x, sender_y, sender_z, audio_data);
 	}
 
@@ -282,10 +282,10 @@ class voice_message_player {
 		}
 		if(loaded) {
 
-			// Calcular posiÃ§Ã£o relativa ao jogador (para HRTF)
+			// Calcular posição relativa ao jogador (para HRTF)
 			float relative_x = sender_x - game_me.x;
 			float relative_y = sender_y - game_me.y;
-			float relative_z = sender_z - 0; // Z serÃ¡ implementado
+			float relative_z = sender_z - 0; // Z será implementado
 
 			// Posicionar som no mundo 3D (Steam Audio HRTF)
 			// Assinatura: set_position(listener_x, listener_y, listener_z, sound_x, sound_y, sound_z, rotation, pan_step, volume_step)
@@ -296,32 +296,32 @@ class voice_message_player {
 				relative_z,        // Sound Z relativo
 				0,                 // Rotation
 				0.01,              // Pan step (panning suave)
-				0.1                // Volume step (atenuaÃ§Ã£o por distÃ¢ncia)
+				0.1                // Volume step (atenuação por distância)
 			);
 
 			// Reproduzir
 			voice.play();
 
-			// Armazenar referÃªncia para cleanup
+			// Armazenar referência para cleanup
 			@active_voices[sender_id] = @voice;
 
 			// Criar timer de cleanup
 			timer@ cleanup_timer = timer();
 			@cleanup_timers[sender_id] = @cleanup_timer;
 
-			debug_log("ðŸ”Š Reproduzindo voice de " + sender_id + " em posiÃ§Ã£o relativa (" + relative_x + "," + relative_y + "," + relative_z + ")");
+			debug_log("ðŸ”Š Reproduzindo voice de " + sender_id + " em posição relativa (" + relative_x + "," + relative_y + "," + relative_z + ")");
 
 			// Feedback TTS (opcional)
-			if(sender_id != un) { // NÃ£o falar se for prÃ³pria voz
+			if(sender_id != un) { // Não falar se for própria voz
 				screen_reader_speak("Mensagem de " + sender_id, true);
 			}
 		}
 		else {
-			debug_log("âš ï¸ Falha ao carregar som de notificaÃ§Ã£o para voice message");
+			debug_log("Falha ao carregar som de notificacao para voice message");
 		}
 	}
 
-	// Parar voz especÃ­fica
+	// Parar voz específica
 	void stop_voice(string sender_id) {
 		sound@ voice;
 		if(active_voices.get(sender_id, @voice)) {
@@ -345,7 +345,7 @@ class voice_message_player {
 			if(active_voices.get(sender_id, @voice) &&
 			   cleanup_timers.get(sender_id, @cleanup_timer)) {
 
-				// Verificar se som terminou (apÃ³s 10 segundos ou se nÃ£o estÃ¡ tocando)
+				// Verificar se som terminou (após 10 segundos ou se não está tocando)
 				if(@cleanup_timer != null && cleanup_timer.elapsed >= 10000) {
 					stop_voice(sender_id);
 					debug_log("ðŸ§¹ Limpeza de voice: " + sender_id);
@@ -368,29 +368,29 @@ class voice_message_player {
 }
 
 // ============================================================
-// INSTÃ‚NCIAS GLOBAIS
+// INSTÂNCIAS GLOBAIS
 // ============================================================
 
 voice_message_recorder voice_recorder;
 voice_message_player voice_player;
 
 // ============================================================
-// FUNÃ‡Ã•ES AUXILIARES
+// FUNÇÕES AUXILIARES
 // ============================================================
 
 // Inicializar sistema de voice chat
 void init_voice_chat() {
-	// Garantir que HRTF estÃ¡ ativado globalmente
+	// Garantir que HRTF está ativado globalmente
 	sound_global_hrtf = true;
 
-	// Criar diretÃ³rio temp se nÃ£o existir
+	// Criar diretório temp se não existir
 	if(!directory_exists(VOICE_TEMP_DIR)) {
 		directory_create(VOICE_TEMP_DIR);
 	}
 
 	voice_recorder.set_input_device(voice_input_device);
 
-	debug_log("âœ… Sistema de voice chat inicializado (HRTF: ON)");
+	debug_log("Sistema de voice chat inicializado (HRTF: ON)");
 }
 
 string voice_input_device_label() {
@@ -399,21 +399,21 @@ string voice_input_device_label() {
 		string name = devices[voice_input_device];
 		if(name != "") return name;
 	}
-	return pu.get_value("PadrÃ£o do sistema");
+	return pu.get_value("Padrão do sistema");
 }
 
 bool select_voice_input_device_menu() {
 	string[]@ devices = get_sound_input_devices();
 	if(@devices == null || devices.length() == 0) {
-		dlg(pu.get_value("Nenhum dispositivo de entrada de Ã¡udio foi encontrado."));
+		dlg(pu.get_value("Nenhum dispositivo de entrada de áudio foi encontrado."));
 		return false;
 	}
 
 	setupmenu();
-	game_menu.add_item(pu.get_value("PadrÃ£o do sistema"), "mic:-1");
+	game_menu.add_item(pu.get_value("Padrão do sistema"), "mic:-1");
 
 	for(uint i = 0; i < devices.length(); i++) {
-		if(i == 0) continue; // Ã­ndice 0 costuma ser "sem som"
+		if(i == 0) continue; // índice 0 costuma ser "sem som"
 		string device_name = devices[i];
 		if(device_name == "") continue;
 		game_menu.add_item(device_name, "mic:" + i);
@@ -449,7 +449,7 @@ void update_voice_chat() {
 
 // Handler para processar pacotes de voz recebidos
 void handle_voice_packet(string message) {
-	// Mensagens comeÃ§am com "VOICE_PLAY|"
+	// Mensagens começam com "VOICE_PLAY|"
 	if(message.find("VOICE_PLAY|") == 0) {
 		voice_player.handle_voice_message(message);
 	}
