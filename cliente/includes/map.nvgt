@@ -115,7 +115,7 @@ void mapreset(bool complete = true) {
 	disableds.resize(0);
 	
 	if(complete) {
-		currentloc = "";
+		currentloc = -1;
 		destroy_all_ambientes();
 		destroy_all_sources();
 		destroy_all_source2s();
@@ -215,7 +215,7 @@ void init_data(string data_line, bool complete = true) {
 		debug_log("🧱 Parede criada: x=" + x + " y(" + min_y + "-" + max_y + ") tipo=" + tiles);
 	}
 	// ZONA: suporta "zone" e abreviação "z"
-	else if((parsed[0] == "zone" || parsed[0] == "z") && parsed.length() >= 5) {
+	else if((parsed[0] == "zone" || parsed[0] == "z") && parsed.length() >= 6) {
 		// Criar objeto zone e adicionar ao array
 		zone z(string_to_number(parsed[1]), string_to_number(parsed[2]), 
 		       string_to_number(parsed[3]), string_to_number(parsed[4]), 
@@ -751,7 +751,17 @@ void load_map(string mdata, bool complete = true) {
 	debug_log("📍 Dados recebidos: " + mdata.substr(0, 100) + "..."); // Primeiros 100 chars
 	mapreset(complete);
 	bool isitsafe = false;
-	string[] ldata = delinear(mdata);
+	// Normalizar quebras de linha para evitar mapa vindo em uma linha só
+	mdata = mdata.replace("\r\n", "\n");
+	mdata = mdata.replace("\r", "\n");
+	string[] ldata = mdata.split("\n");
+	// Remover linhas vazias nas extremidades
+	while(ldata.length() > 0 && ldata[0].trim_whitespace() == "") ldata.remove_at(0);
+	while(ldata.length() > 0 && ldata[ldata.length() - 1].trim_whitespace() == "") ldata.remove_at(ldata.length() - 1);
+	if(ldata.length() == 0) {
+		debug_log("ERRO: payload de mapa vazio apos normalizacao.");
+		return;
+	}
 	debug_log("📍 Mapa tem " + ldata.length() + " linhas de dados");
 	
 	if(ldata.length() > 0) {
