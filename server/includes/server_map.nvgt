@@ -2939,3 +2939,36 @@ void process_map_interaction(int player_index) {
 
 	send_reliable_text(p.peer_id, "say Não ha nada para interagir aqui.", 0);
 }
+
+bool pickup_map_object_at(player@ p) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return false;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return false;
+
+	int obj_index = current_map.have_obj(p.x, p.y);
+	if(obj_index < 0 || obj_index >= int(current_map.objs.length())) return false;
+	obj@ current_obj = current_map.objs[obj_index];
+	if(current_obj is null || current_obj.taked || !current_obj.obtainable) return false;
+
+	string item_name = current_obj.itemname != "" ? current_obj.itemname : current_obj.item;
+	int amount = current_obj.num > 0 ? current_obj.num : current_obj.amount;
+	if(amount <= 0) amount = 1;
+
+	current_obj.get(player_index);
+	current_obj.taked = true;
+
+	string sound_name = current_obj.sound_get;
+	if(sound_name == "") sound_name = "get" + item_name;
+	if(sound_name != "" && !sound_name.ends_with(".ogg")) sound_name += ".ogg";
+	if(sound_name != "") current_map.send_packet(0, "play " + sound_name + " " + p.x + " " + p.y, true);
+
+	current_map.send_packet(0, "getobj " + p.x + " " + p.y + " " + item_name + " " + amount + " " + p.charname, true);
+	send_reliable_text(p.peer_id, "msgpegouitem " + amount + " " + item_name, 0);
+	return true;
+}
