@@ -1190,6 +1190,32 @@ class player {
 		}
 		return -1;
 	}
+	void start_death_zone(int dindex) {
+		this.ndeath = 1;
+		this.tdeath.restart();
+		this.death_index = dindex;
+		this.death_time = server_maps[mapindex].deaths[dindex].time;
+		this.death_reason = server_maps[mapindex].deaths[dindex].reason;
+		this.progressive_death = server_maps[mapindex].deaths[dindex].enable_progressive_death != 0 ? 1 : 0;
+		this.death_life = server_maps[mapindex].deaths[dindex].life;
+	}
+	void stop_death_zone() {
+		this.ndeath = 0;
+		this.death_index = -1;
+		this.tdeath.force(0);
+		this.tdeath.pause();
+		this.death_reason = "";
+		this.death_time = 0;
+		this.progressive_death = 0;
+	}
+	void update_death_zone_state(int dindex) {
+		if(this.ndeath == 0 && dindex > -1) {
+			start_death_zone(dindex);
+		}
+		else if(this.ndeath == 1 && dindex < 0) {
+			stop_death_zone();
+		}
+	}
 	void move(string steps, int x, int y, int n = 0) {
 		int dindex = have_death(x, y);
 		if(this.paralisado == true || this.paralisado2 == true || this.afk) return;
@@ -1202,24 +1228,7 @@ class player {
 		else {
 			server_maps[mapindex].send_to_others(this.peer_id, 0, "upl " + this.peer_id + " " + this.x + " " + this.y, true);
 		}
-		if(this.ndeath == 0 && dindex > -1) {
-			this.ndeath = 1;
-			this.tdeath.restart();
-			this.death_index = dindex;
-			this.death_time = server_maps[mapindex].deaths[dindex].time;
-			this.death_reason = server_maps[mapindex].deaths[dindex].reason;
-			this.progressive_death = server_maps[mapindex].deaths[dindex].enable_progressive_death != 0 ? 1 : 0;
-			this.death_life = server_maps[mapindex].deaths[dindex].life;
-		}
-		else if(this.ndeath == 1 && dindex < 0) {
-			this.ndeath = 0;
-			this.death_index = dindex;
-			this.tdeath.force(0);
-			this.tdeath.pause();
-			this.death_reason = "";
-			this.death_time = 0;
-			this.progressive_death = 0;
-		}
+		update_death_zone_state(dindex);
 		int find_objects = server_maps[mapindex].have_obj(this.x, this.y);
 		if(find_objects > -1) {
 			send_reliable_text(this.peer_id, "ps cameratile.ogg", 0);
