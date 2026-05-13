@@ -1,7 +1,5 @@
-// stubs.nvgt - Funções temporárias/stub para compilação
-// NOTA: Este arquivo foi limpo em 24/01/2026
-// Funções duplicadas foram removidas pois já existem implementações reais
-// Mantidas apenas funções que AINDA NÃO foram implementadas em outros arquivos
+// legacy_compat.nvgt - Wrappers de compatibilidade legada para módulos portados do BGT
+// Mantém assinaturas antigas apontando para implementações NVGT reais.
 
 // ==================== FUNÇÕES DE UPTIME (Únicas aqui) ====================
 // Funções de sistema temporal (uptime do servidor)
@@ -11,15 +9,6 @@ int upm() { return ups() / 60; }                         // Minutos
 int uph() { return upm() / 60; }                         // Horas
 int upd() { return uph() / 24; }                         // Dias
 int upw() { return upd() / 7; }                          // Semanas
-
-// ==================== FUNÇÕES DE OBJETOS (Únicas aqui) ====================
-// Classe para objetos placeholder
-class obj_placeholder {
-    string map;
-    bool obtainable = true;
-    bool delete = false;
-}
-obj_placeholder@[] objs_placeholder;
 
 // Mensagem atual em processamento, usada por wrappers legados portados do BGT.
 string current_event_message = "";
@@ -143,104 +132,116 @@ void gc(string playername, double amount) {
     }
 }
 
+void write_transfer_log(string name, string filename, string text) {
+    if(name == "" || filename == "" || text == "") return;
+    string player_dir = "players/" + name;
+    if(!directory_exists(player_dir)) {
+        directory_create(player_dir);
+    }
+
+    file log_file;
+    if(!log_file.open(player_dir + "/" + filename, "a")) {
+        debug_log("TRANSFER: falha ao abrir log de transferência para " + name);
+        return;
+    }
+    log_file.write(text);
+    log_file.close();
+}
+
+void save_transfer(string origin, string destination, string itemname, double amount) {
+    save_transfer(origin, destination, itemname, "", amount);
+}
+
 // save_transfer() - salvar transferência de itens/moeda
 void save_transfer(string origin, string destination, string itemname, string info, double amount) {
-    debug_log("Transfer: " + origin + " -> " + destination + " | " + itemname + " | " + info + " | Amount: " + amount);
+    if(origin == "" || destination == "") return;
+
+    string stamp = DATE_DAY + "." + DATE_MONTH + "." + DATE_YEAR;
+    string time_text = TIME_HOUR + "." + TIME_MINUTE;
+    string log_name = "transferences_" + stamp + ".log";
+    string suffix = info == "" ? "" : " " + info;
+
+    string send_info = origin + " el " + stamp + " a las " + time_text + " transfirió " + amount + " " + itemname + " para " + destination + suffix + "\r\n";
+    string receive_info = destination + " el " + stamp + " a las " + time_text + " recibió " + amount + " " + itemname + " de " + origin + suffix + "\r\n";
+
+    write_transfer_log(origin, log_name, send_info);
+    write_transfer_log(destination, log_name, receive_info);
+    log_action(origin, "transfer", send_info, "", 0, 0, 0, info, destination, itemname);
 }
 
 // ==================== FUNÇÕES DE NPC (Únicas aqui) ====================
-void die(int npc_index) { debug_log("NPC_DIE: " + npc_index); }
-void attack(int npc_index, int target_player) { debug_log("NPC_ATTACK: " + npc_index); }
-void move(int npc_index, int direction) {
-    // Wrapper legado BGT -> NVGT:
-    // resolve um indice "flat" de NPC para a estrutura atual por mapa.
-    if(npc_index < 0) return;
+npc@ get_npc_by_flat_index(int npc_index) {
+    if(npc_index < 0) return null;
 
     int flat_index = 0;
     for(uint m = 0; m < server_maps.length(); m++) {
         int npc_count = int(server_maps[m].npcs.length());
         if(npc_index < flat_index + npc_count) {
             int local_index = npc_index - flat_index;
-            if(local_index < 0 || local_index >= npc_count) return;
-
-            npc@ n = server_maps[m].npcs[local_index];
-            if(n is null) return;
-
-            int nx = n.x;
-            int ny = n.y;
-
-            // Convencao de direcao herdada:
-            // 0=Forward, 1=Back, 2=Left, 3=Right.
-            if(direction == 0) ny--;
-            else if(direction == 1) ny++;
-            else if(direction == 2) nx--;
-            else if(direction == 3) nx++;
-            else return;
-
-            if(!is_walkable(nx, ny, n.map)) return;
-
-            n.x = nx;
-            n.y = ny;
-            server_broadcast("npc_move " + n.id + " " + n.x + " " + n.y, n.map);
-            return;
+            if(local_index < 0 || local_index >= npc_count) return null;
+            return server_maps[m].npcs[local_index];
         }
         flat_index += npc_count;
     }
+    return null;
+}
+
+void die(int npc_index) {
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return;
+    if(n.morreu) return;
+
+    n.vida = 0;
+    n.die();
+}
+
+void attack(int npc_index, int target_player) {
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return;
+    if(target_player < 0 || target_player >= int(players.length())) return;
+    if(players[target_player].map != n.map) return;
+    if(players[target_player].afk || players[target_player].pacifico == 1 || players[target_player].health <= 0) return;
+
+    n.p_index = target_player;
+    n.attack();
+}
+
+void move(int npc_index, int direction) {
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return;
+
+    int nx = n.x;
+    int ny = n.y;
+
+    // Convencao de direcao herdada:
+    // 0=Forward, 1=Back, 2=Left, 3=Right.
+    if(direction == 0) ny--;
+    else if(direction == 1) ny++;
+    else if(direction == 2) nx--;
+    else if(direction == 3) nx++;
+    else return;
+
+    if(!is_walkable(nx, ny, n.map)) return;
+
+    n.x = nx;
+    n.y = ny;
+    server_broadcast("npc_move " + n.id + " " + n.x + " " + n.y, n.map);
 }
 bool exists_player_in_my_map(int npc_index) {
-    // Compatibilidade BGT->NVGT:
-    // em NVGT os NPCs ficam dentro de cada mapa (server_maps[i].npcs),
-    // não em um array global `npcs`.
-    if(npc_index < 0) return false;
-
-    int flat_index = 0;
-    for(uint m = 0; m < server_maps.length(); m++) {
-        int npc_count = int(server_maps[m].npcs.length());
-        if(npc_index < flat_index + npc_count) {
-            return exists_player_in_my_map(server_maps[m].name);
-        }
-        flat_index += npc_count;
-    }
-
-    return false;
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return false;
+    return n.exists_player_in_my_map();
 }
 int select_player_to_attack(int npc_index) {
-    if(npc_index < 0) return -1;
-
-    int flat_index = 0;
-    for(uint m = 0; m < server_maps.length(); m++) {
-        int npc_count = int(server_maps[m].npcs.length());
-        if(npc_index < flat_index + npc_count) {
-            if(server_maps[m].mapplayers.length() == 0) return -1;
-            int pick = random(0, server_maps[m].mapplayers.length() - 1);
-            int player_index = server_maps[m].mapplayers[pick];
-            if(player_index < 0 || player_index >= int(players.length())) return -1;
-            return player_index;
-        }
-        flat_index += npc_count;
-    }
-    return -1;
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return -1;
+    return n.select_player_to_attack();
 }
 
 int change_player(int npc_index, int exclude = -1) {
-    if(npc_index < 0) return -1;
-
-    int flat_index = 0;
-    for(uint m = 0; m < server_maps.length(); m++) {
-        int npc_count = int(server_maps[m].npcs.length());
-        if(npc_index < flat_index + npc_count) {
-            for(uint i = 0; i < server_maps[m].mapplayers.length(); i++) {
-                int candidate = server_maps[m].mapplayers[i];
-                if(candidate == exclude) continue;
-                if(candidate < 0 || candidate >= int(players.length())) continue;
-                if(players[candidate].health <= 0 || players[candidate].afk || players[candidate].pacifico == 1 || players[candidate].newbie) continue;
-                return candidate;
-            }
-            return -1;
-        }
-        flat_index += npc_count;
-    }
-    return -1;
+    npc@ n = get_npc_by_flat_index(npc_index);
+    if(n is null) return -1;
+    return n.change_player(exclude);
 }
 
 void change_player(int npc_index) {
@@ -418,25 +419,12 @@ class game_disabled {
     }
 }
 
-class game_disabled_data {
-    bool disabled = false;
-    string reason = "";
-}
-game_disabled_data global_game_disabled;
-
-// Funções de configuração do servidor
-class sconfigs_placeholder {
-    int max_players = 100;
-    string server_name = "EVM Server";
-}
-sconfigs_placeholder sconfigs;
-
 // ==================== VARIÁVEIS GLOBAIS (Únicas aqui) ====================
 timer savetimer;
 int enable_double_emeralds = 0;
 int MAX_PLAYERS = 100;
 
-// Função de mudança de nome (placeholder)
+// Função de mudança de nome
 void changename(int player_index, string new_name) {
     if(player_index < 0 || player_index >= int(players.length())) return;
 
@@ -691,16 +679,6 @@ bool cmd_server_info(player@ player, string[] args) {
     return true;
 }
 
-// Função de helper para propriedade status
-bool player_add_status_property_warned = false;
-void player_add_status_property() {
-    // No-op de compatibilidade: status ja esta integrado na classe player.
-    if(!player_add_status_property_warned) {
-        debug_log("player_add_status_property(): no-op de compatibilidade.");
-        player_add_status_property_warned = true;
-    }
-}
-
 // Função de spawn de fogo do jogador (versão alternativa)
 void spawn_playerfire(int x, int y, string map_name, string owner = "") {
     if(map_name == "") return;
@@ -718,111 +696,6 @@ void spawn_playerfire(int x, int y, string map_name, string owner = "") {
 
         players[i].spawn_playerfire(fire_owner);
     }
-}
-
-// ==================== FUNÇÕES DE HISTORY (Log e Estatísticas) ====================
-// Estas funções complementam ou substituem history.nvgt quando não incluído
-
-// Estatísticas em memória
-int stats_total_logins = 0;
-int stats_total_registrations = 0;
-int stats_total_combats = 0;
-int stats_items_spawned = 0;
-int stats_items_collected = 0;
-int stats_messages_sent = 0;
-int stats_database_queries = 0;
-int stats_backup_count = 0;
-const int ACTION_HISTORY_MAX = 500;
-string[] action_history_lines;
-string[] action_history_players;
-string[] action_history_types;
-
-void log_action(string player_name, string action_type, string action_details,
-                string map_name = "", int x = 0, int y = 0, int z = 0,
-                string additional_data = "", string affected_player = "", string item_name = "") {
-    // Criar mensagem de log formatada
-    string log_msg = "ACTION: [" + player_name + "] " + action_type + " - " + action_details;
-    if(map_name != "") {
-        log_msg += " @ " + map_name + " (" + x + "," + y + "," + z + ")";
-    }
-    if(affected_player != "") {
-        log_msg += " [Target: " + affected_player + "]";
-    }
-    if(item_name != "") {
-        log_msg += " [Item: " + item_name + "]";
-    }
-    if(additional_data != "") {
-        log_msg += " [Extra: " + additional_data + "]";
-    }
-    debug_log(log_msg);
-    action_history_lines.insert_last(log_msg);
-    action_history_players.insert_last(player_name);
-    action_history_types.insert_last(action_type);
-    while(action_history_lines.length() > ACTION_HISTORY_MAX) {
-        action_history_lines.remove_at(0);
-        action_history_players.remove_at(0);
-        action_history_types.remove_at(0);
-    }
-}
-
-void update_statistics(string stat_type, int increment = 1) {
-    if(stat_type == "login") {
-        stats_total_logins += increment;
-    }
-    else if(stat_type == "registration") {
-        stats_total_registrations += increment;
-    }
-    else if(stat_type == "combat") {
-        stats_total_combats += increment;
-    }
-    else if(stat_type == "item_spawn") {
-        stats_items_spawned += increment;
-    }
-    else if(stat_type == "item_collect") {
-        stats_items_collected += increment;
-    }
-    else if(stat_type == "message") {
-        stats_messages_sent += increment;
-    }
-    else if(stat_type == "database_query") {
-        stats_database_queries += increment;
-    }
-    else if(stat_type == "backup") {
-        stats_backup_count += increment;
-    }
-    debug_log("STATS: " + stat_type + " +" + increment);
-}
-
-string get_current_statistics_report() {
-    string report = "=== ESTATÍSTICAS DO SERVIDOR ===\n";
-    report += "Logins: " + stats_total_logins + "\n";
-    report += "Registros: " + stats_total_registrations + "\n";
-    report += "Combates: " + stats_total_combats + "\n";
-    report += "Itens spawnados: " + stats_items_spawned + "\n";
-    report += "Itens coletados: " + stats_items_collected + "\n";
-    report += "Mensagens: " + stats_messages_sent + "\n";
-    report += "Queries DB: " + stats_database_queries + "\n";
-    report += "Backups: " + stats_backup_count + "\n";
-    return report;
-}
-
-string[] get_recent_actions(int limit = 50, string action_type = "", string player_name = "") {
-    string[] results;
-    if(limit <= 0) limit = 1;
-    string type_filter = action_type.trim_whitespace();
-    string player_filter = player_name.trim_whitespace();
-
-    for(int i = int(action_history_lines.length()) - 1; i >= 0; i--) {
-        if(player_filter != "" && action_history_players[i] != player_filter) continue;
-        if(type_filter != "" && action_history_types[i] != type_filter) continue;
-        results.insert_last(action_history_lines[i]);
-        if(int(results.length()) >= limit) break;
-    }
-
-    if(results.length() == 0) {
-        results.insert_last("Nenhuma acao registrada com os filtros informados.");
-    }
-    return results;
 }
 
 // ==================== FUNÇÕES DE EQUIPE E SELEÇÃO ====================

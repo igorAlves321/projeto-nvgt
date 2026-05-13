@@ -1,5 +1,5 @@
-// placeholder_classes.nvgt - Classes temporárias para compilação
-// Estas classes serão substituídas por implementações completas posteriormente
+// map_legacy_data.nvgt - Classes legadas de dados usadas pelo mapa
+// Mantem estruturas pequenas portadas do BGT enquanto os sistemas maiores vivem em arquivos próprios.
 
 //  REMOVIDO: Classes npc, npc_data, monstruo, monstruo_data
 // Agora implementadas em npc.nvgt e monstruo.nvgt
@@ -101,7 +101,7 @@ class arbol {
 		this.maxy = amaxy;
 		this.vida = avida;
 		this.vida_inicial = avida;
-		// trespawn seria configurado aqui se fosse necessário (ignorado por ora)
+		this.trespawn.restart();
 		this.enableitems = aenable;
 		this.items = aitems;
 		this.name = aname;
@@ -145,57 +145,90 @@ class arbol_data {
 // Zonas de morte
 class death {
 	int minx, maxx, miny, maxy;
-	int damage;
-	int item_cantity = 0; // Quantidade de item necessária
-	string item_required = "", require_item = ""; // Item necessário
-	string item = ""; // Item associado
-	bool instant_death;
 	int time = 1000; // Tempo em ms entre danos
+	int enable_progressive_death = 1; // Morte progressiva habilitada
+	int require_item = 0; // Se exige item para evitar a morte
+	double life = 100; // Dano/vida da zona de morte
+	double item_cantity = 0; // Quantidade de item necessária
 	string reason = ""; // Razão da morte
-	bool enable_progressive_death = true; // Morte progressiva habilitada
-	int life = 100; // Vida da zona de morte
+	string item = ""; // Item necessário
+	bool instant_death = false;
 
 	death(int minx, int maxx, int miny, int maxy, int damage, string item_required, bool instant) {
 		this.minx = minx; this.maxx = maxx;
 		this.miny = miny; this.maxy = maxy;
-		this.damage = damage;
-		this.item_required = item_required;
-		this.require_item = item_required;
+		this.life = damage;
+		this.item = item_required;
+		this.require_item = item_required == "" ? 0 : 1;
 		this.instant_death = instant;
+		this.enable_progressive_death = instant ? 0 : 1;
 	}
 
 	// Construtor alternativo com 11 parâmetros (do arquivo de mapa)
 	death(int p1, int p2, int p3, int p4, int p5, int p6, int p7, string s1, string s2, int p8, int p9) {
 		this.minx = p1; this.maxx = p2;
 		this.miny = p3; this.maxy = p4;
-		this.damage = p5;
-		this.item_required = s1;
-		this.require_item = s1;
-		this.instant_death = (p6 != 0);
-		this.time = p7;
-		this.reason = s2;
-		this.enable_progressive_death = (p8 != 0);
-		this.life = p9;
+		this.time = p5;
+		this.enable_progressive_death = p6;
+		this.life = p7;
+		this.reason = s1;
+		this.item = s2;
+		this.require_item = p8;
+		this.item_cantity = p9;
+		this.instant_death = (p6 == 0);
 	}
 }
 
 // Zonas de extração
 class extract {
 	int minx, maxx, miny, maxy;
-	string name;
+	int hmitems = 1;
+	int attempts = 1;
+	int initial_attempts = 1;
+	int extracttime = 1000;
+	string extracting = "";
+	string extracted = "";
+	string item = "";
+	string name = "";
+	timer extracttimer;
 
 	extract(int minx, int maxx, int miny, int maxy, string name) {
 		this.minx = minx; this.maxx = maxx;
 		this.miny = miny; this.maxy = maxy;
 		this.name = name;
+		this.item = name;
 	}
 
 	// Construtor alternativo com 10 parâmetros (do arquivo de mapa)
 	extract(int p1, int p2, int p3, int p4, int p5, int p6, int p7, string s1, string s2, string s3) {
 		this.minx = p1; this.maxx = p2;
 		this.miny = p3; this.maxy = p4;
-		this.name = s1; // Usar primeiro string como nome
-		// Parâmetros extras (p5, p6, p7, s2, s3) podem ser usados para funcionalidades futuras
+		this.hmitems = p5;
+		this.attempts = p6;
+		this.initial_attempts = p6;
+		this.extracttime = p7;
+		this.item = s1;
+		this.name = s1;
+		this.extracting = s2;
+		this.extracted = s3;
+	}
+
+	void extract_item(int player_index) {
+		if(player_index < 0 || player_index >= int(players.length())) return;
+		int mapindex = get_map_index_from(players[player_index].map);
+		if(mapindex < 0) return;
+
+		attempts--;
+		if(extracting != "") {
+			server_maps[mapindex].send_packet(0, "play " + extracting + ".ogg " + players[player_index].x + " " + players[player_index].y, true);
+		}
+		if(attempts <= 0) {
+			if(extracted != "") {
+				server_maps[mapindex].send_packet(0, "play " + extracted + ".ogg " + players[player_index].x + " " + players[player_index].y, true);
+			}
+			server_maps[mapindex].spawn_obj("" + players[player_index].x, players[player_index].y, 30000, 1, hmitems, item, "get" + item);
+			attempts = initial_attempts;
+		}
 	}
 }
 
@@ -233,9 +266,10 @@ class cachorromascota {
 class earthquake {
 	int x, y;
 	int minx, maxx, miny, maxy;
-	string map, earthquake_sound = ""; // Som do terremoto
-	int intensity = 5, owner = -1; // Intensidade e dono
-	int duration = 10000; // Duração em ms
+	string map, owner = "";
+	int earthquake_sound = -1; // Som do terremoto
+	int intensity = 5;
+	int duration = 60000; // Duração em ms
 	bool active = false; // Se está ativo
 	timer t, damagetimer; // Timers
 	
@@ -245,4 +279,29 @@ class earthquake {
 		this.intensity = intensity;
 		this.map = mapname;
 	}
+
+	earthquake(string owner_name, int range_x, int range_y, string mapname) {
+		this.owner = owner_name;
+		this.x = range_x;
+		this.y = range_y;
+		this.minx = 0;
+		this.maxx = range_x;
+		this.miny = 0;
+		this.maxy = range_y;
+		this.map = mapname;
+		this.active = true;
+		this.earthquake_sound = spawn_moving_sound("rumble.ogg", range_x, range_y, mapname);
+	}
+}
+
+void create_earthquake(string owner_name, int range_x, int range_y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return;
+
+	earthquake@ quake = earthquake(owner_name, range_x, range_y, mapname);
+	server_maps[mapindex].earthquakes.insert_last(quake);
+
+	string locate = server_maps[mapindex].get_locate_at();
+	if(locate == "") locate = "em " + mapname;
+	send_reliable(0, "msg2 ;un terremoto devastador está fazendo estragos; " + locate, 0);
 }

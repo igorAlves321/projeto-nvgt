@@ -1,9 +1,9 @@
 // server_map.nvgt - Sistema de Mapas do EVM Server (convertido de map.bgt)
 // Conversão: BGT → NVGT
-// Status: EM CONVERSÃO - FASE 1/13
+// Status: lógica principal de mapas portada para NVGT; módulos auxiliares ficam em includes separados.
 
 // Includes necessários
-#include "placeholder_classes.nvgt"  // Classes temporárias para compilação
+#include "map_legacy_data.nvgt"  // Classes legadas de dados usadas pelo mapa
 #include "map_elements.nvgt"         //  Task 1.3.1: Elementos de mapa completos
 #include "mine/mina.nvgt"
 #include "portals.nvgt"
@@ -943,7 +943,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// MÉTODOS DE LOOP - A IMPLEMENTAR NAS PRÓXIMAS FASES
+	// MÉTODOS DE LOOP DOS SISTEMAS DO MAPA
 	// ============================================================================
 	
 	// ============================================================================
@@ -2899,6 +2899,19 @@ void process_map_interaction(int player_index) {
 	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
 	map@ current_map = server_maps[map_idx];
 	if(current_map is null) return;
+
+	int extract_index = current_map.have_extract(p.x, p.y);
+	if(extract_index >= 0) {
+		extract@ current_extract = current_map.extracts[extract_index];
+		if(current_extract is null) return;
+		if(current_extract.extracttimer.elapsed < current_extract.extracttime) {
+			send_reliable_text(p.peer_id, "say Aguarde um pouco antes de extrair novamente.", 0);
+			return;
+		}
+		current_extract.extracttimer.restart();
+		current_extract.extract_item(player_index);
+		return;
+	}
 
 	for(uint i = 0; i < current_map.mapdata.length(); i++) {
 		string line = current_map.mapdata[i].trim_whitespace();

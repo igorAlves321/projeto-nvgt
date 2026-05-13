@@ -1,15 +1,15 @@
 #pragma plugin nvgt_sqlite
 
 // SQLite deve vir antes de módulos que dependem dele
-#include "../docks/nvgt/release/include/sqlite3constants.nvgt"
+#include "sqlite3constants.nvgt"
 
 // Utilitários
-#include "../docks/nvgt/release/include/token_gen.nvgt"  // Task 1.2.2: Geração de salt
+#include "token_gen.nvgt"  // Task 1.2.2: Geração de salt
 
 // Configurações do servidor
 const int SERVER_PORT = 9317;
 const string server_version = "1.0.0-alpha"; // Versão do servidor
-// const int MAX_PLAYERS = 100; // Movido para stubs.nvgt como variável modificável
+// MAX_PLAYERS é variável configurável em includes/legacy_compat.nvgt.
 const string DATABASE_FILE = "server/database/evm.db";
 
 // Forward declaration removida - NVGT não suporta forward declarations com void
@@ -48,7 +48,8 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/splay.nvgt"
 #include "includes/projetei.nvgt"
 #include "includes/missilguiado.nvgt"
-#include "includes/stubs.nvgt"
+#include "includes/legacy_compat.nvgt"
+#include "includes/history.nvgt"
 #include "includes/apartamento.nvgt"
 #include "includes/banheiro.nvgt"
 #include "includes/bombaatomica.nvgt"
@@ -76,7 +77,7 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/playerfires.nvgt"  // Sistema de fogo contínuo
 #include "includes/npc.nvgt"  // - Sistema completo de NPCs
 #include "includes/monstruo.nvgt"  // - Sistema completo de Monstros
-#include "includes/placeholder_classes.nvgt"  // Classes temporárias (apenas arbol agora)
+#include "includes/map_legacy_data.nvgt"  // Classes de dados legadas usadas pelo mapa
 #include "includes/platforms.nvgt"  // - Sistema de plataformas moveis e escadas
 #include "includes/portals.nvgt"  // - Sistema de portais e teleporte
 #include "includes/vehicles.nvgt"  // - Sistema de veiculos (carros, motos, lanchas)
@@ -109,7 +110,7 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/roles.nvgt"  // [OK] Sistema de Cargos/Permissoes
 #include "includes/afk_pacifico.nvgt"  // [OK] Modos Ausente (AFK) e Pacifico
 #include "includes/admin_chat.nvgt"  // [OK] Sistema de Chat Administrativo
-#include "../docks/nvgt/release/include/db_props.nvgt"
+#include "db_props.nvgt"
 // sqlite3constants.nvgt já incluído no topo
 
 // [OK] Epic 1 Task 1: Modulo de Inicializacao do Servidor
@@ -557,20 +558,13 @@ void perform_database_backup_async() {
         directory_create(backup_dir);
     }
     
-    // Backup usando SQLite backup API
-    sqlite3@ backup_db = sqlite3();
-    if(backup_db.open(backup_file) == SQLITE_OK) {
-        // TODO: Implementar backup SQLite nativo quando disponível
-        // Por agora, fazer cópia simples
-        string backup_sql = "VACUUM main INTO '" + backup_file + "';";
-        if(bancoJogo.execute(backup_sql) == SQLITE_OK) {
-            debug_log("Backup realizado com sucesso: " + backup_file);
-            log_to_database("INFO", "SYSTEM", "Backup automático realizado", -1, backup_file);
-        } else {
-            debug_log("ERRO no backup: " + bancoJogo.get_last_error_text());
-            log_to_database("ERROR", "SYSTEM", "Falha no backup automático", -1, bancoJogo.get_last_error_text());
-        }
-        backup_db.close();
+    string backup_sql = "VACUUM main INTO '" + backup_file + "';";
+    if(bancoJogo.execute(backup_sql) == SQLITE_OK) {
+        debug_log("Backup realizado com sucesso: " + backup_file);
+        log_to_database("INFO", "SYSTEM", "Backup automático realizado", -1, backup_file);
+    } else {
+        debug_log("ERRO no backup: " + bancoJogo.get_last_error_text());
+        log_to_database("ERROR", "SYSTEM", "Falha no backup automático", -1, bancoJogo.get_last_error_text());
     }
     
     async_backup_running = false;
@@ -3064,6 +3058,9 @@ void main() {
         
         // Sistema de Arena - Atualizar partidas e matchmaking
         arena_loop();
+
+        // Sistema de histórico - Persistir estatísticas periodicamente
+        process_history_maintenance();
         
         // - Sistema de Ban Temporario - Verificar expiracao de bans
         tempbanloop();
@@ -3188,67 +3185,6 @@ void main() {
     debug_log("Servidor desligado após " + (server_uptime.elapsed / 1000) + " segundos");
 }
 
-// =====================================================
-// FUNCOES DESATIVADAS / COMENTADAS
-// =====================================================
-/*
-LISTA DE FUNCIONALIDADES DESATIVADAS:
-
-1. INCLUDES DESATIVADOS:
-   - #include "includes/comandos.nvgt" (linha 42)
-     Motivo: NPCs antigos não mais necessários
-   
-   - #include "includes/guarda.nvgt" (linha 82)
-     Motivo: Precisa correção, temporariamente desabilitado
-
-2. NPCs ANTIGOS REMOVIDOS (substituídos por npc.nvgt genérico):
-   - dog.nvgt, coelho.nvgt, cavalo.nvgt, cobra.nvgt
-   - coco.nvgt, paje.nvgt, mercenario.nvgt, hcaverna.nvgt
-   - Arquivos de comandos: cachorro.nvgt, lobo.nvgt, urso.nvgt, etc.
-
-3. SISTEMAS PENDENTES (TODO):
-   - Threading (linhas 256, 292, 346, 391)
-     Status: Aguardando sintaxe confirmada do NVGT
-   
-   - Backup SQLite nativo (linha 367)
-     Status: Aguardando implementação nativa
-   
-   - Sistema de Login (linha 481)
-     Status: Não implementado
-   
-   - History System (linha 461, 580)
-     Status: history.nvgt não implementado
-   
-   - Statistics System (linha 464, 775)
-     Status: Funções save_daily_statistics() não implementadas
-
-   - Combat Cleanup (linha 583)
-     Status: [OK] IMPLEMENTADO - cleanup_expired_combats() com mutex + async + iteracao reversa
-
-   - Items Cleanup (Task 1.1.2)
-     Status: [OK] IMPLEMENTADO - cleanup_expired_items_task() em server_map.nvgt
-     Detalhes: mutex map_global_mutex + async + iteração reversa sobre objs[] de cada mapa
-
-   - GameMap Class (linha 609)
-     Status: Classe de mapas não implementada
-   
-   - Update Logic (linha 429)
-     Status: Lógica de atualização incompleta
-
-4. FUNCOES COMENTADAS NO GAME LOOP (linhas 669-690):
-   - dogloop(), coelholoop(), cavaloloop(), cobraloop()
-   - cocoloop(), pajeloop(), mercenarioloop(), hcavernaloop()
-   - Todos substituídos por: npc_global_loop() e monstruo_global_loop()
-
-5. FUNCOES COMENTADAS POR BUGS:
-   - screen_reader_speak() (linha 762)
-     Motivo: Pode causar bugs no NVDA
-
-OBSERVACOES:
-- A maioria das funções desativadas são de NPCs antigos (substituídos pelo sistema genérico)
-- Algumas funcionalidades aguardam implementação futura (Threading, History, Statistics)
-- Manter este bloco atualizado ao desativar/reativar funcionalidades
-*/
 
 
 
