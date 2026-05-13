@@ -715,6 +715,33 @@ void handle_drop_item(player@ p, string data) {
     send_reliable_text(p.peer_id, "say Você dropou " + quantidade + "x " + item_name, 0);
 }
 
+bool pickup_ground_item_at(player@ p) {
+    if(p is null) return false;
+
+    string[] map_drops = get_drops_in_map(p.map);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != p.x || d.y != p.y) continue;
+
+        string picked_item = d.item_id;
+        int picked_qty = d.quantity;
+        int picked_x = d.x;
+        int picked_y = d.y;
+
+        if(pickup_drop(p, d.drop_id)) {
+            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
+            broadcast_inventory_change(p, pickup_msg);
+            return true;
+        }
+    }
+
+    return pickup_map_object_at(p);
+}
+
 void handle_pickup_item(player@ p, string data) {
     // Formato: item_id
     // Exemplo: PICKUP:drop_123 ou PICKUP:chao
@@ -747,29 +774,7 @@ void handle_pickup_item(player@ p, string data) {
         return;
     }
 
-    // Pickup por posicao atual
-    string[] map_drops = get_drops_in_map(p.map);
-    for(uint i = 0; i < map_drops.length(); i++) {
-        drop_entity@ d = get_drop(map_drops[i]);
-        if(d is null) continue;
-
-        d.update_state();
-        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
-        if(d.x != p.x || d.y != p.y) continue;
-
-        string picked_item = d.item_id;
-        int picked_qty = d.quantity;
-        int picked_x = d.x;
-        int picked_y = d.y;
-
-        if(pickup_drop(p, d.drop_id)) {
-            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
-            broadcast_inventory_change(p, pickup_msg);
-            return;
-        }
-    }
-
-    if(pickup_map_object_at(p)) {
+    if(pickup_ground_item_at(p)) {
         return;
     }
 
@@ -946,6 +951,7 @@ void handle_interact(player@ p, string data) {
     if(data.trim_whitespace() == "") {
         int player_index = get_player_index_from(p.charname);
         if(player_index >= 0) {
+            if(pickup_ground_item_at(p)) return;
             process_map_interaction(player_index);
         }
         return;
@@ -964,13 +970,14 @@ void handle_interact(player@ p, string data) {
 
     // Integracoes rapidas com fluxos existentes
     if(object_id == "pickup" || action == "pickup") {
-        bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
+        bool ok = pickup_ground_item_at(p);
         if(!ok) send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
         return;
     }
     if(object_id == "map" || object_id == "store" || action == "use" || action == "interact") {
         int player_index = get_player_index_from(p.charname);
         if(player_index >= 0) {
+            if(pickup_ground_item_at(p)) return;
             process_map_interaction(player_index);
         }
         return;
