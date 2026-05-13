@@ -35,6 +35,8 @@
 #include"includes/dialogos.nvgt"
 #include"includes/door.nvgt"
 #include"includes/elevador.nvgt"
+#include"includes/client_loop/audio_listener.nvgt"
+#include"includes/client_loop/heartbeat_client.nvgt"
 #include"includes/key_hold.nvgt"
 #include"includes/map.nvgt"
 #include"includes/camera.nvgt"          // Sistema de câmera de exploração (G+teclas)
@@ -594,26 +596,7 @@ void game(){
 		// Ref: Doc NVGT.txt:12360 - "If it is not repeatedly called, your entire application will be disfunctional"
 		refresh_window();
 
-		// ===== CRITICAL: Update ALL sound pools =====
-		// Sem isso, áudio posicional NÃO funciona!
-		// Cada pool precisa saber onde o jogador (listener) está
-		//  CORREÇÃO: Usar me.yaw (graus 0-360) em vez de facing (índice 0-3)
-		// O parâmetro rotation de update_listener_2d espera graus, não índice de direção
-		p.update_listener_2d(me.x, me.y, me.yaw);
-		p2.update_listener_2d(me.x, me.y, me.yaw);
-		game_p.update_listener_2d(me.x, me.y, me.yaw);
-		pobjs.update_listener_2d(me.x, me.y, me.yaw);
-		ambientepool.update_listener_2d(me.x, me.y, me.yaw);
-		sourcepool.update_listener_2d(me.x, me.y, me.yaw);  // Sons ss: do mapa
-		audio.update_listener_2d(me.x, me.y, me.yaw);
-		steps.update_listener_2d(me.x, me.y, me.yaw);
-		shoot.update_listener_2d(me.x, me.y, me.yaw);
-		bodys.update_listener_2d(me.x, me.y, me.yaw);
-		walls.update_listener_2d(me.x, me.y, me.yaw);
-		doors_sound.update_listener_2d(me.x, me.y, me.yaw);
-		npcs.update_listener_2d(me.x, me.y, me.yaw);
-		pl.update_listener_2d(me.x, me.y, me.yaw);
-		// ===== END sound pool update =====
+		update_client_audio_listeners();
 
 		// ===== VOICE CHAT UPDATE =====
 		// Atualiza gravador (PTT) e player (cleanup de sons finalizados)
@@ -623,13 +606,7 @@ void game(){
 		// Atualiza áudio posicional de sons móveis (helicópteros, veículos, etc)
 		moving_sounds_loop();
 
-		// ===== HEARTBEAT AUTOMÁTICO =====
-		// Envia pacote silencioso a cada 5 segundos para manter conexão ativa
-		// Permite ao servidor detectar jogadores fantasma (inativos > 30s)
-		if(heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
-			heartbeat_timer.restart();
-			send_unreliable(peer_id, "heartbeat", 0);
-		}
+		send_client_heartbeat_if_needed();
 
 		loop_count++;
 		if(loop_count % 100 == 0) {
