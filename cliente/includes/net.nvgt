@@ -88,9 +88,9 @@ void net_create() {
 	}
 
 	menusilent();
-	game_menu.add_item(pu.get_value("Mulher"), "0");
-	game_menu.add_item(pu.get_value("Homem"), "1");
-	game_menu.intro_text = pu.get_value("Voce e homem ou mulher?");
+	game_menu.add_item(pu.get_value("Homem"), "0");
+	game_menu.add_item(pu.get_value("Mulher"), "1");
+	game_menu.intro_text = pu.get_value("Você é homem ou mulher?");
 	int selection = game_menu.run();
 	if(selection == -1) {
 		account_creating = false;
@@ -160,7 +160,7 @@ void net_create() {
 					menuprincipal();
 					return;
 				}
-				string received_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
+				string received_msg = normalize_legacy_text(decrypt_packet(event.message)); // Descriptografar + normalizar
 				if(received_msg == "created") {
 					account_creating = false;
 					net_un = username;
@@ -205,7 +205,7 @@ void net_create() {
 void net_logar(bool localhost = false) {
 	// Validacao: Verificar se ha conta configurada
 	if(net_un == "" || net_pw == "") {
-		dlg(pu.get_value("Voce nao tem uma conta configurada. Por favor, crie uma conta primeiro ou configure suas credenciais."));
+		dlg(pu.get_value("Você não tem uma conta configurada. Por favor, crie uma conta primeiro ou configure suas credenciais."));
 		menuprincipal();
 		return;
 	}
@@ -221,7 +221,7 @@ void net_logar(bool localhost = false) {
 
 	debug_log("=== INICIANDO TENTATIVA DE CONEXAO ===");
 	debug_log("Endereco: " + target_address + " Porta: " + game_serverport);
-	if(NET_DEBUG_SPEAKS) speak("DEBUG: Iniciando conexao para " + target_address + " porta " + game_serverport);
+	if(NET_DEBUG_SPEAKS) speak("DEBUG: Iniciando conexão para " + target_address + " porta " + game_serverport);
 	is_connected = false; // Flag global
 	@event = null;
 	
@@ -232,6 +232,7 @@ void net_logar(bool localhost = false) {
 	debug_log("Chamando connect()");
 	if(NET_DEBUG_SPEAKS) speak("DEBUG: Chamando connect para " + target_address + " porta " + game_serverport);
 	uint64 server_peer = con.connect(target_address, game_serverport);
+	uint64 expected_peer = server_peer;
 	
 	if(server_peer == 0) {
 		dlg(pu.get_value("Erro ao conectar ao servidor"));
@@ -242,8 +243,8 @@ void net_logar(bool localhost = false) {
 	
 	peer_id = server_peer; // Armazenar peer_id global
 	
-	debug_log("Aguardando evento de conexao... timeout=" + connecttime + "ms");
-	if(NET_DEBUG_SPEAKS) speak("DEBUG: Aguardando evento de conexao");
+	debug_log("Aguardando evento de conexão... timeout=" + connecttime + "ms");
+	if(NET_DEBUG_SPEAKS) speak("DEBUG: Aguardando evento de conexão");
 	connecttimer.restart();
 
 	// Criar tela de conexao com audio_form para permitir cancelamento
@@ -256,8 +257,8 @@ void net_logar(bool localhost = false) {
 		@event = con.request(); // Poll de eventos de rede (obrigatorio para receber connect/receive/disconnect)
 
 		if(key_pressed(KEY_ESCAPE)) {
-			debug_log("Usuario cancelou a conexao");
-			if(NET_DEBUG_SPEAKS) speak("DEBUG: Usuario cancelou conexao");
+			debug_log("Usuario cancelou a conexão");
+			if(NET_DEBUG_SPEAKS) speak("DEBUG: Usuario cancelou conexão");
 			con.destroy();
 			is_connected = false;
 			reset();
@@ -267,7 +268,7 @@ void net_logar(bool localhost = false) {
 
 		if(event is null) {
 			if(!is_connected && connecttimer.elapsed >= connecttime) {
-				debug_log("TIMEOUT apos " + connecttimer.elapsed + "ms - Servidor nao respondeu");
+				debug_log("TIMEOUT apos " + connecttimer.elapsed + "ms - Servidor não respondeu");
 				if(NET_DEBUG_SPEAKS) speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
 				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 				con.destroy();
@@ -282,7 +283,7 @@ void net_logar(bool localhost = false) {
 		// Ignorar event_none (tipo 0 - sem eventos)
 		if(event.type == event_none) {
 			if(!is_connected && connecttimer.elapsed >= connecttime) {
-				debug_log("TIMEOUT apos " + connecttimer.elapsed + "ms - Servidor nao respondeu");
+				debug_log("TIMEOUT apos " + connecttimer.elapsed + "ms - Servidor não respondeu");
 				if(NET_DEBUG_SPEAKS) speak("DEBUG: Timeout - " + connecttimer.elapsed + "ms sem resposta");
 				dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 				con.destroy();
@@ -297,9 +298,24 @@ void net_logar(bool localhost = false) {
 		debug_log("Evento recebido: tipo=" + event.type + ", peer_id=" + event.peer_id);
 		if(NET_DEBUG_SPEAKS) speak("DEBUG: Evento recebido - tipo=" + event.type + " peer=" + event.peer_id);
 
-		if(event.type == event_disconnect || (!is_connected && connecttimer.elapsed >= connecttime)) {
-			debug_log("Evento de desconexao ou timeout");
-			if(NET_DEBUG_SPEAKS) speak("DEBUG: Desconectado ou timeout");
+		if(event.type == event_disconnect) {
+			// Ignora desconexao de peers antigos (ex.: sessao anterior derrubada pelo servidor).
+			if(event.peer_id != expected_peer) {
+				debug_log("Ignorando desconexão de peer antigo durante login: " + event.peer_id + " (esperado: " + expected_peer + ")");
+				continue;
+			}
+			debug_log("Evento de desconexão do peer atual durante login");
+			if(NET_DEBUG_SPEAKS) speak("DEBUG: Desconectado do peer atual");
+			dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
+			con.destroy();
+			is_connected = false;
+			reset();
+			menuprincipal();
+			return;
+		}
+		if(!is_connected && connecttimer.elapsed >= connecttime) {
+			debug_log("Evento de timeout durante login");
+			if(NET_DEBUG_SPEAKS) speak("DEBUG: Timeout durante login");
 			dlg(pu.get_value("Servidor fora do ar, tente novamente mais tarde."));
 			con.destroy();
 			is_connected = false;
@@ -311,6 +327,7 @@ void net_logar(bool localhost = false) {
 		if(event.type == event_connect && !is_connected) {
 			debug_log("EVENT_CONNECT recebido! peer_id=" + event.peer_id);
 			if(NET_DEBUG_SPEAKS) speak("DEBUG: EVENT_CONNECT recebido! Enviando credenciais");
+			expected_peer = event.peer_id;
 			net_peer_id = event.peer_id;
 			server_peer_id = event.peer_id;
 			peer_id = int(event.peer_id);  // Atualizar peer_id global (int) para compatibilidade BGT
@@ -334,7 +351,7 @@ void net_logar(bool localhost = false) {
 					menuprincipal();
 					return;
 				}
-				string full_msg = decrypt_packet(event.message); // Descriptografar mensagem do servidor
+				string full_msg = normalize_legacy_text(decrypt_packet(event.message)); // Descriptografar + normalizar
 				debug_log("Mensagem recebida do servidor: '" + full_msg + "'");
 				string[] parsed = full_msg.split(" ");
 
@@ -348,11 +365,12 @@ void net_logar(bool localhost = false) {
 					if(parsed[0] == "changemap") {
 						debug_log("- CHANGEMAP recebido - carregando mapa completo");
 
-						// Carregar mapa com dados completos (formato: "changemap [dados]\r\nx:X\r\ny:Y\r\n")
-						load_map(full_msg);
+						// Carregar mapa sem o prefixo do comando (formato esperado: "map:...\r\n...")
+						string map_payload = string_replace(full_msg, "changemap ", "", false);
+						load_map(map_payload);
 
 						// Extrair coordenadas do mapa carregado
-						string[] ldata = delinear(full_msg);
+						string[] ldata = delinear(map_payload);
 						for(uint i = 0; i < ldata.length(); i++) {
 							string[] parts = ldata[i].split(":");
 							if(parts[0] == "x" && parts.length() > 1) {
@@ -367,11 +385,11 @@ void net_logar(bool localhost = false) {
 						}
 
 						debug_log("Mapa carregado! " + mapname + " (" + me.x + "," + me.y + ")");
-						speak("Voce esta no mapa: " + mapname + ". Use as setas para se mover.");
+						speak("Você esta no mapa: " + mapname + ". Use as setas para se mover.");
 
 						// AGORA SIM entra no loop do jogo
 						game();
-						debug_log("game() retornou (desconexao ou saida)");
+						debug_log("game() retornou (desconexão ou saida)");
 						return;
 					}
 				}
@@ -398,7 +416,7 @@ void net_logar(bool localhost = false) {
 						salvavida = 1;
 					}
 					else if(parsed[0] == "updatenow") {
-						dlg(pu.get_value("Erro: Voce precisa da ultima versao para poder jogar. Por favor atualiza para a ultima versao em checar por atualizacoes."));
+						dlg(pu.get_value("Erro: Você precisa da ultima versão para poder jogar. Por favor atualiza para a ultima versão em checar por atualizacoes."));
 						con.destroy();
 						is_connected = false;
 						menuprincipal();
@@ -466,7 +484,7 @@ void netloop() {
 					relogin_flag = true;
 					return;
 				}
-				string full_msg = decrypt_packet(ev.message);
+				string full_msg = normalize_legacy_text(decrypt_packet(ev.message));
 				string[] parsed = full_msg.split(" ");
 				
 				if(parsed.length() == 0) continue;
@@ -633,7 +651,24 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
 		}
 		if(net_json_try_get_string(full_msg, "player", picker) && picker == un) {
-			speak(pu.get_value("Voce pegou um item."), true);
+			speak(pu.get_value("Você pegou um item."), true);
+		}
+		return;
+	}
+	if(parsed[0] == "getobj" && parsed.length() >= 3) {
+		int item_x = string_to_number(parsed[1]);
+		int item_y = string_to_number(parsed[2]);
+		for(uint i = 0; i < objs.length(); i++) {
+			if(objs[i].x == item_x && objs[i].y == item_y) {
+				objs.remove_at(i);
+				break;
+			}
+		}
+		pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		if(parsed.length() >= 6 && parsed[5] == un) {
+			string amount = parsed[4];
+			string item_name = parsed[3];
+			speak(amount + " " + pu.get_value(item_name), true);
 		}
 		return;
 	}
@@ -707,7 +742,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	else if(parsed[0] == "msg2" && parsed.length() > 1) {
 		// Mensagem formatada do servidor com separadores ; (formato BGT)
-		// Exemplo: "Voce esta no nivel; 5, ;e na patente; ;soldado;. ;"
+		// Exemplo: "Você esta no nivel; 5, ;e na patente; ;soldado;. ;"
 		string m = "";
 		// Reconstruir a mensagem inteira a partir do texto original, ignorando "msg2 "
 		string a = full_msg.substr(5); 
@@ -898,7 +933,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 					if(generic_error == "") generic_error = "Erro ao sincronizar dados.";
 					speak(generic_error, true);
 					add_add_item("avisos", generic_error);
-					debug_log("Falha ao processar setequipment: payload invalido");
+					debug_log("Falha ao processar setequipment: payload inválido");
 					return;
 				}
 				debug_log("SETEQUIPMENT aplicado: " + payload);
@@ -953,7 +988,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "off" && parsed.length() >= 4) {
 		if(parsed[1] == un) {
 			if(string_to_number(parsed[3]) == 1) {
-				speak(pu.get_value("A conexao com este universo foi perdida..."));
+				speak(pu.get_value("A conexão com este universo foi perdida..."));
 				wait(400);
 				reset();
 				relogin_flag = true;
@@ -1018,7 +1053,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		}
 
 		p.play_stationary(stance_sound, false);
-		speak("Agora voce esta " + stance_name + ".", true);
+		speak("Agora você esta " + stance_name + ".", true);
 		debug_log(" Stance atualizado: " + stance_name + " (" + new_stance + ")");
 	}
 	// Task 2.2: Handler de stance de outros jogadores
@@ -1106,11 +1141,13 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	
 	else if(parsed[0] == "changemap") {
-		load_map(full_msg);
+		string map_payload = string_replace(full_msg, "changemap ", "", false);
+		load_map(map_payload);
 		connect = true;
 	}
 	else if(parsed[0] == "changemap2") {
-		load_map(full_msg, false);
+		string map_payload = string_replace(full_msg, "changemap2 ", "", false);
+		load_map(map_payload, false);
 		connect = true;
 	}
 	
@@ -1356,7 +1393,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		for(int x = 0; x < lines.length(); x++) {
 			string[] data = lines[x].split(" ");
 			if(data.length() < 16) {
-				debug_log("Pacote create_weapon invalido (campos insuficientes): " + lines[x]);
+				debug_log("Pacote create_weapon inválido (campos insuficientes): " + lines[x]);
 				continue;
 			}
 			if(get_weapon_index(data[10]) < 0) {
@@ -1369,11 +1406,15 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	
 	// === GRUPO 10: MENUS ===
+	else if(parsed[0] == "dataportal" || parsed[0] == "use_portal") {
+		string content = full_msg.replace(parsed[0] + " ", "");
+		telemenu(content.split("\r\n"));
+	}
 	else if(parsed[0] == "servermenu") {
 		string content = full_msg.replace(parsed[0] + " ", "");
 		string[] data = content.split("|");
 		if(data.length() < 5) {
-			debug_log("Pacote servermenu invalido: " + content);
+			debug_log("Pacote servermenu inválido: " + content);
 		}
 		else {
 			menuserver(data[0], data[1], string_to_number(data[2]), data[3].split("\r\n"), data[4].split("\r\n"));
@@ -1455,6 +1496,13 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		exit();
 	}
 	else if(parsed[0] == "reiniciar") {
+		// Feedback sonoro/tela para reinício forçado pelo servidor.
+		if(file_exists(get_sound_path("reiniciando.ogg"))) {
+			p.play_stationary("reiniciando.ogg", false);
+		} else {
+			p.play_stationary("notify8.ogg", false);
+		}
+		speak("Servidor reiniciando. Reconectando...");
 		wait(1000);
 		reset();
 		relogin_flag = true;
@@ -1496,7 +1544,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	else if(parsed[0] == "permanent") {
 		string text = full_msg.replace(parsed[0] + " ", "");
-		string text2 = text.replace("mensaje permanente no leido de", pu.get_value("mensagem permanente nao lida de"));
+		string text2 = text.replace("mensaje permanente no leido de", pu.get_value("mensagem permanente não lida de"));
 		add_add_item("conversaciones_privadas", text2);
 		if(logpermanents == 1) {
 			if(!directory_exists("permanents")) directory_create("permanents");
@@ -1531,7 +1579,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 				p.play_stationary("hit.ogg", false);
 				
 				// Adicionar mensagem ao chat
-				string msg = "NPC " + npc_objects[i].name + " atacou voce! Dano: " + dano;
+				string msg = "NPC " + npc_objects[i].name + " atacou você! Dano: " + dano;
 				add_add_item("avisos", msg);
 				
 				// Debug log
@@ -1617,7 +1665,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else {
 		// Compatibilidade: alguns fluxos antigos enviam "som.ogg x y" sem prefixo "play"
 		// Exemplo: "abrirziper.ogg 52 0"
-		if(parsed.length() == 3 && parsed[0].find(".ogg") > 0 && string_is_digits(parsed[1]) && string_is_digits(parsed[2])) {
+		if(parsed.length() >= 3 && parsed[0].find(".ogg") >= 0) {
 			p.play_2d(parsed[0], me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
 			return;
 		}
@@ -1879,6 +1927,67 @@ void process_msg2(string full_msg, string[] parsed) {
 	string a = full_msg;
 	a = a.replace(parsed[0] + " ", "");
 	string[] b = a.split(";");
+	
+	// Ajuste de escrita para mensagens de ganho de item:
+	// "1 ;Peixe de olhos brancos;." -> "1 peixe de olhos brancos."
+	if(b.length() == 3) {
+		string qtd = b[0].trim_whitespace();
+		string item_raw = b[1].trim_whitespace();
+		string tail = b[2].trim_whitespace();
+		if(qtd != "" && item_raw != "" && tail == ".") {
+			string first_char = qtd.substr(0, 1);
+			int first_code = character_to_ascii(first_char);
+			if(first_code >= 48 && first_code <= 57) {
+				// Garantir que quantidade e totalmente numerica
+				bool only_digits = true;
+				for(uint qi = 0; qi < qtd.length(); qi++) {
+					int code = character_to_ascii(qtd.substr(qi, 1));
+					if(code < 48 || code > 57) {
+						only_digits = false;
+						break;
+					}
+				}
+				if(!only_digits) {
+					for(uint i = 0; i < b.length(); i++) {
+						m += pu.get_value(b[i]);
+					}
+					add_add_item("tudo", m);
+					return;
+				}
+				
+				int qty_int = parse_int(qtd);
+				string item_text = pu.get_value(item_raw);
+				if(item_text.length() > 1) {
+					item_text = item_text.substr(0, 1).lower() + item_text.substr(1, item_text.length() - 1);
+				} else if(item_text.length() == 1) {
+					item_text = item_text.lower();
+				}
+				
+				// Pluralizacao basica para mensagens de quantidade
+				if(qty_int > 1) {
+					string lower_item = item_text.lower();
+					if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "ao") {
+						item_text += "s";
+					} else if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "al") {
+						item_text = item_text.substr(0, item_text.length() - 1) + "is";
+					} else if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "el") {
+						item_text = item_text.substr(0, item_text.length() - 1) + "is";
+					} else if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "ol") {
+						item_text = item_text.substr(0, item_text.length() - 1) + "is";
+					} else if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "ul") {
+						item_text = item_text.substr(0, item_text.length() - 1) + "is";
+					} else if(lower_item.length() >= 1 && lower_item.substr(lower_item.length() - 1, 1) != "s") {
+						item_text += "s";
+					}
+				}
+				
+				m = qtd + " " + item_text + ".";
+				add_add_item("tudo", m);
+				return;
+			}
+		}
+	}
+	
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
@@ -2064,10 +2173,10 @@ void process_pinfo_data(string full_msg) {
 	// Status de ban com destaque
 	if(info[2] == "Sim") {
 		game_menu.add_item(pu.get_value("as BANIDO: Sim"), "banido");
-		game_menu.add_item(pu.get_value("Razao do ban: ") + info[3], "razao");
+		game_menu.add_item(pu.get_value("Razão do ban: ") + info[3], "razao");
 		game_menu.add_item(pu.get_value("Expira em: ") + info[4], "expira");
 	} else {
-		game_menu.add_item(pu.get_value("Banido: Nao"), "banido");
+		game_menu.add_item(pu.get_value("Banido: Não"), "banido");
 	}
 	
 	// Estatisticas (se disponiveis)

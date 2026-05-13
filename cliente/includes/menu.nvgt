@@ -1,6 +1,5 @@
 // Sistema de menus convertido para NVGT usando classes nativas
-#include "../../docks/include/menu.nvgt"  // Include do sistema de menu nativo do NVGT
-#include "../../docks/include/input_forms.nvgt"  // Formulários de entrada NVGT
+#include "input_forms.nvgt"  // Formulários de entrada NVGT
 
 // Instância global do menu
 menu game_menu;
@@ -27,7 +26,10 @@ int menu_volume_to_db() {
 	int vol = int(musicamenu);
 	if(vol < 0) vol = 0;
 	if(vol > 100) vol = 100;
-	return vol - 100;
+	// Mapeamento mais audível: 30% não pode virar quase mudo (-70dB).
+	// 0%=-100dB, 100%=0dB, com curva suave para menus.
+	if(vol == 0) return -100;
+	return (vol / 2) - 50;
 }
 
 void stop_menu_music_internal() {
@@ -84,7 +86,7 @@ void start_menu_music() {
 		loaded = menu_music_sound.load("sounds/" + track);
 	}
 	if(!loaded) {
-		debug_log("ERRO: Nao foi possivel carregar musica do menu!");
+		debug_log("ERRO: Não foi possível carregar musica do menu!");
 		debug_log("Tentou: " + resolved_track + ", pack, " + track + " e sounds/" + track);
 		return;
 	}
@@ -96,7 +98,7 @@ void start_menu_music() {
 	menu_music_sound.play_looped();
 	menu_music_loaded = true;
 	current_menu_music = track;
-	debug_log("✅ Música do menu tocando: " + track);
+	debug_log(" Música do menu tocando: " + track);
 }
 
 void ensure_menu_music_volume() {
@@ -228,7 +230,11 @@ void setupmenu(bool music = false) {
 	game_menu.background_callback_data = "";
 }
 
-// Função para menu silencioso (definição principal - remove stub)
+string checkbox_label(const string&in label, bool checked) {
+	return (checked ? "[x] " : "[ ] ") + label;
+}
+
+// Função principal para menu silencioso
 void menusilent() {
 	game_menu.reset(true);
 	ensure_menu_music_volume();
@@ -305,7 +311,7 @@ void menuprincipal() {
 		debug_log("📋 Usuário selecionou CONECTAR");
 		// Validação: Verificar se há conta configurada
 		if(net_un == "" || net_pw == "") {
-			debug_log("⚠️ Conta não configurada");
+			debug_log(" Conta não configurada");
 			dlg(pu.get_value("Você não tem uma conta configurada. Por favor, crie uma conta primeiro em 'Criar nova conta' ou configure suas credenciais em 'Configurar personagem'."));
 			menuprincipal();
 			return;
@@ -368,7 +374,7 @@ void salvar_configuracoes_automatico(audio_form@ form_geral, audio_form@ form_pe
 	ouvirmortes = form_notificacoes.is_checked(fn_mortes) ? 1 : 0;
 	
 	writeprefs();
-	debug_log("✅ Configurações salvas automaticamente");
+	debug_log(" Configurações salvas automaticamente");
 }
 
 // Menu de configurações (Lista principal)
@@ -427,7 +433,7 @@ void gerais() {
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	
-	if(mres <= 0 || selected_id == "back") {
+	if(mres < 0 || selected_id == "back") {
 		return;
 	}
 	else if(selected_id == "side") {
@@ -467,14 +473,11 @@ void gerais() {
 void notificacoes_menu() {
 	setupmenu();
 	
-	if(avisadesconectou == 1) game_menu.add_item(pu.get_value("OPT_NOTIF_DISCONN_ON"), "disconn");
-	else game_menu.add_item(pu.get_value("OPT_NOTIF_DISCONN_OFF"), "disconn");
+	game_menu.add_item(checkbox_label(pu.get_value("Avisar desconexões"), avisadesconectou == 1), "disconn");
 	
-	if(avisanivel == 1) game_menu.add_item(pu.get_value("OPT_NOTIF_LEVELUP_ON"), "level");
-	else game_menu.add_item(pu.get_value("OPT_NOTIF_LEVELUP_OFF"), "level");
+	game_menu.add_item(checkbox_label(pu.get_value("Avisar ao subir de nível"), avisanivel == 1), "level");
 	
-	if(ouvirmortes == 1) game_menu.add_item(pu.get_value("OPT_NOTIF_DEATH_ON"), "death");
-	else game_menu.add_item(pu.get_value("OPT_NOTIF_DEATH_OFF"), "death");
+	game_menu.add_item(checkbox_label(pu.get_value("Ouvir sons de morte"), ouvirmortes == 1), "death");
 	
 	game_menu.add_item(pu.get_value("OPT_BACK"), "back");
 	
@@ -482,7 +485,7 @@ void notificacoes_menu() {
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	
-	if(mres <= 0 || selected_id == "back") {
+	if(mres < 0 || selected_id == "back") {
 		return;
 	}
 	else if(selected_id == "disconn") {
@@ -681,7 +684,7 @@ void perfio() {
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	
-	if(mres <= 0 || selected_id == "back") {
+	if(mres < 0 || selected_id == "back") {
 		return;
 	}
 	else if(selected_id == "voice") {
@@ -802,7 +805,7 @@ void optionsmenu2() {
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	
-	if(mres <= 0 || selected_id == "back") {
+	if(mres < 0 || selected_id == "back") {
 		return;
 	}
 	
@@ -1223,7 +1226,7 @@ string selecionar_jogador() {
 	game_menu.intro_text = pu.get_value("Selecione o jogador que deseja");
 	int mres = game_menu.run();
 	
-	if(mres <= 0) {
+	if(mres < 0) {
 		speak(pu.get_value("Ninguém por perto."));
 		return "";
 	}
@@ -1250,7 +1253,7 @@ string zoeiras() {
 	game_menu.intro_text = pu.get_value("Escolha o arquivo de som para enviar.");
 	int mres = game_menu.run();
 	
-	if(mres <= 0) {
+	if(mres < 0) {
 		return "-1";
 	}
 	else return game_menu.get_item_id(mres);
@@ -1281,7 +1284,7 @@ string soundsmenu() {
 	game_menu.intro_text = pu.get_value("Selecione o áudio a enviar. Atualmente existem ") + soundfiles.length() + pu.get_value(" arquivos na pasta de sons.");
 	int mres = game_menu.run();
 	
-	if(mres <= 0) {
+	if(mres < 0) {
 		return "";
 	}
 	else return game_menu.get_item_id(mres);
@@ -1360,7 +1363,7 @@ string audiosmenu() {
 	game_menu.intro_text = pu.get_value("Selecione o áudio. Total de arquivos: ") + audiofiles.length();
 	int mres = game_menu.run();
 	
-	if(mres <= 0) {
+	if(mres < 0) {
 		return "";
 	}
 	else return game_menu.get_item_id(mres);
@@ -1392,13 +1395,13 @@ string permanentsmenu() {
 	game_menu.intro_text = pu.get_value("Selecione o som ambiente permanente. Total: ") + soundfiles.length();
 	int mres = game_menu.run();
 	
-	if(mres <= 0) {
+	if(mres < 0) {
 		return "";
 	}
 	else return game_menu.get_item_id(mres);
 }
 
-// Missing function stubs that need to be converted from BGT
+// Seleção de jogador próximo para transferência de itens
 string daritem(){
 	if(ausente||!moveable)return "";
 	menusilent();
@@ -1426,13 +1429,12 @@ string get_player_username_by_index(int index) {
 	return "";
 }
 
-// Placeholder para funções que dependem de outros sistemas ainda não convertidos
+// Menu de voz usando as vozes disponíveis no TTS do NVGT
 void voicemenu() {
 	refresh_voice_list();
 	string[] voices = get_voice_names();
 	if(voices.length() == 0) {
-		dlg(pu.get_value("Nenhuma voz disponível."));
-		perfio();
+		dlg(pu.get_value("Ainda não há vozes cadastradas."));
 		return;
 	}
 
@@ -1524,8 +1526,6 @@ void voicemenu() {
 		voice = original_voice;
 		ttsrate = original_rate;
 	}
-
-	perfio();
 }
 
 // Menu de slider para ajuste de volume (0-100%)
@@ -1961,7 +1961,7 @@ void servicesmenu() {
 		}
 	}
 	else if(selected_id == "escolherchat") {
-		chatmenu();
+		speak(pu.get_value("Funcionalidade desativada no momento."));
 	}
 	else if(selected_id == "bounty") {
 		game_net.send(net_peer_id, encrypt_packet("bounty_menu"), 0, true);
@@ -2041,6 +2041,9 @@ void servicesmenu() {
 
 // Menu de chat
 void chatmenu() {
+	speak(pu.get_value("Funcionalidade desativada no momento."));
+	return;
+
 	setupmenu();
 	game_menu.add_item(pu.get_value("Chat global"), "global");
 	game_menu.add_item(pu.get_value("Chat regional"), "regional");
@@ -2051,7 +2054,7 @@ void chatmenu() {
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	
-	if(mres <= 0 || selected_id == "back") return;
+	if(mres < 0 || selected_id == "back") return;
 	
 	if(selected_id == "global") {
 		game_net.send(net_peer_id, encrypt_packet("/setchannel global"), 1, true);
@@ -2107,11 +2110,11 @@ string sociaismenu() {
 // Menu de seleção de sexo
 string sexomenu() {
 	menusilent();
-	game_menu.add_item(pu.get_value("Feminino"), "1");
-	game_menu.add_item(pu.get_value("Masculino"), "0");
+	game_menu.add_item(pu.get_value("GENDER_MALE"), "0");
+	game_menu.add_item(pu.get_value("GENDER_FEMALE"), "1");
 	game_menu.add_item(pu.get_value("Voltar"), "back");
 	
-	game_menu.intro_text = pu.get_value("Selecione o seu sexo.");
+	game_menu.intro_text = pu.get_value("MENU_GENDER_SELECT");
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
 	

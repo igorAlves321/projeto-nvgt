@@ -1,15 +1,15 @@
-﻿// ============================================================
+// ============================================================
 // SISTEMA DE LOOT E DROPS NO MAPA
 // ============================================================
-// âœ… Epic 1 Task 7: Sistema de Loot / Drops no Mapa
+// [OK] Epic 1 Task 7: Sistema de Loot / Drops no Mapa
 //
 // Implementa sistema completo de itens dropados no mundo:
 // - Spawn de drops (morte de mobs, containers, eventos)
-// - Regras de loot (owner_only â†’ public)
-// - Sistema de pickup com validaÃ§Ãµes
-// - Garbage collection automÃ¡tico
-// - SincronizaÃ§Ã£o eficiente com players prÃ³ximos
-// - PersistÃªncia temporÃ¡ria de drops
+// - Regras de loot (owner_only -> public)
+// - Sistema de pickup com validacoes
+// - Garbage collection automatico
+// - Sincronizacao eficiente com players proximos
+// - Persistencia temporaria de drops
 // - Anti-exploit (distance checks, atomicidade)
 
 // ============================================================
@@ -18,7 +18,7 @@
 
 const float PICKUP_RANGE = 3.0;                // Alcance para pegar itens (metros)
 const uint64 OWNER_EXCLUSIVE_TIME = 30000;     // 30s exclusivo para owner/party
-const uint64 DROP_EXPIRE_TIME = 300000;        // 5min atÃ© drop expirar
+const uint64 DROP_EXPIRE_TIME = 300000;        // 5min ate drop expirar
 const float DROP_BROADCAST_RANGE = 50.0;       // Alcance para broadcasts
 const int MAX_DROPS_PER_MAP = 500;             // Limite de drops por mapa
 const uint DROP_JSON_MAX_MESSAGE_CHARS = 4096;
@@ -34,16 +34,16 @@ const string DROP_STATE_EXPIRED = "expired";
 // ============================================================
 
 class drop_entity {
-    string drop_id;             // UUID Ãºnico do drop
+    string drop_id;             // UUID unico do drop
     string item_id;             // ID do item (nome)
-    string instance_id;         // UUID da instÃ¢ncia (se item Ãºnico)
+    string instance_id;         // UUID da instancia (se item unico)
     int quantity;               // Quantidade
-    string map_id;              // Mapa onde estÃ¡ o drop
-    int x;                      // PosiÃ§Ã£o X
-    int y;                      // PosiÃ§Ã£o Y
+    string map_id;              // Mapa onde esta o drop
+    int x;                      // Posicao X
+    int y;                      // Posicao Y
     uint64 owner_id;            // Peer ID do dono (0 = nenhum)
     uint64 spawned_at;          // Timestamp de spawn
-    uint64 owner_until;         // AtÃ© quando Ã© exclusivo do owner
+    uint64 owner_until;         // Ate quando e exclusivo do owner
     uint64 expire_at;           // Quando expira
     string state;               // owner_only, public, picked, expired
 
@@ -91,7 +91,7 @@ class drop_entity {
         return ticks() >= expire_at;
     }
 
-    // Verificar se ainda Ã© exclusivo do owner
+    // Verificar se ainda e exclusivo do owner
     bool is_owner_only() {
         if(owner_id == 0) return false;
         return ticks() < owner_until;
@@ -104,7 +104,7 @@ class drop_entity {
         } else if(is_owner_only()) {
             state = DROP_STATE_OWNER_ONLY;
         } else if(state == DROP_STATE_OWNER_ONLY) {
-            // TransiÃ§Ã£o de owner_only para public
+            // Transicao de owner_only para public
             state = DROP_STATE_PUBLIC;
         }
     }
@@ -121,22 +121,22 @@ class drop_entity {
 // ARMAZENAMENTO GLOBAL DE DROPS
 // ============================================================
 
-// DicionÃ¡rio global: drop_id â†’ drop_entity@
+// Dicionario global: drop_id -> drop_entity@
 dictionary global_drops;
 
-// DicionÃ¡rio: map_id â†’ array de drop_ids
+// Dicionario: map_id -> array de drop_ids
 dictionary drops_by_map;
 
-// Counter para estatÃ­sticas
+// Counter para estatisticas
 int total_drops_spawned = 0;
 int total_drops_picked = 0;
 int total_drops_expired = 0;
 
 // ============================================================
-// FUNÃ‡Ã•ES DE GERENCIAMENTO DE DROPS
+// FUNCOES DE GERENCIAMENTO DE DROPS
 // ============================================================
 
-// Gerar ID Ãºnico para drop
+// Gerar ID unico para drop
 string generate_drop_id() {
     return "drop_" + ticks() + "_" + random(0, 999999);
 }
@@ -150,15 +150,15 @@ bool add_drop(drop_entity@ drop) {
     if(drops_by_map.exists(drop.map_id)) {
         drops_by_map.get(drop.map_id, @map_drops);
         if(int(map_drops.length()) >= MAX_DROPS_PER_MAP) {
-            debug_log("âš ï¸ Limite de drops atingido no mapa " + drop.map_id);
+            debug_log("[WARN] Limite de drops atingido no mapa " + drop.map_id);
             return false;
         }
     }
 
-    // Adicionar ao dicionÃ¡rio global
+    // Adicionar ao dicionario global
     global_drops.set(drop.drop_id, @drop);
 
-    // Adicionar ao Ã­ndice por mapa
+    // Adicionar ao indice por mapa
     if(!drops_by_map.exists(drop.map_id)) {
         string[] new_array;
         drops_by_map.set(drop.map_id, @new_array);
@@ -170,7 +170,7 @@ bool add_drop(drop_entity@ drop) {
 
     total_drops_spawned++;
 
-    debug_log("ðŸ“¦ DROP: Spawned " + drop.item_id + " x" + drop.quantity + " em " + drop.map_id + " (" + drop.x + "," + drop.y + ") [" + drop.drop_id + "]");
+    debug_log("[DROP] Spawned " + drop.item_id + " x" + drop.quantity + " em " + drop.map_id + " (" + drop.x + "," + drop.y + ") [" + drop.drop_id + "]");
 
     return true;
 }
@@ -182,7 +182,7 @@ bool remove_drop(string drop_id) {
     drop_entity@ drop;
     global_drops.get(drop_id, @drop);
 
-    // Remover do Ã­ndice por mapa
+    // Remover do indice por mapa
     if(drops_by_map.exists(drop.map_id)) {
         string[]@ map_drops;
         drops_by_map.get(drop.map_id, @map_drops);
@@ -197,10 +197,10 @@ bool remove_drop(string drop_id) {
         drops_by_map.set(drop.map_id, @map_drops);
     }
 
-    // Remover do dicionÃ¡rio global
+    // Remover do dicionario global
     global_drops.delete(drop_id);
 
-    debug_log("ðŸ—‘ï¸ DROP: Removido " + drop_id);
+    debug_log("[DROP] Removido " + drop_id);
 
     return true;
 }
@@ -224,7 +224,7 @@ string[] get_drops_in_map(string map_id) {
     string[]@ map_drops;
     drops_by_map.get(map_id, @map_drops);
 
-    // Retornar cÃ³pia do array (nÃ£o pode retornar handle diretamente)
+    // Retornar copia do array (nao pode retornar handle diretamente)
     string[] result;
     if(@map_drops != null) {
         for(uint i = 0; i < map_drops.length(); i++) {
@@ -235,7 +235,7 @@ string[] get_drops_in_map(string map_id) {
 }
 
 // ============================================================
-// FUNÃ‡Ã•ES DE SPAWN DE DROPS
+// FUNCOES DE SPAWN DE DROPS
 // ============================================================
 
 // Spawnar drop de item no mapa
@@ -252,26 +252,26 @@ string spawn_drop(string item_id, int quantity, string map_id, int x, int y, uin
     return drop.drop_id;
 }
 
-// Spawnar mÃºltiplos drops (loot de mob)
+// Spawnar multiplos drops (loot de mob)
 void spawn_loot_table(string[] items, int[] quantities, string map_id, int x, int y, uint64 owner_id = 0) {
     if(items.length() != quantities.length()) {
-        debug_log("âš ï¸ Loot table invÃ¡lida: arrays com tamanhos diferentes");
+        debug_log("[WARN] Loot table invalida: arrays com tamanhos diferentes");
         return;
     }
 
     for(uint i = 0; i < items.length(); i++) {
-        // Espalhar drops em Ã¡rea pequena (Â±2 tiles)
+        // Espalhar drops em area pequena (+/-2 tiles)
         int drop_x = x + random(-2, 2);
         int drop_y = y + random(-2, 2);
 
         spawn_drop(items[i], quantities[i], map_id, drop_x, drop_y, owner_id);
     }
 
-    debug_log("ðŸ’° LOOT: Spawned " + items.length() + " itens de loot em " + map_id);
+    debug_log("[LOOT] Spawned " + items.length() + " itens de loot em " + map_id);
 }
 
 // ============================================================
-// FUNÃ‡Ã•ES DE PICKUP
+// FUNCOES DE PICKUP
 // ============================================================
 
 // Processar pickup de drop por um jogador
@@ -281,16 +281,16 @@ bool pickup_drop(player@ p, string drop_id) {
     // Obter drop
     drop_entity@ drop = get_drop(drop_id);
     if(@drop == null) {
-        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Drop nÃ£o encontrado\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Drop não encontrado\"}", 0);
         return false;
     }
 
     // Atualizar estado do drop
     drop.update_state();
 
-    // Verificar se jÃ¡ foi pego ou expirou
+    // Verificar se ja foi pego ou expirou
     if(drop.state == DROP_STATE_PICKED) {
-        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Item jÃ¡ foi coletado\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Item ja foi coletado\"}", 0);
         return false;
     }
 
@@ -300,31 +300,31 @@ bool pickup_drop(player@ p, string drop_id) {
         return false;
     }
 
-    // Verificar permissÃ£o (owner_only vs public)
+    // Verificar permissao (owner_only vs public)
     if(!drop.can_pickup(p.peer_id)) {
-        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Este item ainda nÃ£o estÃ¡ disponÃ­vel para vocÃª\"}", 0);
+        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Este item ainda não esta disponivel para você\"}", 0);
         return false;
     }
 
-    // Verificar se estÃ¡ no mesmo mapa
+    // Verificar se esta no mesmo mapa
     if(p.map != drop.map_id) {
         send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Item em mapa diferente\"}", 0);
         return false;
     }
 
-    // Verificar distÃ¢ncia (anti-speedhack)
+    // Verificar distancia (anti-speedhack)
     float dx = p.x - drop.x;
     float dy = p.y - drop.y;
     float distance = sqrt(dx * dx + dy * dy);
 
     if(distance > PICKUP_RANGE) {
-        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Muito longe (distÃ¢ncia: " + distance + ")\"}", 0);
-        debug_log("âš ï¸ PICKUP: " + p.name + " tentou pegar item muito longe (" + distance + "m)");
+        send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Muito longe (distancia: " + distance + ")\"}", 0);
+        debug_log("[WARN] PICKUP: " + p.name + " tentou pegar item muito longe (" + distance + "m)");
         return false;
     }
 
-    // Verificar espaÃ§o no inventÃ¡rio (limite por tipos de item/slots lÃ³gicos)
-    // Se o item jÃ¡ existe no inventÃ¡rio, apenas acumula.
+    // Verificar espaco no inventario (limite por tipos de item/slots logicos)
+    // Se o item ja existe no inventario, apenas acumula.
     if(!p.inv.exists(drop.item_id)) {
         string[] inv_keys = p.inv.get_keys();
         if(int(inv_keys.length()) >= MAX_INVENTORY_SLOTS) {
@@ -334,7 +334,7 @@ bool pickup_drop(player@ p, string drop_id) {
         }
     }
 
-    // Adicionar ao inventÃ¡rio
+    // Adicionar ao inventario
     if(!add_item_with_sync(p, drop.item_id, drop.quantity)) {
         send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Falha ao adicionar item\"}", 0);
         return false;
@@ -343,7 +343,7 @@ bool pickup_drop(player@ p, string drop_id) {
     // Marcar como pego
     drop.state = DROP_STATE_PICKED;
 
-    // Broadcast para players prÃ³ximos
+    // Broadcast para players proximos
     broadcast_drop_picked(drop, p.name);
 
     // Remover do sistema
@@ -354,13 +354,13 @@ bool pickup_drop(player@ p, string drop_id) {
 
     total_drops_picked++;
 
-    debug_log("âœ… PICKUP: " + p.name + " pegou " + drop.item_id + " x" + drop.quantity + " [" + drop_id + "]");
+    debug_log("[OK] PICKUP: " + p.name + " pegou " + drop.item_id + " x" + drop.quantity + " [" + drop_id + "]");
 
     return true;
 }
 
 // ============================================================
-// FUNÃ‡Ã•ES DE BROADCAST
+// FUNCOES DE BROADCAST
 // ============================================================
 
 // Broadcast de spawn de drop para players no mapa
@@ -408,7 +408,7 @@ void broadcast_drop_expired(drop_entity@ drop) {
     broadcast_to_map(drop.map_id, msg, DROP_BROADCAST_RANGE, drop.x, drop.y);
 }
 
-// Broadcast de transiÃ§Ã£o owner_only â†’ public
+// Broadcast de transicao owner_only -> public
 void broadcast_drop_public(drop_entity@ drop) {
     if(@drop == null) return;
 
@@ -420,7 +420,7 @@ void broadcast_drop_public(drop_entity@ drop) {
     broadcast_to_map(drop.map_id, msg, DROP_BROADCAST_RANGE, drop.x, drop.y);
 }
 
-// Broadcast para players em um mapa (com filtro de distÃ¢ncia)
+// Broadcast para players em um mapa (com filtro de distancia)
 void broadcast_to_map(string map_id, string message, float range, int center_x, int center_y) {
     for(uint i = 0; i < players.length(); i++) {
         player@ p = players[i];
@@ -430,7 +430,7 @@ void broadcast_to_map(string map_id, string message, float range, int center_x, 
         if(p.peer_id == 0) continue;
         if(p.map != map_id) continue;
 
-        // Verificar distÃ¢ncia se range > 0
+        // Verificar distancia se range > 0
         if(range > 0) {
             float dx = p.x - center_x;
             float dy = p.y - center_y;
@@ -484,7 +484,7 @@ void cleanup_expired_drops() {
     }
 
     if(expired_count > 0 || transitioned_count > 0) {
-        debug_log("ðŸ§¹ GC: Removidos " + expired_count + " drops expirados, " + transitioned_count + " transiÃ§Ãµes para pÃºblico");
+        debug_log("[GC] Removidos " + expired_count + " drops expirados, " + transitioned_count + " transicoes para publico");
     }
 }
 
@@ -509,7 +509,7 @@ void handle_drop_request_list(player@ p, string map_id) {
 
     string[] map_drops = get_drops_in_map(map_id);
 
-    debug_log("ðŸ“‹ DROP_LIST: " + p.name + " solicitou drops de " + map_id + " (" + map_drops.length() + " drops)");
+    debug_log("[DROP_LIST] " + p.name + " solicitou drops de " + map_id + " (" + map_drops.length() + " drops)");
 
     // Enviar cada drop
     int sent = 0;
@@ -519,7 +519,7 @@ void handle_drop_request_list(player@ p, string map_id) {
 
         drop.update_state();
 
-        // SÃ³ enviar se nÃ£o expirou
+        // So enviar se nao expirou
         if(drop.state != DROP_STATE_EXPIRED) {
             string msg = "{\"type\":\"drop_spawn\",\"drop\":{";
             msg += "\"drop_id\":\"" + drop.drop_id + "\",";
@@ -612,8 +612,8 @@ void dispatch_drop_json(player@ p, string json_message) {
     if(msg_type == "pickup") {
         string drop_id = json_get_drop_id(payload);
         if(drop_id == "" || drop_id.length() > 96 || !drop_json_is_valid_identifier(drop_id)) {
-            network_log_invalid_payload(p, "dispatch_drop_json", "drop_id invalido", json_message);
-            send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Drop invalido\"}", 0);
+            network_log_invalid_payload(p, "dispatch_drop_json", "drop_id inválido", json_message);
+            send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Drop inválido\"}", 0);
             return;
         }
         handle_pickup_drop(p, drop_id);
@@ -622,7 +622,7 @@ void dispatch_drop_json(player@ p, string json_message) {
         string map_id = drop_json_get_string(payload, "map_id");
         if(map_id.length() > 96) {
             network_log_invalid_payload(p, "dispatch_drop_json", "map_id acima do limite", json_message);
-            send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Mapa invalido\"}", 0);
+            send_reliable_text(p.peer_id, "{\"type\":\"drop_pickup_result\",\"status\":\"error\",\"reason\":\"Mapa inválido\"}", 0);
             return;
         }
         handle_drop_request_list(p, map_id);
@@ -634,10 +634,10 @@ void dispatch_drop_json(player@ p, string json_message) {
 }
 
 // ============================================================
-// FUNÃ‡Ã•ES AUXILIARES
+// FUNCOES AUXILIARES
 // ============================================================
 
-// Spawnar drop do inventÃ¡rio do jogador (quando morre ou dropa manualmente)
+// Spawnar drop do inventario do jogador (quando morre ou dropa manualmente)
 string drop_from_player_inventory(player@ p, string item_name, int quantity) {
     if(@p == null) return "";
 
@@ -649,7 +649,7 @@ string drop_from_player_inventory(player@ p, string item_name, int quantity) {
 
     if(current < quantity) return "";
 
-    // Remover do inventÃ¡rio
+    // Remover do inventario
     if(current > quantity) {
         p.inv.set(item_name, current - quantity);
     } else {
@@ -657,7 +657,7 @@ string drop_from_player_inventory(player@ p, string item_name, int quantity) {
     }
 
     // Spawnar drop
-    string drop_id = spawn_drop(item_name, quantity, p.map, p.x, p.y, 0);  // PÃºblico imediatamente
+    string drop_id = spawn_drop(item_name, quantity, p.map, p.x, p.y, 0);  // Publico imediatamente
 
     // Salvar player
     save_player_to_database(p);
@@ -673,14 +673,14 @@ void clear_map_drops(string map_id) {
         remove_drop(map_drops[i]);
     }
 
-    debug_log("ðŸ—‘ï¸ Removidos " + map_drops.length() + " drops do mapa " + map_id);
+    debug_log("[DROP] Removidos " + map_drops.length() + " drops do mapa " + map_id);
 }
 
-// Obter estatÃ­sticas de drops
+// Obter estatisticas de drops
 string get_drop_statistics() {
     int active_drops = global_drops.size();
 
-    string stats = "ðŸ“Š DROP STATS:\n";
+    string stats = "DROP STATS:\n";
     stats += "  Active: " + active_drops + "\n";
     stats += "  Spawned: " + total_drops_spawned + "\n";
     stats += "  Picked: " + total_drops_picked + "\n";
@@ -692,6 +692,6 @@ string get_drop_statistics() {
 // Inicializar sistema de drops
 void init_drop_system() {
     gc_timer.restart();
-    debug_log("âœ… Sistema de Drops inicializado");
+    debug_log("[OK] Sistema de Drops inicializado");
 }
 

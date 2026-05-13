@@ -1,14 +1,13 @@
 // server_map.nvgt - Sistema de Mapas do EVM Server (convertido de map.bgt)
 // Conversão: BGT → NVGT
-// Status: EM CONVERSÃO - FASE 1/13
+// Status: lógica principal de mapas portada para NVGT; módulos auxiliares ficam em includes separados.
 
 // Includes necessários
-// TODO: Converter estes arquivos para NVGT quando necessário
-#include "placeholder_classes.nvgt"  // Classes temporárias para compilação
-#include "map_elements.nvgt"         // 🆕 Task 1.3.1: Elementos de mapa completos
+#include "map_legacy_data.nvgt"  // Classes legadas de dados usadas pelo mapa
+#include "map_elements.nvgt"         //  Task 1.3.1: Elementos de mapa completos
 #include "mine/mina.nvgt"
 #include "portals.nvgt"
-// #include "vehicles.nvgt"
+// vehicles.nvgt é incluído pelo server.nvgt para evitar duplicação de símbolos.
 #include "platforms.nvgt"
 #include "safezones.nvgt"
 #include "zones.nvgt"
@@ -33,7 +32,7 @@ int get_damage(int base_damage, int distance, int max_range = 20) {
 }
 
 // ============================================================================
-// 🔒 MUTEX GLOBAL PARA ACESSO AOS MAPAS
+//  MUTEX GLOBAL PARA ACESSO AOS MAPAS
 // ============================================================================
 // Protege o acesso e modificação do array server_maps e seus objetos
 // durante operações assíncronas de limpeza
@@ -66,7 +65,7 @@ string resolve_map_path(string map_input) {
 // Executa de forma assíncrona para não bloquear o main loop
 
 void cleanup_expired_items_task() {
-    map_global_mutex.lock(); // 🔒 Travar o Mutex para acesso exclusivo
+    map_global_mutex.lock(); //  Travar o Mutex para acesso exclusivo
     
     uint64 current_time = ticks(); // Tempo atual em millisegundos
     int total_removed = 0;
@@ -80,7 +79,7 @@ void cleanup_expired_items_task() {
         // Pular mapas pausados (sem jogadores) para otimização
         // NOTA: Ainda assim processamos para evitar acúmulo de lixo
         
-        // 🆕 Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
+        //  Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
         // Itera de trás para frente para evitar pular elementos ao remover
         for(int obj_idx = int(current_map.objs.length()) - 1; obj_idx >= 0; obj_idx--) {
             obj@ item = current_map.objs[obj_idx];
@@ -127,7 +126,7 @@ void cleanup_expired_items_task() {
         debug_log("[CLEANUP] Removidos " + total_removed + " itens expirados de " + maps_processed + " mapas");
     }
     
-    map_global_mutex.unlock(); // 🔓 Libera o Mutex
+    map_global_mutex.unlock(); //  Libera o Mutex
 }
 
 // Classe principal de mapa
@@ -200,18 +199,17 @@ class map {
 	// ============================================================================
 	// VEÍCULOS E AMBIENTE
 	// ============================================================================
-	// vehicle@[] vehicles;        // Veículos // TODO: Classe não convertida ainda
+	// vehicle@[] vehicles;        // Sistema convertido em vehicles.nvgt; manter fora do mapa até integrar ciclo de vida.
 	earthquake@[] earthquakes;  // Terremotos
-	// msound@[] msounds;          // Sons móveis (3D) // TODO: Classe não convertida ainda
+	// msound@[] msounds;          // Sistema global convertido em moving_sound/msound.nvgt.
 	
 	// ============================================================================
 	// SISTEMAS DE JOGO
 	// ============================================================================
-	// game_disabled@[] disableds; // Zonas onde jogos são desativados // TODO: Classe não convertida ainda
 	dictionary desactivados;    // Itens desativados neste mapa
 
 	// ============================================================================
-	// 🆕 NOVOS ELEMENTOS DE MAPA (Task 1.3.1)
+	//  NOVOS ELEMENTOS DE MAPA (Task 1.3.1)
 	// ============================================================================
 	door@[] doors;                      // Portas interativas
 	sound_source@[] sound_sources;      // Fontes sonoras ambientes
@@ -430,7 +428,7 @@ class map {
 			}
 
 			// ========================================================================
-			// 🆕 TASK 1.3.1: PARSING COMPLETO DOS 27+ TIPOS FALTANTES
+			//  TASK 1.3.1: PARSING COMPLETO DOS 27+ TIPOS FALTANTES
 			// ========================================================================
 
 			// MAP NAME - Nome de exibição do mapa
@@ -945,11 +943,11 @@ class map {
 	}
 	
 	// ============================================================================
-	// MÉTODOS DE LOOP - A IMPLEMENTAR NAS PRÓXIMAS FASES
+	// MÉTODOS DE LOOP DOS SISTEMAS DO MAPA
 	// ============================================================================
 	
 	// ============================================================================
-	// FASE 2: LOOPS DE OBJETOS COLETÁVEIS - ✅ IMPLEMENTADO
+	// FASE 2: LOOPS DE OBJETOS COLETÁVEIS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void spawn_obj(string coors_x, int y, int time_out, int disable_respawn, double amount, string itemname, string sound_get, int time_respawn = 0) {
@@ -1019,7 +1017,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 3: LOOP DE MORTE - ✅ IMPLEMENTADO
+	// FASE 3: LOOP DE MORTE -  IMPLEMENTADO
 	// ============================================================================
 	
 	void deathloop() {
@@ -1066,7 +1064,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 4: LOOPS DE ÁRVORES - ✅ IMPLEMENTADO
+	// FASE 4: LOOPS DE ÁRVORES -  IMPLEMENTADO
 	// ============================================================================
 	
 	void arbolLoop() {
@@ -1093,7 +1091,7 @@ class map {
 				}
 				
 				// Criar arbol_data para respawn
-				// ✅ Converter timer.elapsed para int (milissegundos)
+				//  Converter timer.elapsed para int (milissegundos)
 				int trespawn_ms = int(arbols[i].trespawn.elapsed / 1000);
 				arbol_data ad(arbols[i].x, arbols[i].miny, arbols[i].maxy, arbols[i].vida_inicial,
 				             trespawn_ms, arbols[i].enableitems, arbols[i].items, arbols[i].name);
@@ -1141,7 +1139,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 5: LOOPS DE PAREDES - ✅ IMPLEMENTADO
+	// FASE 5: LOOPS DE PAREDES -  IMPLEMENTADO
 	// ============================================================================
 	
 	void wallLoop() {
@@ -1149,7 +1147,7 @@ class map {
 			// Parede foi destruída (vida <= 0)
 			if (walls[i].vida <= 0) {
 				// Atualizar arquivo do mapa (marcar como destruída com -1)
-				// ✅ Serializar timer usando .elapsed (em milissegundos)
+				//  Serializar timer usando .elapsed (em milissegundos)
 				int64 trespawn_elapsed = walls[i].trespawn.elapsed / 1000; // Converter de microssegundos para ms
 				replace_line("wall:" + walls[i].x + ":" + walls[i].miny + ":" + walls[i].maxy + ":" +
 				            walls[i].vida_inicial + ":" + trespawn_elapsed + ":" +
@@ -1177,7 +1175,7 @@ class map {
 				}
 				
 				// Criar wall_data para respawn
-				// ✅ Converter timer.elapsed para int (milissegundos)
+				//  Converter timer.elapsed para int (milissegundos)
 				int trespawn_ms = int(walls[i].trespawn.elapsed / 1000);
 				wall_data wd(walls[i].x, walls[i].miny, walls[i].maxy, walls[i].vida_inicial,
 				            trespawn_ms, walls[i].enableitems, walls[i].items,
@@ -1214,7 +1212,7 @@ class map {
 					      walls_data[i].sound_fall, this.name);
 					
 				// Atualizar arquivo do mapa (restaurar coordenadas)
-				// ✅ Usar trespawn diretamente (já está em milissegundos)
+				//  Usar trespawn diretamente (já está em milissegundos)
 				replace_line("wall:" + walls_data[i].x + ":-1:-1:" + walls_data[i].vida + ":" +
 				            walls_data[i].trespawn + ":" + walls_data[i].enableitems + ":" +
 				            join(walls_data[i].items, ".") + ":" + walls_data[i].name + ":" +
@@ -1234,7 +1232,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 6: LOOPS DE BOLAS DE FOGO - ✅ IMPLEMENTADO
+	// FASE 6: LOOPS DE BOLAS DE FOGO -  IMPLEMENTADO
 	// ============================================================================
 	
 	void boladefogoloop() {
@@ -1312,7 +1310,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 7: LOOPS DE BALAS - ✅ IMPLEMENTADO
+	// FASE 7: LOOPS DE BALAS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void bulletloop() {
@@ -1548,7 +1546,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 8: LOOP DE TERREMOTOS - ✅ IMPLEMENTADO
+	// FASE 8: LOOP DE TERREMOTOS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void earthquakeloop() {
@@ -1589,7 +1587,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 9: LOOP DE MINAS - ✅ IMPLEMENTADO
+	// FASE 9: LOOP DE MINAS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void mineloop() {
@@ -1660,7 +1658,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 10: LOOPS DE NPCs - ✅ IMPLEMENTADO
+	// FASE 10: LOOPS DE NPCs -  IMPLEMENTADO
 	// ============================================================================
 	
 	void npcLoop() {
@@ -1840,7 +1838,7 @@ class map {
 	// ============================================================================
 	
 	// ============================================================================
-	// FASE 12: LOOP DE BOMBAS DE PLASMA - ✅ IMPLEMENTADO
+	// FASE 12: LOOP DE BOMBAS DE PLASMA -  IMPLEMENTADO
 	// ============================================================================
 	
 	void plasmabomb_loop() {
@@ -1879,7 +1877,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 13: LOOPS DE PIAS - ✅ IMPLEMENTADO
+	// FASE 13: LOOPS DE PIAS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void pialoop() {
@@ -1911,7 +1909,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// FASE 14: LOOP DE PORTAIS - ✅ IMPLEMENTADO
+	// FASE 14: LOOP DE PORTAIS -  IMPLEMENTADO
 	// ============================================================================
 	
 	void portal_loop() {
@@ -2011,7 +2009,7 @@ class map {
 	}
 	
 	// ============================================================================
-	// CONVERSÃO COMPLETA - TODAS AS 14 FASES IMPLEMENTADAS! 🎉
+	// CONVERSÃO COMPLETA - TODAS AS 14 FASES IMPLEMENTADAS! 
 	// ============================================================================
 	
 	// ============================================================================
@@ -2666,7 +2664,7 @@ bool get_safezone_at(int x, int y, string mapname) {
 // ============================================================================
 // STATUS DA CONVERSÃO
 // ============================================================================
-// FASE 1/14: ✅ CONCLUÍDA
+// FASE 1/14:  CONCLUÍDA
 // - Classe map criada
 // - Todas as 44 propriedades definidas
 // - Construtor implementado
@@ -2821,7 +2819,7 @@ void check_hazard_zones(int player_index) {
 		if(hazard_is_progressive) {
 			if(p.progressive_death == 0 || p.death_reason.find("hazard:") != 0) {
 				start_progressive_death(player_index, DEATH_TYPE_SUFFOCATING, hazard_damage, hazard_death_time, hazard_reason);
-				send_reliable_text(p.peer_id, "say [SISTEMA] Voce entrou em uma zona de perigo!", 0);
+				send_reliable_text(p.peer_id, "say [SISTEMA] Você entrou em uma zona de perigo!", 0);
 				if(hazard_reason == "hazard:quicksand") {
 					send_reliable_text(p.peer_id, "ps morrendo_areia.ogg", 0);
 				} else {
@@ -2845,7 +2843,7 @@ void check_hazard_zones(int player_index) {
 		p.ndeath = 0;
 		p.death_reason = "";
 		p.death_time = 0;
-		send_reliable_text(p.peer_id, "say Voce conseguiu escapar da zona de perigo a tempo.", 0);
+		send_reliable_text(p.peer_id, "say Você conseguiu escapar da zona de perigo a tempo.", 0);
 	}
 }
 
@@ -2874,17 +2872,17 @@ void process_map_step(int player_index) {
 
 		string dest_map = parsed[3].trim_whitespace().lower();
 		if(!builder_is_valid_map_name(dest_map)) {
-			send_reliable_text(p.peer_id, "say Portal com destino invalido.", 0);
+			send_reliable_text(p.peer_id, "say Portal com destino inválido.", 0);
 			return;
 		}
 		if(get_map_index_from(dest_map) < 0) {
-			send_reliable_text(p.peer_id, "say O mapa de destino deste portal nao existe.", 0);
+			send_reliable_text(p.peer_id, "say O mapa de destino deste portal não existe.", 0);
 			return;
 		}
 
 		broadcast_to_map(p.map, "play teleport.ogg " + p.x + " " + p.y);
 		move_player_to_map(player_index, dest_map, dest_x, dest_y);
-		send_reliable_text(p.peer_id, "say Voce atravessou um portal magico!", 0);
+		send_reliable_text(p.peer_id, "say Você atravessou um portal magico!", 0);
 		return;
 	}
 
@@ -2901,6 +2899,19 @@ void process_map_interaction(int player_index) {
 	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
 	map@ current_map = server_maps[map_idx];
 	if(current_map is null) return;
+
+	int extract_index = current_map.have_extract(p.x, p.y);
+	if(extract_index >= 0) {
+		extract@ current_extract = current_map.extracts[extract_index];
+		if(current_extract is null) return;
+		if(current_extract.extracttimer.elapsed < current_extract.extracttime) {
+			send_reliable_text(p.peer_id, "say Aguarde um pouco antes de extrair novamente.", 0);
+			return;
+		}
+		current_extract.extracttimer.restart();
+		current_extract.extract_item(player_index);
+		return;
+	}
 
 	for(uint i = 0; i < current_map.mapdata.length(); i++) {
 		string line = current_map.mapdata[i].trim_whitespace();
@@ -2926,5 +2937,38 @@ void process_map_interaction(int player_index) {
 		return;
 	}
 
-	send_reliable_text(p.peer_id, "say Nao ha nada para interagir aqui.", 0);
+	send_reliable_text(p.peer_id, "say Não ha nada para interagir aqui.", 0);
+}
+
+bool pickup_map_object_at(player@ p) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return false;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return false;
+
+	int obj_index = current_map.have_obj(p.x, p.y);
+	if(obj_index < 0 || obj_index >= int(current_map.objs.length())) return false;
+	obj@ current_obj = current_map.objs[obj_index];
+	if(current_obj is null || current_obj.taked || !current_obj.obtainable) return false;
+
+	string item_name = current_obj.itemname != "" ? current_obj.itemname : current_obj.item;
+	int amount = current_obj.num > 0 ? current_obj.num : current_obj.amount;
+	if(amount <= 0) amount = 1;
+
+	current_obj.get(player_index);
+	current_obj.taked = true;
+
+	string sound_name = current_obj.sound_get;
+	if(sound_name == "") sound_name = "get" + item_name;
+	if(sound_name != "" && !sound_name.ends_with(".ogg")) sound_name += ".ogg";
+	if(sound_name != "") current_map.send_packet(0, "play " + sound_name + " " + p.x + " " + p.y, true);
+
+	current_map.send_packet(0, "getobj " + p.x + " " + p.y + " " + item_name + " " + amount + " " + p.charname, true);
+	send_reliable_text(p.peer_id, "msgpegouitem " + amount + " " + item_name, 0);
+	return true;
 }

@@ -1,27 +1,27 @@
-﻿// network_handlers.nvgt - Sistema Completo de Handlers de Rede
-// âœ… Epic 1 Task 3: Sistema de Rede e Handlers (NVGT / ENet)
+// network_handlers.nvgt - Sistema Completo de Handlers de Rede
+// [OK] Epic 1 Task 3: Sistema de Rede e Handlers (NVGT / ENet)
 //
-// Este mÃ³dulo implementa o sistema completo de handlers de mensagens de rede
+// Este modulo implementa o sistema completo de handlers de mensagens de rede
 // usando a API NVGT/ENet, com dispatcher manual e protocolo bem definido.
 //
 // Estrutura:
-// 1. DefiniÃ§Ã£o de protocolo (prefixos de mensagens)
+// 1. Definicao de protocolo (prefixos de mensagens)
 // 2. Dispatcher manual (roteador de mensagens)
 // 3. Handlers por categoria:
 //    - Combate (ataques, habilidades)
-//    - InventÃ¡rio (usar items, equipar, dropar)
-//    - Mapa (movimento, teleporte, interaÃ§Ãµes)
+//    - Inventario (usar items, equipar, dropar)
+//    - Mapa (movimento, teleporte, interacoes)
 //    - Social (chat, party, guild, trade)
 //    - Admin (comandos administrativos)
 //    - Habilidades (magias, skills)
 
 // ============================================================
-// 1. DEFINIÃ‡ÃƒO DE PROTOCOLO - PREFIXOS DE MENSAGENS
+// 1. DEFINICAO DE PROTOCOLO - PREFIXOS DE MENSAGENS
 // ============================================================
 
-// Protocolo baseado em prefixos para organizaÃ§Ã£o clara das mensagens
+// Protocolo baseado em prefixos para organizacao clara das mensagens
 // Formato: PREFIXO:dados|separados|por|pipe
-// Exemplo: CHAT:OlÃ¡ a todos!
+// Exemplo: CHAT:Ola a todos!
 // Exemplo: COMBAT:attack|goblin_1|espada_ferro
 // Exemplo: INV:use|pocao_vida
 
@@ -29,14 +29,14 @@
 const string MSG_COMBAT = "COMBAT:";        // Ataques e combate
 const string MSG_SKILL = "SKILL:";          // Uso de habilidades
 const string MSG_MAGIC = "MAGIC:";          // Uso de magias
-const string MSG_DAMAGE = "DAMAGE:";        // Aplicar dano (servidor â†’ cliente)
+const string MSG_DAMAGE = "DAMAGE:";        // Aplicar dano (servidor -> cliente)
 
-// === INVENTÃRIO ===
-const string MSG_INV = "INV:";              // Comandos de inventÃ¡rio
+// === INVENTARIO ===
+const string MSG_INV = "INV:";              // Comandos de inventario
 const string MSG_USE = "USE:";              // Usar item
 const string MSG_EQUIP = "EQUIP:";          // Equipar item
 const string MSG_DROP = "DROP:";            // Dropar item
-const string MSG_PICKUP = "PICKUP:";        // Pegar item do chÃ£o
+const string MSG_PICKUP = "PICKUP:";        // Pegar item do chao
 
 // === MAPA ===
 const string MSG_MOVE = "MOVE:";            // Movimento do jogador
@@ -50,7 +50,7 @@ const string MSG_CHAT = "CHAT:";            // Chat global
 const string MSG_WHISPER = "WHISPER:";      // Mensagem privada
 const string MSG_PARTY = "PARTY:";          // Comandos de party
 const string MSG_GUILD = "GUILD:";          // Comandos de guild
-const string MSG_TRADE = "TRADE:";          // ComÃ©rcio entre jogadores
+const string MSG_TRADE = "TRADE:";          // Comercio entre jogadores
 const string MSG_FRIEND = "FRIEND:";        // Sistema de amigos
 
 // === ADMIN ===
@@ -60,14 +60,44 @@ const string MSG_KICK = "KICK:";            // Expulsar jogador
 const string MSG_BAN = "BAN:";              // Banir jogador
 
 // === VOICE CHAT ===
-const string MSG_VOICE = "VOICE_MSG|";      // Mensagem de voz (Ã¡udio)
+const string MSG_VOICE = "VOICE_MSG|";      // Mensagem de voz (audio)
 
 // === SISTEMA ===
 const string MSG_PING = "PING";             // Ping
 const string MSG_PONG = "PONG";             // Pong (resposta)
-const string MSG_UPDATE = "UPDATE:";        // AtualizaÃ§Ã£o de estado
+const string MSG_UPDATE = "UPDATE:";        // Atualizacao de estado
 
 const uint NETWORK_HANDLER_MAX_MESSAGE_CHARS = 8192;
+
+bool is_modern_network_message(const string&in message) {
+    string msg = message.trim_whitespace();
+    if(msg == "") return false;
+    if(msg == MSG_PING) return true;
+    if(msg.find(MSG_COMBAT) == 0) return true;
+    if(msg.find(MSG_SKILL) == 0) return true;
+    if(msg.find(MSG_MAGIC) == 0) return true;
+    if(msg.find(MSG_INV) == 0) return true;
+    if(msg.find(MSG_USE) == 0) return true;
+    if(msg.find(MSG_EQUIP) == 0) return true;
+    if(msg.find(MSG_DROP) == 0) return true;
+    if(msg.find(MSG_PICKUP) == 0) return true;
+    if(msg.find(MSG_MOVE) == 0) return true;
+    if(msg.find(MSG_TELEPORT) == 0) return true;
+    if(msg.find(MSG_INTERACT) == 0) return true;
+    if(msg.find(MSG_DOOR) == 0) return true;
+    if(msg.find(MSG_ELEVATOR) == 0) return true;
+    if(msg.find(MSG_CHAT) == 0) return true;
+    if(msg.find(MSG_WHISPER) == 0) return true;
+    if(msg.find(MSG_PARTY) == 0) return true;
+    if(msg.find(MSG_GUILD) == 0) return true;
+    if(msg.find(MSG_TRADE) == 0) return true;
+    if(msg.find(MSG_FRIEND) == 0) return true;
+    if(msg.find(MSG_ADMIN) == 0) return true;
+    if(msg.find(MSG_BUILDER) == 0) return true;
+    if(msg.find(MSG_VOICE) == 0) return true;
+    if(msg.find(MSG_UPDATE) == 0) return true;
+    return false;
+}
 
 string network_safe_preview(const string&in message, uint max_len = 80) {
     if(message.length() <= max_len) return message;
@@ -76,13 +106,13 @@ string network_safe_preview(const string&in message, uint max_len = 80) {
 
 void network_log_invalid_payload(player@ p, const string&in handler_name, const string&in reason, const string&in data) {
     string who = p is null ? "null_player" : p.name;
-    debug_log("Payload invÃ¡lido [" + handler_name + "] de " + who + ": " + reason + " | dados=" + network_safe_preview(data));
+    debug_log("Payload inválido [" + handler_name + "] de " + who + ": " + reason + " | dados=" + network_safe_preview(data));
 }
 
 void network_reject_invalid_payload(player@ p, const string&in handler_name, const string&in reason, const string&in data) {
     network_log_invalid_payload(p, handler_name, reason, data);
     if(p is null) return;
-    send_reliable_text(p.peer_id, "say Pacote invalido.", 0);
+    send_reliable_text(p.peer_id, "say Pacote inválido.", 0);
 }
 
 bool network_require_non_empty(player@ p, const string&in handler_name, const string&in data) {
@@ -162,14 +192,14 @@ bool network_can_use_builder_channel(player@ p) {
 
 void network_send_action_error(player@ p, const string&in scope, const string&in action) {
     if(p is null) return;
-    send_reliable_text(p.peer_id, "say " + scope + ": aÃ§Ã£o desconhecida '" + action + "'.", 0);
+    send_reliable_text(p.peer_id, "say " + scope + ": acao desconhecida '" + action + "'.", 0);
 }
 
 // ============================================================
 // 2. DISPATCHER MANUAL - ROTEADOR DE MENSAGENS
 // ============================================================
 
-// FunÃ§Ã£o principal de dispatch que roteia mensagens para handlers especÃ­ficos
+// Funcao principal de dispatch que roteia mensagens para handlers especificos
 void dispatch_network_message(player@ p, string message) {
     if(p is null) return;
     if(message.trim_whitespace() == "") return;
@@ -178,16 +208,16 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    debug_log("ðŸ“¨ Dispatch: " + p.name + " â†’ " + message.substr(0, min(50, message.length())));
+    debug_log("[DISPATCH] " + p.name + " -> " + message.substr(0, min(50, message.length())));
 
     // ============================================================
-    // PROTOCOLO JSON - Sistema de InventÃ¡rio Sincronizado
+    // PROTOCOLO JSON - Sistema de Inventario Sincronizado
     // ============================================================
-    // Detectar mensagens JSON (comeÃ§am com '{' e contÃªm "type")
+    // Detectar mensagens JSON (comecam com '{' e contem "type")
     if(message.length() > 0 && message.substr(0, 1) == "{" && message.find("\"type\"") >= 0) {
         string json_type = json_get_type(message);
 
-        // Mensagens de inventÃ¡rio JSON
+        // Mensagens de inventario JSON
         if(json_type.find("inv_") == 0) {
             dispatch_inventory_json(p, message);
             return;
@@ -206,7 +236,7 @@ void dispatch_network_message(player@ p, string message) {
         }
 
         // Outros tipos de mensagens JSON podem ser adicionados aqui
-        debug_log("âš ï¸ Mensagem JSON nÃ£o reconhecida: " + json_type);
+        debug_log("[ALERTA] Mensagem JSON não reconhecida: " + json_type);
         return;
     }
 
@@ -226,7 +256,7 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === INVENTÃRIO ===
+    // === INVENTARIO ===
     if(message.find(MSG_INV) == 0) {
         handle_inventory(p, message.substr(MSG_INV.length()));
         return;
@@ -318,7 +348,7 @@ void dispatch_network_message(player@ p, string message) {
     // === ADMIN ===
     if(message.find(MSG_ADMIN) == 0) {
         if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
-            send_reliable_text(p.peer_id, "say Acesso negado: vocÃª nÃ£o Ã© administrador.", 0);
+            send_reliable_text(p.peer_id, "say Acesso negado: você não e administrador.", 0);
             return;
         }
         handle_admin(p, message.substr(MSG_ADMIN.length()));
@@ -327,7 +357,7 @@ void dispatch_network_message(player@ p, string message) {
 
     if(message.find(MSG_BUILDER) == 0) {
         if(!has_role(p.charname, "builder") && !has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
-            send_reliable_text(p.peer_id, "say Acesso negado: vocÃª nÃ£o Ã© construtor.", 0);
+            send_reliable_text(p.peer_id, "say Acesso negado: você não e construtor.", 0);
             return;
         }
         handle_builder(p, message.substr(MSG_BUILDER.length()));
@@ -378,7 +408,7 @@ void handle_combat(player@ p, string data) {
             args.insert_last(weapon);
             cmd_attack(p, args);
         } else {
-            send_reliable_text(p.peer_id, "say Erro interno: jogador nao encontrado.", 0);
+            send_reliable_text(p.peer_id, "say Erro interno: jogador não encontrado.", 0);
         }
         return;
     }
@@ -449,7 +479,7 @@ void handle_combat(player@ p, string data) {
         if(w.require_ammo == 1) {
             int ammo_to_consume = 1;
             if(w.ammo == "") {
-                send_reliable_text(p.peer_id, "say Falha ao recarregar: tipo de municao nao definido para a arma.", 0);
+                send_reliable_text(p.peer_id, "say Falha ao recarregar: tipo de municao não definido para a arma.", 0);
                 return;
             }
             if(!remove_item_with_sync(p, w.ammo, ammo_to_consume)) {
@@ -468,7 +498,7 @@ void handle_combat(player@ p, string data) {
 
     if(action == "defend") {
         p.crouched = true;
-        send_reliable_text(p.peer_id, "say Voce esta defendendo", 0);
+        send_reliable_text(p.peer_id, "say Você está defendendo", 0);
         return;
     }
 
@@ -489,9 +519,9 @@ void handle_skill(player@ p, string data) {
     string skill_name = parts[0];
     string target = parts.length() >= 2 ? parts[1] : "";
 
-    debug_log("âœ¨ " + p.name + " usando habilidade: " + skill_name);
+    debug_log("[SKILL] " + p.name + " usando habilidade: " + skill_name);
 
-    string msg = "VocÃª usou " + skill_name;
+    string msg = "Você usou " + skill_name;
     if(target != "") msg += " em " + target;
     send_reliable_text(p.peer_id, "say " + msg, 0);
 }
@@ -512,12 +542,12 @@ void handle_magic(player@ p, string data) {
     int mana_cost = 0;
     if(parts.length() >= 3 && parts[2] != "") {
         if(!network_try_parse_int(parts[2], mana_cost) || mana_cost < 0) {
-            network_reject_invalid_payload(p, "handle_magic", "mana_cost invalido", data);
+            network_reject_invalid_payload(p, "handle_magic", "mana_cost inválido", data);
             return;
         }
     }
 
-    debug_log("ðŸ”® " + p.name + " conjurando: " + magic_name);
+    debug_log("[MAGIC] " + p.name + " conjurando: " + magic_name);
 
     // Verificar mana
     if(p.mp < mana_cost) {
@@ -528,18 +558,18 @@ void handle_magic(player@ p, string data) {
     // Consumir mana
     p.mp -= mana_cost;
 
-    string cast_msg = "VocÃª conjurou " + magic_name;
+    string cast_msg = "Você conjurou " + magic_name;
     if(target != "") cast_msg += " em " + target;
     cast_msg += " (custo: " + mana_cost + " MP)";
     send_reliable_text(p.peer_id, "say " + cast_msg, 0);
 }
 
 // ============================================================
-// 4. HANDLERS DE INVENTÃRIO
+// 4. HANDLERS DE INVENTARIO
 // ============================================================
 
 void handle_inventory(player@ p, string data) {
-    // Comandos gerais de inventÃ¡rio
+    // Comandos gerais de inventario
     // Formato: action|params
     // Exemplo: INV:list
     // Exemplo: INV:info|espada_ferro
@@ -547,7 +577,7 @@ void handle_inventory(player@ p, string data) {
     if(!network_require_non_empty(p, "handle_inventory", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_inventory", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_inventory", "acao ausente", data);
         return;
     }
 
@@ -563,11 +593,11 @@ void handle_inventory(player@ p, string data) {
         }
 
         if(valid_count == 0) {
-            send_reliable_text(p.peer_id, "say InventÃ¡rio vazio.", 0);
+            send_reliable_text(p.peer_id, "say Inventario vazio.", 0);
             return;
         }
 
-        send_reliable_text(p.peer_id, "say InventÃ¡rio: " + valid_count + " item(ns).", 0);
+        send_reliable_text(p.peer_id, "say Inventario: " + valid_count + " item(ns).", 0);
         for(uint i = 0; i < items.length(); i++) {
             int quantity = 0;
             p.inv.get(items[i], quantity);
@@ -579,7 +609,7 @@ void handle_inventory(player@ p, string data) {
         string item_name = parts[1];
         GameItem@ item = get_item_by_name(item_name);
         if(item is null) {
-            send_reliable_text(p.peer_id, "say Item nÃ£o encontrado: " + item_name, 0);
+            send_reliable_text(p.peer_id, "say Item não encontrado: " + item_name, 0);
             return;
         }
 
@@ -597,23 +627,23 @@ void handle_use_item(player@ p, string data) {
     string item_name = data.trim_whitespace();
     if(item_name == "") {
         network_log_invalid_payload(p, "handle_use_item", "item vazio", data);
-        send_reliable_text(p.peer_id, "say Item invÃ¡lido.", 0);
+        send_reliable_text(p.peer_id, "say Item inválido.", 0);
         return;
     }
 
-    debug_log("ðŸ’Š " + p.name + " usando: " + item_name);
+    debug_log("[USE] " + p.name + " usando: " + item_name);
 
-    // Obter Ã­ndice do jogador
+    // Obter indice do jogador
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) {
-        send_reliable_text(p.peer_id, "say Erro: Jogador nÃ£o encontrado.", 0);
+        send_reliable_text(p.peer_id, "say Erro: Jogador não encontrado.", 0);
         return;
     }
 
-    // Delegar ao sistema de consumÃ­veis (que jÃ¡ faz verificaÃ§Ãµes e remove item)
-    // O sistema de consumables.nvgt verifica inventÃ¡rio, aplica efeitos e remove item
+    // Delegar ao sistema de consumiveis (que ja faz verificacoes e remove item)
+    // O sistema de consumables.nvgt verifica inventario, aplica efeitos e remove item
     use_item(player_index, item_name);
-    // Mensagens de erro/sucesso jÃ¡ sÃ£o enviadas pelo sistema de consumables
+    // Mensagens de erro/sucesso ja sao enviadas pelo sistema de consumables
 }
 
 void handle_equip_item(player@ p, string data) {
@@ -631,11 +661,11 @@ void handle_equip_item(player@ p, string data) {
     string item_name = parts[0];
     string slot = parts[1];
 
-    debug_log("ðŸŽ½ " + p.name + " equipando: " + item_name + " em " + slot);
+    debug_log("[EQUIP] " + p.name + " equipando: " + item_name + " em " + slot);
 
     bool equipped = equip_item(p, item_name);
     if(!equipped) {
-        send_reliable_text(p.peer_id, "say NÃ£o foi possÃ­vel equipar " + item_name + ".", 0);
+        send_reliable_text(p.peer_id, "say Não foi possível equipar " + item_name + ".", 0);
         return;
     }
     send_reliable_text(p.peer_id, "say Equipado: " + item_name + " em " + slot, 0);
@@ -669,7 +699,7 @@ void handle_drop_item(player@ p, string data) {
     debug_log("DROP_NET: " + p.name + " -> " + item_name + " x" + quantidade);
 
     if(!remove_item_with_sync(p, item_name, quantidade)) {
-        send_reliable_text(p.peer_id, "say Voce nao possui essa quantidade.", 0);
+        send_reliable_text(p.peer_id, "say Você não possui essa quantidade.", 0);
         return;
     }
 
@@ -682,7 +712,34 @@ void handle_drop_item(player@ p, string data) {
 
     string broadcast_msg = create_inv_broadcast_drop_json(p.name, item_name, p.x, p.y, quantidade);
     broadcast_inventory_change(p, broadcast_msg);
-    send_reliable_text(p.peer_id, "say Voce dropou " + quantidade + "x " + item_name, 0);
+    send_reliable_text(p.peer_id, "say Você dropou " + quantidade + "x " + item_name, 0);
+}
+
+bool pickup_ground_item_at(player@ p) {
+    if(p is null) return false;
+
+    string[] map_drops = get_drops_in_map(p.map);
+    for(uint i = 0; i < map_drops.length(); i++) {
+        drop_entity@ d = get_drop(map_drops[i]);
+        if(d is null) continue;
+
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != p.x || d.y != p.y) continue;
+
+        string picked_item = d.item_id;
+        int picked_qty = d.quantity;
+        int picked_x = d.x;
+        int picked_y = d.y;
+
+        if(pickup_drop(p, d.drop_id)) {
+            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
+            broadcast_inventory_change(p, pickup_msg);
+            return true;
+        }
+    }
+
+    return pickup_map_object_at(p);
 }
 
 void handle_pickup_item(player@ p, string data) {
@@ -717,26 +774,8 @@ void handle_pickup_item(player@ p, string data) {
         return;
     }
 
-    // Pickup por posicao atual
-    string[] map_drops = get_drops_in_map(p.map);
-    for(uint i = 0; i < map_drops.length(); i++) {
-        drop_entity@ d = get_drop(map_drops[i]);
-        if(d is null) continue;
-
-        d.update_state();
-        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
-        if(d.x != p.x || d.y != p.y) continue;
-
-        string picked_item = d.item_id;
-        int picked_qty = d.quantity;
-        int picked_x = d.x;
-        int picked_y = d.y;
-
-        if(pickup_drop(p, d.drop_id)) {
-            string pickup_msg = create_inv_broadcast_pickup_json(p.name, picked_item, picked_x, picked_y, picked_qty);
-            broadcast_inventory_change(p, pickup_msg);
-            return;
-        }
+    if(pickup_ground_item_at(p)) {
+        return;
     }
 
     send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
@@ -748,7 +787,7 @@ void handle_pickup_item(player@ p, string data) {
 
 void handle_move(player@ p, string data) {
     // Formato aceito:
-    //   x|y           - posiÃ§Ã£o simples
+    //   x|y           - posicao simples
     //   x=10;y=20     - formato chave=valor
     //   step_sound|x|y - com som de passo (3 partes)
     // Exemplo: MOVE:40|12
@@ -772,13 +811,13 @@ void handle_move(player@ p, string data) {
                 string value = kv[1].trim_whitespace();
                 if(key == "x" && value != "") {
                     if(!network_try_parse_int(value, new_x)) {
-                        network_log_invalid_payload(p, "handle_move", "x invalido no formato chave=valor", data);
+                        network_log_invalid_payload(p, "handle_move", "x inválido no formato chave=valor", data);
                         return;
                     }
                 }
                 else if(key == "y" && value != "") {
                     if(!network_try_parse_int(value, new_y)) {
-                        network_log_invalid_payload(p, "handle_move", "y invalido no formato chave=valor", data);
+                        network_log_invalid_payload(p, "handle_move", "y inválido no formato chave=valor", data);
                         return;
                     }
                 }
@@ -795,7 +834,7 @@ void handle_move(player@ p, string data) {
                 return;
             }
             if(!network_try_parse_int(parts[0], new_x) || !network_try_parse_int(parts[1], new_y)) {
-                network_log_invalid_payload(p, "handle_move", "x ou y invalido", data);
+                network_log_invalid_payload(p, "handle_move", "x ou y inválido", data);
                 return;
             }
         } else if(parts.length() >= 3) {
@@ -806,31 +845,31 @@ void handle_move(player@ p, string data) {
                 return;
             }
             if(!network_try_parse_int(parts[1], new_x) || !network_try_parse_int(parts[2], new_y)) {
-                network_log_invalid_payload(p, "handle_move", "x ou y invalido no formato com step", data);
+                network_log_invalid_payload(p, "handle_move", "x ou y inválido no formato com step", data);
                 return;
             }
         } else {
-            network_log_invalid_payload(p, "handle_move", "formato invÃ¡lido", data);
+            network_log_invalid_payload(p, "handle_move", "formato inválido", data);
             return;
         }
     }
 
-    // ===== VALIDAÃ‡Ã•ES (Task 4 - movimento_jogador.md) =====
+    // ===== VALIDACOES (Task 4 - movimento_jogador.md) =====
     
-    // Validar jogador nÃ£o estÃ¡ paralisado ou AFK
+    // Validar jogador não está paralisado ou AFK
     if(p.paralisado || p.paralisado2 || p.afk) {
-        send_reliable_text(p.peer_id, "msg2 ;VocÃª nÃ£o pode se mover agora.;", 0);
+        send_reliable_text(p.peer_id, "msg2 ;Você não pode se mover agora.;", 0);
         return;
     }
     
-    // Validar movimento nÃ£o Ã© muito grande (anti-cheat)
+    // Validar movimento não e muito grande (anti-cheat)
     if(!is_valid_movement(p.x, p.y, new_x, new_y, 10)) {
-        debug_log("âš ï¸ Movimento invÃ¡lido (MOVE:) " + p.name + ": (" + p.x + "," + p.y + ") â†’ (" + new_x + "," + new_y + ")");
+        debug_log("[ALERTA] Movimento inválido (MOVE:) " + p.name + ": (" + p.x + "," + p.y + ") -> (" + new_x + "," + new_y + ")");
         send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
         return;
     }
     
-    // Verificar se a posiÃ§Ã£o Ã© caminhÃ¡vel
+    // Verificar se a posicao e caminhavel
     if(!is_walkable(new_x, new_y, p.map_name)) {
         send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
         return;
@@ -839,7 +878,7 @@ void handle_move(player@ p, string data) {
     // Obter tipo do tile para sons de passos (usa o enviado ou detecta)
     string tile_type = step_sound != "" ? step_sound : get_tile_at(new_x, new_y, p.map_name);
     
-    // Usar a funÃ§Ã£o move() da classe player (inclui minas, zonas de morte, etc.)
+    // Usar a funcao move() da classe player (inclui minas, zonas de morte, etc.)
     p.move(tile_type, new_x, new_y, 0);
 
     int player_index = get_player_index_from(p.charname);
@@ -847,7 +886,7 @@ void handle_move(player@ p, string data) {
         process_map_step(player_index);
     }
     
-    debug_log("ðŸš¶ " + p.name + " â†’ (" + new_x + ", " + new_y + ") [" + tile_type + "]");
+    debug_log("[MOVE] " + p.name + " -> (" + new_x + ", " + new_y + ") [" + tile_type + "]");
 }
 
 void handle_teleport(player@ p, string data) {
@@ -869,27 +908,27 @@ void handle_teleport(player@ p, string data) {
         return;
     }
 
-    debug_log("ðŸŒ€ " + p.name + " teleportando para " + map_name + " (" + x + "," + y + ")");
+    debug_log("[TELEPORT] " + p.name + " teleportando para " + map_name + " (" + x + "," + y + ")");
 
-    // SeguranÃ§a: teleporte por pacote sÃ³ para admin/dev
+    // Seguranca: teleporte por pacote so para admin/dev
     if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
         send_reliable_text(p.peer_id, "say Acesso negado para teleporte.", 0);
         return;
     }
 
     if(!builder_is_valid_map_name(map_name)) {
-        send_reliable_text(p.peer_id, "say Mapa invÃ¡lido: " + map_name, 0);
+        send_reliable_text(p.peer_id, "say Mapa inválido: " + map_name, 0);
         return;
     }
 
     int map_index = get_map_index_from(map_name);
     if(map_index < 0 || map_index >= int(server_maps.length())) {
-        send_reliable_text(p.peer_id, "say Mapa nÃ£o encontrado: " + map_name, 0);
+        send_reliable_text(p.peer_id, "say Mapa não encontrado: " + map_name, 0);
         return;
     }
 
     if(x < 0 || y < 0 || x > server_maps[map_index].max_x || y > server_maps[map_index].max_y) {
-        send_reliable_text(p.peer_id, "say Coordenadas invÃ¡lidas para o mapa " + map_name + ".", 0);
+        send_reliable_text(p.peer_id, "say Coordenadas invalidas para o mapa " + map_name + ".", 0);
         return;
     }
 
@@ -912,6 +951,7 @@ void handle_interact(player@ p, string data) {
     if(data.trim_whitespace() == "") {
         int player_index = get_player_index_from(p.charname);
         if(player_index >= 0) {
+            if(pickup_ground_item_at(p)) return;
             process_map_interaction(player_index);
         }
         return;
@@ -926,22 +966,23 @@ void handle_interact(player@ p, string data) {
     string object_id = parts[0];
     string action = parts.length() >= 2 ? parts[1] : "use";
 
-    debug_log("ðŸ‘† " + p.name + " interagindo com " + object_id + " (" + action + ")");
+    debug_log("[INTERACT] " + p.name + " interagindo com " + object_id + " (" + action + ")");
 
-    // IntegraÃ§Ãµes rÃ¡pidas com fluxos existentes
+    // Integracoes rapidas com fluxos existentes
     if(object_id == "pickup" || action == "pickup") {
-        bool ok = pickup_item_at(p.charname, p.map_name, p.x, p.y, p.z);
+        bool ok = pickup_ground_item_at(p);
         if(!ok) send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
         return;
     }
     if(object_id == "map" || object_id == "store" || action == "use" || action == "interact") {
         int player_index = get_player_index_from(p.charname);
         if(player_index >= 0) {
+            if(pickup_ground_item_at(p)) return;
             process_map_interaction(player_index);
         }
         return;
     }
-    send_reliable_text(p.peer_id, "say InteraÃ§Ã£o registrada: " + object_id + " (" + action + ")", 0);
+    send_reliable_text(p.peer_id, "say Interacao registrada: " + object_id + " (" + action + ")", 0);
 }
 
 void handle_door(player@ p, string data) {
@@ -958,7 +999,7 @@ void handle_door(player@ p, string data) {
     string door_id = parts[0];
     string action = parts[1];
 
-    debug_log("ðŸšª " + p.name + " - porta " + door_id + " â†’ " + action);
+    debug_log("[DOOR] " + p.name + " - porta " + door_id + " -> " + action);
 
     send_reliable_text(p.peer_id, "say Porta " + door_id + " " + action + ".", 0);
 }
@@ -977,18 +1018,18 @@ void handle_elevator(player@ p, string data) {
     string elevator_id = parts[0];
     int floor = 0;
     if(!network_try_parse_int(parts[1], floor)) {
-        network_log_invalid_payload(p, "handle_elevator", "andar invalido", data);
+        network_log_invalid_payload(p, "handle_elevator", "andar inválido", data);
         return;
     }
 
-    debug_log("ðŸ›— " + p.name + " - elevador " + elevator_id + " â†’ andar " + floor);
+    debug_log("[ELEVATOR] " + p.name + " - elevador " + elevator_id + " -> andar " + floor);
 
     send_reliable_text(p.peer_id, "say Elevador " + elevator_id + " indo para o andar " + floor + ".", 0);
 }
 
 void handle_whisper(player@ p, string data) {
     // Formato: target_name|message
-    // Exemplo: WHISPER:JoÃ£o|OlÃ¡, tudo bem?
+    // Exemplo: WHISPER:Joao|Ola, tudo bem?
 
     if(!network_require_non_empty(p, "handle_whisper", data)) return;
     string[] parts = data.split("|");
@@ -1014,12 +1055,12 @@ void handle_whisper(player@ p, string data) {
         return;
     }
 
-    debug_log("ðŸ¤« " + p.name + " â†’ " + target_name + ": " + message);
+    debug_log("[WHISPER] " + p.name + " -> " + target_name + ": " + message);
 
     // Encontrar jogador alvo
     player@ target = get_player_by_name(target_name);
     if(target is null) {
-        send_reliable_text(p.peer_id, "say Jogador nÃ£o encontrado: " + target_name, 0);
+        send_reliable_text(p.peer_id, "say Jogador não encontrado: " + target_name, 0);
         return;
     }
 
@@ -1037,12 +1078,12 @@ void handle_whisper(player@ p, string data) {
 
 void handle_chat(player@ p, string data) {
     // Formato: mensagem
-    // Exemplo: CHAT:OlÃ¡ a todos!
+    // Exemplo: CHAT:Ola a todos!
     
     string message = data.trim_whitespace();
     if(message.length() == 0) return;
 
-    debug_log("ðŸ’¬ " + p.name + ": " + message);
+    debug_log("[CHAT] " + p.name + ": " + message);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index >= 0) {
@@ -1052,20 +1093,20 @@ void handle_chat(player@ p, string data) {
 
 void handle_party(player@ p, string data) {
     // Formato: action|params
-    // Exemplo: PARTY:invite|JoÃ£o
+    // Exemplo: PARTY:invite|Joao
     // Exemplo: PARTY:accept
     // Exemplo: PARTY:leave
 
     if(!network_require_non_empty(p, "handle_party", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_party", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_party", "acao ausente", data);
         return;
     }
 
     string action = parts[0];
 
-    debug_log("ðŸ‘¥ " + p.name + " - party: " + action);
+    debug_log("[PARTY] " + p.name + " - party: " + action);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) return;
@@ -1094,19 +1135,19 @@ void handle_party(player@ p, string data) {
 void handle_guild(player@ p, string data) {
     // Formato: action|params
     // Exemplo: GUILD:create|MinhaGuild
-    // Exemplo: GUILD:invite|JoÃ£o
+    // Exemplo: GUILD:invite|Joao
     // Exemplo: GUILD:leave
 
     if(!network_require_non_empty(p, "handle_guild", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_guild", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_guild", "acao ausente", data);
         return;
     }
 
     string action = parts[0];
 
-    debug_log("ðŸ° " + p.name + " - guild: " + action);
+    debug_log("[GUILD] " + p.name + " - guild: " + action);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) return;
@@ -1136,7 +1177,7 @@ void handle_guild(player@ p, string data) {
     } else if(action == "donate" && parts.length() >= 2) {
         int donate_amount = 0;
         if(!network_try_parse_int(parts[1], donate_amount) || donate_amount <= 0) {
-            network_reject_invalid_payload(p, "handle_guild", "valor de doacao invalido", data);
+            network_reject_invalid_payload(p, "handle_guild", "valor de doacao inválido", data);
             return;
         }
         cmd_donateguild(player_index, donate_amount);
@@ -1147,20 +1188,20 @@ void handle_guild(player@ p, string data) {
 
 void handle_trade(player@ p, string data) {
     // Formato: action|params
-    // Exemplo: TRADE:request|JoÃ£o
+    // Exemplo: TRADE:request|Joao
     // Exemplo: TRADE:offer|espada_ferro|1
     // Exemplo: TRADE:accept
 
     if(!network_require_non_empty(p, "handle_trade", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_trade", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_trade", "acao ausente", data);
         return;
     }
 
     string action = parts[0];
 
-    debug_log("ðŸ¤ " + p.name + " - trade: " + action);
+    debug_log("[TRADE] " + p.name + " - trade: " + action);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) return;
@@ -1177,7 +1218,7 @@ void handle_trade(player@ p, string data) {
     } else if(action == "addgold" && parts.length() >= 2) {
         int amount = 0;
         if(!network_try_parse_int(parts[1], amount)) {
-            send_reliable_text(p.peer_id, "say Trade: valor de gold invalido.", 0);
+            send_reliable_text(p.peer_id, "say Trade: valor de gold inválido.", 0);
             return;
         }
         cmd_addgold(player_index, amount);
@@ -1194,20 +1235,20 @@ void handle_trade(player@ p, string data) {
 
 void handle_friend(player@ p, string data) {
     // Formato: action|player_name
-    // Exemplo: FRIEND:add|JoÃ£o
+    // Exemplo: FRIEND:add|Joao
     // Exemplo: FRIEND:remove|Maria
     // Exemplo: FRIEND:list
 
     if(!network_require_non_empty(p, "handle_friend", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_friend", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_friend", "acao ausente", data);
         return;
     }
 
     string action = parts[0];
 
-    debug_log("ðŸ‘‹ " + p.name + " - friend: " + action);
+    debug_log("[FRIEND] " + p.name + " - friend: " + action);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) return;
@@ -1235,12 +1276,12 @@ void handle_friend(player@ p, string data) {
 
 void handle_admin(player@ p, string data) {
     // Formato: command|params
-    // Exemplo: ADMIN:teleport|JoÃ£o|cidade|100|50
-    // Exemplo: ADMIN:give|JoÃ£o|pocao_vida|10
+    // Exemplo: ADMIN:teleport|Joao|cidade|100|50
+    // Exemplo: ADMIN:give|Joao|pocao_vida|10
     // Exemplo: ADMIN:freeze|Maria
 
     if(!network_can_use_admin_channel(p)) {
-        send_reliable_text(p.peer_id, "say Acesso negado: voce nao e administrador.", 0);
+        send_reliable_text(p.peer_id, "say Acesso negado: você não e administrador.", 0);
         return;
     }
 
@@ -1253,12 +1294,12 @@ void handle_admin(player@ p, string data) {
 
     string command = parts[0].trim_whitespace();
     if(!network_is_valid_action_token(command)) {
-        network_log_invalid_payload(p, "handle_admin", "comando invalido", data);
-        send_reliable_text(p.peer_id, "say Comando admin invalido.", 0);
+        network_log_invalid_payload(p, "handle_admin", "comando inválido", data);
+        send_reliable_text(p.peer_id, "say Comando admin inválido.", 0);
         return;
     }
 
-    debug_log("ðŸ‘‘ ADMIN " + p.name + ": " + command);
+    debug_log("[ADMIN] " + p.name + ": " + command);
 
     string command_line = "/" + command;
     if(parts.length() > 1) {
@@ -1274,14 +1315,14 @@ void handle_builder(player@ p, string data) {
     // Exemplo: BUILDER:delete|obj_123
 
     if(!network_can_use_builder_channel(p)) {
-        send_reliable_text(p.peer_id, "say Acesso negado: voce nao e construtor.", 0);
+        send_reliable_text(p.peer_id, "say Acesso negado: você não e construtor.", 0);
         return;
     }
 
     if(!network_require_non_empty(p, "handle_builder", data)) return;
     string[] parts = split_pipe_trimmed(data);
     if(parts.length() < 1 || parts[0] == "") {
-        network_log_invalid_payload(p, "handle_builder", "aÃ§Ã£o ausente", data);
+        network_log_invalid_payload(p, "handle_builder", "acao ausente", data);
         return;
     }
 
@@ -1292,7 +1333,7 @@ void handle_builder(player@ p, string data) {
         return;
     }
 
-    debug_log("ðŸ—ï¸ BUILDER " + p.name + ": " + action);
+    debug_log("[BUILDER] " + p.name + ": " + action);
 
     if(action == "add_line" && parts.length() >= 2) {
         req_builder_create_element(p, parts[1]);
@@ -1348,7 +1389,7 @@ void handle_ping(player@ p) {
 }
 
 void handle_update(player@ p, string data) {
-    // AtualizaÃ§Ã£o de estado do cliente
+    // Atualizacao de estado do cliente
     // Formato: stat_name|value
     // Exemplo: UPDATE:health|80
 
@@ -1365,8 +1406,8 @@ void handle_update(player@ p, string data) {
     if(stat_name == "status") {
         string status_value = value.trim_whitespace();
         if(status_value == "" || status_value.length() > 24 || status_value.find("|") >= 0) {
-            network_log_invalid_payload(p, "handle_update", "status invalido", data);
-            send_reliable_text(p.peer_id, "say Update invalido para status.", 0);
+            network_log_invalid_payload(p, "handle_update", "status inválido", data);
+            send_reliable_text(p.peer_id, "say Update inválido para status.", 0);
             return;
         }
         p.status = status_value;
@@ -1375,14 +1416,14 @@ void handle_update(player@ p, string data) {
 
     if(stat_name == "voice") {
         if(!is_unsigned_integer_string(value)) {
-            network_log_invalid_payload(p, "handle_update", "voice invalido", data);
-            send_reliable_text(p.peer_id, "say Update invalido para voice.", 0);
+            network_log_invalid_payload(p, "handle_update", "voice inválido", data);
+            send_reliable_text(p.peer_id, "say Update inválido para voice.", 0);
             return;
         }
         int voice_value = parse_int(value);
         if(voice_value < 0 || voice_value > 10) {
             network_log_invalid_payload(p, "handle_update", "voice fora de faixa", data);
-            send_reliable_text(p.peer_id, "say Update invalido para voice.", 0);
+            send_reliable_text(p.peer_id, "say Update inválido para voice.", 0);
             return;
         }
         p.voice = voice_value;
@@ -1393,23 +1434,23 @@ void handle_update(player@ p, string data) {
         string version_value = value.trim_whitespace();
         if(version_value == "" || version_value.length() > 32 || version_value.find("|") >= 0) {
             network_log_invalid_payload(p, "handle_update", "version invalida", data);
-            send_reliable_text(p.peer_id, "say Update invalido para version.", 0);
+            send_reliable_text(p.peer_id, "say Update inválido para version.", 0);
             return;
         }
         p.version = version_value;
         return;
     }
 
-    network_log_invalid_payload(p, "handle_update", "stat nao permitido: " + stat_name, data);
-    send_reliable_text(p.peer_id, "say Campo de update nao permitido: " + stat_name, 0);
+    network_log_invalid_payload(p, "handle_update", "stat não permitido: " + stat_name, data);
+    send_reliable_text(p.peer_id, "say Campo de update não permitido: " + stat_name, 0);
 }
 
 // ============================================================
-// FUNÃ‡ÃƒO PRINCIPAL DE PROCESSAMENTO
+// FUNCAO PRINCIPAL DE PROCESSAMENTO
 // ============================================================
 
-// Esta funÃ§Ã£o substitui/complementa o process_player_command() existente
-// Ela verifica se a mensagem usa o novo protocolo, senÃ£o usa fallback
+// Esta funcao substitui/complementa o process_player_command() existente
+// Ela verifica se a mensagem usa o novo protocolo, senao usa fallback
 void process_network_message(uint64 peer_id, string message) {
     if(message.trim_whitespace() == "") return;
     if(message.length() > NETWORK_HANDLER_MAX_MESSAGE_CHARS) {
@@ -1419,12 +1460,11 @@ void process_network_message(uint64 peer_id, string message) {
 
     player@ p = get_player_by_peer(peer_id);
     if(p is null) {
-        debug_log("âš ï¸ Mensagem de peer nÃ£o autenticado: " + peer_id);
+        debug_log("[ALERTA] Mensagem de peer não autenticado: " + peer_id);
         return;
     }
 
-    // Verificar se usa novo protocolo (tem dois pontos no inÃ­cio)
-    if(message.find(":") > 0 && message.find(":") < 15) {
+    if(is_modern_network_message(message)) {
         // Usa novo protocolo, dispatch
         dispatch_network_message(p, message);
     } else {
@@ -1437,22 +1477,23 @@ void process_network_message(uint64 peer_id, string message) {
 // RESULTADO ESPERADO
 // ============================================================
 //
-// Com este mÃ³dulo implementado:
-// âœ… Protocolo de mensagens bem definido com prefixos
-// âœ… Dispatcher manual organizado por categoria
-// âœ… Handlers separados para:
+// Com este modulo implementado:
+// [OK] Protocolo de mensagens bem definido com prefixos
+// [OK] Dispatcher manual organizado por categoria
+// [OK] Handlers separados para:
 //    - Combate (ataque, skills, magia)
-//    - InventÃ¡rio (usar, equipar, dropar, pegar)
-//    - Mapa (movimento, teleporte, interaÃ§Ãµes)
+//    - Inventario (usar, equipar, dropar, pegar)
+//    - Mapa (movimento, teleporte, interacoes)
 //    - Social (chat, whisper, party, guild, trade, friends)
 //    - Admin (comandos administrativos e builder)
 //    - Sistema (ping/pong, updates)
-// âœ… FÃ¡cil expansÃ£o para novos comandos
-// âœ… Logs detalhados de todas as aÃ§Ãµes
-// âœ… Compatibilidade com cÃ³digo existente via fallback
+// [OK] Facil expansao para novos comandos
+// [OK] Logs detalhados de todas as acoes
+// [OK] Compatibilidade com codigo existente via fallback
 //
-// Este Ã© o sistema de rede moderno e organizado do NVGT!
+// Este e o sistema de rede moderno e organizado do NVGT!
 // ============================================================
+
 
 
 
