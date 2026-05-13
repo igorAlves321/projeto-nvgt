@@ -69,36 +69,144 @@ void destroy_all_source2s(bool delete_sounds = true) {
 	source2s.resize(0);
 }
 
-// ==================== MINIJOGOS (Ainda não implementados) ====================
-class jogofarkle {
-    void jogar() { /* Stub - não implementado */ }
-};
+// ==================== MINIJOGOS ====================
+string draw_card_label(int value) {
+	if(value == 1) return "A";
+	if(value == 11) return "J";
+	if(value == 12) return "Q";
+	if(value == 13) return "K";
+	return "" + value;
+}
 
-class jogoblackjack {
-    void jogar() { /* Stub - não implementado */ }
-};
+int draw_blackjack_card() {
+	int card = random(1, 13);
+	if(card > 10) return 10;
+	if(card == 1) return 11;
+	return card;
+}
 
-class jogoparouimpar {
-    void jogar() { /* Stub - não implementado */ }
-};
+int score_farkle_dice(int[] dice) {
+	int score = 0;
+	int[] counts(7);
+	for(uint i = 0; i < dice.length(); i++) {
+		if(dice[i] >= 1 && dice[i] <= 6) counts[dice[i]]++;
+	}
 
-class dadodasorte {
-    void jogar() { /* Stub - não implementado */ }
-};
+	for(int face = 1; face <= 6; face++) {
+		if(counts[face] >= 3) {
+			score += (face == 1) ? 1000 : face * 100;
+			counts[face] -= 3;
+		}
+	}
+	score += counts[1] * 100;
+	score += counts[5] * 50;
+	return score;
+}
 
 class game_class {
+	string id;
+
+	game_class() {
+		id = "";
+	}
+
+	game_class(const string&in game_id) {
+		id = game_id;
+	}
+
 	void jogar() {
-        speak("Jogo ainda não implementado");
+		if(ausente || !player_moveable) return;
+
+		if(id == "roleta_animais") {
+			string[] animals = {"cachorro", "gato", "lobo", "urso", "rato", "tubarão", "dragonsauro", "macaco"};
+			int index = random(0, int(animals.length()) - 1);
+			speak(pu.get_value("A roleta gira...") + " " + pu.get_value("Resultado:") + " " + pu.get_value(animals[index]) + ".");
+			return;
+		}
+
+		if(id == "parouimpar") {
+			string choice = input_box(pu.get_value("Par ou ímpar"), pu.get_value("Digite par ou impar."));
+			choice = choice.trim_whitespace().lower();
+			if(choice != "par" && choice != "impar" && choice != "ímpar") return;
+
+			string number_text = input_box(pu.get_value("Par ou ímpar"), pu.get_value("Digite um número de 0 a 9."));
+			int player_number = string_to_number(number_text);
+			if(player_number < 0) player_number = 0;
+			if(player_number > 9) player_number = 9;
+
+			int house_number = random(0, 9);
+			int total = player_number + house_number;
+			bool even = (total % 2) == 0;
+			bool player_won = (even && choice == "par") || (!even && (choice == "impar" || choice == "ímpar"));
+			speak(pu.get_value("Você jogou") + " " + player_number + ". " + pu.get_value("A casa jogou") + " " + house_number + ". " + (player_won ? pu.get_value("Você venceu.") : pu.get_value("Você perdeu.")));
+			return;
+		}
+
+		if(id == "blackjack") {
+			int player_total = draw_blackjack_card() + draw_blackjack_card();
+			int dealer_total = draw_blackjack_card() + draw_blackjack_card();
+			while(player_total < 17) {
+				if(!simple_yes_no(pu.get_value("Você tem") + " " + player_total + ". " + pu.get_value("Comprar outra carta?"))) break;
+				player_total += draw_blackjack_card();
+			}
+			while(dealer_total < 17) {
+				dealer_total += draw_blackjack_card();
+			}
+
+			string result;
+			if(player_total > 21) result = pu.get_value("Você estourou.");
+			else if(dealer_total > 21 || player_total > dealer_total) result = pu.get_value("Você venceu.");
+			else if(player_total == dealer_total) result = pu.get_value("Empate.");
+			else result = pu.get_value("Você perdeu.");
+			speak(pu.get_value("Sua pontuação:") + " " + player_total + ". " + pu.get_value("Casa:") + " " + dealer_total + ". " + result);
+			return;
+		}
+
+		if(id == "poker") {
+			string choice = input_box(pu.get_value("Pedra, papel, tesoura"), pu.get_value("Digite pedra, papel ou tesoura."));
+			choice = choice.trim_whitespace().lower();
+			if(choice != "pedra" && choice != "papel" && choice != "tesoura") return;
+
+			string[] choices = {"pedra", "papel", "tesoura"};
+			string house = choices[random(0, 2)];
+			bool draw = choice == house;
+			bool won = (choice == "pedra" && house == "tesoura") || (choice == "papel" && house == "pedra") || (choice == "tesoura" && house == "papel");
+			string result = draw ? pu.get_value("Empate.") : (won ? pu.get_value("Você venceu.") : pu.get_value("Você perdeu."));
+			speak(pu.get_value("Você escolheu") + " " + pu.get_value(choice) + ". " + pu.get_value("A casa escolheu") + " " + pu.get_value(house) + ". " + result);
+			return;
+		}
+
+		if(id == "farkle") {
+			int[] dice;
+			string roll_text = "";
+			for(int i = 0; i < 6; i++) {
+				int die = random(1, 6);
+				dice.insert_last(die);
+				if(roll_text != "") roll_text += ", ";
+				roll_text += "" + die;
+			}
+			int score = score_farkle_dice(dice);
+			speak(pu.get_value("Dados:") + " " + roll_text + ". " + pu.get_value("Pontuação:") + " " + score + ".");
+			return;
+		}
+
+		if(id == "dadosorte") {
+			string guess_text = input_box(pu.get_value("Dado da sorte"), pu.get_value("Escolha um número de 1 a 6."));
+			int guess = string_to_number(guess_text);
+			int die = random(1, 6);
+			speak(pu.get_value("O dado caiu em") + " " + die + ". " + (guess == die ? pu.get_value("Você venceu.") : pu.get_value("Você perdeu.")));
+			return;
+		}
 	}
 };
-game_class roleta_animais;
-game_class parouimpar;
-game_class blackjack;
-game_class poker;
-game_class farkle;
-game_class dadosorte;
+game_class roleta_animais("roleta_animais");
+game_class parouimpar("parouimpar");
+game_class blackjack("blackjack");
+game_class poker("poker");
+game_class farkle("farkle");
+game_class dadosorte("dadosorte");
 
-// ==================== DOWNLOAD (Ainda não implementado) ====================
+// ==================== DOWNLOAD ====================
 class downloader {
     // Stub - downloader não é usado ativamente no cliente
 };
@@ -225,7 +333,7 @@ void lanchonete() {
 	open_generic_store("lanchonete");
 }
 
-// ==================== TELEFONE (Ainda não implementado) ====================
+// ==================== TELEFONE ====================
 class telefone_class {
 	string input(string prompt) {
 		return input_box("Telefone", prompt);
@@ -233,32 +341,59 @@ class telefone_class {
 };
 telefone_class tel;
 
-string telemenu() {
-    speak("Menu de telefone ainda não implementado");
-	return "";
+string travel_ticket_menu(const string&in title, const string[]&in destinations, int price) {
+	if(!player_moveable) return "";
+
+	setupmenu();
+	for(uint i = 0; i < destinations.length(); i++) {
+		string label = pu.get_value(destinations[i]) + " - " + price + " " + pu.get_value("reais");
+		game_menu.add_item(label, destinations[i]);
+	}
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	game_menu.intro_text = pu.get_value(title);
+
+	int result = game_menu.run();
+	if(result < 0) return "";
+	string selected_id = game_menu.get_item_id(result);
+	if(selected_id == "back") return "";
+	return selected_id;
 }
 
-// ==================== TICKETS/PASSAGENS (Ainda não implementado) ====================
+// ==================== TICKETS/PASSAGENS ====================
 string comprarpa() {
-	return "";
+	string[] destinations = {
+		"ciudad_de_arduam",
+		"ciudad_de_stalwalquer",
+		"ciudad_de_san_ángel",
+		"ciudad_scorpion",
+		"ciudad_tornair"
+	};
+	return travel_ticket_menu("Escolha seu destino de avião.", destinations, 500);
 }
 
 string comprarpa2() {
-	return "";
+	string[] destinations = {
+		"estación_abandonada",
+		"reserva_de_la_estación",
+		"ciudad_lesnói",
+		"ciudad_telaman",
+		"pueblo_de_zaragoza"
+	};
+	return travel_ticket_menu("Escolha seu destino de trem.", destinations, 250);
 }
 
-// ==================== FUNÇÕES DE MAPA (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE MAPA ====================
 void load_map2(string mapdata) {
 	// Compatibilidade legado/BGT: encaminha para o carregador principal NVGT.
 	load_map(mapdata, true);
 }
 
-// ==================== FUNÇÕES DE TECLAS (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE TECLAS ====================
 void reset_all_forced_keys() {
 	// Compatibilidade: no cliente NVGT atual nao ha estado global de teclas forcadas.
 }
 
-// ==================== FUNÇÕES DE ARMAS (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE ARMAS ====================
 void weaponcheckloop() {
 	// Encaminha para o loop real de armas (weapon.nvgt).
 	// Mantido como wrapper para compatibilidade com chamadas legadas.
@@ -269,7 +404,7 @@ void weaponcheckloop() {
 string current_weapon_name = "";
 int weapontime = 0;
 
-// ==================== FUNÇÕES DE TESTE (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE TESTE ====================
 void mtester(string data) {
 	// Handler de compatibilidade para mensagens de teste.
 	string payload = data.trim_whitespace();
@@ -277,7 +412,7 @@ void mtester(string data) {
 	debug_log("MTESTER: " + payload);
 }
 
-// ==================== FUNÇÕES DE SOM (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE SOM ====================
 sound progress_synth;
 
 void beep_percentage(double percentage) {
@@ -309,7 +444,7 @@ void set_player_peaceful(string name, bool peaceful) {
 	}
 }
 
-// ==================== FUNÇÕES DE INVENTÁRIO (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE INVENTÁRIO ====================
 void load_secondary_inventory(string data) {
 	string content = data;
 	if(content.find("invsec ") == 0) {
@@ -338,7 +473,7 @@ void load_secondary_inventory(string data) {
 	}
 }
 
-// ==================== FUNÇÕES DE MENU (Ainda não implementadas) ====================
+// ==================== FUNÇÕES DE MENU ====================
 int menu_jump_by_first_letter(string[]@ items, int current_index, const string&in letter) {
 	if(@items == null || items.length() == 0) return current_index;
 	if(letter == "" || letter == " " || letter.length() != 1) return current_index;
@@ -741,12 +876,42 @@ void menul5(string[] items) {
 	}
 }
 
-// ==================== FUNÇÕES DE TRADUÇÃO (Ainda não implementadas) ====================
-string ndicionario(string text) {
-    return text; // Por enquanto, retorna o texto sem modificação
+// ==================== FUNÇÕES DE FILTRO/LOCALIZAÇÃO ====================
+string mask_banned_word(const string&in word) {
+	string masked = "";
+	for(uint i = 0; i < word.length(); i++) {
+		masked += "...";
+	}
+	return masked;
 }
 
-// ==================== FUNÇÕES DE ÁUDIO (Ainda não implementadas) ====================
+string ndicionario(string text) {
+	string dictionary_file = "palavras.txt";
+	if(!file_exists(dictionary_file) && file_exists("palavras.nvgt")) {
+		dictionary_file = "palavras.nvgt";
+	}
+	if(!file_exists(dictionary_file)) return text;
+
+	file f;
+	if(!f.open(dictionary_file, "r")) return text;
+	string content = f.read();
+	f.close();
+	if(content == "") return text;
+
+	string normalized_text = text.lower();
+	string[] filters = content.split("\r\n", false);
+	for(uint i = 0; i < filters.length(); i++) {
+		string banned = trim_string(filters[i]);
+		if(banned == "") continue;
+		if(normalized_text.find(banned.lower()) < 0) continue;
+
+		text = text.replace(banned, mask_banned_word(banned), true);
+		normalized_text = text.lower();
+	}
+	return text;
+}
+
+// ==================== FUNÇÕES DE ÁUDIO ====================
 void saveaudio(string voice_data) {
 	if(voice_data == "") return;
 

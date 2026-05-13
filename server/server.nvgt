@@ -1,10 +1,10 @@
 #pragma plugin nvgt_sqlite
 
 // SQLite deve vir antes de módulos que dependem dele
-#include "sqlite3constants.nvgt"
+#include "../docks/nvgt/release/include/sqlite3constants.nvgt"
 
 // Utilitários
-#include "token_gen.nvgt"  // Task 1.2.2: Geração de salt
+#include "../docks/nvgt/release/include/token_gen.nvgt"  // Task 1.2.2: Geração de salt
 
 // Configurações do servidor
 const int SERVER_PORT = 9317;
@@ -109,7 +109,7 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/roles.nvgt"  // [OK] Sistema de Cargos/Permissoes
 #include "includes/afk_pacifico.nvgt"  // [OK] Modos Ausente (AFK) e Pacifico
 #include "includes/admin_chat.nvgt"  // [OK] Sistema de Chat Administrativo
-#include "db_props.nvgt"
+#include "../docks/nvgt/release/include/db_props.nvgt"
 // sqlite3constants.nvgt já incluído no topo
 
 // [OK] Epic 1 Task 1: Modulo de Inicializacao do Servidor
@@ -870,6 +870,84 @@ void reject_invalid_network_packet(uint64 peer_id, const string&in context, cons
     if(disconnect_peer) force_disconnect_and_cleanup(peer_id, true);
 }
 
+bool is_valid_travel_destination(const string&in ticket_type, const string&in destination_map) {
+    if(ticket_type == "passagema") {
+        return destination_map == "ciudad_de_arduam" ||
+               destination_map == "ciudad_de_stalwalquer" ||
+               destination_map == "ciudad_de_san_ángel" ||
+               destination_map == "ciudad_scorpion" ||
+               destination_map == "ciudad_tornair";
+    }
+    if(ticket_type == "passagemb") {
+        return destination_map == "estación_abandonada" ||
+               destination_map == "reserva_de_la_estación" ||
+               destination_map == "ciudad_lesnói" ||
+               destination_map == "ciudad_telaman" ||
+               destination_map == "pueblo_de_zaragoza";
+    }
+    if(ticket_type == "passagemo") {
+        return destination_map == "playa";
+    }
+    return false;
+}
+
+int get_travel_ticket_price(const string&in ticket_type) {
+    if(ticket_type == "passagema") return 500;
+    if(ticket_type == "passagemb") return 250;
+    if(ticket_type == "passagemo") return 150;
+    return 0;
+}
+
+string get_default_travel_destination(const string&in ticket_type) {
+    if(ticket_type == "passagemo") return "playa";
+    return "";
+}
+
+string get_travel_transport_name(const string&in ticket_type) {
+    if(ticket_type == "passagema") return "avião";
+    if(ticket_type == "passagemb") return "trem";
+    if(ticket_type == "passagemo") return "ônibus";
+    return "transporte";
+}
+
+void handle_travel_ticket(int player_index, const string&in ticket_type, const string&in destination_arg) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+
+    string destination_map = destination_arg;
+    if(destination_map == "") destination_map = get_default_travel_destination(ticket_type);
+
+    int price = get_travel_ticket_price(ticket_type);
+    if(price <= 0 || !is_valid_travel_destination(ticket_type, destination_map)) {
+        send_reliable_text(players[player_index].peer_id, "msg2 ;Destino de passagem invalido.;", 0);
+        return;
+    }
+
+    if(get_map_index_from(destination_map) < 0) {
+        send_reliable_text(players[player_index].peer_id, "msg2 ;O destino escolhido ainda nao esta disponivel.;", 0);
+        return;
+    }
+
+    if(players[player_index].afk || players[player_index].paralisado || players[player_index].paralisado2 || game_frozen) {
+        send_reliable_text(players[player_index].peer_id, "msg2 ;Você não pode viajar agora.;", 0);
+        return;
+    }
+
+    if(players[player_index].inv_item_number("reais") < price) {
+        send_reliable_text(players[player_index].peer_id, "msg2 ;Você não tem reais suficientes para comprar esta passagem.;", 0);
+        return;
+    }
+
+    players[player_index].inv_add_item("reais", -price, true);
+    players[player_index].jaandou = 0;
+    players[player_index].javoou = 0;
+    players[player_index].noaviao = ticket_type == "passagema" ? 1 : 0;
+    players[player_index].notrem = ticket_type == "passagemb" ? 1 : 0;
+    players[player_index].maptraveltimer.restart();
+
+    changemap(destination_map, player_index, 1, 0);
+    send_reliable_text(players[player_index].peer_id, "msg2 ;Você compra a passagem de " + get_travel_transport_name(ticket_type) + " e chega ao destino.;", 0);
+}
+
 // Processamento de comando de jogador
 void process_player_command(uint64 peer_id, string command) {
     player@ player = get_player_by_peer(peer_id);
@@ -879,6 +957,7 @@ void process_player_command(uint64 peer_id, string command) {
     }
     
     command = command.trim_whitespace();
+    set_event_message(command);
     if(command == "") return;
 
     // Protocolo moderno (PREFIXO:payload) - delega para dispatcher novo
@@ -1082,6 +1161,59 @@ void process_player_command(uint64 peer_id, string command) {
         
         // Obter índice do jogador para comandos que usam player_index
         int player_index = get_player_index_from(player.name);
+        if(player_index < 0) return;
+
+        if(cmd == "portallist") {
+            getportal(player_index);
+            return;
+        }
+
+        if(cmd == "usetele" && parts.length() == 4) {
+            int destination_x = 0;
+            int destination_y = 0;
+            if(!try_parse_int_token(parts[2], destination_x) || !try_parse_int_token(parts[3], destination_y)) {
+                reject_invalid_network_packet(peer_id, "process_player_command:usetele_xy", command);
+                return;
+            }
+
+            string destination_map = parts[1];
+            int current_map_index = get_map_index_from(player.map);
+            int destination_map_index = get_map_index_from(destination_map);
+            if(current_map_index < 0 || destination_map_index < 0) {
+                send_reliable_text(peer_id, "msg2 ;Destino de portal invalido.;", 0);
+                return;
+            }
+
+            if(players[player_index].inv_item_number("portal_de_luz") <= 0) {
+                send_reliable_text(peer_id, "msg2 ;Você precisa de um portal de luz para fazer isso.;", 0);
+                return;
+            }
+
+            if(player.afk || player.paralisado || player.paralisado2 || game_frozen) {
+                send_reliable_text(peer_id, "msg2 ;Você não pode abrir um portal agora.;", 0);
+                return;
+            }
+
+            if(server_maps[current_map_index].is_disabled("portal_de_luz")) {
+                send_reliable_text(peer_id, "msg2 ;Portais de luz estão desativados neste mapa.;", 0);
+                return;
+            }
+
+            if(players[player_index].teletimer.elapsed < 30000) {
+                send_reliable_text(peer_id, "msg2 ;Aguarde para abrir outro portal.;", 0);
+                return;
+            }
+
+            players[player_index].teletimer.restart();
+            spawn_portal(player_index, player.x, player.y, player.map, destination_map, destination_x, destination_y);
+            return;
+        }
+
+        if(cmd == "passagema" || cmd == "passagemb" || cmd == "passagemo") {
+            string ticket_destination = parts.length() >= 2 ? parts[1] : "";
+            handle_travel_ticket(player_index, cmd, ticket_destination);
+            return;
+        }
 
         // [OK] Phase 1: Zone Interaction Handler (zsa)
         if(cmd == "zsa") {

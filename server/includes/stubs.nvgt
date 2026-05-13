@@ -21,9 +21,15 @@ class obj_placeholder {
 }
 obj_placeholder@[] objs_placeholder;
 
-// Função de evento de mensagem
+// Mensagem atual em processamento, usada por wrappers legados portados do BGT.
+string current_event_message = "";
+
+void set_event_message(const string&in message) {
+    current_event_message = message;
+}
+
 string get_event_message() {
-    return "";
+    return current_event_message;
 }
 
 // Timer para objetos
@@ -847,29 +853,97 @@ bool emequipe(string nome, string alvo) {
     return false;
 }
 
-// ==================== SISTEMA DE ARENA (Placeholder) ====================
-class arena_placeholder {
+// ==================== SISTEMA DE ARENA (Compatibilidade) ====================
+class arena_compat {
     int counter_deaths = 0;
-    
-    void remove_player_from(int player_index) {
-        debug_log("ARENA: Chamada legada remove_player_from");
+
+    int find_player_arena_index(int player_index) {
+        if(player_index < 0 || player_index >= int(players.length())) return -1;
+
+        int arena_index = -1;
+        if(players[player_index].maparena != "") {
+            arena_index = get_arena_index(players[player_index].maparena);
+        }
+        if(arena_index < 0) {
+            arena_index = get_arena_index(players[player_index].map);
+        }
+        if(arena_index >= 0) return arena_index;
+
+        for(uint i = 0; i < arenas.length(); i++) {
+            for(uint p = 0; p < arenas[i].players_in_arena.length(); p++) {
+                if(arenas[i].players_in_arena[p] == players[player_index].charname) {
+                    return int(i);
+                }
+            }
+        }
+        return -1;
     }
-    
+
+    void remove_player_from(int player_index) {
+        if(player_index < 0 || player_index >= int(players.length())) return;
+
+        int arena_index = find_player_arena_index(player_index);
+        if(arena_index >= 0) {
+            remove_player_from_arena(arena_index, player_index);
+            return;
+        }
+
+        players[player_index].in_arena = 0;
+        players[player_index].maparena = "";
+        debug_log("ARENA: jogador removido do estado legado sem arena ativa: " + players[player_index].charname);
+    }
+
     void reset() {
         counter_deaths = 0;
-        debug_log("ARENA: Arena resetada (placeholder)");
+        for(uint i = 0; i < arenas.length(); i++) {
+            arenas[i].match_started = false;
+            arenas[i].active = false;
+            arenas[i].players_in_arena.resize(0);
+            arenas[i].reset_scores();
+        }
+        for(uint p = 0; p < players.length(); p++) {
+            players[p].in_arena = 0;
+            players[p].maparena = "";
+        }
+        debug_log("ARENA: estado de arenas resetado");
     }
 }
-arena_placeholder arena_global;
+arena_compat arena_global;
 
-// ==================== SISTEMA DE ROUPAS (Placeholder) ====================
+// ==================== SISTEMA DE ROUPAS (Compatibilidade) ====================
 class clothes_data {
     string name = "";
-    int protection = 0;
+    double protection = 0;
+    string body_part = "";
     bool enable_degradation = false;
-    int degradation = 0;
+    double degradation = 0.5;
 }
 clothes_data@[] clothes;
+
+void sync_legacy_clothes_from_available() {
+    clothes.resize(0);
+    for(uint i = 0; i < available_clothing.length(); i++) {
+        clothes_data c;
+        c.name = available_clothing[i].name;
+        c.protection = available_clothing[i].protection;
+        c.body_part = available_clothing[i].body_part;
+        c.enable_degradation = true;
+        c.degradation = 0.5;
+        clothes.insert_last(c);
+    }
+    debug_log("CLOTHES: tabela legada sincronizada com " + clothes.length() + " roupas");
+}
+
+int find_legacy_clothing_index(const string&in clothing_name) {
+    if(clothes.length() == 0 && available_clothing.length() > 0) {
+        sync_legacy_clothes_from_available();
+    }
+
+    for(uint i = 0; i < clothes.length(); i++) {
+        if(clothes[i].name == clothing_name) return int(i);
+    }
+    return -1;
+}
 
 // ==================== FIM DO ARQUIVO ====================
 
