@@ -18,6 +18,7 @@ class ServerCommand {
 }
 dictionary registered_commands;
 dictionary command_aliases;
+#include "commands/basic_player_commands.nvgt"
 void init_command_system() {
     debug_log("Inicializando sistema de comandos");
     register_command("help", "Mostra lista de comandos disponiveis", false);
@@ -938,124 +939,6 @@ bool execute_command(player@ player, string command, string[] args) {
     }
     player.send_message("say Comando '" + command + "' reconhecido mas Nao implementado ainda.");
     return false;
-}
-bool cmd_help(player@ player, string[] args) {
-    string[] command_list;
-    string[] admin_list;
-    string[] keys = registered_commands.get_keys();
-    for(uint i = 0; i < keys.length(); i++) {
-        ServerCommand@ cmd;
-        registered_commands.get(keys[i], @cmd);
-        if(cmd is null) continue;
-        if(cmd.admin_only) {
-            if(player.admin_status) {
-                admin_list.push_back(cmd.name + " - " + cmd.description);
-            }
-        } else {
-            command_list.push_back(cmd.name + " - " + cmd.description);
-        }
-    }
-    player.send_message("say === COMANDOS DISPONIVEIS ===");
-    for(uint i = 0; i < command_list.length(); i++) {
-        player.send_message("say " + command_list[i]);
-    }
-    if(admin_list.length() > 0) {
-        player.send_message("say === COMANDOS DE ADMINISTRADOR ===");
-        for(uint i = 0; i < admin_list.length(); i++) {
-            player.send_message("say " + admin_list[i]);
-        }
-    }
-    return true;
-}
-bool cmd_who(player@ player, string[] args) {
-    string[] online = get_online_players();
-    player.send_message("say Jogadores online (" + online.length() + "): " + join(online, ", "));
-    return true;
-}
-bool cmd_time(player@ player, string[] args) {
-    int hora_atual = TIME_HOUR;
-    int minuto_atual = TIME_MINUTE;
-    string hora = hora_atual < 10 ? "0" + hora_atual : "" + hora_atual;
-    string minuto = minuto_atual < 10 ? "0" + minuto_atual : "" + minuto_atual;
-    player.send_message("say Hora atual do servidor: " + hora + ":" + minuto);
-    return true;
-}
-bool cmd_save(player@ player, string[] args) {
-    player.save_player_data();
-    player.send_message("say Dados salvos com sucesso!");
-    return true;
-}
-bool cmd_quit(player@ player, string[] args) {
-    player.send_message("say Desconectando...");
-    uint64 peer = player.peer_id;
-    player.save_player_data();
-    force_disconnect_and_cleanup(peer, true);
-    return true;
-}
-bool cmd_pm(player@ player, string[] args) {
-    if(args.length() < 2) {
-        player.send_message("say Uso: pm <jogador> <mensagem>");
-        return false;
-    }
-    string target_name = args[0];
-    string message = "";
-    for(uint i = 1; i < args.length(); i++) {
-        if(i > 1) message += " ";
-        message += args[i];
-    }
-    player@ target = get_player_by_name(target_name);
-    if(target is null) {
-        player.send_message("say Jogador '" + target_name + "' Nao encontrado.");
-        return false;
-    }
-    target.send_message("pm [" + player.name + "]: " + message);
-    player.send_message("pm Para [" + target.name + "]: " + message);
-    return true;
-}
-bool cmd_say(player@ player, string[] args) {
-    if(args.length() == 0) {
-        player.send_message("say Uso: say <mensagem>");
-        return false;
-    }
-    string message = join(args, " ");
-    player@[] players_here = get_players_in_map(player.map_name);
-    for(uint i = 0; i < players_here.length(); i++) {
-        players_here[i].send_message("say " + player.name + " diz: " + message);
-    }
-    return true;
-}
-bool cmd_inventory(player@ player, string[] args) {
-    string[] inv_keys = player.inv.get_keys();
-    if(inv_keys.length() == 0) {
-        player.send_message("say Seu inventario esta vazio.");
-        debug_log("" + player.charname + " verificou inventario vazio");
-        return true;
-    }
-    string inv_msg = "=== INVENTARIO ===\n";
-    inv_msg += "Total de itens: " + inv_keys.length() + "\n\n";
-    for(uint i = 0; i < inv_keys.length(); i++) {
-        int quantity = 0;
-        player.inv.get(inv_keys[i], quantity);
-        if(quantity > 0) {
-            inv_msg += "- " + inv_keys[i] + ": " + quantity + "\n";
-        }
-    }
-    player.send_message("say " + inv_msg);
-    debug_log("" + player.charname + " verificou inventario (" + inv_keys.length() + " itens)");
-    return true;
-}
-bool cmd_score(player@ player, string[] args) {
-    string stats = "=== ESTATISTICAS ===\n";
-    stats += "Nome: " + player.name + "\n";
-    stats += "Nivel: " + player.player_level + "\n";
-    stats += "Experiencia: " + player.exp + "\n";
-    stats += "Ouro: " + player.gold + "\n";
-    stats += "Vida: " + player.hp + "/" + player.max_hp + "\n";
-    stats += "Mana: " + player.mp + "/" + player.max_mp + "\n";
-    stats += "Raca: " + player.race + "\n";
-    stats += "Localizacaoo: " + player.map_name + " (" + player.x + "," + player.y + "," + player.z + ")";
-    player.send_message("say " + stats);
-    return true;
 }
 bool cmd_setvoice(player@ player, string[] args) {
     if(args.length() < 1) {
