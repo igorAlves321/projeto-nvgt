@@ -1,0 +1,148 @@
+// Menu de ações e gerenciamento de categorias de inventário
+void actions_menu(string type, string context) {
+	if(type == "inv") {
+		// Menu de gerenciamento de categorias do inventário
+		inventory_categories_menu();
+	}
+	else {
+		speak(pu.get_value("Tipo de menu de ações não reconhecido: ") + type);
+	}
+}
+
+// Menu de categorias de inventário
+void inventory_categories_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Ver todas as categorias"), "view_all");
+	game_menu.add_item(pu.get_value("Filtrar por categoria"), "filter");
+	game_menu.add_item(pu.get_value("Organizar automaticamente"), "auto_organize");
+	game_menu.add_item(pu.get_value("Definir categoria padrão"), "set_default");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Gerenciamento de categorias do inventário. O que deseja fazer?");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "view_all") {
+		view_inventory_categories();
+	}
+	else if(selected_id == "filter") {
+		filter_by_category_menu();
+	}
+	else if(selected_id == "auto_organize") {
+		auto_organize_inventory();
+	}
+	else if(selected_id == "set_default") {
+		set_default_category_menu();
+	}
+	else if(selected_id == "back") {
+		servicesmenu();
+	}
+}
+
+// Ver todas as categorias disponíveis
+void view_inventory_categories() {
+	setupmenu();
+	
+	// Categorias padrão do jogo
+	string[] categories = {
+		"Armas",
+		"Munição",
+		"Consumíveis",
+		"Ferramentas",
+		"Veículos",
+		"Materiais",
+		"Especiais",
+		"Outros"
+	};
+	
+	for(uint i = 0; i < categories.length(); i++) {
+		game_menu.add_item(categories[i], "cat_" + i);
+	}
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Categorias de inventário disponíveis. Total: ") + categories.length();
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id != "back") {
+		// Extrair índice da categoria selecionada
+		if(selected_id.find("cat_") == 0) {
+			int cat_index = string_to_number(selected_id.substr(4));
+			if(cat_index >= 0 && cat_index < int(categories.length())) {
+				speak(pu.get_value("Categoria: ") + categories[cat_index]);
+				// Aqui poderia listar itens dessa categoria
+				send_reliable(peer_id, "listcategory " + categories[cat_index], 0);
+			}
+		}
+	}
+	
+	inventory_categories_menu();
+}
+
+// Menu de filtro por categoria
+void filter_by_category_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Mostrar apenas armas"), "weapons");
+	game_menu.add_item(pu.get_value("Mostrar apenas consumíveis"), "consumables");
+	game_menu.add_item(pu.get_value("Mostrar apenas ferramentas"), "tools");
+	game_menu.add_item(pu.get_value("Mostrar tudo"), "all");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Filtrar inventário por categoria");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id == "weapons") {
+		send_reliable(peer_id, "filterinv weapons", 0);
+		speak(pu.get_value("Mostrando apenas armas"));
+	}
+	else if(selected_id == "consumables") {
+		send_reliable(peer_id, "filterinv consumables", 0);
+		speak(pu.get_value("Mostrando apenas consumíveis"));
+	}
+	else if(selected_id == "tools") {
+		send_reliable(peer_id, "filterinv tools", 0);
+		speak(pu.get_value("Mostrando apenas ferramentas"));
+	}
+	else if(selected_id == "all") {
+		send_reliable(peer_id, "filterinv all", 0);
+		speak(pu.get_value("Mostrando todos os itens"));
+	}
+	
+	if(selected_id != "back") {
+		inventory_categories_menu();
+	}
+}
+
+// Organizar inventário automaticamente
+void auto_organize_inventory() {
+	speak(pu.get_value("Organizando inventário por categoria..."));
+	send_reliable(peer_id, "organizeinv", 0);
+	wait(500);
+	speak(pu.get_value("Inventário organizado com sucesso!"));
+	inventory_categories_menu();
+}
+
+// Menu para definir categoria padrão
+void set_default_category_menu() {
+	setupmenu();
+	
+	game_menu.add_item(pu.get_value("Armas"), "weapons");
+	game_menu.add_item(pu.get_value("Consumíveis"), "consumables");
+	game_menu.add_item(pu.get_value("Ferramentas"), "tools");
+	game_menu.add_item(pu.get_value("Outros"), "other");
+	game_menu.add_item(pu.get_value("Voltar"), "back");
+	
+	game_menu.intro_text = pu.get_value("Escolha a categoria padrão para novos itens");
+	int mres = game_menu.run();
+	string selected_id = game_menu.get_item_id(mres);
+	
+	if(selected_id != "back") {
+		send_reliable(peer_id, "setdefaultcategory " + selected_id, 0);
+		speak(pu.get_value("Categoria padrão definida: ") + selected_id);
+	}
+	
+	inventory_categories_menu();
+}
