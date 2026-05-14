@@ -1,0 +1,195 @@
+void cmd_addzone(int player_index, int minx, int maxx, int miny, int maxy, string map_name, string message = "Zona Segura") {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "addzone", "Apenas super admins podem usar este comando!");
+		return;
+	}
+	if(!is_valid_coord(minx) || !is_valid_coord(maxx) || !is_valid_coord(miny) || !is_valid_coord(maxy)) {
+		send_admin_error(player_index, "addzone", "Coordenadas fora dos limites permitidos (" + ADMIN_MIN_COORD + " a " + ADMIN_MAX_COORD + ").");
+		return;
+	}
+	if(minx > maxx || miny > maxy) {
+		send_admin_error(player_index, "addzone", "Coordenadas invalidas: min deve ser menor que max.");
+		return;
+	}
+	if(!is_valid_map_name(map_name)) {
+		send_admin_error(player_index, "addzone", "Nome de mapa invalido!");
+		return;
+	}
+	if(message.length() > 128) {
+		message = message.substr(0, 128);
+	}
+
+	game_disabled_zone@ nova_zona = game_disabled_zone(minx, maxx, miny, maxy, map_name, message);
+	nova_zona.disable_pvp = true;
+	nova_zona.disable_items = false;
+	nova_zona.disable_commands = false;
+	game_disabled_zones.insert_last(nova_zona);
+
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 Zona adicionada: [" + minx + "," + maxx + "] x [" + miny + "," + maxy + "] no mapa " + map_name, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " adicionou zona desabilitada no mapa " + map_name);
+}
+
+void cmd_removezone(int player_index, int zone_index) {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "removezone", "Apenas super admins podem usar este comando!");
+		return;
+	}
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_admin_error(player_index, "removezone", "Andice de zona inválido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
+		return;
+	}
+
+	string map_removed = game_disabled_zones[zone_index].map;
+	game_disabled_zones.remove_at(zone_index);
+	send_reliable_text(players[player_index].peer_id, "msg2 Zona " + zone_index + " removida do mapa " + map_removed, 0);
+	debug_log("ADMIN: " + players[player_index].charname + " removeu zona " + zone_index);
+}
+
+void cmd_listzones(int player_index) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "listzones", "Você não tem permissao!");
+		return;
+	}
+	if(game_disabled_zones.length() == 0) {
+		send_reliable_text(players[player_index].peer_id, "msg2 Nenhuma zona desabilitada configurada", 0);
+		return;
+	}
+
+	string result = "=== ZONAS DESABILITADAS (" + game_disabled_zones.length() + ") ===\\r\\n";
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		result += "[" + i + "] Mapa: " + game_disabled_zones[i].map +
+			" | Area: [" + game_disabled_zones[i].minx + "-" + game_disabled_zones[i].maxx +
+			"] x [" + game_disabled_zones[i].miny + "-" + game_disabled_zones[i].maxy + "]";
+		if(game_disabled_zones[i].disable_pvp) result += " | PvP:OFF";
+		if(game_disabled_zones[i].disable_items) result += " | Items:OFF";
+		if(game_disabled_zones[i].disable_commands) result += " | Commands:OFF";
+		result += "\\r\\n";
+	}
+	send_reliable_text(players[player_index].peer_id, "say " + result, 0);
+}
+
+void cmd_togglezonepvp(int player_index, int zone_index) {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "togglezonepvp", "Apenas super admins podem usar este comando!");
+		return;
+	}
+	if(zone_index < 0 || zone_index >= int(game_disabled_zones.length())) {
+		send_admin_error(player_index, "togglezonepvp", "Andice de zona invalido (0-" + (int(game_disabled_zones.length()) - 1) + "). Use /listzones para ver as zonas.");
+		return;
+	}
+
+	game_disabled_zones[zone_index].disable_pvp = !game_disabled_zones[zone_index].disable_pvp;
+	string status = game_disabled_zones[zone_index].disable_pvp ? "desabilitado" : "habilitado";
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 PvP " + status + " na zona " + zone_index + " (" + game_disabled_zones[zone_index].map + ")", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " alterou PvP na zona " + zone_index + " para " + status);
+}
+
+void cmd_checkzone(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	bool in_zone = false;
+	int zone_id = -1;
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		if(game_disabled_zones[i].is_inside(players[player_index].x, players[player_index].y, players[player_index].map)) {
+			in_zone = true;
+			zone_id = i;
+			break;
+		}
+	}
+
+	if(in_zone) {
+		send_reliable_text(players[player_index].peer_id,
+			"msg2 Você está na zona [" + zone_id + "] - " + game_disabled_zones[zone_id].message +
+			" | PvP:" + (game_disabled_zones[zone_id].disable_pvp ? "OFF" : "ON"), 0);
+	} else {
+		send_reliable_text(players[player_index].peer_id, "msg2 Você não está em nenhuma zona desabilitada", 0);
+	}
+}
+
+void cmd_savezones(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "savezones", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	file f;
+	if(!f.open("disabled_zones.cfg", "wb")) {
+		send_admin_error(player_index, "savezones", "Erro ao abrir arquivo para salvar!");
+		return;
+	}
+
+	string content = "// Zonas Desabilitadas - Configuracao\\n";
+	content += "// Formato: map|minx|maxx|miny|maxy|pvp|items|commands|message\\n\\n";
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		content += game_disabled_zones[i].map + "|";
+		content += game_disabled_zones[i].minx + "|";
+		content += game_disabled_zones[i].maxx + "|";
+		content += game_disabled_zones[i].miny + "|";
+		content += game_disabled_zones[i].maxy + "|";
+		content += (game_disabled_zones[i].disable_pvp ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_items ? "1" : "0") + "|";
+		content += (game_disabled_zones[i].disable_commands ? "1" : "0") + "|";
+		content += game_disabled_zones[i].message + "\\n";
+	}
+
+	f.write(content);
+	f.close();
+	send_reliable_text(players[player_index].peer_id,
+		"msg2 " + game_disabled_zones.length() + " zonas salvas em disabled_zones.cfg", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " salvou " + game_disabled_zones.length() + " zonas");
+}
+
+int load_disabled_zones_from_disk() {
+	file f;
+	if(!f.open("disabled_zones.cfg", "rb")) return -1;
+
+	string content = f.read();
+	f.close();
+	game_disabled_zones.resize(0);
+
+	string[] lines = content.split("\\n");
+	int loaded = 0;
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = trim(lines[i]);
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		string[] parts = line.split("|");
+		if(parts.length() >= 9) {
+			string map = parts[0];
+			int minx = string_to_number(parts[1]);
+			int maxx = string_to_number(parts[2]);
+			int miny = string_to_number(parts[3]);
+			int maxy = string_to_number(parts[4]);
+			bool pvp = (parts[5] == "1");
+			bool items = (parts[6] == "1");
+			bool commands = (parts[7] == "1");
+			string message = parts[8];
+
+			game_disabled_zone@ zona = game_disabled_zone(minx, maxx, miny, maxy, map, message);
+			zona.disable_pvp = pvp;
+			zona.disable_items = items;
+			zona.disable_commands = commands;
+			game_disabled_zones.insert_last(zona);
+			loaded++;
+		}
+	}
+	return loaded;
+}
+
+void cmd_loadzones(int player_index) {
+	if(!is_super_admin(player_index)) {
+		send_admin_error(player_index, "loadzones", "Apenas super admins podem usar este comando!");
+		return;
+	}
+
+	int loaded = load_disabled_zones_from_disk();
+	if(loaded < 0) {
+		send_admin_error(player_index, "loadzones", "Arquivo disabled_zones.cfg não encontrado!");
+		return;
+	}
+
+	send_reliable_text(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas de disabled_zones.cfg", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " carregou " + loaded + " zonas");
+}
