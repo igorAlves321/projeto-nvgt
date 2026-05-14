@@ -1,0 +1,108 @@
+bool handle_social_player_command(uint64 peer_id, player@ player, int player_index, string command, string cmd, string[] parts) {
+    if(cmd == "adm" && parts.length() > 1) {
+        handle_admin_chat_command(player, command);
+        return true;
+    }
+
+    if(cmd == "/falarnomapa" && parts.length() >= 2) {
+        string msg_text = command.substr(13);
+        cmd_falarnomapa(player_index, msg_text);
+        return true;
+    }
+
+    if((cmd == "/e" || cmd == "/t") && parts.length() >= 2) {
+        string msg_text = command.substr(3);
+        cmd_team(player_index, msg_text);
+        return true;
+    }
+
+    if(cmd == "/pm" && parts.length() >= 3) {
+        string target_name = parts[1];
+        int target_pos = command.find(parts[1]);
+        if(target_pos < 0) {
+            reject_invalid_network_packet(peer_id, "process_player_command:pm_target", command);
+            return true;
+        }
+        int msg_start = target_pos + parts[1].length() + 1;
+        if(msg_start < int(command.length())) {
+            string msg_text = command.substr(msg_start);
+            cmd_pm(player_index, target_name, msg_text);
+        }
+        return true;
+    }
+
+    if((cmd == "/reply" || cmd == "/r") && parts.length() >= 2) {
+        string msg_text;
+        if(cmd == "/reply") {
+            msg_text = command.substr(7);
+        } else {
+            msg_text = command.substr(3);
+        }
+        cmd_reply(player_index, msg_text);
+        return true;
+    }
+
+    if(cmd == "frasesbarra" && parts.length() >= 3) {
+        int nsom = 0;
+        if(!try_parse_int_token(parts[1], nsom)) {
+            reject_invalid_network_packet(peer_id, "process_player_command:frasesbarra_nsom", command);
+            return true;
+        }
+        frasesbarra(player_index, nsom, parts[2]);
+        return true;
+    }
+
+    if(cmd == "translate" && parts.length() >= 2) {
+        cmd_translate(player_index, parts);
+        return true;
+    }
+
+    if((cmd == "/traduzir" || cmd == "traduzir" || cmd == "/translate") && parts.length() >= 3) {
+        cmd_translate(player_index, parts);
+        return true;
+    }
+
+    if((cmd == "/enable_translate" || cmd == "enable_translate") && parts.length() >= 2) {
+        cmd_enable_translate(player_index, parts);
+        return true;
+    }
+
+    if((cmd == "/remove_translate" || cmd == "remove_translate") && parts.length() >= 2) {
+        cmd_remove_translate(player_index, parts);
+        return true;
+    }
+
+    return false;
+}
+
+void handle_admin_chat_command(player@ player, string command) {
+    string msg_text = command.substr(4);
+    string msg_prefix = "";
+    string player_title = player.title.lower();
+    if(player_title == "chatter" || player_title == "bugueiro") {
+        msg_prefix = "[LOGO_CHATTER] ";
+    }
+
+    string mensagem = "msg4 " + msg_prefix + player.name + "; ;diz:; " + msg_text;
+    string sound_packet = "ps notify5.ogg";
+
+    for(uint i = 0; i < players.length(); i++) {
+        if(!players[i].is_logged_in) continue;
+        if(players[i].has_muted(player.name)) continue;
+
+        bool can_receive = players[i].check_admin() || players[i].moderador;
+        if(!can_receive) {
+            if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
+               file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
+                can_receive = true;
+            }
+        }
+
+        if(can_receive) {
+            send_reliable_text(players[i].peer_id, sound_packet, 0);
+            send_reliable_text(players[i].peer_id, mensagem, 0);
+        }
+    }
+
+    debug_log("[ADMCHAT] Chat Admin de " + player.name + ": " + msg_text);
+}

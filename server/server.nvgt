@@ -944,6 +944,7 @@ void handle_travel_ticket(int player_index, const string&in ticket_type, const s
 
 #include "includes/player_command_economy.nvgt"
 #include "includes/player_command_query.nvgt"
+#include "includes/player_command_social.nvgt"
 #include "includes/player_command_progression.nvgt"
 
 // Processamento de comando de jogador
@@ -2061,140 +2062,7 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
         
-        // ============================================================================
-        // - TASK 2.6.2: CHAT ADMINISTRATIVO (comando "adm")
-        // ============================================================================
-        // Formato: adm <mensagem>
-        // Envia mensagem para todos os admins/mods conectados
-        // Jogadores com título "CHATTER" ou "Bugueiro" recebem prefixo [LOGO_CHATTER]
-        if(cmd == "adm" && parts.length() > 1) {
-            // Reconstruir a mensagem (remove o "adm " do início)
-            string msg_text = command.substr(4); // Remove "adm "
-            
-            // Verificar se o jogador tem título Chatter/Bugueiro
-            string msg_prefix = "";
-            string player_title = player.title.lower();
-            if(player_title == "chatter" || player_title == "bugueiro") {
-                msg_prefix = "[LOGO_CHATTER] ";
-            }
-            
-            // Montar mensagem no formato BGT: "msg4 <nome>; ;diz:; <mensagem>"
-            string mensagem = "msg4 " + msg_prefix + player.name + "; ;diz:; " + msg_text;
-            string sound_packet = "ps notify5.ogg";
-            
-            // Enviar para todos os admins e moderadores conectados
-            for(uint i = 0; i < players.length(); i++) {
-                if(!players[i].is_logged_in) continue;
-                if(players[i].has_muted(player.name)) continue; // Não enviar para quem mutou
-                
-                // Verificar se é admin, moderador ou tem permissão de chat admin
-                bool can_receive = players[i].check_admin() || players[i].moderador;
-                if(!can_receive) {
-                    // Verificar arquivo de permissão específico
-                    if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
-                       file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
-                        can_receive = true;
-                    }
-                }
-                
-                if(can_receive) {
-                    send_reliable_text(players[i].peer_id, sound_packet, 0);
-                    send_reliable_text(players[i].peer_id, mensagem, 0);
-                }
-            }
-            
-            debug_log("[ADMCHAT] Chat Admin de " + player.name + ": " + msg_text);
-            return;
-        }
-        
-        // ============================================================================
-        // - SISTEMA DE CHAT COMPLETO (Chat Local, Equipe, PM)
-        // ============================================================================
-        
-        // /falarnomapa <mensagem> - Chat local (fala para jogadores próximos)
-        if(cmd == "/falarnomapa" && parts.length() >= 2) {
-            // Reconstruir a mensagem (remove o comando do início)
-            string msg_text = command.substr(13); // Remove "/falarnomapa "
-            cmd_falarnomapa(player_index, msg_text);
-            return;
-        }
-        
-        // /e <mensagem> ou /t <mensagem> - Chat de equipe
-        if((cmd == "/e" || cmd == "/t") && parts.length() >= 2) {
-            string msg_text = command.substr(3); // Remove "/e " ou "/t "
-            cmd_team(player_index, msg_text);
-            return;
-        }
-        
-        // /pm <nome> <mensagem> - Mensagem privada
-        if(cmd == "/pm" && parts.length() >= 3) {
-            string target_name = parts[1];
-            // Reconstruir a mensagem (remove "/pm nome ")
-            int target_pos = command.find(parts[1]);
-            if(target_pos < 0) {
-                reject_invalid_network_packet(peer_id, "process_player_command:pm_target", command);
-                return;
-            }
-            int msg_start = target_pos + parts[1].length() + 1;
-            if(msg_start < int(command.length())) {
-                string msg_text = command.substr(msg_start);
-                cmd_pm(player_index, target_name, msg_text);
-            }
-            return;
-        }
-        
-        // /reply <mensagem> ou /r <mensagem> - Responder última PM
-        if((cmd == "/reply" || cmd == "/r") && parts.length() >= 2) {
-            string msg_text;
-            if(cmd == "/reply") {
-                msg_text = command.substr(7); // Remove "/reply "
-            } else {
-                msg_text = command.substr(3); // Remove "/r "
-            }
-            cmd_reply(player_index, msg_text);
-            return;
-        }
-        
-        // ============================================================================
-        // [OK] TASK 3.3: SISTEMA QoL (Voice Phrases + Traducao)
-        // ============================================================================
-        
-        // frasesbarra <nsom> <som2> - Voice phrases (sistema original BGT)
-        // Cliente envia: "frasesbarra 1 v1ayuda1.ogg"
-        // Servidor retransmite o som para jogadores próximos
-        if(cmd == "frasesbarra" && parts.length() >= 3) {
-            int nsom = 0;
-            if(!try_parse_int_token(parts[1], nsom)) {
-                reject_invalid_network_packet(peer_id, "process_player_command:frasesbarra_nsom", command);
-                return;
-            }
-            frasesbarra(player_index, nsom, parts[2]);
-            return;
-        }
-        
-        // translate <lang>|<text> - Traduzir texto
-        if(cmd == "translate" && parts.length() >= 2) {
-            cmd_translate(player_index, parts);
-            return;
-        }
-        
-        // /traduzir <lang> <texto> - Traduzir (comando amigável)
-        if((cmd == "/traduzir" || cmd == "traduzir" || cmd == "/translate") && parts.length() >= 3) {
-            cmd_translate(player_index, parts);
-            return;
-        }
-        
-        // /enable_translate <player> - Habilitar tradutor (Admin)
-        if((cmd == "/enable_translate" || cmd == "enable_translate") && parts.length() >= 2) {
-            cmd_enable_translate(player_index, parts);
-            return;
-        }
-        
-        // /remove_translate <player> - Remover tradutor (Admin)
-        if((cmd == "/remove_translate" || cmd == "remove_translate") && parts.length() >= 2) {
-            cmd_remove_translate(player_index, parts);
-            return;
-        }
+        if(handle_social_player_command(peer_id, player, player_index, command, cmd, parts)) return;
         
         // ============================================================================
         // [OK] TASK 2.6.3: FERRAMENTAS DE ADMIN (Lanterna e Detector)
