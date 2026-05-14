@@ -1,0 +1,369 @@
+void spawn_maps() {
+	string[] filemaps = find_files("maps/*.map");
+	string[] server_filemaps = find_files("server/maps/*.map");
+	dictionary seen_names;
+	for(uint i = 0; i < filemaps.length(); i++) {
+		string map_name = get_map_filename(filemaps[i]).replace(".map", "");
+		seen_names.set(map_name, true);
+	}
+	for(uint i = 0; i < server_filemaps.length(); i++) {
+		string map_name = get_map_filename(server_filemaps[i]).replace(".map", "");
+		if(!seen_names.exists(map_name)) {
+			filemaps.insert_last(server_filemaps[i]);
+		}
+	}
+	if(filemaps.length() > 0) {
+		for(uint x = 0; x < filemaps.length(); x++) {
+			map map1(filemaps[x]);
+			server_maps.insert_last(map1);
+			server_maps[x].mapindex = x;
+		}
+	}
+	else {
+		alert("Info", "Não há arquivos no diretório maps/. Por favor, tenha pelo menos um arquivo no diretório e execute o servidor novamente.");
+		exit();
+	}
+}
+
+int get_map_index_from(string m) {
+	for(uint i = 0; i < server_maps.length(); i++) {
+		if(server_maps[i].name == m) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+string linear(string[] a, string char_separator = "\r\n") {
+	string final;
+	for(uint i = 0; i < a.length(); i++) {
+		final += a[i] + char_separator;
+	}
+	return final;
+}
+
+string linear(uint[] data, string char_separator = "\r\n") {
+	string final;
+	for(uint i = 0; i < data.length(); i++) {
+		final += data[i] + char_separator;
+	}
+	return final;
+}
+
+string[] delinear(string a, string char_separator = "\r\n") {
+	return a.split(char_separator);
+}
+
+string get_tile_at(int x, int y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return "";
+	return server_maps[mapindex].get_tile_at(x, y);
+}
+
+string get_zone_at(int x, int y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return "";
+	return server_maps[mapindex].get_zone_at(x, y);
+}
+
+bool is_platform(int x, int y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return false;
+	return server_maps[mapindex].is_platform(x, y);
+}
+
+bool is_staircase(int x, int y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return false;
+	return server_maps[mapindex].is_staircase(x, y);
+}
+
+bool get_safezone_at(int x, int y, string mapname) {
+	int mapindex = get_map_index_from(mapname);
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return false;
+	return server_maps[mapindex].get_safezone_at(x, y);
+}
+
+bool map_try_parse_int_token(const string&in token, int&out value) {
+	string t = token.trim_whitespace();
+	if(t == "") return false;
+	bool neg = false;
+	uint start = 0;
+	if(t[0] == '-') {
+		neg = true;
+		start = 1;
+		if(t.length() == 1) return false;
+	}
+	for(uint i = start; i < t.length(); i++) {
+		if(t[i] < '0' || t[i] > '9') return false;
+	}
+	value = string_to_number(t);
+	if(neg && value > 0) value = -value;
+	return true;
+}
+
+void check_hazard_zones(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+	if(p.health <= 0 || p.pacifico == 1 || has_role(p.charname, "dev")) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	bool in_danger = false;
+	bool hazard_is_progressive = false;
+	int hazard_death_time = 1000;
+	double hazard_damage = 15.0;
+	string hazard_reason = "hazard:zona perigosa";
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "") continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 3) continue;
+
+		string element_type = parsed[0].trim_whitespace().lower();
+
+		if(element_type == "death" && parsed.length() >= 6) {
+			int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+			if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+			int minx = x1 <= x2 ? x1 : x2;
+			int maxx = x1 <= x2 ? x2 : x1;
+			int miny = y1 <= y2 ? y1 : y2;
+			int maxy = y1 <= y2 ? y2 : y1;
+			if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+			in_danger = true;
+
+			int parsed_time = 1000;
+			if(parsed.length() >= 6) {
+				int t = 0;
+				if(map_try_parse_int_token(parsed[5], t) && t > 0) parsed_time = t;
+			}
+
+			int progressive_flag = 0;
+			if(parsed.length() >= 7) {
+				int pf = 0;
+				if(map_try_parse_int_token(parsed[6], pf)) progressive_flag = pf;
+			}
+
+			double parsed_damage = 15.0;
+			if(parsed.length() >= 8) {
+				int dmg = 0;
+				if(map_try_parse_int_token(parsed[7], dmg) && dmg > 0) parsed_damage = double(dmg);
+			}
+
+			string parsed_reason = "hazard:death_zone";
+			if(parsed.length() >= 9) {
+				string msg = parsed[8].trim_whitespace();
+				if(msg != "") parsed_reason = "hazard:" + msg;
+			}
+
+			hazard_is_progressive = (progressive_flag == 1);
+			hazard_death_time = parsed_time;
+			hazard_damage = parsed_damage;
+			hazard_reason = parsed_reason;
+			break;
+		}
+
+		if(element_type == "deaths" && parsed.length() >= 5) {
+			int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+			if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+			int minx = x1 <= x2 ? x1 : x2;
+			int maxx = x1 <= x2 ? x2 : x1;
+			int miny = y1 <= y2 ? y1 : y2;
+			int maxy = y1 <= y2 ? y2 : y1;
+			if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+			in_danger = true;
+			hazard_is_progressive = true;
+			hazard_death_time = 1000;
+			hazard_damage = 15.0;
+			hazard_reason = "hazard:death_zone";
+			if(parsed.length() >= 6) {
+				int t = 0;
+				if(map_try_parse_int_token(parsed[5], t) && t > 0) hazard_death_time = t;
+			}
+			if(parsed.length() >= 7 && parsed[6].trim_whitespace() != "") {
+				hazard_reason = "hazard:" + parsed[6].trim_whitespace();
+			}
+			break;
+		}
+
+		if((element_type == "am" || element_type == "areia_movedissa") && parsed.length() >= 3) {
+			int ax = 0, ay = 0;
+			if(!map_try_parse_int_token(parsed[1], ax) || !map_try_parse_int_token(parsed[2], ay)) continue;
+			if(p.x != ax || p.y != ay) continue;
+
+			in_danger = true;
+			hazard_is_progressive = true;
+			hazard_death_time = 800;
+			hazard_damage = 25.0;
+			hazard_reason = "hazard:quicksand";
+			break;
+		}
+	}
+
+	if(in_danger) {
+		p.ndeath = 1;
+		if(hazard_is_progressive) {
+			if(p.progressive_death == 0 || p.death_reason.find("hazard:") != 0) {
+				start_progressive_death(player_index, DEATH_TYPE_SUFFOCATING, hazard_damage, hazard_death_time, hazard_reason);
+				send_reliable_text(p.peer_id, "say [SISTEMA] Você entrou em uma zona de perigo!", 0);
+				if(hazard_reason == "hazard:quicksand") {
+					send_reliable_text(p.peer_id, "ps morrendo_areia.ogg", 0);
+				} else {
+					send_reliable_text(p.peer_id, "ps hazzard_enter.ogg", 0);
+				}
+			}
+		} else {
+			p.progressive_death = 0;
+			p.death_reason = hazard_reason;
+			p.death_time = hazard_death_time;
+		}
+		return;
+	}
+
+	if(p.ndeath == 1 && p.death_reason.find("hazard:") == 0) {
+		if(p.progressive_death == 1) {
+			stop_progressive_death(player_index);
+		}
+		p.ndeath = 0;
+		p.death_reason = "";
+		p.death_time = 0;
+		send_reliable_text(p.peer_id, "say Você conseguiu escapar da zona de perigo a tempo.", 0);
+	}
+}
+
+void process_map_step(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "" || line.find("portal:") != 0) continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 6) continue;
+
+		int px = 0, py = 0, dest_x = 0, dest_y = 0;
+		if(!map_try_parse_int_token(parsed[1], px) || !map_try_parse_int_token(parsed[2], py)) continue;
+		if(!map_try_parse_int_token(parsed[4], dest_x) || !map_try_parse_int_token(parsed[5], dest_y)) continue;
+
+		if(p.x != px || p.y != py) continue;
+
+		string dest_map = parsed[3].trim_whitespace().lower();
+		if(!builder_is_valid_map_name(dest_map)) {
+			send_reliable_text(p.peer_id, "say Portal com destino inválido.", 0);
+			return;
+		}
+		if(get_map_index_from(dest_map) < 0) {
+			send_reliable_text(p.peer_id, "say O mapa de destino deste portal não existe.", 0);
+			return;
+		}
+
+		broadcast_to_map(p.map, "play teleport.ogg " + p.x + " " + p.y);
+		move_player_to_map(player_index, dest_map, dest_x, dest_y);
+		send_reliable_text(p.peer_id, "say Você atravessou um portal magico!", 0);
+		return;
+	}
+
+	check_hazard_zones(player_index);
+}
+
+void process_map_interaction(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return;
+
+	int extract_index = current_map.have_extract(p.x, p.y);
+	if(extract_index >= 0) {
+		extract@ current_extract = current_map.extracts[extract_index];
+		if(current_extract is null) return;
+		if(current_extract.extracttimer.elapsed < current_extract.extracttime) {
+			send_reliable_text(p.peer_id, "say Aguarde um pouco antes de extrair novamente.", 0);
+			return;
+		}
+		current_extract.extracttimer.restart();
+		current_extract.extract_item(player_index);
+		return;
+	}
+
+	for(uint i = 0; i < current_map.mapdata.length(); i++) {
+		string line = current_map.mapdata[i].trim_whitespace();
+		if(line == "" || line.find("store:") != 0) continue;
+
+		string[] parsed = line.split(":");
+		if(parsed.length() < 6) continue;
+
+		int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+		if(!map_try_parse_int_token(parsed[1], x1) || !map_try_parse_int_token(parsed[2], x2)) continue;
+		if(!map_try_parse_int_token(parsed[3], y1) || !map_try_parse_int_token(parsed[4], y2)) continue;
+
+		int minx = x1 <= x2 ? x1 : x2;
+		int maxx = x1 <= x2 ? x2 : x1;
+		int miny = y1 <= y2 ? y1 : y2;
+		int maxy = y1 <= y2 ? y2 : y1;
+
+		if(p.x < minx || p.x > maxx || p.y < miny || p.y > maxy) continue;
+
+		string store_type = parsed[5].trim_whitespace().lower();
+		if(store_type == "") store_type = "mista";
+		send_reliable_text(p.peer_id, "store_open " + store_type, 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "say Não ha nada para interagir aqui.", 0);
+}
+
+bool pickup_map_object_at(player@ p) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx < 0 || map_idx >= int(server_maps.length())) return false;
+	map@ current_map = server_maps[map_idx];
+	if(current_map is null) return false;
+
+	int obj_index = current_map.have_obj(p.x, p.y);
+	if(obj_index < 0 || obj_index >= int(current_map.objs.length())) return false;
+	obj@ current_obj = current_map.objs[obj_index];
+	if(current_obj is null || current_obj.taked || !current_obj.obtainable) return false;
+
+	string item_name = current_obj.itemname != "" ? current_obj.itemname : current_obj.item;
+	int amount = current_obj.num > 0 ? current_obj.num : current_obj.amount;
+	if(amount <= 0) amount = 1;
+
+	current_obj.get(player_index);
+	current_obj.taked = true;
+
+	string sound_name = current_obj.sound_get;
+	if(sound_name == "") sound_name = "get" + item_name;
+	if(sound_name != "" && !sound_name.ends_with(".ogg")) sound_name += ".ogg";
+	if(sound_name != "") current_map.send_packet(0, "play " + sound_name + " " + p.x + " " + p.y, true);
+
+	current_map.send_packet(0, "getobj " + p.x + " " + p.y + " " + item_name + " " + amount + " " + p.charname, true);
+	send_reliable_text(p.peer_id, "msgpegouitem " + amount + " " + item_name, 0);
+	return true;
+}
