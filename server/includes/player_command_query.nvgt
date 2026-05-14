@@ -1,0 +1,125 @@
+bool handle_query_player_command(uint64 peer_id, player@ player, string cmd) {
+    if(cmd == "r") {
+        handle_radar_query(peer_id, player);
+        return true;
+    }
+
+    if(cmd == "check_items") {
+        handle_ground_items_query(peer_id, player);
+        return true;
+    }
+
+    if(cmd == "/vestindo") {
+        handle_equipment_query(peer_id, player);
+        return true;
+    }
+
+    if(cmd == "whoonline") {
+        handle_who_online_query(peer_id, player);
+        return true;
+    }
+
+    return false;
+}
+
+void handle_radar_query(uint64 peer_id, player@ player) {
+    int radar_range = 12;
+    int found = 0;
+    string radar_msg = "Você avista:";
+
+    for(uint ni = 0; ni < npcs_global.length(); ni++) {
+        if(npcs_global[ni].morreu || npcs_global[ni].vida <= 0) continue;
+        if(npcs_global[ni].map != player.map_name) continue;
+
+        int ndx = npcs_global[ni].x - player.x;
+        int ndy = npcs_global[ni].y - player.y;
+        int ndist = int(sqrt(double(ndx * ndx + ndy * ndy)));
+        if(ndist > radar_range) continue;
+
+        radar_msg += " npc " + npcs_global[ni].nombrenpc + " a " + ndist + "m;";
+        found++;
+    }
+
+    for(uint mi = 0; mi < monstruos_global.length(); mi++) {
+        if(monstruos_global[mi].morreu || monstruos_global[mi].vida <= 0) continue;
+        if(monstruos_global[mi].map != player.map_name) continue;
+
+        int mdx = monstruos_global[mi].x - player.x;
+        int mdy = monstruos_global[mi].y - player.y;
+        int mdist = int(sqrt(double(mdx * mdx + mdy * mdy)));
+        if(mdist > radar_range) continue;
+
+        radar_msg += " monstro " + monstruos_global[mi].name + " a " + mdist + "m;";
+        found++;
+    }
+
+    if(found == 0) {
+        send_reliable_text(peer_id, "say Nada por perto.", 0);
+    } else {
+        send_reliable_text(peer_id, "msg2 " + radar_msg, 0);
+    }
+    debug_log("[radar] " + player.name + " encontrou " + found + " npc(s)/monstro(s) proximos");
+}
+
+void handle_ground_items_query(uint64 peer_id, player@ player) {
+    string[] map_drops = get_drops_in_map(player.map);
+    int found_count = 0;
+    string msg = "Itens no chao aqui:";
+
+    for(uint di = 0; di < map_drops.length(); di++) {
+        drop_entity@ d = get_drop(map_drops[di]);
+        if(d is null) continue;
+        d.update_state();
+        if(d.state == DROP_STATE_EXPIRED || d.state == DROP_STATE_PICKED) continue;
+        if(d.x != player.x || d.y != player.y) continue;
+
+        found_count++;
+        msg += " " + d.item_id + " x" + d.quantity + ";";
+    }
+
+    if(found_count == 0) {
+        send_reliable_text(peer_id, "say Nenhum item no chao nesta posicao.", 0);
+    } else {
+        send_reliable_text(peer_id, "msg2 " + msg, 0);
+    }
+    debug_log("[drops] " + player.name + " verificou itens no chao: " + found_count);
+}
+
+void handle_equipment_query(uint64 peer_id, player@ player) {
+    string equipment_msg = "Protecao de roupa: " + player.clothing_protection + "%";
+    int items_count = 0;
+    if(player.jaquetacouro > 0) { equipment_msg += ", Jaqueta de couro"; items_count++; }
+    if(player.camisamalha > 0) { equipment_msg += ", Camisa de malha"; items_count++; }
+    if(player.calcajeans > 0) { equipment_msg += ", Calca jeans"; items_count++; }
+    if(player.luvas > 0) { equipment_msg += ", Luvas"; items_count++; }
+    if(player.pulseira > 0) { equipment_msg += ", Pulseira"; items_count++; }
+    if(player.pulseirabronze > 0) { equipment_msg += ", Pulseira de bronze"; items_count++; }
+    if(player.pulseiraprata > 0) { equipment_msg += ", Pulseira de prata"; items_count++; }
+    if(player.chapeupanama > 0) { equipment_msg += ", Chapeu Panama"; items_count++; }
+    if(player.bonemizuno > 0) { equipment_msg += ", Bone Mizuno"; items_count++; }
+
+    if(items_count == 0) {
+        equipment_msg = "Você está nu.";
+    }
+
+    send_reliable_text(peer_id, "say " + equipment_msg, 0);
+    debug_log("[equipment] " + player.name + " verificou equipamento: " + items_count + " itens, protecao " + player.clothing_protection + "%");
+}
+
+void handle_who_online_query(uint64 peer_id, player@ player) {
+    int count = 0;
+    string players_list = "Jogadores no mapa " + player.map_name + ": ";
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].map_name == player.map_name && players[i].is_logged_in) {
+            if(count > 0) players_list += ", ";
+            players_list += players[i].name;
+            count++;
+        }
+    }
+    if(count == 1) {
+        send_reliable_text(peer_id, "say ha so você conectado", 0);
+    } else {
+        send_reliable_text(peer_id, "say " + players_list + " (Total: " + count + ")", 0);
+    }
+    debug_log("[players] " + player.name + " listou jogadores: " + count + " no mapa " + player.map_name);
+}
