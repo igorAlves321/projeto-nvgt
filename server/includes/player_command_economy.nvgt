@@ -1,0 +1,168 @@
+bool handle_economy_player_command(uint64 peer_id, player@ player, int player_index, string cmd, string[] parts) {
+    if(cmd == "req_sell_item" && parts.length() >= 3) {
+        handle_sell_item(peer_id, parts);
+        return true;
+    }
+
+    if((cmd == "/vender" || cmd == "vender" || cmd == "/sell" || cmd == "sell") && parts.length() >= 3) {
+        string[] sell_parts = {"req_sell_item", parts[1], parts[2]};
+        handle_sell_item(peer_id, sell_parts);
+        return true;
+    }
+
+    if(cmd == "/itensvenda" || cmd == "itensvenda" || cmd == "/sellable" || cmd == "sellable") {
+        int sell_player_index = get_player_index_from(player.name);
+        list_sellable_items(sell_player_index);
+        return true;
+    }
+
+    if(cmd == "/auction" || cmd == "auction" || cmd == "/leilao" || cmd == "leilao" ||
+       cmd == "/venda" || cmd == "venda" || cmd == "/venta" || cmd == "venta" ||
+       cmd == "/vente" || cmd == "vente") {
+        return handle_auction_command(peer_id, player_index, parts);
+    }
+
+    if(cmd == "/bid" || cmd == "bid" || cmd == "/ofertar" || cmd == "ofertar") {
+        return handle_bid_command(peer_id, player_index, parts);
+    }
+
+    if(cmd == "/cancelauction" || cmd == "cancelauction" || cmd == "/cancelarl" || cmd == "cancelarl") {
+        return handle_cancel_auction_command(peer_id, player_index, parts);
+    }
+
+    return false;
+}
+
+bool handle_auction_command(uint64 peer_id, int player_index, string[] parts) {
+    if(player_index < 0) {
+        send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+        return true;
+    }
+
+    if(parts.length() < 4) {
+        int active_count = 0;
+        int first_idx = -1;
+        auction_mutex.lock();
+        for(uint ai = 0; ai < active_auctions.length(); ai++) {
+            if(active_auctions[ai].is_active && !active_auctions[ai].is_finalized && !active_auctions[ai].is_expired()) {
+                active_count++;
+                if(first_idx < 0) first_idx = int(ai);
+            }
+        }
+
+        if(active_count == 0) {
+            auction_mutex.unlock();
+            send_reliable_text(peer_id, "msgnormal Nenhum item a venda.", 0);
+            return true;
+        }
+
+        if(active_count == 1 && first_idx >= 0) {
+            Auction@ one = @active_auctions[first_idx];
+            string noleilao = "noleilao " + one.item_name + " " + one.item_quantity + " " + one.current_bid;
+            auction_mutex.unlock();
+            send_reliable_text(peer_id, noleilao, 0);
+            return true;
+        }
+
+        auction_mutex.unlock();
+        cmd_list_auctions(player_index);
+        return true;
+    }
+
+    int auction_qty = 0;
+    int auction_min_bid = 0;
+    int auction_duration = 120;
+
+    if(!try_parse_int_token(parts[1], auction_qty) || auction_qty <= 0) {
+        send_reliable_text(peer_id, "msg2 Erro: Quantidade invalida.", 0);
+        return true;
+    }
+
+    string auction_item = parts[2];
+    if(!try_parse_int_token(parts[3], auction_min_bid) || auction_min_bid <= 0) {
+        send_reliable_text(peer_id, "msg2 Erro: Lance inicial inválido.", 0);
+        return true;
+    }
+
+    if(parts.length() >= 5) {
+        if(!try_parse_int_token(parts[4], auction_duration)) {
+            send_reliable_text(peer_id, "msg2 Erro: Duracao invalida.", 0);
+            return true;
+        }
+    }
+
+    cmd_create_auction(player_index, auction_item, auction_qty, auction_min_bid, auction_duration);
+    return true;
+}
+
+bool handle_bid_command(uint64 peer_id, int player_index, string[] parts) {
+    if(player_index < 0) {
+        send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+        return true;
+    }
+
+    int bid_auction_id = -1;
+    int bid_amount = 0;
+
+    if(parts.length() >= 3) {
+        if(!try_parse_int_token(parts[1], bid_auction_id) || !try_parse_int_token(parts[2], bid_amount)) {
+            send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+            return true;
+        }
+    } else if(parts.length() >= 2) {
+        if(!try_parse_int_token(parts[1], bid_amount)) {
+            send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+            return true;
+        }
+
+        int active_count = 0;
+        int single_active_id = -1;
+        auction_mutex.lock();
+        for(uint i = 0; i < active_auctions.length(); i++) {
+            if(active_auctions[i].is_active && !active_auctions[i].is_finalized && !active_auctions[i].is_expired()) {
+                active_count++;
+                single_active_id = active_auctions[i].id;
+            }
+        }
+        auction_mutex.unlock();
+
+        if(active_count == 0) {
+            send_reliable_text(peer_id, "msg2 Não ha leiloes ativos no momento.", 0);
+            return true;
+        }
+        if(active_count > 1) {
+            send_reliable_text(peer_id, "msg2 Ha mais de um leilao ativo. Use /bid <id> <valor>.", 0);
+            return true;
+        }
+        bid_auction_id = single_active_id;
+    } else {
+        send_reliable_text(peer_id, "msg2 Uso: /bid <id> <valor> ou /bid <valor>", 0);
+        return true;
+    }
+
+    if(bid_amount <= 0) {
+        send_reliable_text(peer_id, "msg2 Erro: Valor do lance inválido.", 0);
+        return true;
+    }
+
+    req_place_bid(player_index, bid_auction_id, bid_amount);
+    return true;
+}
+
+bool handle_cancel_auction_command(uint64 peer_id, int player_index, string[] parts) {
+    if(player_index < 0) {
+        send_reliable_text(peer_id, "msg2 Erro interno ao localizar jogador.", 0);
+        return true;
+    }
+    if(parts.length() < 2) {
+        send_reliable_text(peer_id, "msg2 Uso: /cancelauction <id>", 0);
+        return true;
+    }
+    int auction_id = 0;
+    if(!try_parse_int_token(parts[1], auction_id)) {
+        send_reliable_text(peer_id, "msg2 Erro: ID de leilao inválido.", 0);
+        return true;
+    }
+    cmd_cancel_auction(player_index, auction_id);
+    return true;
+}
