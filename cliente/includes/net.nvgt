@@ -1,4 +1,5 @@
 // Sistema de rede modernizado para NVGT
+#include "net/msg2_handler.nvgt"
 
 // ============================================================================
 // FLAG DE DEBUG - Descomente para ativar speaks de debug
@@ -741,131 +742,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		store(store_payload);
 	}
 	else if(parsed[0] == "msg2" && parsed.length() > 1) {
-		// Mensagem formatada do servidor com separadores ; (formato BGT)
-		// Exemplo: "Você esta no nivel; 5, ;e na patente; ;soldado;. ;"
-		string m = "";
-		// Reconstruir a mensagem inteira a partir do texto original, ignorando "msg2 "
-		string a = full_msg.substr(5); 
-
-		// Lista de itens do construtor: abrir menu dedicado com contagem
-		if(a.find("=== Itens do Banco de Dados ===") >= 0) {
-			if(item_list_request_pending) {
-				item_list_response_payload = a;
-				item_list_response_ready = true;
-				item_list_request_pending = false;
-				return;
-			}
-			show_items_list_menu(a);
-			return;
-		}
-		// Metadados do item builder (types/rarities/categories)
-		if(a.find("ITEM_BUILDER_META|") == 0) {
-			if(item_builder_meta_request_pending) {
-				item_builder_meta_response_payload = a;
-				item_builder_meta_response_ready = true;
-				item_builder_meta_request_pending = false;
-			}
-			return;
-		}
-		if(a.find("/item_builder_meta") >= 0 && item_builder_meta_request_pending) {
-			item_builder_meta_response_payload = "";
-			item_builder_meta_response_ready = false;
-			item_builder_meta_request_pending = false;
-			return;
-		}
-		// Feedback imediato para erros de listagem/permissao no construtor de itens
-		if(a.find("/list_items") >= 0 || a.find("Erro ao listar itens") >= 0) {
-			if(item_list_request_pending) {
-				item_list_response_payload = a;
-				item_list_response_ready = true;
-				item_list_request_pending = false;
-				return;
-			}
-			speak(a, true);
-			add_add_item("avisos", a);
-			return;
-		}
-		// Captura erros padronizados do item builder para nao deixar requisicoes pendentes.
-		if(a.find("[ERRO] /") == 0) {
-			bool is_item_builder_error = (a.find("/list_items") >= 0 ||
-				a.find("/create_item_tool") >= 0 ||
-				a.find("/edit_item_tool") >= 0 ||
-				a.find("/delete_item_tool") >= 0 ||
-				a.find("/create_weapon_tool") >= 0 ||
-				a.find("/ib_") >= 0 ||
-				a.find("/item_builder_meta") >= 0);
-			if(is_item_builder_error) {
-				if(item_list_request_pending) {
-					item_list_response_payload = a;
-					item_list_response_ready = true;
-					item_list_request_pending = false;
-				}
-				if(item_builder_meta_request_pending) {
-					item_builder_meta_response_payload = "";
-					item_builder_meta_response_ready = false;
-					item_builder_meta_request_pending = false;
-				}
-				if(item_builder_action_request_pending) {
-					item_builder_action_response_payload = a;
-					item_builder_action_response_ready = true;
-					item_builder_action_request_pending = false;
-				}
-				speak(a, true);
-				add_add_item("avisos", a);
-				return;
-			}
-		}
-		if(a.find("Nenhum item cadastrado") >= 0) {
-			if(item_list_request_pending) {
-				item_list_response_payload = pu.get_value("Nenhum item cadastrado.");
-				item_list_response_ready = true;
-				item_list_request_pending = false;
-				return;
-			}
-			speak(pu.get_value("Nenhum item cadastrado."), true);
-			add_add_item("avisos", pu.get_value("Nenhum item cadastrado."));
-			return;
-		}
-		// Feedback de create/edit/delete do item builder para fluxos com espera ativa.
-		if(item_builder_action_request_pending) {
-			string a_lower = a.lower();
-			bool is_item_builder_action_feedback = (
-				a.find("[ERRO] /create_item_tool") == 0 ||
-				a.find("[ERRO] /edit_item_tool") == 0 ||
-				a.find("[ERRO] /delete_item_tool") == 0 ||
-				a.find("[ERRO] /create_weapon_tool") == 0 ||
-				a_lower.find("item criado com sucesso") >= 0 ||
-				a_lower.find("item atualizado com sucesso") >= 0 ||
-				a_lower.find("item removido do catalogo") >= 0 ||
-				a_lower.find("item removido do catalogo") >= 0 ||
-				a_lower.find("arma criada com sucesso") >= 0
-			);
-			if(is_item_builder_action_feedback) {
-				item_builder_action_response_payload = a;
-				item_builder_action_response_ready = true;
-				item_builder_action_request_pending = false;
-				return;
-			}
-		}
-		
-		string[] b = a.split(";");
-		for(uint i = 0; i < b.length(); i++) {
-			if(b[i] != "") {
-				// Tentar traduzir cada segmento
-				string segment = b[i];
-				string translated = pu.get_value(segment);
-
-				// Fallback: se nao houver traducao, manter texto original
-				if(translated == "") translated = segment;
-				m += translated;
-			}
-		}
-
-		// Fallback adicional para mensagens sem separador ';'
-		if(m == "") m = a;
-		
-		add_add_item("avisos", m);
-		debug_log("Mensagem servidor processada (msg2): " + m);
+		process_msg2_packet(full_msg);
 	}
 	else if(parsed[0] == "inv" && parsed.length() >= 1) {
 		// Atualizacao incremental de inventario
