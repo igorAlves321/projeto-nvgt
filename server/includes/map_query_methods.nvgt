@@ -1,0 +1,260 @@
+	int get_npc_index(int id) {
+		for (uint x = 0; x < npcs.length(); x++) {
+			if (npcs[x].id == id) return x;
+		}
+		return -1;
+	}
+	
+	int get_npc_index(int x, int y) {
+		for (uint i = 0; i < npcs.length(); i++) {
+			if (npcs[i].x_inicial == x && npcs[i].y_inicial == y) return i;
+		}
+		return -1;
+	}
+	
+	int get_npc_index(string name) {
+		for (uint x = 0; x < npcs.length(); x++) {
+			if (npcs[x].nombrenpc == name) return x;
+		}
+		return -1;
+	}
+	
+	int get_npc_quantity(string name) {
+		int quantity = 0;
+		for (uint x = 0; x < npcs.length(); x++) {
+			if (npcs[x].nombrenpc == name) quantity++;
+		}
+		return quantity;
+	}
+	
+	bool is_disabled(string item) {
+		return desactivados.exists(item);
+	}
+
+	bool is_point_in_area(int x, int y, int minx, int maxx, int miny, int maxy) {
+		if (minx > x) return false;
+		return minx <= x && maxx >= x && miny <= y && maxy >= y;
+	}
+	
+	string get_tile_at(int x, int y) {
+		string outval;
+		int minx, maxx, miny, maxy;
+		for (uint i = 0; i < platforms.length(); i++) {
+			minx = platforms[i].min_x;
+			maxx = platforms[i].max_x;
+			miny = platforms[i].min_y;
+			maxy = platforms[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy)) {
+				outval = platforms[i].tiles;
+				continue;
+			}
+		}
+		return outval;
+	}
+	
+	bool is_platform(int x, int y) {
+		int minx, maxx, miny, maxy;
+		for (uint i = 0; i < platforms.length(); i++) {
+			minx = platforms[i].min_x;
+			maxx = platforms[i].max_x;
+			miny = platforms[i].min_y;
+			maxy = platforms[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy) && platforms[i].is_platform) return platforms[i].is_platform;
+		}
+		return false;
+	}
+	
+	bool is_staircase(int x, int y) {
+		int minx, maxx, miny, maxy;
+		for (uint i = 0; i < platforms.length(); i++) {
+			minx = platforms[i].min_x;
+			maxx = platforms[i].max_x;
+			miny = platforms[i].min_y;
+			maxy = platforms[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy) && platforms[i].is_staircase) return platforms[i].is_staircase;
+		}
+		return false;
+	}
+	
+	bool is_wall(int x, int y) {
+		int minx, maxx, miny, maxy;
+		for (uint i = 0; i < platforms.length(); i++) {
+			minx = platforms[i].min_x;
+			maxx = platforms[i].max_x;
+			miny = platforms[i].min_y;
+			maxy = platforms[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy) && platforms[i].is_wall) return platforms[i].is_wall;
+		}
+		return false;
+	}
+	
+	string get_zone_at(int x, int y) {
+		string outval;
+		for (uint i = 0; i < zones.length(); i++) {
+			int minx = zones[i].min_x;
+			int maxx = zones[i].max_x;
+			int miny = zones[i].min_y;
+			int maxy = zones[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy)) outval = zones[i].text;
+		}
+		return outval;
+	}
+	
+	string get_locate_at() {
+		string outval;
+		for (uint i = 0; i < mapdata.length(); i++) {
+			string[] parsed = string_split(mapdata[i], ":", false);
+			if (parsed[0] == "where" && parsed.length() > 1) outval = parsed[1];
+		}
+		return outval;
+	}
+	
+	bool get_safezone_at(int x, int y) {
+		for (uint i = 0; i < safezones.length(); i++) {
+			int minx = safezones[i].min_x;
+			int maxx = safezones[i].max_x;
+			int miny = safezones[i].min_y;
+			int maxy = safezones[i].max_y;
+			if (is_point_in_area(x, y, minx, maxx, miny, maxy)) return true;
+		}
+		return false;
+	}
+	
+	// ============================================================================
+	// MÉTODOS DE VISUALIZAÇÃO
+	// ============================================================================
+	
+	void view_items(int index) {
+		string final;
+		int items_cantity = 0;
+		for (uint x = 0; x < objs.length(); x++) {
+			int coor_x = objs[x].x, coor_y = objs[x].y;
+			string direction_x, direction_y, name = objs[x].itemname;
+			double distance_min_x = players[index].x - coor_x;
+			double distance_max_x = coor_x - players[index].x;
+			double distance_min_y = players[index].y - coor_y;
+			double distance_max_y = coor_y - players[index].y;
+			
+			if (distance_min_x <= 30 && distance_min_y <= 30 && distance_max_x <= 30 && distance_max_y <= 30) {
+				if (coor_x < players[index].x) direction_x = distance_min_x + " ;pasos a tu izquierda;";
+				else if (coor_x > players[index].x) direction_x = distance_max_x + " ;pasos a tu derecha;";
+				else if (coor_x == players[index].x) direction_x = ";justo al frente de ti;";
+				
+				if (coor_y < players[index].y) direction_y = distance_min_y + " ;pasos hacia abajo;";
+				else if (coor_y > players[index].y) direction_y = distance_max_y + " ;pasos hacia arriba;";
+				
+				items_cantity++;
+				if (direction_x != "" && direction_y != "") final += ";" + name + ";, " + direction_y + ", " + direction_x + ". ";
+				else if (direction_x != "" && direction_y == "") final += ";" + name + ";, " + direction_x + ". ";
+				else if (direction_x == "" && direction_y != "") final += ";" + name + ";, " + direction_y + ". ";
+			}
+		}
+		if (items_cantity == 0) final = ";No hay objetos cerca de ti.;";
+		send_reliable_text(players[index].peer_id, "msg2 " + final, 0);
+	}
+	
+	void view(int index) {
+		bool achou = false;
+		int distance;
+		int range = 12;
+		string a = "Cerca de ti se encuentra:;";
+		
+		for (uint i = 0; i < arbols.length(); i++) {
+			distance = get_distance(players[index].x, arbols[i].x, players[index].y, arbols[i].miny);
+			if (distance <= range) {
+				a += " ;" + arbols[i].name + ";, ;con; " + arbols[i].vida + " ;de vida.;";
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < walls.length(); i++) {
+			distance = get_distance(players[index].x, walls[i].x, players[index].y, walls[i].miny);
+			if (distance <= range) {
+				a += " ;" + walls[i].name + ";, ;con; " + walls[i].vida + " ;de vida.;";
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < npcs.length(); i++) {
+			distance = get_distance(players[index].x, npcs[i].x, players[index].y, npcs[i].y);
+			if (distance <= range) {
+				a += " ;" + npcs[i].nombrenpc + ";, ;com; " + npcs[i].vida + "; ;de vida.";
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < portals.length(); i++) {
+			distance = get_distance(players[index].x, portals[i].x, players[index].y, portals[i].y);
+			if (distance <= range) {
+				a += " " + portals[i].getdesc();
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < jaulas.length(); i++) {
+			distance = get_distance(players[index].x, jaulas[i].x, players[index].y, jaulas[i].y);
+			if (distance <= range && jaulas[i].map == this.name) {
+				a += " ;jaula de; " + jaulas[i].dueno + ", ;com; " + jaulas[i].vida + "; ;de vida.";
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < cachorromascotas.length(); i++) {
+			distance = get_distance(players[index].x, cachorromascotas[i].x, players[index].y, cachorromascotas[i].y);
+			if (distance <= range && cachorromascotas[i].mapindex == this.mapindex) {
+				a += " " + cachorromascotas[i].getdesc();
+				achou = true;
+			}
+		}
+		
+		for (uint i = 0; i < monstruos.length(); i++) {
+			distance = get_distance(players[index].x, monstruos[i].x, players[index].y, monstruos[i].y);
+			if (distance <= range) {
+				a += " ;el monstruo legendario;, ;com; " + monstruos[i].vida + "; ;de vida.;";
+				achou = true;
+			}
+		}
+		
+		if (achou == false) send_reliable_text(players[index].peer_id, "msgnormal Nada por perto.", 0);
+		else send_reliable_text(players[index].peer_id, "msg2 " + a, 0);
+	}
+
+	void cleanup_dead_npcs() {
+		for (uint i = 0; i < npcs.length(); i++) {
+			if (npcs[i].vida <= 0 && npcs[i].morrendo) {
+				@npcs[i] = null;
+				npcs.remove_at(i);
+				break;
+			}
+		}
+	}
+	
+	void cleanup_dead_objects() {
+		for (uint i = 0; i < objs.length(); i++) {
+			if (objs[i].taked) {
+				@objs[i] = null;
+				objs.remove_at(i);
+				break;
+			}
+		}
+	}
+	
+	void reset_npc_spawn_data() {
+		for (uint i = 0; i < npcs_data.length(); i++) {
+			if (npcs_data[i].respawn_timer.elapsed >= npcs_data[i].tiempoaparicion) continue;
+		}
+	}
+	
+	string get_npc_description(npc@ n) {
+		if (@n == null) return "sem npc";
+		return n.nombrenpc + " com " + n.vida + " de vida";
+	}
+	
+	string get_map_stats() {
+		string stats = "Mapa: " + this.name + ", ";
+		stats += "Jogadores: " + mapplayers.length() + ", ";
+		stats += "NPCs: " + npcs.length() + ", ";
+		stats += "Objetos: " + objs.length() + ", ";
+		stats += "Limites: [" + max_x + "x" + max_y + "]";
+		return stats;
+	}

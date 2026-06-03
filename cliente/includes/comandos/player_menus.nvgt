@@ -1,0 +1,195 @@
+// ============================================================================
+// MENU DE JOGADORES ONLINE (F5) - Lista global de todos jogadores conectados
+// ============================================================================
+// Recebe dados do servidor no formato: nome|titulo|status||nome2|titulo2|status2||...
+// MIGRADO PARA SISTEMA NATIVO: Redução de 166 → 70 linhas (-58%)
+void playersmenu(string data) {
+	debug_log("📋 playersmenu chamado (versão nativa)");
+	
+	if(ausente) return;
+	
+	// Validar dados
+	if(data == "" || data.length() < 3) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	// Parse data (mantém lógica original)
+	string[] lines = data.split("||");
+	dictionary player_info;  // nome -> "titulo|status"
+	
+	for(uint i = 0; i < lines.length(); i++) {
+		if(lines[i] == "" || lines[i].length() < 1) continue;
+		
+		string[] parsed = lines[i].split("|");
+		if(parsed.length() >= 1 && parsed[0] != "") {
+			string name = parsed[0];
+			string title = parsed.length() >= 2 ? parsed[1] : "";
+			string status = parsed.length() >= 3 ? parsed[2] : "";
+			
+			// Armazenar info
+			player_info.set(name, title + "|" + status);
+		}
+	}
+	
+	if(player_info.size() == 0) {
+		speak(pu.get_value("Nenhum jogador online."));
+		return;
+	}
+	
+	// Configurar menu nativo
+	menu pm;
+	@pm.pack_file = @sound_default_pack;
+	pm.click_sound = "invmove6.ogg";
+	pm.select_sound = "-old-menuchecked.ogg";
+	pm.open_sound = "notify37.ogg";
+	pm.wrap = false;
+	pm.focus_first_item = false;
+	
+	// Adicionar jogadores ao menu
+	string[] player_names = player_info.get_keys();
+	player_names.sort_ascending();
+	
+	for(uint i = 0; i < player_names.length(); i++) {
+		string name = player_names[i];
+		string info = "";
+		player_info.get(name, info);
+		string[] parts = info.split("|");
+		string title = parts.length() > 0 ? parts[0] : "";
+		string status = parts.length() > 1 ? parts[1] : "";
+		
+		// Display: "Nome (Título): Status"
+		string display = name;
+		if(title != "") display += " (" + pu.get_value(title) + ")";
+		if(status != "") display += ": " + status;
+		
+		pm.add_item(display, name);
+	}
+	
+	pm.intro_text = pu.get_value("Mostrando lista de jogadores.") + " " + player_names.length() + " " + pu.get_value("online.");
+	
+	// Callback para atalhos (ALT+I, F1-F4, etc)
+	@pm.background_callback = menu::menu_callback(playersmenu_shortcuts);
+	pm.background_callback_data = "";
+	
+	emchat = true;
+	
+	// Run menu
+	int selected_index = pm.run();
+	emchat = false;
+	
+	if(selected_index < 0) return;  // ESC pressionado
+	
+	// Obter jogador selecionado
+	string selected_name = pm.get_item_id(selected_index);
+	
+	// Pedir mensagem PM
+	string msg = v.input(pu.get_value("Digite sua mensagem para") + " " + selected_name);
+	if(msg != "") {
+		send_reliable(peer_id, "/pm " + selected_name + " " + msg, 1);
+		emchat = true;
+	}
+}
+
+// Callback para atalhos do playersmenu
+void playersmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_name = m.get_item_id(m.focused_item);
+	
+	// ALT + teclas
+	if(key_down(KEY_LMENU)) {
+		if(key_pressed(KEY_I)) send_reliable(peer_id, "/ign " + selected_name, 1);
+		if(key_pressed(KEY_U)) send_reliable(peer_id, "/deign " + selected_name, 1);
+		if(key_pressed(KEY_E)) send_reliable(peer_id, "/eqr " + selected_name, 1);
+		if(key_pressed(KEY_D)) send_reliable(peer_id, "/dqr " + selected_name, 1);
+		if(key_pressed(KEY_S)) send_reliable(peer_id, "/eqs " + selected_name, 1);
+	}
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 " + selected_name, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 " + selected_name, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 " + selected_name, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 " + selected_name, 0);
+	
+	// Processar rede
+	netloop();
+}
+
+// ============================================================================
+// MENU DE JOGADORES NO MAPA - Lista jogadores no mesmo mapa que você
+// ============================================================================
+// MIGRADO PARA SISTEMA NATIVO: Redução de 120 → 45 linhas (-62%)
+void jogadoresmenu(){
+	if(players.length()==0||ausente)return;
+	
+	// Configurar menu nativo
+	menu jm;
+	@jm.pack_file = @sound_default_pack;
+	jm.click_sound = "";
+	jm.select_sound = "";
+	jm.wrap = false;
+	jm.focus_first_item = true;
+	
+	// Adiciona jogadores (filtra por beeping ou DM)
+	for(uint i=0; i<players.length(); i++){
+		if(players[i].beeping==1||desenvolvedordm==1){
+			jm.add_item(players[i].charname, players[i].charname);
+		}
+	}
+	
+	if(jm.item_count == 0) return;
+	
+	jm.intro_text = "";
+	
+	// Callback para atalhos
+	@jm.background_callback = menu::menu_callback(jogadoresmenu_shortcuts);
+	
+	emchat=true;
+	int selected_index = jm.run();
+	emchat=false;
+	
+	if(selected_index < 0) return;  // ESC
+	
+	string selected_player = jm.get_item_id(selected_index);
+	
+	// Enviar PM
+	string msg=v.input(pu.get_value("Digite sua mensagem para")+" "+selected_player);
+	if(msg!="") send_reliable(peer_id, "/pm "+selected_player+" "+msg, 1);
+}
+
+// Callback para atalhos do jogadoresmenu
+void jogadoresmenu_shortcuts(menu@ m, string data) {
+	if(m.focused_item < 0) return;
+	string selected_player = m.get_item_id(m.focused_item);
+	
+	// F1-F4: Info do jogador
+	if(key_pressed(KEY_F1)) send_reliable(peer_id, "j1 "+selected_player, 0);
+	if(key_pressed(KEY_F2)) send_reliable(peer_id, "j2 "+selected_player, 0);
+	if(key_pressed(KEY_F3)) send_reliable(peer_id, "j3 "+selected_player, 0);
+	if(key_pressed(KEY_F4)) send_reliable(peer_id, "j4 "+selected_player, 0);
+	
+	// CTRL + teclas
+	if(key_down(KEY_LCTRL)||key_down(KEY_RCTRL)){
+		if(key_pressed(KEY_C)){
+			clipboard_copy_text(selected_player);
+			speak(selected_player+" "+pu.get_value("copiado."));
+		}
+		if(desenvolvedordm==1){
+			if(key_pressed(KEY_M)) send_reliable(peer_id, "/killplayer "+selected_player, 1);
+			if(key_pressed(KEY_E)) send_reliable(peer_id, "/expulsar "+selected_player, 1);
+			if(key_pressed(KEY_B)) send_reliable(peer_id, "/ban "+selected_player, 1);
+			if(key_pressed(KEY_Z)){
+				nolhar=selected_player;
+				int n=get_player(nolhar);
+				if(n>-1){
+					speak(pu.get_value("Pronto."));
+					olhar_x=players[n].x;
+					olhar_y=players[n].y;
+					send_reliable(peer_id, "olhar "+nolhar, 0);
+					moveable=false;
+					inansz=true;
+				}
+			}
+		}
+	}
+}

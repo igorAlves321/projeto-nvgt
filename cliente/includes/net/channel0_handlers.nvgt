@@ -1,0 +1,235 @@
+bool handle_channel0_physical_inventory(string full_msg, string[] parsed) {
+	if(full_msg.find("{\"type\":\"inv_broadcast_drop\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("drop.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		return true;
+	}
+
+	if(full_msg.find("{\"type\":\"inv_broadcast_pickup\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		string picker = "";
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		if(net_json_try_get_string(full_msg, "player", picker) && picker == un) {
+			speak(pu.get_value("Você pegou um item."), true);
+		}
+		return true;
+	}
+
+	if(parsed[0] == "getobj" && parsed.length() >= 3) {
+		int item_x = string_to_number(parsed[1]);
+		int item_y = string_to_number(parsed[2]);
+		for(uint i = 0; i < objs.length(); i++) {
+			if(objs[i].x == item_x && objs[i].y == item_y) {
+				objs.remove_at(i);
+				break;
+			}
+		}
+		pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		if(parsed.length() >= 6 && parsed[5] == un) {
+			string amount = parsed[4];
+			string item_name = parsed[3];
+			speak(amount + " " + pu.get_value(item_name), true);
+		}
+		return true;
+	}
+
+	return false;
+}
+
+bool handle_channel0_remote_movement(string[] parsed) {
+	if(parsed[0] != "xt01" || parsed.length() < 4) return false;
+
+	uint64 other_peer_id = string_to_number(parsed[1]);
+	int other_x = string_to_number(parsed[2]);
+	int other_y = string_to_number(parsed[3]);
+	
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].peer_id == other_peer_id) {
+			players[i].x = other_x;
+			players[i].y = other_y;
+			
+			string tile = get_tile_at(other_x, other_y);
+			if(tile != "") {
+				string step_sound = tile + "step" + random(1, 5) + ".ogg";
+				p.play_2d(step_sound, me.x, me.y, other_x, other_y, false);
+			}
+			break;
+		}
+	}
+
+	return true;
+}
+
+bool handle_channel0_audio(string[] parsed) {
+	if(parsed[0] == "play_body" && parsed.length() > 3) {
+		bodys.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		return true;
+	}
+	if(parsed[0] == "play" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		return true;
+	}
+	if(parsed[0] == "play2" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), true);
+		return true;
+	}
+	if(parsed[0] == "play3" && parsed.length() > 4) {
+		p.play_extended_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), 
+		                   0, 0, 0, 0, false, 0, 0, 0, string_to_number(parsed[4]));
+		return true;
+	}
+	if(parsed[0] == "play4" && parsed.length() > 4) {
+		p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), 
+		                            string_to_number(parsed[3]), string_to_number(parsed[4]));
+		return true;
+	}
+	if(parsed[0] == "ps" && parsed.length() >= 2) {
+		p.play_stationary(parsed[1], false);
+		return true;
+	}
+	if(parsed[0] == "ps2" && parsed.length() > 2) {
+		p.play_stationary_extended(parsed[1], false, 0, 0, 0, string_to_number(parsed[2]));
+		return true;
+	}
+	if(parsed[0] == "p2d" && parsed.length() > 3) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		return true;
+	}
+	if(parsed[0] == "pan" && parsed.length() > 2) {
+		p.play_stationary_extended(parsed[1], false, 0, string_to_number(parsed[2]), 0, 100);
+		return true;
+	}
+	if(parsed[0] == "rs" && parsed.length() > 3) {
+		for(uint i = 0; i < sons.length(); i++) {
+			string[] ss = sons[i].split(":");
+			if(ss.length() > 1 && ss[1] == parsed[1]) {
+				p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+				break;
+			}
+		}
+		return true;
+	}
+	if(parsed[0] == "rico" && parsed.length() > 3) {
+		if(parsed[1] != "") {
+			p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		}
+		return true;
+	}
+	if(parsed[0] == "draw" && parsed.length() == 4) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+		return true;
+	}
+	if(parsed[0] == "pst" && parsed.length() >= 2) {
+		if(somchuva != "rain4.ogg") {
+			sound t;
+			t.load(parsed[1]);
+			string vo = "-" + random(3, 5);
+			t.volume = string_to_number(vo);
+			t.play();
+		}
+		else if(somchuva == "rain4.ogg") {
+			p.play_stationary(parsed[1], false);
+		}
+		return true;
+	}
+
+	return false;
+}
+
+bool handle_channel0_npc(string[] parsed) {
+	if(parsed[0] == "npc_attack" && parsed.length() >= 4) {
+		int npc_id = string_to_number(parsed[1]);
+		int dano = string_to_number(parsed[2]);
+		string tipo = parsed[3];
+		
+		for(uint i = 0; i < npc_objects.length(); i++) {
+			if(npc_objects[i].id == npc_id) {
+				p.play_stationary("hit.ogg", false);
+				string msg = "NPC " + npc_objects[i].name + " atacou você! Dano: " + dano;
+				add_add_item("avisos", msg);
+				debug_log("NPC " + npc_objects[i].name + " (ID:" + npc_id + ") atacou! Dano: " + dano + " Tipo: " + tipo);
+				break;
+			}
+		}
+		return true;
+	}
+
+	if(parsed[0] == "npc_move" && parsed.length() >= 4) {
+		int id = string_to_number(parsed[1]);
+		int x = string_to_number(parsed[2]);
+		int y = string_to_number(parsed[3]);
+		
+		for(uint i = 0; i < npc_objects.length(); i++) {
+			if(npc_objects[i].id == id) {
+				npc_objects[i].x = x;
+				npc_objects[i].y = y;
+				npc_objects[i].last_seen.restart();
+				break;
+			}
+		}
+		return true;
+	}
+
+	if(parsed[0] == "npc_spawn" && parsed.length() >= 8) {
+		int id = string_to_number(parsed[1]);
+		string nome = parsed[2];
+		int x = string_to_number(parsed[3]);
+		int y = string_to_number(parsed[4]);
+		int hp = string_to_number(parsed[5]);
+		int max_hp = string_to_number(parsed[6]);
+		
+		npc_client_class novo_npc;
+		novo_npc.id = id;
+		novo_npc.name = nome;
+		novo_npc.x = x;
+		novo_npc.y = y;
+		novo_npc.x_inicial = x;
+		novo_npc.y_inicial = y;
+		novo_npc.hp = hp;
+		novo_npc.max_hp = max_hp;
+		novo_npc.map = mapname;
+		novo_npc.last_seen.restart();
+		
+		npc_objects.insert_last(novo_npc);
+		debug_log(" NPC spawned: " + nome + " ID:" + id + " em (" + x + "," + y + ")");
+		return true;
+	}
+
+	if(parsed[0] == "npc_die" && parsed.length() >= 2) {
+		int id = string_to_number(parsed[1]);
+		
+		for(uint i = 0; i < npc_objects.length(); i++) {
+			if(npc_objects[i].id == id) {
+				debug_log(" NPC morreu: " + npc_objects[i].name + " (ID:" + id + ")");
+				@npc_objects[i] = null;
+				npc_objects.remove_at(i);
+				break;
+			}
+		}
+		return true;
+	}
+
+	if(parsed[0] == "npc_hp" && parsed.length() >= 4) {
+		int id = string_to_number(parsed[1]);
+		int hp = string_to_number(parsed[2]);
+		int max_hp = string_to_number(parsed[3]);
+		
+		for(uint i = 0; i < npc_objects.length(); i++) {
+			if(npc_objects[i].id == id) {
+				npc_objects[i].hp = hp;
+				npc_objects[i].max_hp = max_hp;
+				debug_log("a NPC " + npc_objects[i].name + " HP: " + hp + "/" + max_hp);
+				break;
+			}
+		}
+		return true;
+	}
+
+	return false;
+}
