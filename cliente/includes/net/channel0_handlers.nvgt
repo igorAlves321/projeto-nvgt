@@ -1,0 +1,67 @@
+bool handle_channel0_physical_inventory(string full_msg, string[] parsed) {
+	if(full_msg.find("{\"type\":\"inv_broadcast_drop\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("drop.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		return true;
+	}
+
+	if(full_msg.find("{\"type\":\"inv_broadcast_pickup\"") == 0) {
+		int item_x = 0;
+		int item_y = 0;
+		string picker = "";
+		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
+			pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		}
+		if(net_json_try_get_string(full_msg, "player", picker) && picker == un) {
+			speak(pu.get_value("Você pegou um item."), true);
+		}
+		return true;
+	}
+
+	if(parsed[0] == "getobj" && parsed.length() >= 3) {
+		int item_x = string_to_number(parsed[1]);
+		int item_y = string_to_number(parsed[2]);
+		for(uint i = 0; i < objs.length(); i++) {
+			if(objs[i].x == item_x && objs[i].y == item_y) {
+				objs.remove_at(i);
+				break;
+			}
+		}
+		pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
+		if(parsed.length() >= 6 && parsed[5] == un) {
+			string amount = parsed[4];
+			string item_name = parsed[3];
+			speak(amount + " " + pu.get_value(item_name), true);
+		}
+		return true;
+	}
+
+	return false;
+}
+
+bool handle_channel0_remote_movement(string[] parsed) {
+	if(parsed[0] != "xt01" || parsed.length() < 4) return false;
+
+	uint64 other_peer_id = string_to_number(parsed[1]);
+	int other_x = string_to_number(parsed[2]);
+	int other_y = string_to_number(parsed[3]);
+	
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].peer_id == other_peer_id) {
+			players[i].x = other_x;
+			players[i].y = other_y;
+			
+			string tile = get_tile_at(other_x, other_y);
+			if(tile != "") {
+				string step_sound = tile + "step" + random(1, 5) + ".ogg";
+				p.play_2d(step_sound, me.x, me.y, other_x, other_y, false);
+			}
+			break;
+		}
+	}
+
+	return true;
+}

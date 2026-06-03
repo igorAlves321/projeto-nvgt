@@ -2,6 +2,7 @@
 #include "net/msg2_handler.nvgt"
 #include "net/message_handlers.nvgt"
 #include "net/sync_handlers.nvgt"
+#include "net/channel0_handlers.nvgt"
 
 // ============================================================================
 // FLAG DE DEBUG - Descomente para ativar speaks de debug
@@ -637,69 +638,8 @@ bool net_json_try_get_string(const string &in json, const string &in field, stri
 }
 
 void process_channel_0(string full_msg, string[] parsed, const network_event@ ev) {
-	// === EVENTOS JSON DE INVENTARIO FISICO (loot/drops) ===
-	if(full_msg.find("{\"type\":\"inv_broadcast_drop\"") == 0) {
-		int item_x = 0;
-		int item_y = 0;
-		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
-			pobjs.play_2d("drop.ogg", me.x, me.y, item_x, item_y, false);
-		}
-		return;
-	}
-	if(full_msg.find("{\"type\":\"inv_broadcast_pickup\"") == 0) {
-		int item_x = 0;
-		int item_y = 0;
-		string picker = "";
-		if(net_json_try_get_int(full_msg, "x", item_x) && net_json_try_get_int(full_msg, "y", item_y)) {
-			pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
-		}
-		if(net_json_try_get_string(full_msg, "player", picker) && picker == un) {
-			speak(pu.get_value("Você pegou um item."), true);
-		}
-		return;
-	}
-	if(parsed[0] == "getobj" && parsed.length() >= 3) {
-		int item_x = string_to_number(parsed[1]);
-		int item_y = string_to_number(parsed[2]);
-		for(uint i = 0; i < objs.length(); i++) {
-			if(objs[i].x == item_x && objs[i].y == item_y) {
-				objs.remove_at(i);
-				break;
-			}
-		}
-		pobjs.play_2d("get.ogg", me.x, me.y, item_x, item_y, false);
-		if(parsed.length() >= 6 && parsed[5] == un) {
-			string amount = parsed[4];
-			string item_name = parsed[3];
-			speak(amount + " " + pu.get_value(item_name), true);
-		}
-		return;
-	}
-
-	// === MOVIMENTO DE OUTROS JOGADORES (BROADCAST DO SERVIDOR) ===
-	if(parsed[0] == "xt01" && parsed.length() >= 4) {
-		// xt01 peer_id x y - Movimento de outro jogador
-		uint64 other_peer_id = string_to_number(parsed[1]);
-		int other_x = string_to_number(parsed[2]);
-		int other_y = string_to_number(parsed[3]);
-		
-		// Atualizar posicao do jogador no array local
-		for(uint i = 0; i < players.length(); i++) {
-			if(players[i].peer_id == other_peer_id) {
-				players[i].x = other_x;
-				players[i].y = other_y;
-				
-				// Tocar som de passo 3D do outro jogador
-				string tile = get_tile_at(other_x, other_y);
-				if(tile != "") {
-					string step_sound = tile + "step" + random(1, 5) + ".ogg";
-					p.play_2d(step_sound, me.x, me.y, other_x, other_y, false);
-				}
-				break;
-			}
-		}
-		return;
-	}
+	if(handle_channel0_physical_inventory(full_msg, parsed)) return;
+	if(handle_channel0_remote_movement(parsed)) return;
 	
 	// === GRUPO 1: GERENCIAMENTO DE JOGADORES ===
 	if(parsed[0] == "pong") {
