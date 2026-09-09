@@ -1,0 +1,598 @@
+#include "globals.nvgt"
+
+// ============================================================================
+// RELOGIO DE JOGO (autoridade unica de tempo do servidor)
+// ----------------------------------------------------------------------------
+// Porte consolidado do relogio do BGT. No BGT o relogio vivia solto em
+// re_server_test.bgt:
+//   - variaveis globais minuto/hora/dia/mes/ano (re_server_test.bgt:75..129)
+//   - avanco no loop principal        (re_server_test.bgt:1298-1317)
+//   - anuncios ambientais checarhora()(re_server_test.bgt:832-864)
+//   - leitura falada horareloj()      (re_server_test.bgt:2336-2358)
+//   - persistencia em servidor.configs(writeprefs / includes/iniciar.bgt:58-71)
+//   - relogio de pulso setado ao vestir roupa (includes/clothes.bgt:32-34/54-56)
+//
+// Este arquivo substitui os DOIS meio-relogios que existiam no projeto NVGT:
+//   - includes/calendar.nvgt      (game_calendar server_calendar) -> nunca era
+//     tickado; ficava congelado em 12:00:00
+//   - includes/systems_advanced.nvgt (time_system game_time) -> era tickado mas
+//     ninguem lia, e mandava o pacote "time ..." que o cliente ignora
+//
+// Regras de negocio herdadas do BGT (mantidas):
+//   - 1 minuto de jogo a cada 5000 ms reais (const int horatempo=5000), ou seja
+//     1 dia de jogo = 2 horas reais
+//   - som "coruja.ogg" a meia noite, "voar.ogg" as 6 da manha
+//   - uma frase ambiental sorteada em cada uma dessas viradas
+//   - /hora exige um relogio e toca relogio.ogg em 3D no mapa do jogador
+//   - hora falada em linguagem natural ("Meia noite em ponto", "tres horas e
+//     dois minutos", ...)
+//
+// Bugs do BGT corrigidos aqui:
+//   - o BGT estourava o mes com dia>31 fixo, independente do mes; aqui usamos
+//     dias_do_mes()
+//   - o BGT chamava checarhora() ANTES de normalizar hora>23, entao o bloco de
+//     meia noite nunca disparava; aqui a virada e normalizada primeiro
+//   - checarhora() tinha quatro "else if(mostrar==1)" seguidos (3 inalcancaveis)
+//     e frases em espanhol misturadas; aqui e um array sorteado, tudo em
+//     portugues
+//
+// Persistencia: tabela server_config (criada em server/server.nvgt), que ate
+// agora nao tinha nenhum leitor nem escritor no projeto.
+// ============================================================================
+
+// Paridade com "const int horatempo=5000" do BGT.
+const int RELOGIO_MS_POR_MINUTO_PADRAO = 5000;
+// Piso de seguranca: abaixo disso o loop principal viraria um moedor de CPU.
+const int RELOGIO_MS_POR_MINUTO_MINIMO = 100;
+const int RELOGIO_MS_POR_MINUTO_MAXIMO = 3600000;
+// De quanto em quanto tempo real o estado vai para o banco.
+const int RELOGIO_AUTOSAVE_MS = 60000;
+
+// Nome canonico do item/roupa que da acesso a hora.
+const string RELOGIO_ITEM_PADRAO = "relogio_de_pulso";
+
+// Pedacos de nome que identificam um relogio vestivel. O BGT fazia
+// string_contains(name, "reloj") / "watch" em clothes.bgt:32 e :54.
+string[] RELOGIO_NOMES_PARCIAIS = {"relogio", "relógio", "reloj", "watch"};
+
+// ============================================================================
+// HELPERS GENERICOS DE server_config
+// ----------------------------------------------------------------------------
+// A tabela server_config(key, value, description, last_modified) ja existe em
+// server/server.nvgt (create_config). O relogio e o primeiro consumidor real.
+// ============================================================================
+
+string config_get_text(string chave, string padrao) {
+	if(!database_initialized || bancoJogo is null) return padrao;
+
+	string query = "SELECT value FROM server_config WHERE key = ?;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO config_get_text: " + bancoJogo.get_last_error_text());
+		return padrao;
+	}
+
+	stmt.bind_text(1, chave);
+
+	if(stmt.step() == SQLITE_ROW) {
+		string valor = stmt.column_text(0);
+		if(valor.length() > 0) return valor;
+	}
+	return padrao;
+}
+
+void config_set_text(string chave, string valor, string descricao) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	// INSERT OR REPLACE em vez de ON CONFLICT DO UPDATE: mesmo efeito com uma
+	// chave primaria unica e todas as colunas fornecidas, e nao depende da
+	// versao do sqlite embarcado suportar UPSERT.
+	string query = """
+		INSERT OR REPLACE INTO server_config (key, value, description, last_modified)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO config_set_text: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, chave);
+	stmt.bind_text(2, valor);
+	stmt.bind_text(3, descricao);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao gravar server_config[" + chave + "]: " + bancoJogo.get_last_error_text());
+	}
+}
+
+int config_get_int(string chave, int padrao) {
+	string bruto = config_get_text(chave, "");
+	if(bruto.length() == 0) return padrao;
+	return string_to_number(bruto);
+}
+
+void config_set_int(string chave, int valor, string descricao) {
+	config_set_text(chave, "" + valor, descricao);
+}
+
+// ============================================================================
+// A CLASSE
+// ============================================================================
+
+class relogio_jogo {
+	int minuto = 0;
+	int hora = 6;
+	int dia = 1;
+	int mes = 1;
+	int ano = 1;
+
+	int ms_por_minuto = RELOGIO_MS_POR_MINUTO_PADRAO;
+	bool pausado = false;
+
+	// Equivalente ao "nbadalar" do BGT: evita reanunciar a mesma hora.
+	int ultima_hora_anunciada = -1;
+
+	timer tick_timer;
+	timer autosave_timer;
+
+	relogio_jogo() {
+		tick_timer.restart();
+		autosave_timer.restart();
+	}
+
+	void reiniciar_timers() {
+		tick_timer.restart();
+		autosave_timer.restart();
+	}
+
+	void normalizar_velocidade() {
+		if(ms_por_minuto < RELOGIO_MS_POR_MINUTO_MINIMO) ms_por_minuto = RELOGIO_MS_POR_MINUTO_MINIMO;
+		if(ms_por_minuto > RELOGIO_MS_POR_MINUTO_MAXIMO) ms_por_minuto = RELOGIO_MS_POR_MINUTO_MAXIMO;
+	}
+
+	// Chamado a cada volta do loop principal do servidor.
+	void tick() {
+		if(pausado) return;
+		normalizar_velocidade();
+		if(tick_timer.elapsed >= ms_por_minuto) {
+			tick_timer.restart();
+			avancar_minutos(1);
+		}
+	}
+
+	int dias_do_mes(int m) {
+		switch(m) {
+			case 2:
+				return 28;
+			case 4:
+			case 6:
+			case 9:
+			case 11:
+				return 30;
+			default:
+				return 31;
+		}
+	}
+
+	// Avanca n minutos com cascata correta minuto->hora->dia->mes->ano.
+	// Dispara o anuncio ambiental em cada virada de hora (ja normalizada).
+	void avancar_minutos(int n) {
+		if(n <= 0) return;
+		// Teto de seguranca: 10 anos de jogo de uma vez so.
+		if(n > 5259600) n = 5259600;
+
+		for(int i = 0; i < n; i++) {
+			minuto++;
+			if(minuto <= 59) continue;
+
+			minuto = 0;
+			hora++;
+			if(hora > 23) {
+				hora = 0;
+				dia++;
+				if(dia > dias_do_mes(mes)) {
+					dia = 1;
+					mes++;
+					if(mes > 12) {
+						mes = 1;
+						ano++;
+					}
+				}
+			}
+			// Chamado com a hora JA normalizada (o BGT chamava antes, e por
+			// isso o bloco de meia noite nunca rodava).
+			relogio_anunciar_hora(hora);
+		}
+	}
+
+	void ajustar(int nova_hora, int novo_minuto) {
+		if(nova_hora < 0) nova_hora = 0;
+		if(nova_hora > 23) nova_hora = 23;
+		if(novo_minuto < 0) novo_minuto = 0;
+		if(novo_minuto > 59) novo_minuto = 59;
+		hora = nova_hora;
+		minuto = novo_minuto;
+		ultima_hora_anunciada = hora;
+		tick_timer.restart();
+	}
+
+	bool eh_noite() {
+		return (hora >= 20 || hora < 6);
+	}
+
+	bool eh_dia() {
+		return !eh_noite();
+	}
+
+	string periodo() {
+		if(hora < 6) return "madrugada";
+		if(hora < 12) return "manhã";
+		if(hora < 18) return "tarde";
+		return "noite";
+	}
+
+	// Movido de calendar.nvgt:44-55.
+	string estacao() {
+		if(mes >= 3 && mes <= 5) return "primavera";
+		if(mes >= 6 && mes <= 8) return "verão";
+		if(mes >= 9 && mes <= 11) return "outono";
+		return "inverno";
+	}
+
+	// Dias corridos desde o dia 1 do ano 1 (1 = primeiro dia).
+	// A soma de dias_do_mes(1..12) da exatamente 365.
+	int dia_absoluto() {
+		int total = (ano - 1) * 365;
+		for(int m = 1; m < mes; m++) {
+			total += dias_do_mes(m);
+		}
+		total += dia;
+		return total;
+	}
+
+	// Movido de calendar.nvgt:126-138.
+	string nome_do_dia_semana() {
+		int d = dia_absoluto() % 7;
+		if(d < 0) d = 0;
+		switch(d) {
+			case 0: return "Domingo";
+			case 1: return "Segunda-feira";
+			case 2: return "Terça-feira";
+			case 3: return "Quarta-feira";
+			case 4: return "Quinta-feira";
+			case 5: return "Sexta-feira";
+			case 6: return "Sábado";
+			default: return "Desconhecido";
+		}
+	}
+
+	string dois_digitos(int v) {
+		if(v < 0) v = 0;
+		return v < 10 ? "0" + v : "" + v;
+	}
+
+	string hora_curta() {
+		return dois_digitos(hora) + ":" + dois_digitos(minuto);
+	}
+
+	string data_curta() {
+		return dois_digitos(dia) + "/" + dois_digitos(mes) + "/" + ano;
+	}
+}
+
+relogio_jogo relogio_clock;
+
+// ============================================================================
+// GANCHOS DE VIRADA DE HORA
+// ----------------------------------------------------------------------------
+// Pensado para o sistema de clima do servidor (includes/clima.nvgt) acionar
+// chuvaativa/fimchuva/volumechuva sem que o relogio precise conhecer o clima.
+// Handles individuais em vez de um array de funcdef: e o unico padrao de
+// funcdef que ja existia no projeto (calendar.nvgt:210, sound_path_wrapper).
+// ============================================================================
+
+funcdef void relogio_evento_cb();
+
+relogio_evento_cb@ relogio_cb_hora_1;
+relogio_evento_cb@ relogio_cb_hora_2;
+relogio_evento_cb@ relogio_cb_hora_3;
+relogio_evento_cb@ relogio_cb_hora_4;
+
+bool relogio_registrar_virada_de_hora(relogio_evento_cb@ cb) {
+	if(cb is null) return false;
+	if(@relogio_cb_hora_1 == null) { @relogio_cb_hora_1 = @cb; return true; }
+	if(@relogio_cb_hora_2 == null) { @relogio_cb_hora_2 = @cb; return true; }
+	if(@relogio_cb_hora_3 == null) { @relogio_cb_hora_3 = @cb; return true; }
+	if(@relogio_cb_hora_4 == null) { @relogio_cb_hora_4 = @cb; return true; }
+	debug_log("RELOGIO: sem slot livre para callback de virada de hora");
+	return false;
+}
+
+void relogio_limpar_callbacks() {
+	@relogio_cb_hora_1 = null;
+	@relogio_cb_hora_2 = null;
+	@relogio_cb_hora_3 = null;
+	@relogio_cb_hora_4 = null;
+}
+
+void relogio_disparar_callbacks() {
+	if(@relogio_cb_hora_1 != null) relogio_cb_hora_1();
+	if(@relogio_cb_hora_2 != null) relogio_cb_hora_2();
+	if(@relogio_cb_hora_3 != null) relogio_cb_hora_3();
+	if(@relogio_cb_hora_4 != null) relogio_cb_hora_4();
+}
+
+// ============================================================================
+// API PUBLICA FINA (substitui get_current_hour()/is_daytime() de calendar.nvgt)
+// ============================================================================
+
+int relogio_hora() { return relogio_clock.hora; }
+int relogio_minuto() { return relogio_clock.minuto; }
+int relogio_dia() { return relogio_clock.dia; }
+int relogio_mes() { return relogio_clock.mes; }
+int relogio_ano() { return relogio_clock.ano; }
+int relogio_dia_absoluto() { return relogio_clock.dia_absoluto(); }
+bool relogio_eh_noite() { return relogio_clock.eh_noite(); }
+bool relogio_eh_dia() { return relogio_clock.eh_dia(); }
+bool relogio_pausado() { return relogio_clock.pausado; }
+string relogio_periodo() { return relogio_clock.periodo(); }
+string relogio_estacao() { return relogio_clock.estacao(); }
+string relogio_hora_curta() { return relogio_clock.hora_curta(); }
+string relogio_data_curta() { return relogio_clock.data_curta(); }
+string relogio_dia_semana() { return relogio_clock.nome_do_dia_semana(); }
+
+string relogio_info_completa() {
+	string info = relogio_clock.nome_do_dia_semana() + ", " + relogio_clock.data_curta();
+	info += " — " + relogio_clock.hora_curta();
+	info += ", " + relogio_clock.periodo();
+	info += ", " + relogio_clock.estacao();
+	if(relogio_clock.pausado) info += " (relogio pausado)";
+	return info;
+}
+
+// ============================================================================
+// HORA FALADA — porte de horareloj() (re_server_test.bgt:2336-2358)
+// ----------------------------------------------------------------------------
+// O original era uma sequencia de ifs independentes que se sobrescreviam; aqui
+// vira if/else-if de verdade. As frases em ponto sao as mesmas do BGT.
+// ============================================================================
+
+string relogio_hora_falada() {
+	int h = relogio_clock.hora;
+	int m = relogio_clock.minuto;
+
+	if(m == 0) {
+		if(h == 0) return "Meia noite em ponto";
+		if(h == 1) return "Uma hora em ponto";
+		if(h == 2) return "Duas horas em ponto";
+		return "" + h + " horas em ponto";
+	}
+
+	string texto;
+	if(h == 0) texto = "Meia noite e ";
+	else if(h == 1) texto = "Uma hora e ";
+	else if(h == 2) texto = "Duas horas e ";
+	else texto = "" + h + " horas e ";
+
+	if(m == 1) texto += "um minuto";
+	else texto += "" + m + " minutos";
+
+	return texto;
+}
+
+// ============================================================================
+// ANUNCIO AMBIENTAL — porte de checarhora() (re_server_test.bgt:832-864)
+// ============================================================================
+
+void relogio_transmitir_som(string arquivo) {
+	if(arquivo.length() == 0) return;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(!players[i].is_logged_in) continue;
+		send_reliable_text(players[i].peer_id, "ps " + arquivo, 0);
+	}
+}
+
+void relogio_transmitir_texto(string mensagem) {
+	if(mensagem.length() == 0) return;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(!players[i].is_logged_in) continue;
+		send_reliable_text(players[i].peer_id, "msgnormal " + mensagem, 0);
+	}
+}
+
+void relogio_anunciar_hora(int hora_nova) {
+	// "nbadalar" do BGT: nao repete o anuncio da mesma hora.
+	if(relogio_clock.ultima_hora_anunciada == hora_nova) return;
+	relogio_clock.ultima_hora_anunciada = hora_nova;
+
+	string som = "";
+	string[] frases;
+
+	if(hora_nova == 0) {
+		// Paridade BGT: coruja a meia noite + frase de crepusculo.
+		som = "coruja.ogg";
+		frases.insert_last("Os últimos raios alaranjados se fazem visíveis, à medida que o Sol retorna ao horizonte.");
+		frases.insert_last("A claridade do dia se desvanece aos poucos, dando lugar ao cinzento crepúsculo.");
+		frases.insert_last("O silêncio da madrugada toma conta de tudo. Apenas o vento continua acordado.");
+	}
+	else if(hora_nova == 6) {
+		// Paridade BGT: passaros voando ao amanhecer.
+		som = "voar.ogg";
+		frases.insert_last("Pássaros despertam e iniciam seu gorjear na distância. Um novo dia se aproxima.");
+		frases.insert_last("O vento avança para o leste, sussurrando ao passar por você.");
+		frases.insert_last("O Sol desliza por detrás do horizonte, trazendo consigo uma nova manhã.");
+	}
+	else if(hora_nova == 12) {
+		frases.insert_last("O Sol alcança o ponto mais alto do céu. O calor do meio-dia pesa sobre a terra.");
+		frases.insert_last("As sombras encolhem até quase desaparecer. É meio-dia.");
+	}
+	else if(hora_nova == 18) {
+		frases.insert_last("O céu se tinge de laranja e o dia começa a se despedir.");
+		frases.insert_last("A luz enfraquece e um frio leve anuncia a chegada da noite.");
+	}
+
+	if(som.length() > 0) relogio_transmitir_som(som);
+
+	if(frases.length() > 0) {
+		// Correcao do copy-paste do BGT (quatro "else if(mostrar==1)" seguidos,
+		// tres deles inalcancaveis).
+		relogio_transmitir_texto(frases[random(0, frases.length() - 1)]);
+	}
+
+	debug_log("RELOGIO: virada de hora -> " + relogio_clock.hora_curta() + " (" + relogio_clock.periodo() + ")");
+
+	relogio_disparar_callbacks();
+}
+
+// ============================================================================
+// POSSE DE RELOGIO
+// ----------------------------------------------------------------------------
+// Baseado no INVENTARIO/roupa e nao em player.relogio, porque player.relogio e
+// gravado em sconfigs.nvgt:23 e nunca lido de volta: se dependesse so dele, a
+// funcionalidade morreria a cada relog.
+// ============================================================================
+
+bool relogio_nome_eh_relogio(string nome) {
+	string minusculo = string_to_lower_case(nome);
+	for(uint i = 0; i < RELOGIO_NOMES_PARCIAIS.length(); i++) {
+		if(minusculo.find(RELOGIO_NOMES_PARCIAIS[i]) > -1) return true;
+	}
+	return false;
+}
+
+// Olha SO para inventario/roupa. Usado para (re)sincronizar player.relogio.
+bool relogio_detectar_posse(player@ p) {
+	if(p is null) return false;
+
+	if(p.inv_item_number(RELOGIO_ITEM_PADRAO) >= 1) return true;
+
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		if(relogio_nome_eh_relogio(p.clothing[i])) return true;
+	}
+
+	return false;
+}
+
+bool jogador_tem_relogio(player@ p) {
+	if(p is null) return false;
+	if(p.relogio == 1) return true;
+	return relogio_detectar_posse(p);
+}
+
+bool jogador_tem_relogio(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	return jogador_tem_relogio(players[player_index]);
+}
+
+// Chamada no login e em equip/unequip de roupa.
+void relogio_sincronizar_equipamento(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(players[player_index] is null) return;
+
+	int novo = relogio_detectar_posse(players[player_index]) ? 1 : 0;
+	if(players[player_index].relogio != novo) {
+		players[player_index].relogio = novo;
+		debug_log("RELOGIO: " + players[player_index].charname + " relogio=" + novo);
+	}
+}
+
+void relogio_sincronizar_equipamento(player@ p) {
+	if(p is null) return;
+	p.relogio = relogio_detectar_posse(p) ? 1 : 0;
+}
+
+// ============================================================================
+// PERSISTENCIA (substitui o servidor.configs serializado do BGT)
+// ============================================================================
+
+void relogio_salvar() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	config_set_int("relogio.minuto", relogio_clock.minuto, "Minuto atual do relogio de jogo");
+	config_set_int("relogio.hora", relogio_clock.hora, "Hora atual do relogio de jogo");
+	config_set_int("relogio.dia", relogio_clock.dia, "Dia atual do calendario de jogo");
+	config_set_int("relogio.mes", relogio_clock.mes, "Mes atual do calendario de jogo");
+	config_set_int("relogio.ano", relogio_clock.ano, "Ano atual do calendario de jogo");
+	config_set_int("relogio.ms_por_minuto", relogio_clock.ms_por_minuto, "Milissegundos reais por minuto de jogo");
+	config_set_int("relogio.pausado", relogio_clock.pausado ? 1 : 0, "1 = relogio de jogo pausado");
+}
+
+void relogio_init() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("RELOGIO: banco nao inicializado, usando valores padrao");
+		relogio_clock.reiniciar_timers();
+		relogio_clock.ultima_hora_anunciada = relogio_clock.hora;
+		return;
+	}
+
+	// Padrao de primeira execucao: 06:00 do dia 01/01 do ano 1.
+	relogio_clock.minuto = config_get_int("relogio.minuto", 0);
+	relogio_clock.hora = config_get_int("relogio.hora", 6);
+	relogio_clock.dia = config_get_int("relogio.dia", 1);
+	relogio_clock.mes = config_get_int("relogio.mes", 1);
+	relogio_clock.ano = config_get_int("relogio.ano", 1);
+	relogio_clock.ms_por_minuto = config_get_int("relogio.ms_por_minuto", RELOGIO_MS_POR_MINUTO_PADRAO);
+	relogio_clock.pausado = config_get_int("relogio.pausado", 0) == 1;
+
+	// Saneamento de valores vindos do banco.
+	if(relogio_clock.minuto < 0 || relogio_clock.minuto > 59) relogio_clock.minuto = 0;
+	if(relogio_clock.hora < 0 || relogio_clock.hora > 23) relogio_clock.hora = 6;
+	if(relogio_clock.mes < 1 || relogio_clock.mes > 12) relogio_clock.mes = 1;
+	if(relogio_clock.ano < 1) relogio_clock.ano = 1;
+	if(relogio_clock.dia < 1 || relogio_clock.dia > relogio_clock.dias_do_mes(relogio_clock.mes)) relogio_clock.dia = 1;
+	relogio_clock.normalizar_velocidade();
+
+	relogio_clock.ultima_hora_anunciada = relogio_clock.hora;
+	relogio_clock.reiniciar_timers();
+
+	// Garante que todas as chaves existam na tabela.
+	relogio_salvar();
+
+	debug_log("RELOGIO: iniciado em " + relogio_info_completa() +
+		" (" + relogio_clock.ms_por_minuto + " ms por minuto de jogo)");
+}
+
+// Chamado uma vez por volta do loop principal do servidor.
+void relogio_loop() {
+	relogio_clock.tick();
+
+	if(relogio_clock.autosave_timer.elapsed >= RELOGIO_AUTOSAVE_MS) {
+		relogio_clock.autosave_timer.restart();
+		relogio_salvar();
+	}
+}
+
+// ============================================================================
+// AJUSTES ADMINISTRATIVOS
+// ============================================================================
+
+void relogio_definir_hora(int nova_hora, int novo_minuto) {
+	relogio_clock.ajustar(nova_hora, novo_minuto);
+	relogio_salvar();
+}
+
+void relogio_definir_velocidade(int ms) {
+	relogio_clock.ms_por_minuto = ms;
+	relogio_clock.normalizar_velocidade();
+	relogio_clock.tick_timer.restart();
+	relogio_salvar();
+}
+
+bool relogio_alternar_pausa() {
+	relogio_clock.pausado = !relogio_clock.pausado;
+	relogio_clock.tick_timer.restart();
+	relogio_salvar();
+	return relogio_clock.pausado;
+}
+
+// Avanca o relogio em horas cheias (equivalente ao skip_time de calendar.nvgt).
+void relogio_avancar_horas(int horas) {
+	if(horas <= 0) return;
+	if(horas > 8760) horas = 8760;
+	relogio_clock.avancar_minutos(horas * 60);
+	relogio_salvar();
+}

@@ -1,0 +1,1052 @@
+// ============================================================================
+// clothing_catalog.nvgt - Catalogo de roupas (data-driven) + motor de vestir
+// ----------------------------------------------------------------------------
+// Consolidacao do sistema de roupas do BGT (includes/clothes.bgt, voids.bgt,
+// net.bgt, re_server_test.bgt) para o projeto NVGT.
+//
+// Diferencas conscientes em relacao ao BGT:
+//  - O catalogo mora no sqlite (tabela clothes_catalog) em vez do clothes.db
+//    de texto separado por "=".
+//  - protecao e guardada em PERCENTUAL 0..100 (o BGT guardava fracao,
+//    protection*0.01). Toda a matematica de dano usa aplicar_protecao().
+//  - As pecas vestidas de cada jogador sao persistidas em player_clothing,
+//    em vez de ficarem so na memoria/arquivo de configs.
+//
+// ATENCAO: este arquivo e a UNICA fonte de verdade de clothing_protection.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Partes do corpo (vocabulario normalizado com equipment_buffs.nvgt)
+// ---------------------------------------------------------------------------
+const string PARTE_CABECA = "head";
+const string PARTE_ROSTO = "face";
+const string PARTE_TRONCO = "body";
+const string PARTE_PERNAS = "legs";
+const string PARTE_PES = "feet";
+const string PARTE_MAOS = "hands";
+const string PARTE_CANELAS = "shins";
+const string PARTE_ESCUDO = "shield";
+const string PARTE_PULSEIRA = "accessory_1";
+const string PARTE_ANEL = "accessory_2";
+const string PARTE_BRACO = "arm";
+const string PARTE_PULSO = "wrist";
+const string PARTE_COSTAS = "back";
+
+const double PROTECAO_MAXIMA_ROUPAS = 90.0;
+const string MARCADOR_MIGRACAO_ROUPAS = "__migracao__";
+
+// ---------------------------------------------------------------------------
+// class roupa - uma entrada do catalogo (== class clothe do BGT)
+// ---------------------------------------------------------------------------
+class roupa {
+	string nome = "";
+	string parte_corpo = "";
+	string descricao = "";
+	string som_vestir = "";
+	string som_tirar = "";
+	string especial = "";
+	string criado_por = "system";
+	int mostrar_para_todos = 1;
+	int permite_desgaste = 1;
+	double desgaste_por_tiro = 0.5;
+	double protecao = 0;
+
+	roupa() {
+	}
+
+	roupa(string nome2, string parte_corpo2, string descricao2, string som_vestir2,
+	      string som_tirar2, int mostrar_para_todos2, int permite_desgaste2,
+	      double desgaste_por_tiro2, double protecao2, string especial2 = "",
+	      string criado_por2 = "system") {
+		this.nome = nome2;
+		this.parte_corpo = parte_corpo2;
+		this.descricao = descricao2;
+		this.som_vestir = som_vestir2;
+		this.som_tirar = som_tirar2;
+		this.mostrar_para_todos = mostrar_para_todos2;
+		this.permite_desgaste = permite_desgaste2;
+		this.desgaste_por_tiro = desgaste_por_tiro2;
+		this.protecao = protecao2;
+		this.especial = especial2;
+		this.criado_por = criado_por2;
+	}
+
+	bool eh_relogio() {
+		if(this.especial.lower() == "relogio") return true;
+		string n = this.nome.lower();
+		if(n.find("relogio") >= 0) return true;
+		if(n.find("watch") >= 0) return true;
+		return false;
+	}
+
+	bool eh_paraquedas() {
+		if(this.especial.lower() == "paraquedas") return true;
+		string n = this.nome.lower();
+		if(n.find("paraquedas") >= 0) return true;
+		if(n.find("paracaidas") >= 0) return true;
+		return false;
+	}
+
+	string linha_de_catalogo() {
+		return this.nome + " [" + this.parte_corpo + "] protecao=" + this.protecao +
+		       "% desgaste=" + this.desgaste_por_tiro +
+		       (this.especial != "" ? " especial=" + this.especial : "");
+	}
+}
+
+roupa@[] catalogo_roupas;
+
+// ---------------------------------------------------------------------------
+// Utilitarios de nome
+// ---------------------------------------------------------------------------
+string normalizar_nome_de_roupa(string nome) {
+	string n = nome.trim_whitespace().lower();
+	n = n.replace(" ", "_");
+	return n;
+}
+
+string chave_usuario_roupas(string username) {
+	return username.trim_whitespace().lower();
+}
+
+// ---------------------------------------------------------------------------
+// Consultas ao catalogo em memoria
+// ---------------------------------------------------------------------------
+int indice_roupa(string nome) {
+	string alvo = normalizar_nome_de_roupa(nome);
+	for(uint i = 0; i < catalogo_roupas.length(); i++) {
+		if(catalogo_roupas[i].nome == alvo) return int(i);
+	}
+	return -1;
+}
+
+roupa@ obter_roupa(string nome) {
+	int idx = indice_roupa(nome);
+	if(idx < 0) return null;
+	return catalogo_roupas[idx];
+}
+
+bool roupa_existe(string nome) {
+	if(indice_roupa(nome) >= 0) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT 1 FROM clothes_catalog WHERE nome = ?;");
+	if(@stmt == null) return false;
+	stmt.bind_text(1, normalizar_nome_de_roupa(nome));
+	return stmt.step() == SQLITE_ROW;
+}
+
+// ---------------------------------------------------------------------------
+// Criacao das tabelas
+// ---------------------------------------------------------------------------
+void criar_tabelas_roupas() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_roupas - Banco nao inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela clothes_catalog...");
+
+	string criar_catalogo = """
+		CREATE TABLE IF NOT EXISTS clothes_catalog (
+			nome TEXT PRIMARY KEY,
+			parte_corpo TEXT NOT NULL,
+			descricao TEXT DEFAULT '',
+			som_vestir TEXT DEFAULT '',
+			som_tirar TEXT DEFAULT '',
+			mostrar_para_todos INTEGER DEFAULT 1,
+			permite_desgaste INTEGER DEFAULT 1,
+			desgaste_por_tiro REAL DEFAULT 0.5,
+			protecao REAL DEFAULT 0,
+			especial TEXT DEFAULT '',
+			criado_por TEXT DEFAULT 'system',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(criar_catalogo) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela clothes_catalog: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela clothes_catalog criada/verificada");
+	}
+
+	string criar_vestidas = """
+		CREATE TABLE IF NOT EXISTS player_clothing (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			nome_roupa TEXT NOT NULL,
+			parte_corpo TEXT NOT NULL,
+			degradacao REAL DEFAULT 0,
+			vestida_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(username, nome_roupa),
+			UNIQUE(username, parte_corpo)
+		);
+	""";
+
+	if(bancoJogo.execute(criar_vestidas) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela player_clothing: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela player_clothing criada/verificada");
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_player_clothing_username ON player_clothing(username);");
+}
+
+// ---------------------------------------------------------------------------
+// Seed do catalogo padrao
+// ---------------------------------------------------------------------------
+void semear_roupa_padrao(string nome, string parte, string descricao, string som_vestir,
+                         string som_tirar, int mostrar, int desgasta, double desgaste,
+                         double protecao, string especial = "") {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR IGNORE INTO clothes_catalog
+			(nome, parte_corpo, descricao, som_vestir, som_tirar,
+			 mostrar_para_todos, permite_desgaste, desgaste_por_tiro, protecao, especial, criado_por)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system');
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar semear_roupa_padrao: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, normalizar_nome_de_roupa(nome));
+	stmt.bind_text(2, parte);
+	stmt.bind_text(3, descricao);
+	stmt.bind_text(4, som_vestir);
+	stmt.bind_text(5, som_tirar);
+	stmt.bind_int(6, mostrar);
+	stmt.bind_int(7, desgasta);
+	stmt.bind_double(8, desgaste);
+	stmt.bind_double(9, protecao);
+	stmt.bind_text(10, especial);
+	stmt.step();
+}
+
+void semear_roupas_padrao() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: semear_roupas_padrao - Banco nao inicializado");
+		return;
+	}
+
+	debug_log("Semeando catalogo padrao de roupas...");
+
+	// --- cabeca -------------------------------------------------------------
+	semear_roupa_padrao("capacete_policia", PARTE_CABECA, "na cabeca, um capacete da policia.", "capacetedraw", "retirarcapacete2", 1, 1, 0.5, 8.0);
+	semear_roupa_padrao("chapeu_panama", PARTE_CABECA, "na cabeca, um chapeu panama.", "bonedraw", "retirarcapacete2", 1, 1, 0.2, 1.0);
+	semear_roupa_padrao("bone_mizuno", PARTE_CABECA, "na cabeca, um bone mizuno.", "bonedraw", "retirarcapacete2", 1, 1, 0.2, 1.0);
+
+	// --- rosto --------------------------------------------------------------
+	semear_roupa_padrao("oculos_mizuno", PARTE_ROSTO, "no rosto, um par de oculos mizuno.", "oculosdraw", "retiraroculos", 1, 1, 0.2, 1.0);
+
+	// --- tronco -------------------------------------------------------------
+	semear_roupa_padrao("colete_aprova_de_balas", PARTE_TRONCO, "no corpo, um colete a prova de balas.", "coletedraw", "retirarcolete", 1, 1, 0.5, 18.0);
+	semear_roupa_padrao("colete_militar", PARTE_TRONCO, "no corpo, um colete militar.", "coletedraw", "retirarcolete", 1, 1, 0.5, 15.0);
+	semear_roupa_padrao("colete_camuflado", PARTE_TRONCO, "no corpo, um colete camuflado.", "coletedraw", "retirarcolete", 1, 1, 0.5, 12.0);
+	semear_roupa_padrao("colete_mizuno", PARTE_TRONCO, "no corpo, um colete mizuno.", "colete2draw", "retirarcolete", 1, 1, 0.5, 9.0);
+	semear_roupa_padrao("colete_salvavida", PARTE_TRONCO, "no corpo, um colete salva-vidas.", "coletedraw", "retirarcolete", 1, 1, 0.4, 7.0);
+	semear_roupa_padrao("casaco_peles", PARTE_TRONCO, "no corpo, um casaco de peles.", "vestir_casaco_de_neve", "retirarjaqueta", 1, 1, 0.3, 6.0);
+	semear_roupa_padrao("jaqueta_couro", PARTE_TRONCO, "no corpo, uma jaqueta de couro.", "camisadraw", "retirarjaqueta", 1, 1, 0.3, 4.0);
+	semear_roupa_padrao("camisa_malha", PARTE_TRONCO, "no corpo, uma camisa de malha.", "camisadraw", "retirarcamisa", 1, 1, 0.2, 2.0);
+
+	// --- pernas -------------------------------------------------------------
+	semear_roupa_padrao("calca_camuflada", PARTE_PERNAS, "nas pernas, uma calca camuflada.", "calcadraw", "retirarcalca", 1, 1, 0.3, 6.0);
+	semear_roupa_padrao("calca_jeans", PARTE_PERNAS, "nas pernas, uma calca jeans.", "calcadraw", "retirarcalca", 1, 1, 0.3, 4.0);
+	semear_roupa_padrao("calca_mizuno", PARTE_PERNAS, "nas pernas, uma calca mizuno.", "calcadraw", "retirarcalca", 1, 1, 0.3, 3.0);
+	semear_roupa_padrao("calca_legging", PARTE_PERNAS, "nas pernas, uma legging.", "calcadraw", "retirarcalca", 1, 1, 0.2, 2.0);
+
+	// --- pes ----------------------------------------------------------------
+	semear_roupa_padrao("coturno_militar", PARTE_PES, "nos pes, um par de coturnos militares.", "botadraw", "retirarbota", 1, 1, 0.3, 6.0);
+	semear_roupa_padrao("bota_mizuno", PARTE_PES, "nos pes, um par de botas mizuno.", "botadraw", "retirarbota", 1, 1, 0.3, 5.0);
+	semear_roupa_padrao("tenis_nike", PARTE_PES, "nos pes, um par de tenis nike.", "tenisdraw", "retirartenis", 1, 1, 0.2, 3.0);
+	semear_roupa_padrao("tenis_adidas", PARTE_PES, "nos pes, um par de tenis adidas.", "tenisdraw", "retirartenis", 1, 1, 0.2, 3.0);
+	semear_roupa_padrao("sapato_carpin", PARTE_PES, "nos pes, um par de sapatos carpin.", "botadraw", "retirarbota", 1, 1, 0.2, 2.0);
+	semear_roupa_padrao("sapato_magnetico", PARTE_PES, "nos pes, um par de sapatos magneticos.", "botadraw", "retirarbota", 1, 1, 0.2, 4.0);
+
+	// --- maos ---------------------------------------------------------------
+	semear_roupa_padrao("luvas", PARTE_MAOS, "nas maos, um par de luvas.", "luvadraw", "retirarcamisa", 1, 1, 0.2, 3.0);
+
+	// --- canelas ------------------------------------------------------------
+	semear_roupa_padrao("caneleira_metal", PARTE_CANELAS, "nas canelas, um par de caneleiras de metal.", "escudodraw", "retirarescudo", 1, 1, 0.4, 8.0);
+	semear_roupa_padrao("caneleira_madeira", PARTE_CANELAS, "nas canelas, um par de caneleiras de madeira.", "escudodraw", "retirarescudo", 1, 1, 0.4, 5.0);
+
+	// --- escudo -------------------------------------------------------------
+	semear_roupa_padrao("escudo", PARTE_ESCUDO, "no braco, um escudo.", "escudodraw", "retirarescudo", 1, 1, 0.5, 10.0);
+
+	// --- acessorios ---------------------------------------------------------
+	semear_roupa_padrao("pulseira", PARTE_PULSEIRA, "no pulso, uma pulseira.", "pulseiradraw", "retirarpulseira", 1, 0, 0.0, 1.0);
+	semear_roupa_padrao("pulseira_ouro", PARTE_PULSEIRA, "no pulso, uma pulseira de ouro.", "pulseiradraw", "retirarpulseira", 1, 0, 0.0, 2.0);
+	semear_roupa_padrao("pulseira_prata", PARTE_PULSEIRA, "no pulso, uma pulseira de prata.", "pulseiradraw", "retirarpulseira", 1, 0, 0.0, 1.0);
+	semear_roupa_padrao("pulseira_bronze", PARTE_PULSEIRA, "no pulso, uma pulseira de bronze.", "pulseiradraw", "retirarpulseira", 1, 0, 0.0, 1.0);
+	semear_roupa_padrao("anel", PARTE_ANEL, "no dedo, um anel.", "pulseiradraw", "retirarpulseira", 1, 0, 0.0, 1.0);
+	semear_roupa_padrao("bracadeira", PARTE_BRACO, "no braco, uma bracadeira.", "pulseiradraw", "retirarpulseira", 1, 1, 0.2, 2.0);
+
+	// --- especiais ----------------------------------------------------------
+	semear_roupa_padrao("relogio", PARTE_PULSO, "no pulso, um relogio.", "relogio", "retirarpulseira", 1, 0, 0.0, 0.0, "relogio");
+	semear_roupa_padrao("paraquedas", PARTE_COSTAS, "nas costas, um paraquedas.", "paraquedas", "retirarcolete", 1, 0, 0.0, 0.0, "paraquedas");
+
+	debug_log("OK - Catalogo padrao de roupas semeado");
+}
+
+// ---------------------------------------------------------------------------
+// Carga do catalogo
+// ---------------------------------------------------------------------------
+void carregar_catalogo_roupas() {
+	catalogo_roupas.resize(0);
+
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: carregar_catalogo_roupas - Banco nao inicializado");
+		return;
+	}
+
+	string query = """
+		SELECT nome, parte_corpo, descricao, som_vestir, som_tirar,
+		       mostrar_para_todos, permite_desgaste, desgaste_por_tiro,
+		       protecao, especial, criado_por
+		FROM clothes_catalog
+		ORDER BY nome;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar carregar_catalogo_roupas: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	while(stmt.step() == SQLITE_ROW) {
+		roupa r(stmt.column_text(0), stmt.column_text(1), stmt.column_text(2),
+		        stmt.column_text(3), stmt.column_text(4), stmt.column_int(5),
+		        stmt.column_int(6), stmt.column_double(7), stmt.column_double(8),
+		        stmt.column_text(9), stmt.column_text(10));
+		catalogo_roupas.insert_last(r);
+	}
+
+	debug_log("OK - Catalogo de roupas carregado: " + catalogo_roupas.length() + " pecas");
+}
+
+// ---------------------------------------------------------------------------
+// CRUD do catalogo (== new_clothe / delete_clothe / save_clothes do BGT)
+// ---------------------------------------------------------------------------
+bool salvar_roupa(roupa@ r, string criado_por) {
+	if(@r == null) return false;
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: salvar_roupa - Banco nao inicializado");
+		return false;
+	}
+
+	r.nome = normalizar_nome_de_roupa(r.nome);
+	if(r.nome == "") return false;
+	if(r.parte_corpo == "") return false;
+
+	if(r.protecao < 0) r.protecao = 0;
+	if(r.protecao > PROTECAO_MAXIMA_ROUPAS) r.protecao = PROTECAO_MAXIMA_ROUPAS;
+	if(r.desgaste_por_tiro < 0) r.desgaste_por_tiro = 0;
+	if(r.desgaste_por_tiro > 100) r.desgaste_por_tiro = 100;
+	if(r.mostrar_para_todos != 0) r.mostrar_para_todos = 1;
+	if(r.permite_desgaste != 0) r.permite_desgaste = 1;
+
+	string query = """
+		INSERT OR REPLACE INTO clothes_catalog
+			(nome, parte_corpo, descricao, som_vestir, som_tirar,
+			 mostrar_para_todos, permite_desgaste, desgaste_por_tiro, protecao, especial, criado_por)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar salvar_roupa: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, r.nome);
+	stmt.bind_text(2, r.parte_corpo);
+	stmt.bind_text(3, r.descricao);
+	stmt.bind_text(4, r.som_vestir);
+	stmt.bind_text(5, r.som_tirar);
+	stmt.bind_int(6, r.mostrar_para_todos);
+	stmt.bind_int(7, r.permite_desgaste);
+	stmt.bind_double(8, r.desgaste_por_tiro);
+	stmt.bind_double(9, r.protecao);
+	stmt.bind_text(10, r.especial);
+	stmt.bind_text(11, criado_por);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao salvar roupa " + r.nome + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	carregar_catalogo_roupas();
+	debug_log("ROUPAS: peca '" + r.nome + "' salva no catalogo por " + criado_por);
+	return true;
+}
+
+bool remover_roupa_do_catalogo(string nome, string removido_por) {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: remover_roupa_do_catalogo - Banco nao inicializado");
+		return false;
+	}
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	if(alvo == "") return false;
+	if(indice_roupa(alvo) < 0) return false;
+
+	// Tira a peca de todo mundo que estiver online usando ela.
+	for(uint i = 0; i < players.length(); i++) {
+		if(esta_vestindo(int(i), alvo)) {
+			tirar_roupa(int(i), alvo, false);
+		}
+	}
+
+	sqlite3statement@ stmt_vestidas = bancoJogo.prepare("DELETE FROM player_clothing WHERE nome_roupa = ?;");
+	if(@stmt_vestidas != null) {
+		stmt_vestidas.bind_text(1, alvo);
+		stmt_vestidas.step();
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM clothes_catalog WHERE nome = ?;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar remover_roupa_do_catalogo: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	stmt.bind_text(1, alvo);
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao remover roupa " + alvo + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	carregar_catalogo_roupas();
+
+	// Limpa referencias residuais nos arrays legados dos jogadores online.
+	for(uint i = 0; i < players.length(); i++) {
+		sanear_roupas_do_jogador(int(i));
+	}
+
+	debug_log("ROUPAS: peca '" + alvo + "' removida do catalogo por " + removido_por);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Inicializacao (nome mantido: iniciar.nvgt ja chama init_clothing_system)
+// ---------------------------------------------------------------------------
+void init_clothing_system() {
+	// popula available_clothing, de que legacy_compat.nvgt ainda depende
+	init_clothing_legacy_catalog();
+
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("AVISO: init_clothing_system chamado antes do banco estar pronto - ignorado");
+		return;
+	}
+
+	criar_tabelas_roupas();
+	semear_roupas_padrao();
+	carregar_catalogo_roupas();
+}
+
+// ---------------------------------------------------------------------------
+// Backfill das flags legadas (coluna `equipment` da tabela players)
+// ---------------------------------------------------------------------------
+void backfill_flag_roupa(string username, int flag, string nome_roupa) {
+	if(flag != 1) return;
+
+	roupa@ r = obter_roupa(nome_roupa);
+	if(@r == null) return;
+
+	string query = """
+		INSERT OR IGNORE INTO player_clothing (username, nome_roupa, parte_corpo, degradacao)
+		VALUES (?, ?, ?, 0);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, username);
+	stmt.bind_text(2, r.nome);
+	stmt.bind_text(3, r.parte_corpo);
+	stmt.step();
+}
+
+bool roupas_ja_migradas(string username) {
+	if(!database_initialized || bancoJogo is null) return true;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(
+		"SELECT 1 FROM player_clothing WHERE LOWER(username) = ? AND nome_roupa = ?;");
+	if(@stmt == null) return true;
+
+	stmt.bind_text(1, chave_usuario_roupas(username));
+	stmt.bind_text(2, MARCADOR_MIGRACAO_ROUPAS);
+	return stmt.step() == SQLITE_ROW;
+}
+
+void marcar_roupas_migradas(string username) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR IGNORE INTO player_clothing (username, nome_roupa, parte_corpo, degradacao)
+		VALUES (?, ?, ?, 0);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, chave_usuario_roupas(username));
+	stmt.bind_text(2, MARCADOR_MIGRACAO_ROUPAS);
+	stmt.bind_text(3, MARCADOR_MIGRACAO_ROUPAS);
+	stmt.step();
+}
+
+void migrar_flags_legadas_para_roupas(string username) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string chave = chave_usuario_roupas(username);
+	if(chave == "") return;
+	if(roupas_ja_migradas(chave)) return;
+
+	int idx = get_player_index_from(username);
+	if(idx < 0 || idx >= int(players.length())) return;
+
+	player@ p = players[idx];
+
+	backfill_flag_roupa(chave, p.capacetepolicia, "capacete_policia");
+	backfill_flag_roupa(chave, p.chapeupanama, "chapeu_panama");
+	backfill_flag_roupa(chave, p.bonemizuno, "bone_mizuno");
+	backfill_flag_roupa(chave, p.oculosmizuno, "oculos_mizuno");
+
+	backfill_flag_roupa(chave, p.colete_aprova_de_balas, "colete_aprova_de_balas");
+	backfill_flag_roupa(chave, p.coletemilitar, "colete_militar");
+	backfill_flag_roupa(chave, p.coletecamuflado, "colete_camuflado");
+	backfill_flag_roupa(chave, p.coletemizuno, "colete_mizuno");
+	backfill_flag_roupa(chave, p.coletesalvavida, "colete_salvavida");
+	backfill_flag_roupa(chave, p.casacopeles, "casaco_peles");
+	backfill_flag_roupa(chave, p.jaquetacouro, "jaqueta_couro");
+	backfill_flag_roupa(chave, p.camisamalha, "camisa_malha");
+
+	backfill_flag_roupa(chave, p.calcacamuflada, "calca_camuflada");
+	backfill_flag_roupa(chave, p.calcajeans, "calca_jeans");
+	backfill_flag_roupa(chave, p.calcamizuno, "calca_mizuno");
+	backfill_flag_roupa(chave, p.calcalegging, "calca_legging");
+
+	backfill_flag_roupa(chave, p.coturnomilitar, "coturno_militar");
+	backfill_flag_roupa(chave, p.botamizuno, "bota_mizuno");
+	backfill_flag_roupa(chave, p.tenisnike, "tenis_nike");
+	backfill_flag_roupa(chave, p.tenisadidas, "tenis_adidas");
+	backfill_flag_roupa(chave, p.sapatoscarpin, "sapato_carpin");
+	backfill_flag_roupa(chave, p.sapatomagnetico, "sapato_magnetico");
+
+	backfill_flag_roupa(chave, p.luvas, "luvas");
+	backfill_flag_roupa(chave, p.caneleirametal, "caneleira_metal");
+	backfill_flag_roupa(chave, p.caneleiramadeira, "caneleira_madeira");
+	backfill_flag_roupa(chave, p.escudo, "escudo");
+
+	backfill_flag_roupa(chave, p.pulseiraouro, "pulseira_ouro");
+	backfill_flag_roupa(chave, p.pulseiraprata, "pulseira_prata");
+	backfill_flag_roupa(chave, p.pulseirabronze, "pulseira_bronze");
+	backfill_flag_roupa(chave, p.pulseira, "pulseira");
+	backfill_flag_roupa(chave, p.anel, "anel");
+	backfill_flag_roupa(chave, p.bracadeira, "bracadeira");
+	backfill_flag_roupa(chave, p.relogio, "relogio");
+
+	marcar_roupas_migradas(chave);
+	debug_log("ROUPAS: flags legadas migradas para " + chave);
+}
+
+// ---------------------------------------------------------------------------
+// Desgaste (espelhado no .ini de degradacao compartilhado com as armas)
+// ---------------------------------------------------------------------------
+// O load_degradation() de player.nvgt semeia 100.0 para as chaves ja existentes
+// no inventario, enquanto manage_degradation() destroi o item quando o valor
+// chega a 100. Por isso, ao vestir/carregar uma peca, normalizamos a chave.
+void garantir_registro_de_desgaste(int player_index, string nome, double valor = 0) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(!p.degradation.exists(nome)) {
+		p.degradation.set(nome, valor);
+		return;
+	}
+
+	double atual = p.get_degradation(nome);
+	if(atual >= 100 || atual < 0) {
+		p.degradation.set(nome, valor);
+	}
+}
+
+void sincronizar_desgaste_no_banco(int player_index, string nome) {
+	if(!database_initialized || bancoJogo is null) return;
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(
+		"UPDATE player_clothing SET degradacao = ? WHERE LOWER(username) = ? AND nome_roupa = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_double(1, players[player_index].get_degradation(nome));
+	stmt.bind_text(2, chave_usuario_roupas(players[player_index].charname));
+	stmt.bind_text(3, nome);
+	stmt.step();
+}
+
+// ---------------------------------------------------------------------------
+// Estado das pecas vestidas
+// ---------------------------------------------------------------------------
+bool esta_vestindo(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		if(players[player_index].clothing[i] == alvo) return true;
+	}
+	return false;
+}
+
+// Sobrecarga com a assinatura do BGT: cindex e um indice do catalogo.
+bool has_clothe(int cindex, int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	if(cindex < 0) return false;
+
+	for(uint i = 0; i < players[player_index].clothing_indexs.length(); i++) {
+		if(players[player_index].clothing_indexs[i] == cindex) return true;
+	}
+	return false;
+}
+
+bool parte_do_corpo_ocupada(int player_index, string parte) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	for(uint i = 0; i < players[player_index].body_parts.length(); i++) {
+		if(players[player_index].body_parts[i] == parte) return true;
+	}
+	return false;
+}
+
+// Remove das listas paralelas qualquer peca que nao exista mais no catalogo
+// e realinha clothing / body_parts / clothing_indexs.
+void sanear_roupas_do_jogador(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	string[] nomes_validos;
+
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		if(indice_roupa(p.clothing[i]) >= 0) nomes_validos.insert_last(p.clothing[i]);
+	}
+
+	p.clothing.resize(0);
+	p.body_parts.resize(0);
+	p.clothing_indexs.resize(0);
+
+	for(uint i = 0; i < nomes_validos.length(); i++) {
+		roupa@ r = obter_roupa(nomes_validos[i]);
+		if(@r == null) continue;
+		if(parte_do_corpo_ocupada(player_index, r.parte_corpo)) continue;
+		p.clothing.insert_last(r.nome);
+		p.body_parts.insert_last(r.parte_corpo);
+		p.clothing_indexs.insert_last(indice_roupa(r.nome));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Protecao - UNICA fonte de verdade de clothing_protection
+// ---------------------------------------------------------------------------
+void recalcular_protecao(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	double total = 0;
+
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		roupa@ r = obter_roupa(p.clothing[i]);
+		if(@r != null) total += r.protecao;
+	}
+
+	if(total < 0) total = 0;
+	if(total > PROTECAO_MAXIMA_ROUPAS) total = PROTECAO_MAXIMA_ROUPAS;
+
+	p.clothing_protection = total;
+}
+
+// dano_bruto -> dano ja reduzido pela protecao (percentual 0..90).
+double aplicar_protecao(int player_index, double dano_bruto) {
+	if(dano_bruto <= 0) return dano_bruto;
+	if(player_index < 0 || player_index >= int(players.length())) return dano_bruto;
+
+	double protecao = players[player_index].clothing_protection;
+	if(protecao < 0) protecao = 0;
+	if(protecao > PROTECAO_MAXIMA_ROUPAS) protecao = PROTECAO_MAXIMA_ROUPAS;
+
+	double final_dano = dano_bruto * (1.0 - (protecao / 100.0));
+	if(final_dano < 0) final_dano = 0;
+	return final_dano;
+}
+
+// ---------------------------------------------------------------------------
+// Especiais (relogio / paraquedas) e som
+// ---------------------------------------------------------------------------
+void aplicar_especiais_da_roupa(int player_index, roupa@ r, bool vestindo) {
+	if(@r == null) return;
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(r.eh_relogio()) p.relogio = vestindo ? 1 : 0;
+	if(r.eh_paraquedas()) p.have_parachute = vestindo ? 1 : 0;
+}
+
+void tocar_som_de_roupa(int player_index, string som) {
+	if(som == "") return;
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	int mapindex = get_map_index_from(p.map);
+	if(mapindex < 0) mapindex = p.mapindex;
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return;
+
+	string arquivo = som;
+	if(arquivo.find(".ogg") < 0) arquivo += ".ogg";
+
+	server_maps[mapindex].send_packet(0, "play " + arquivo, p.x, p.y);
+}
+
+// ---------------------------------------------------------------------------
+// Vestir / tirar
+// ---------------------------------------------------------------------------
+// Retorno: -2 fora do catalogo, -1 sem o item no inventario, 0 ja vestida,
+//           1 parte do corpo ocupada, 2 vestida com sucesso.
+int vestir_roupa(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return -2;
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	roupa@ r = obter_roupa(alvo);
+	if(@r == null) return -2;
+
+	player@ p = players[player_index];
+
+	if(!p.inv_item_exists(r.nome) || p.inv_item_number(r.nome) <= 0) return -1;
+	if(esta_vestindo(player_index, r.nome)) return 0;
+	if(parte_do_corpo_ocupada(player_index, r.parte_corpo)) return 1;
+
+	p.clothing.insert_last(r.nome);
+	p.body_parts.insert_last(r.parte_corpo);
+	p.clothing_indexs.insert_last(indice_roupa(r.nome));
+
+	aplicar_especiais_da_roupa(player_index, r, true);
+	garantir_registro_de_desgaste(player_index, r.nome);
+	recalcular_protecao(player_index);
+	salvar_roupas_do_jogador(player_index);
+	tocar_som_de_roupa(player_index, r.som_vestir);
+
+	debug_log("ROUPAS: " + p.charname + " vestiu " + r.nome + " (protecao total " + p.clothing_protection + "%)");
+	return 2;
+}
+
+// Retorno: 0 nao estava vestida (ou nao pode ser tirada), 1 tirada.
+int tirar_roupa(int player_index, string nome, bool avisar = true) {
+	if(player_index < 0 || player_index >= int(players.length())) return 0;
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	player@ p = players[player_index];
+
+	// Regra do BGT: tatuagens nao saem.
+	if(alvo.find("tatuagem") >= 0 || alvo.find("tatuaje") >= 0) {
+		if(avisar) send_reliable_text(p.peer_id, "msg2 Uma tatuagem nao se tira assim tao facil.", 0);
+		return 0;
+	}
+
+	int posicao = -1;
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		if(p.clothing[i] == alvo) {
+			posicao = int(i);
+			break;
+		}
+	}
+
+	if(posicao < 0) {
+		if(avisar) send_reliable_text(p.peer_id, "msg2 Voce nao esta usando esta peca, por que iria querer tira-la?", 0);
+		return 0;
+	}
+
+	roupa@ r = obter_roupa(alvo);
+
+	p.clothing.remove_at(uint(posicao));
+	if(uint(posicao) < p.body_parts.length()) p.body_parts.remove_at(uint(posicao));
+	if(uint(posicao) < p.clothing_indexs.length()) p.clothing_indexs.remove_at(uint(posicao));
+
+	if(@r != null) aplicar_especiais_da_roupa(player_index, r, false);
+
+	recalcular_protecao(player_index);
+	salvar_roupas_do_jogador(player_index);
+
+	if(@r != null) tocar_som_de_roupa(player_index, r.som_tirar);
+
+	if(avisar) {
+		send_reliable_text(p.peer_id, "msg2 Voce tirou: " + alvo, 0);
+	}
+
+	debug_log("ROUPAS: " + p.charname + " tirou " + alvo + " (protecao total " + p.clothing_protection + "%)");
+	return 1;
+}
+
+// == retirar em loop do arena.bgt:177-180
+void tirar_todas_as_roupas(int player_index, bool avisar = false) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string[] copia;
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		copia.insert_last(players[player_index].clothing[i]);
+	}
+
+	for(uint i = 0; i < copia.length(); i++) {
+		tirar_roupa(player_index, copia[i], avisar);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Desgaste por tiro (== map.bgt:581-585)
+// ---------------------------------------------------------------------------
+void desgastar_roupa_aleatoria(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p.clothing.length() == 0) return;
+
+	int sorteada = random(0, int(p.clothing.length()) - 1);
+	if(sorteada < 0 || sorteada >= int(p.clothing.length())) return;
+
+	string nome = p.clothing[uint(sorteada)];
+	roupa@ r = obter_roupa(nome);
+	if(@r == null) return;
+	if(r.permite_desgaste != 1) return;
+	if(r.desgaste_por_tiro <= 0) return;
+
+	garantir_registro_de_desgaste(player_index, r.nome);
+	p.manage_degradation(r.nome, r.desgaste_por_tiro);
+	sincronizar_desgaste_no_banco(player_index, r.nome);
+}
+
+// ---------------------------------------------------------------------------
+// Persistencia das pecas vestidas
+// ---------------------------------------------------------------------------
+void carregar_roupas_do_jogador(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(!database_initialized || bancoJogo is null) return;
+
+	player@ p = players[player_index];
+
+	p.clothing.resize(0);
+	p.body_parts.resize(0);
+	p.clothing_indexs.resize(0);
+
+	sqlite3statement@ stmt = bancoJogo.prepare(
+		"SELECT nome_roupa, degradacao FROM player_clothing WHERE LOWER(username) = ? ORDER BY id;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar carregar_roupas_do_jogador: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, chave_usuario_roupas(p.charname));
+
+	string[] descartadas;
+
+	while(stmt.step() == SQLITE_ROW) {
+		string nome = stmt.column_text(0);
+		double desgaste = stmt.column_double(1);
+
+		if(nome == MARCADOR_MIGRACAO_ROUPAS) continue;
+
+		roupa@ r = obter_roupa(nome);
+		if(@r == null) {
+			descartadas.insert_last(nome);
+			continue;
+		}
+
+		if(parte_do_corpo_ocupada(player_index, r.parte_corpo)) {
+			descartadas.insert_last(nome);
+			continue;
+		}
+
+		p.clothing.insert_last(r.nome);
+		p.body_parts.insert_last(r.parte_corpo);
+		p.clothing_indexs.insert_last(indice_roupa(r.nome));
+
+		garantir_registro_de_desgaste(player_index, r.nome, desgaste);
+		aplicar_especiais_da_roupa(player_index, r, true);
+	}
+
+	// Pecas que sumiram do catalogo saem do banco tambem.
+	for(uint i = 0; i < descartadas.length(); i++) {
+		sqlite3statement@ del = bancoJogo.prepare(
+			"DELETE FROM player_clothing WHERE LOWER(username) = ? AND nome_roupa = ?;");
+		if(@del == null) continue;
+		del.bind_text(1, chave_usuario_roupas(p.charname));
+		del.bind_text(2, descartadas[i]);
+		del.step();
+	}
+
+	recalcular_protecao(player_index);
+	debug_log("ROUPAS: " + p.charname + " carregou " + p.clothing.length() +
+	          " peca(s), protecao " + p.clothing_protection + "%");
+}
+
+void salvar_roupas_do_jogador(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(!database_initialized || bancoJogo is null) return;
+
+	player@ p = players[player_index];
+	string chave = chave_usuario_roupas(p.charname);
+	if(chave == "") return;
+
+	sqlite3statement@ del = bancoJogo.prepare(
+		"DELETE FROM player_clothing WHERE LOWER(username) = ? AND nome_roupa != ?;");
+	if(@del == null) {
+		debug_log("ERRO ao preparar salvar_roupas_do_jogador: " + bancoJogo.get_last_error_text());
+		return;
+	}
+	del.bind_text(1, chave);
+	del.bind_text(2, MARCADOR_MIGRACAO_ROUPAS);
+	del.step();
+
+	string query_insercao = """
+		INSERT OR REPLACE INTO player_clothing (username, nome_roupa, parte_corpo, degradacao)
+		VALUES (?, ?, ?, ?);
+	""";
+
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		roupa@ r = obter_roupa(p.clothing[i]);
+		if(@r == null) continue;
+
+		sqlite3statement@ ins = bancoJogo.prepare(query_insercao);
+		if(@ins == null) continue;
+
+		ins.bind_text(1, chave);
+		ins.bind_text(2, r.nome);
+		ins.bind_text(3, r.parte_corpo);
+		ins.bind_double(4, p.get_degradation(r.nome));
+		ins.step();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Textos
+// ---------------------------------------------------------------------------
+string listar_roupas_vestidas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return "Jogador invalido.";
+
+	player@ p = players[player_index];
+	if(p.clothing.length() == 0) return "Voce nao esta vestindo nada.";
+
+	string lista = "Voce esta vestindo:\r\n";
+	for(uint i = 0; i < p.clothing.length(); i++) {
+		roupa@ r = obter_roupa(p.clothing[i]);
+		lista += "- " + p.clothing[i];
+		if(@r != null) {
+			lista += " (" + r.parte_corpo + ", protecao " + r.protecao + "%";
+			double d = p.get_degradation(r.nome);
+			if(d > 0 && d < 100) lista += ", desgaste " + d + "%";
+			lista += ")";
+		}
+		lista += "\r\n";
+	}
+	lista += "Protecao total: " + p.clothing_protection + "%";
+	return lista;
+}
+
+// == vestindo() do voids.bgt:849-882
+string descrever_roupas_de(int player_index, int observador_index = -1) {
+	if(player_index < 0 || player_index >= int(players.length())) return "";
+	if(observador_index < 0) observador_index = player_index;
+
+	player@ p = players[player_index];
+	string minhas_roupas, roupas_alheias;
+
+	if(p.clothing.length() == 0) {
+		minhas_roupas = (observador_index == player_index)
+			? "Voce esta nu" + p.sexo2 + ".\r\n"
+			: p.charname + " esta nu" + p.sexo2 + ".\r\n";
+	} else {
+		minhas_roupas = (observador_index == player_index)
+			? "Voce esta vestindo:\r\n"
+			: p.charname + " esta vestindo:\r\n";
+		for(uint i = 0; i < p.clothing.length(); i++) {
+			roupa@ r = obter_roupa(p.clothing[i]);
+			if(@r != null) minhas_roupas += r.descricao + "\r\n";
+		}
+	}
+
+	int mapindex = get_map_index_from(p.map);
+	if(mapindex < 0) mapindex = p.mapindex;
+
+	if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+		for(uint i = 0; i < server_maps[mapindex].mapplayers.length(); i++) {
+			int outro = server_maps[mapindex].mapplayers[i];
+			if(outro < 0 || outro >= int(players.length())) continue;
+			if(outro == player_index) continue;
+
+			player@ o = players[outro];
+			if(o.charname == p.charname) continue;
+			if(o.afk) continue;
+			if(o.watching != 0) continue;
+			if(o.invs != 0) continue;
+			if(o.x < p.x - 12 || o.x > p.x + 12) continue;
+
+			if(o.clothing.length() == 0) {
+				roupas_alheias += o.charname + " esta nu" + o.sexo2 + ".\r\n";
+				continue;
+			}
+
+			string visiveis;
+			for(uint z = 0; z < o.clothing.length(); z++) {
+				roupa@ r = obter_roupa(o.clothing[z]);
+				if(@r == null) continue;
+				if(r.mostrar_para_todos != 1) continue;
+				visiveis += r.descricao + "\r\n";
+			}
+
+			if(visiveis == "") roupas_alheias += o.charname + " esta nu" + o.sexo2 + ".\r\n";
+			else roupas_alheias += o.charname + " esta vestindo:\r\n" + visiveis;
+		}
+	}
+
+	return minhas_roupas + roupas_alheias;
+}
+
+// ---------------------------------------------------------------------------
+// Queda / paraquedas (== net.bgt:1220-1241)
+// ---------------------------------------------------------------------------
+string peca_de_paraquedas_vestida(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return "";
+
+	for(uint i = 0; i < players[player_index].clothing.length(); i++) {
+		roupa@ r = obter_roupa(players[player_index].clothing[i]);
+		if(@r == null) continue;
+		if(r.eh_paraquedas()) return r.nome;
+	}
+	return "";
+}
+
+void aplicar_dano_de_queda(int player_index, int altura) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(altura >= 20 && p.watching == 0 && p.have_parachute == 0) {
+		p.health -= random(1000, 2000) * altura;
+
+		int mapindex = get_map_index_from(p.map);
+		if(mapindex < 0) mapindex = p.mapindex;
+		if(mapindex >= 0 && mapindex < int(server_maps.length())) {
+			server_maps[mapindex].send_packet(0, "inithurt " + p.voice, p.x, p.y);
+		}
+
+		if(p.health <= 0) {
+			p.health = p.maxhealth;
+			p.lasthit = "altura";
+			changemap(mapainicial, player_index, 1, 0);
+		}
+	}
+
+	// O paraquedas e consumido no pouso, com ou sem dano.
+	string peca = peca_de_paraquedas_vestida(player_index);
+	if(peca != "") tirar_roupa(player_index, peca, false);
+}

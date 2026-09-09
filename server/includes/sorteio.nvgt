@@ -1,0 +1,682 @@
+// ==========================================================================
+// Sistema de sorteio global de itens.
+//
+// Porta do BGT original (servidor reino test/includes/voids.bgt):
+//   - sorteo()                              -> realizar_sorteio()
+//   - sorteo(index, itemname, quantity)     -> realizar_sorteio_manual()
+//   - give_presents(string playername)      -> presente_aleatorio_para_todos()
+//   - /auto_raffle                          -> cmd_autosorteio()
+//   - outrosloop() (timer_raffle 420000 ms) -> sorteio_loop()
+//
+// O arquivo sorteo.txt (item=quantidade por linha) foi substituido pela
+// tabela sqlite sorteio_premios, com peso por premio. O int global
+// enable_auto_raffle virou a chave 'sorteio_automatico' em server_config.
+// ==========================================================================
+
+const int SORTEIO_INTERVALO_MS = 420000;
+const int SORTEIO_NIVEL_MINIMO = 1;
+const int SORTEIO_MAX_QUANTIDADE = 100000;
+const int SORTEIO_PESO_MAXIMO = 1000;
+const int SORTEIO_LOG_MAXIMO = 50;
+
+const string SORTEIO_SOM_ANUNCIO = "notify_trumpet.ogg";
+const string SORTEIO_SOM_PRESENTE = "notify2.ogg";
+const string SORTEIO_CONFIG_CHAVE = "sorteio_automatico";
+
+timer timer_sorteio;
+bool sorteio_seed_verificado = false;
+
+// Os "padrinhos" do sorteio automatico, como no BGT original.
+string[] SORTEIO_ELEMENTOS = {
+	"O grande elemento da água",
+	"O grande elemento da terra",
+	"O grande elemento do fogo",
+	"O grande elemento do ar"
+};
+
+// --------------------------------------------------------------------------
+// Tabelas
+// --------------------------------------------------------------------------
+
+void criar_tabelas_sorteio() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_sorteio - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabelas do sorteio...");
+
+	string create_premios = """
+		CREATE TABLE IF NOT EXISTS sorteio_premios (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item_name TEXT NOT NULL UNIQUE,
+			quantidade INTEGER DEFAULT 1,
+			peso INTEGER DEFAULT 1,
+			ativo INTEGER DEFAULT 1,
+			adicionado_por TEXT DEFAULT 'system',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_premios) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela sorteio_premios: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela sorteio_premios criada/verificada");
+	}
+
+	string create_historico = """
+		CREATE TABLE IF NOT EXISTS sorteio_historico (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ganhador TEXT NOT NULL,
+			item_name TEXT NOT NULL,
+			quantidade INTEGER DEFAULT 1,
+			origem TEXT DEFAULT 'automatico',
+			sorteado_por TEXT DEFAULT 'system',
+			sorteado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_historico) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela sorteio_historico: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela sorteio_historico criada/verificada");
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_sorteio_historico_data ON sorteio_historico(sorteado_em);");
+
+	seed_sorteio_premios_padrao();
+}
+
+// Insere a lista inicial de premios (equivalente ao sorteo.txt do BGT), mas
+// somente se a tabela estiver vazia e o item realmente existir no catalogo.
+void seed_sorteio_premios_padrao() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(!sorteio_pool_vazio()) return;
+
+	string[] nomes = {"portal_de_luz", "cristal_de_luz", "naptalm", "runa_de_portal",
+	                  "po_de_energia", "pocao_vida", "diamante", "reais"};
+	int[] quantidades = {100, 3000, 1000, 50, 10, 5, 3, 1000};
+	int[] pesos = {3, 2, 2, 3, 4, 5, 2, 5};
+
+	int inseridos = 0;
+	for(uint i = 0; i < nomes.length(); i++) {
+		if(!item_exists_in_database(nomes[i])) {
+			debug_log("SORTEIO: premio padrão '" + nomes[i] + "' ignorado (item inexistente no banco)");
+			continue;
+		}
+		if(sorteio_gravar_premio(nomes[i], quantidades[i], pesos[i], "system")) inseridos++;
+	}
+
+	debug_log("SORTEIO: " + inseridos + " premios padrão inseridos no pool");
+}
+
+bool sorteio_pool_vazio() {
+	if(!database_initialized || bancoJogo is null) return true;
+
+	string query = "SELECT COUNT(*) FROM sorteio_premios WHERE ativo = 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SORTEIO: erro ao consultar pool de premios: " + bancoJogo.get_last_error_text());
+		return true;
+	}
+
+	if(stmt.step() == SQLITE_ROW) {
+		return stmt.column_int(0) <= 0;
+	}
+
+	return true;
+}
+
+// Insere ou atualiza um premio no pool. Retorna false em caso de erro no banco.
+bool sorteio_gravar_premio(string item_name, int quantidade, int peso, string adicionado_por) {
+	if(!database_initialized || bancoJogo is null) return false;
+	if(item_name == "" || quantidade <= 0) return false;
+	if(peso < 1) peso = 1;
+
+	bool existe = false;
+	string check = "SELECT id FROM sorteio_premios WHERE item_name = ? LIMIT 1;";
+	sqlite3statement@ stmt_check = bancoJogo.prepare(check);
+	if(@stmt_check != null) {
+		stmt_check.bind_text(1, item_name);
+		existe = (stmt_check.step() == SQLITE_ROW);
+	}
+
+	string query;
+	if(existe) {
+		query = "UPDATE sorteio_premios SET quantidade = ?, peso = ?, ativo = 1, adicionado_por = ? WHERE item_name = ?;";
+	} else {
+		query = "INSERT INTO sorteio_premios (quantidade, peso, adicionado_por, item_name) VALUES (?, ?, ?, ?);";
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SORTEIO: erro ao preparar gravação de premio: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_int(1, quantidade);
+	stmt.bind_int(2, peso);
+	stmt.bind_text(3, adicionado_por);
+	stmt.bind_text(4, item_name);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SORTEIO: erro ao gravar premio '" + item_name + "': " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// Sorteio do premio (seleção ponderada por 'peso')
+// --------------------------------------------------------------------------
+
+bool sortear_premio(string &out item_name, int &out quantidade) {
+	item_name = "";
+	quantidade = 0;
+
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = "SELECT item_name, quantidade, peso FROM sorteio_premios WHERE ativo = 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SORTEIO: erro ao preparar sorteio de premio: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	string[] nomes;
+	int[] quantidades;
+	int[] pesos;
+	int total_peso = 0;
+
+	while(stmt.step() == SQLITE_ROW) {
+		string nome = stmt.column_text(0);
+		int qtd = stmt.column_int(1);
+		int peso = stmt.column_int(2);
+
+		if(nome == "" || qtd <= 0) continue;
+		if(peso < 1) peso = 1;
+
+		nomes.insert_last(nome);
+		quantidades.insert_last(qtd);
+		pesos.insert_last(peso);
+		total_peso += peso;
+	}
+
+	if(nomes.length() == 0 || total_peso <= 0) return false;
+
+	int alvo = random(1, total_peso);
+	int acumulado = 0;
+	for(uint i = 0; i < nomes.length(); i++) {
+		acumulado += pesos[i];
+		if(alvo <= acumulado) {
+			item_name = nomes[i];
+			quantidade = quantidades[i];
+			return true;
+		}
+	}
+
+	item_name = nomes[nomes.length() - 1];
+	quantidade = quantidades[quantidades.length() - 1];
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// Candidatos
+// --------------------------------------------------------------------------
+
+// Regra herdada do BGT: exclui quem está afk e exclui a staff.
+// ATENÇÃO: check_is_admin_index() faz uma consulta sqlite por jogador.
+// Só chame isto atrás da guarda de tempo de sorteio_loop() ou de um comando.
+int[] listar_candidatos_sorteio() {
+	int[] candidatos;
+
+	for(uint i = 0; i < players.length(); i++) {
+		player@ p = @players[i];
+		if(p is null) continue;
+		if(!p.is_logged_in || !p.online) continue;
+		if(p.afk || p.dead) continue;
+		if(p.level < SORTEIO_NIVEL_MINIMO) continue;
+		if(check_is_admin_index(int(i))) continue;
+
+		candidatos.insert_last(int(i));
+	}
+
+	return candidatos;
+}
+
+// --------------------------------------------------------------------------
+// Execução do sorteio
+// --------------------------------------------------------------------------
+
+void registrar_sorteio_historico(string ganhador, string item_name, int quantidade,
+                                 string origem, string sorteado_por) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT INTO sorteio_historico (ganhador, item_name, quantidade, origem, sorteado_por)
+		VALUES (?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SORTEIO: erro ao preparar histórico: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, ganhador);
+	stmt.bind_text(2, item_name);
+	stmt.bind_int(3, quantidade);
+	stmt.bind_text(4, origem);
+	stmt.bind_text(5, sorteado_por);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SORTEIO: erro ao gravar histórico: " + bancoJogo.get_last_error_text());
+	}
+}
+
+// Núcleo compartilhado pelo sorteio automático e pelo /sortear.
+bool sorteio_entregar(string item_name, int quantidade, string origem,
+                      string sorteado_por, string anunciante) {
+	if(item_name == "" || quantidade <= 0) return false;
+
+	int[] candidatos = listar_candidatos_sorteio();
+	if(candidatos.length() == 0) {
+		eadm("Não há jogadores aptos para realizar o sorteio.");
+		return false;
+	}
+
+	int escolhido = candidatos[random(0, int(candidatos.length()) - 1)];
+	player@ ganhador = @players[escolhido];
+	if(ganhador is null) return false;
+
+	if(!add_item_with_sync(ganhador, item_name, quantidade)) {
+		eadm("Falha ao entregar o prêmio do sorteio para " + ganhador.charname + ".");
+		return false;
+	}
+
+	string anuncio = "msg2 Sorteio de " + quantidade + " " + item_name;
+	if(anunciante != "") anuncio += ", iniciado por " + anunciante;
+	broadcast_all(anuncio);
+	broadcast_all("msg2 O ganhador é: " + ganhador.charname + "!");
+	broadcast_all("ps " + SORTEIO_SOM_ANUNCIO);
+
+	registrar_sorteio_historico(ganhador.charname, item_name, quantidade, origem, sorteado_por);
+	log_action(sorteado_por, "sorteio", "Sorteou " + quantidade + "x " + item_name +
+	           " para " + ganhador.charname, ganhador.map_name, 0, 0, 0, origem,
+	           ganhador.charname, item_name);
+
+	debug_log("SORTEIO: " + quantidade + "x " + item_name + " para " + ganhador.charname +
+	          " (origem: " + origem + ", por: " + sorteado_por + ")");
+
+	return true;
+}
+
+// Porta de sorteo() do BGT: escolhe o prêmio no pool e o ganhador entre os online.
+void realizar_sorteio(string origem = "automatico", string sorteado_por = "system") {
+	string item_name = "";
+	int quantidade = 0;
+
+	if(!sortear_premio(item_name, quantidade)) {
+		eadm("Erro ao tentar realizar o sorteio, verifique se a lista de prêmios não está vazia.");
+		return;
+	}
+
+	if(quantidade <= 0) {
+		eadm("A quantidade do objeto a sortear deve ser maior que 0.");
+		return;
+	}
+
+	string elemento = SORTEIO_ELEMENTOS[random(0, int(SORTEIO_ELEMENTOS.length()) - 1)];
+	sorteio_entregar(item_name, quantidade, origem, sorteado_por, elemento);
+}
+
+// Porta de sorteo(index, itemname, quantity) do BGT.
+void realizar_sorteio_manual(int player_index, string item_name, int quantidade) {
+	if(!sorteio_admin_guard(player_index, "sortear")) return;
+
+	item_name = item_name.trim_whitespace();
+
+	if(item_name == "") {
+		sorteio_msg(player_index, "[ERRO] Por favor especifique um item a sortear.");
+		return;
+	}
+
+	if(!is_valid_item_name(item_name)) {
+		sorteio_msg(player_index, "[ERRO] Nome de item inválido!");
+		return;
+	}
+
+	if(quantidade <= 0) {
+		sorteio_msg(player_index, "[ERRO] A quantidade do objeto a sortear deve ser maior que 0.");
+		return;
+	}
+
+	if(quantidade > SORTEIO_MAX_QUANTIDADE) {
+		sorteio_msg(player_index, "[ERRO] Quantidade máxima por sorteio: " + SORTEIO_MAX_QUANTIDADE + ".");
+		return;
+	}
+
+	if(!item_exists_in_database(item_name)) {
+		sorteio_msg(player_index, "[ERRO] O item '" + item_name + "' não existe no banco de itens.");
+		return;
+	}
+
+	string admin_name = players[player_index].charname;
+
+	if(sorteio_entregar(item_name, quantidade, "manual", admin_name, admin_name)) {
+		sorteio_msg(player_index, "Sorteio realizado com sucesso.");
+	} else {
+		sorteio_msg(player_index, "[ERRO] Não foi possível realizar o sorteio agora.");
+	}
+}
+
+// Porta de give_presents(string playername) do BGT: um prêmio do pool para
+// TODOS os jogadores online. Diferente do /regalos, onde o admin escolhe o item.
+void presente_aleatorio_para_todos(string motivo) {
+	string item_name = "";
+	int quantidade = 0;
+
+	if(!sortear_premio(item_name, quantidade)) {
+		eadm("Erro ao tentar dar presente, verifique se a lista de prêmios não está vazia.");
+		return;
+	}
+
+	if(quantidade <= 0) {
+		eadm("A quantidade do objeto a dar deve ser maior que 0.");
+		return;
+	}
+
+	int total = 0;
+	for(uint i = 0; i < players.length(); i++) {
+		player@ p = @players[i];
+		if(p is null) continue;
+		if(!p.is_logged_in || !p.online) continue;
+
+		if(add_item_with_sync(p, item_name, quantidade)) total++;
+	}
+
+	broadcast_all("ps " + SORTEIO_SOM_PRESENTE);
+	broadcast_all("msg2 Novo presente da parte de " + motivo + ": " + item_name +
+	              ", quantidade, " + quantidade);
+
+	debug_log("SORTEIO: presente automático (" + motivo + ") de " + quantidade + "x " +
+	          item_name + " para " + total + " jogadores");
+}
+
+// --------------------------------------------------------------------------
+// Configuração do sorteio automático (server_config)
+// --------------------------------------------------------------------------
+
+bool sorteio_automatico_ativo() {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = "SELECT value FROM server_config WHERE key = ? LIMIT 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, SORTEIO_CONFIG_CHAVE);
+
+	if(stmt.step() == SQLITE_ROW) {
+		return stmt.column_text(0) == "1";
+	}
+
+	// Igual ao BGT: enable_auto_raffle nasce em 0 (desligado).
+	return false;
+}
+
+void set_sorteio_automatico(bool ativo) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR REPLACE INTO server_config (key, value, description, last_modified)
+		VALUES (?, ?, 'Sorteio automatico de itens: 1 ligado, 0 desligado', CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SORTEIO: erro ao preparar gravação de configuração: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, SORTEIO_CONFIG_CHAVE);
+	stmt.bind_text(2, ativo ? "1" : "0");
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SORTEIO: erro ao gravar configuração: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	if(ativo) {
+		timer_sorteio.restart();
+	} else {
+		timer_sorteio.force(0);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Loop
+// --------------------------------------------------------------------------
+
+void sorteio_loop() {
+	if(timer_sorteio.elapsed < SORTEIO_INTERVALO_MS) return;
+	timer_sorteio.restart();
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	// Na inicialização o catálogo de itens ainda pode não estar carregado,
+	// então tentamos semear o pool de novo uma única vez com o servidor no ar.
+	if(!sorteio_seed_verificado) {
+		sorteio_seed_verificado = true;
+		seed_sorteio_premios_padrao();
+	}
+
+	if(!sorteio_automatico_ativo()) return;
+
+	realizar_sorteio("automatico", "system");
+}
+
+// --------------------------------------------------------------------------
+// Comandos
+// --------------------------------------------------------------------------
+
+void sorteio_msg(int player_index, string texto) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + texto, 0);
+}
+
+bool sorteio_admin_guard(int player_index, string comando) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	if(!check_is_admin_index(player_index)) {
+		sorteio_msg(player_index, "[ERRO] Você não tem permissão para usar /" + comando + ".");
+		return false;
+	}
+
+	return true;
+}
+
+void cmd_sortear(int player_index, string[] args) {
+	if(!sorteio_admin_guard(player_index, "sortear")) return;
+
+	if(args.length() < 2) {
+		sorteio_msg(player_index, "Uso: /sortear <item> <quantidade>");
+		return;
+	}
+
+	realizar_sorteio_manual(player_index, args[0], string_to_number(args[1]));
+}
+
+void cmd_autosorteio(int player_index) {
+	if(!sorteio_admin_guard(player_index, "autosorteio")) return;
+
+	bool novo_estado = !sorteio_automatico_ativo();
+	set_sorteio_automatico(novo_estado);
+
+	string estado = novo_estado ? "ativou" : "desativou";
+	sorteio_msg(player_index, "Você " + estado + " o sorteio automático de objetos.");
+	eadm(players[player_index].charname + " " + estado + " o sorteio automático de objetos.");
+
+	debug_log("SORTEIO: " + players[player_index].charname + " " + estado + " o sorteio automático");
+}
+
+void cmd_premios(int player_index) {
+	if(!sorteio_admin_guard(player_index, "premios")) return;
+
+	if(!database_initialized || bancoJogo is null) {
+		sorteio_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	string query = """
+		SELECT item_name, quantidade, peso, ativo, adicionado_por
+		FROM sorteio_premios
+		ORDER BY ativo DESC, peso DESC, item_name;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		sorteio_msg(player_index, "[ERRO] Falha ao consultar os prêmios.");
+		return;
+	}
+
+	string[] linhas;
+	while(stmt.step() == SQLITE_ROW) {
+		string nome = stmt.column_text(0);
+		int qtd = stmt.column_int(1);
+		int peso = stmt.column_int(2);
+		bool ativo = stmt.column_int(3) == 1;
+		string autor = stmt.column_text(4);
+
+		linhas.insert_last(nome + " x" + qtd + " (peso " + peso + ", " +
+		                   (ativo ? "ativo" : "inativo") + ", por " + autor + ")");
+	}
+
+	if(linhas.length() == 0) {
+		sorteio_msg(player_index, "[ERRO] O pool de prêmios está vazio. Use /addpremio <item> <quantidade> [peso].");
+		return;
+	}
+
+	sorteio_msg(player_index, "=== Prêmios do sorteio (" + linhas.length() + ") ===");
+	for(uint i = 0; i < linhas.length(); i++) {
+		sorteio_msg(player_index, linhas[i]);
+	}
+}
+
+void cmd_addpremio(int player_index, string item_name, int quantidade, int peso) {
+	if(!sorteio_admin_guard(player_index, "addpremio")) return;
+
+	item_name = item_name.trim_whitespace();
+
+	if(!is_valid_item_name(item_name)) {
+		sorteio_msg(player_index, "[ERRO] Nome de item inválido!");
+		return;
+	}
+
+	if(quantidade <= 0 || quantidade > SORTEIO_MAX_QUANTIDADE) {
+		sorteio_msg(player_index, "[ERRO] Quantidade deve estar entre 1 e " + SORTEIO_MAX_QUANTIDADE + ".");
+		return;
+	}
+
+	if(peso < 1) peso = 1;
+	if(peso > SORTEIO_PESO_MAXIMO) peso = SORTEIO_PESO_MAXIMO;
+
+	if(!item_exists_in_database(item_name)) {
+		sorteio_msg(player_index, "[ERRO] O item '" + item_name + "' não existe no banco de itens.");
+		return;
+	}
+
+	if(!sorteio_gravar_premio(item_name, quantidade, peso, players[player_index].charname)) {
+		sorteio_msg(player_index, "[ERRO] Falha ao gravar o prêmio no banco.");
+		return;
+	}
+
+	sorteio_msg(player_index, "Prêmio salvo: " + item_name + " x" + quantidade + " (peso " + peso + ").");
+	debug_log("SORTEIO: " + players[player_index].charname + " adicionou o prêmio " +
+	          item_name + " x" + quantidade + " peso " + peso);
+}
+
+void cmd_delpremio(int player_index, string item_name) {
+	if(!sorteio_admin_guard(player_index, "delpremio")) return;
+
+	item_name = item_name.trim_whitespace();
+
+	if(!is_valid_item_name(item_name)) {
+		sorteio_msg(player_index, "[ERRO] Nome de item inválido!");
+		return;
+	}
+
+	if(!database_initialized || bancoJogo is null) {
+		sorteio_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	string check = "SELECT id FROM sorteio_premios WHERE item_name = ? LIMIT 1;";
+	sqlite3statement@ stmt_check = bancoJogo.prepare(check);
+	if(@stmt_check == null) {
+		sorteio_msg(player_index, "[ERRO] Falha ao consultar o prêmio.");
+		return;
+	}
+
+	stmt_check.bind_text(1, item_name);
+	if(stmt_check.step() != SQLITE_ROW) {
+		sorteio_msg(player_index, "[ERRO] O prêmio '" + item_name + "' não está no pool.");
+		return;
+	}
+
+	string query = "DELETE FROM sorteio_premios WHERE item_name = ?;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		sorteio_msg(player_index, "[ERRO] Falha ao remover o prêmio.");
+		return;
+	}
+
+	stmt.bind_text(1, item_name);
+
+	if(stmt.step() != SQLITE_DONE) {
+		sorteio_msg(player_index, "[ERRO] Falha ao remover o prêmio: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	sorteio_msg(player_index, "Prêmio removido: " + item_name + ".");
+	debug_log("SORTEIO: " + players[player_index].charname + " removeu o prêmio " + item_name);
+}
+
+void cmd_sorteiolog(int player_index, int limite) {
+	if(!sorteio_admin_guard(player_index, "sorteiolog")) return;
+
+	if(limite <= 0) limite = 10;
+	if(limite > SORTEIO_LOG_MAXIMO) limite = SORTEIO_LOG_MAXIMO;
+
+	if(!database_initialized || bancoJogo is null) {
+		sorteio_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	string query = "SELECT ganhador, item_name, quantidade, origem, sorteado_por, " +
+	               "datetime(sorteado_em, 'localtime') FROM sorteio_historico " +
+	               "ORDER BY id DESC LIMIT " + limite + ";";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		sorteio_msg(player_index, "[ERRO] Falha ao consultar o histórico.");
+		return;
+	}
+
+	string[] linhas;
+	while(stmt.step() == SQLITE_ROW) {
+		linhas.insert_last(stmt.column_text(5) + " - " + stmt.column_text(0) + " ganhou " +
+		                   stmt.column_int(2) + "x " + stmt.column_text(1) +
+		                   " (" + stmt.column_text(3) + ", por " + stmt.column_text(4) + ")");
+	}
+
+	if(linhas.length() == 0) {
+		sorteio_msg(player_index, "[ERRO] Nenhum sorteio registrado ainda.");
+		return;
+	}
+
+	sorteio_msg(player_index, "=== Últimos " + linhas.length() + " sorteios ===");
+	for(uint i = 0; i < linhas.length(); i++) {
+		sorteio_msg(player_index, linhas[i]);
+	}
+}

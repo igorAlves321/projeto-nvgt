@@ -1,0 +1,932 @@
+// ============================================================================
+// command_permissions.nvgt
+// Concessao de comandos POR JOGADOR (ortogonal ao cargo).
+//
+// Porte de is_enable_command() / add_commands / remove_commands do BGT
+// (voids.bgt:144-154, voids.bgt:993 e voids.bgt:1020), onde a lista de
+// autorizados de cada comando vivia em commands/<comando>.txt.
+// Aqui isso vira duas tabelas sqlite:
+//   command_permissions  -> liberacoes ('grant') e bloqueios ('deny') por jogador
+//   command_requirements -> exigencia de cargo de cada comando (substitui as
+//                           listas hardcoded de can_use_command)
+// ============================================================================
+
+const int CMD_PERM_CACHE_MAX = 600;
+
+// ----------------------------------------------------------------------------
+// Criacao das tabelas
+// ----------------------------------------------------------------------------
+
+void create_command_permissions_tables() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: create_command_permissions_tables - Banco não inicializado");
+        return;
+    }
+
+    debug_log("Criando tabela command_permissions...");
+
+    string create_permissions = """
+        CREATE TABLE IF NOT EXISTS command_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            command_name TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'grant',
+            granted_by TEXT DEFAULT 'system',
+            granted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME DEFAULT NULL,
+            notes TEXT DEFAULT '',
+            UNIQUE(username, command_name)
+        );
+    """;
+
+    if(bancoJogo.execute(create_permissions) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela command_permissions: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela command_permissions criada/verificada");
+    }
+
+    string create_index = "CREATE INDEX IF NOT EXISTS idx_command_permissions_user ON command_permissions(username);";
+    bancoJogo.execute(create_index);
+
+    debug_log("Criando tabela command_requirements...");
+
+    string create_requirements = """
+        CREATE TABLE IF NOT EXISTS command_requirements (
+            command_name TEXT PRIMARY KEY,
+            min_role_level INTEGER NOT NULL DEFAULT 8,
+            allowed_roles TEXT DEFAULT '',
+            updated_by TEXT DEFAULT 'system',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+
+    if(bancoJogo.execute(create_requirements) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela command_requirements: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela command_requirements criada/verificada");
+    }
+
+    cleanup_expired_command_permissions();
+}
+
+void cleanup_expired_command_permissions() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    bancoJogo.execute("DELETE FROM command_permissions WHERE expires_at IS NOT NULL AND expires_at <= datetime('now');");
+}
+
+// ----------------------------------------------------------------------------
+// Semeadura: reproduz EXATAMENTE as listas hardcoded que viviam em
+// can_use_command() (commands.nvgt). Comandos admin_only que nao aparecem aqui
+// caem no fallback ROLE_LEVEL_ADMIN de get_command_min_role().
+// ----------------------------------------------------------------------------
+
+void seed_command_requirements() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: seed_command_requirements - Banco não inicializado");
+        return;
+    }
+
+    // Comandos de construcao de mapa: builder e dev (admin NAO usa - regra
+    // original de commands.nvgt: "if(is_map_builder_cmd || is_dev_only_cmd) return false;")
+    string[] map_builder_cmds = {
+        "newmap", "delmap", "listmaps", "rawdata", "savemap", "mapupdate",
+        "builderstats", "createportal", "deleteportal", "addzone", "removezone",
+        "listzones", "togglezonepvp", "savezones", "loadzones"
+    };
+
+    // Ferramentas de item: admin e dev (builder e moderator NAO usam)
+    string[] item_builder_cmds = {
+        "create_item_tool", "create_weapon_tool", "list_items", "item_builder_meta",
+        "ib_list_meta", "ib_add_type", "ib_del_type", "ib_add_rarity", "ib_del_rarity",
+        "ib_add_category", "ib_del_category", "edit_item_tool", "delete_item_tool"
+    };
+
+    // Exclusivos de dev
+    string[] dev_only_cmds = { "invis", "god" };
+
+    // Moderacao: moderador para cima (admin e dev tambem passam pelo nivel)
+    // "mute"/"silenciar" e "unmute"/"unsilenciar" ficam com a MESMA exigencia,
+    // porque resolve_command pode entregar um ou outro conforme o caminho.
+    string[] moderation_cmds = {
+        "kick", "mute", "unmute", "silenciar", "unsilenciar", "ac", "admin_msg"
+    };
+
+    int seeded = 0;
+
+    for(uint i = 0; i < map_builder_cmds.length(); i++) {
+        if(seed_one_requirement(map_builder_cmds[i], ROLE_LEVEL_BUILDER, "builder,dev")) seeded++;
+    }
+    for(uint i = 0; i < item_builder_cmds.length(); i++) {
+        if(seed_one_requirement(item_builder_cmds[i], ROLE_LEVEL_ADMIN, "admin,dev")) seeded++;
+    }
+    for(uint i = 0; i < dev_only_cmds.length(); i++) {
+        if(seed_one_requirement(dev_only_cmds[i], ROLE_LEVEL_DEV, "dev")) seeded++;
+    }
+    for(uint i = 0; i < moderation_cmds.length(); i++) {
+        if(seed_one_requirement(moderation_cmds[i], ROLE_LEVEL_MODERATOR, "")) seeded++;
+    }
+
+    debug_log("OK - command_requirements semeada (" + seeded + " comandos verificados)");
+}
+
+bool seed_one_requirement(string command_name, int min_role_level, string allowed_roles) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    command_name = string_to_lower_case(command_name);
+
+    string query = """
+        INSERT OR IGNORE INTO command_requirements (command_name, min_role_level, allowed_roles, updated_by)
+        VALUES (?, ?, ?, 'system');
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar seed_one_requirement: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, command_name);
+    stmt.bind_int(2, min_role_level);
+    stmt.bind_text(3, allowed_roles);
+
+    return (stmt.step() == SQLITE_DONE);
+}
+
+// Opcional: registra no banco todo comando admin_only ja registrado que ainda
+// nao tenha linha propria, usando o fallback ROLE_LEVEL_ADMIN. So faz efeito se
+// chamada DEPOIS de init_command_system(); antes disso o dicionario esta vazio
+// e a funcao simplesmente nao faz nada.
+void sync_command_requirements_from_registry() {
+    if(!database_initialized || bancoJogo is null) return;
+    if(registered_commands.get_size() == 0) return;
+
+    string[] keys = registered_commands.get_keys();
+    int added = 0;
+
+    for(uint i = 0; i < keys.length(); i++) {
+        ServerCommand@ cmd;
+        registered_commands.get(keys[i], @cmd);
+        if(cmd is null) continue;
+        if(!cmd.admin_only) continue;
+
+        if(seed_one_requirement(cmd.name, ROLE_LEVEL_ADMIN, "")) added++;
+    }
+
+    debug_log("OK - sync_command_requirements_from_registry: " + added + " comandos verificados");
+    clear_permission_cache();
+}
+
+// ----------------------------------------------------------------------------
+// Consultas de concessao / bloqueio (porte de is_enable_command)
+// ----------------------------------------------------------------------------
+
+bool has_command_permission_row(string username, string command_name, string mode) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username);
+    command_name = string_to_lower_case(command_name);
+
+    string query = """
+        SELECT 1 FROM command_permissions
+        WHERE LOWER(username) = ? AND command_name = ? AND mode = ?
+        AND (expires_at IS NULL OR expires_at > datetime('now'));
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, command_name);
+    stmt.bind_text(3, mode);
+
+    return (stmt.step() == SQLITE_ROW);
+}
+
+bool has_command_grant(string username, string command_name) {
+    return has_command_permission_row(username, command_name, "grant");
+}
+
+bool has_command_deny(string username, string command_name) {
+    return has_command_permission_row(username, command_name, "deny");
+}
+
+// ----------------------------------------------------------------------------
+// Escrita
+// ----------------------------------------------------------------------------
+
+bool remove_command_permission_row(string username, string command_name) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username);
+    command_name = string_to_lower_case(command_name);
+
+    string query = "DELETE FROM command_permissions WHERE LOWER(username) = ? AND command_name = ?;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, command_name);
+
+    return (stmt.step() == SQLITE_DONE);
+}
+
+bool grant_command(string username, string command_name, string granted_by = "system", int duration_minutes = 0, string notes = "") {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: grant_command - Banco não inicializado");
+        return false;
+    }
+
+    username = string_to_lower_case(username);
+    command_name = string_to_lower_case(command_name);
+
+    if(username == "" || command_name == "") return false;
+
+    remove_command_permission_row(username, command_name);
+
+    string query;
+    if(duration_minutes > 0) {
+        query = """
+            INSERT INTO command_permissions (username, command_name, mode, granted_by, expires_at, notes)
+            VALUES (?, ?, 'grant', ?, datetime('now', '+' || ? || ' minutes'), ?);
+        """;
+    } else {
+        query = """
+            INSERT INTO command_permissions (username, command_name, mode, granted_by, expires_at, notes)
+            VALUES (?, ?, 'grant', ?, NULL, ?);
+        """;
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar grant_command: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, command_name);
+    stmt.bind_text(3, granted_by);
+
+    if(duration_minutes > 0) {
+        stmt.bind_int(4, duration_minutes);
+        stmt.bind_text(5, notes);
+    } else {
+        stmt.bind_text(4, notes);
+    }
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao conceder comando: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    invalidate_permission_cache(username);
+    debug_log("OK - Comando '" + command_name + "' liberado para " + username + " por " + granted_by);
+    return true;
+}
+
+bool revoke_command(string username, string command_name, string removed_by = "system") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username);
+    command_name = string_to_lower_case(command_name);
+
+    if(!remove_command_permission_row(username, command_name)) {
+        debug_log("ERRO ao remover permissao de comando: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    invalidate_permission_cache(username);
+    debug_log("OK - Permissao do comando '" + command_name + "' removida de " + username + " por " + removed_by);
+    return true;
+}
+
+bool deny_command(string username, string command_name, string denied_by = "system", string reason = "") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username);
+    command_name = string_to_lower_case(command_name);
+
+    if(username == "" || command_name == "") return false;
+
+    remove_command_permission_row(username, command_name);
+
+    string query = """
+        INSERT INTO command_permissions (username, command_name, mode, granted_by, expires_at, notes)
+        VALUES (?, ?, 'deny', ?, NULL, ?);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar deny_command: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, command_name);
+    stmt.bind_text(3, denied_by);
+    stmt.bind_text(4, reason);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao bloquear comando: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    invalidate_permission_cache(username);
+    debug_log("OK - Comando '" + command_name + "' bloqueado para " + username + " por " + denied_by);
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// Listagens
+// ----------------------------------------------------------------------------
+
+string[] get_player_command_grants(string username) {
+    string[] result;
+
+    if(!database_initialized || bancoJogo is null) return result;
+
+    username = string_to_lower_case(username);
+
+    string query = """
+        SELECT command_name, mode, granted_by, notes,
+               CASE WHEN expires_at IS NULL THEN '' ELSE expires_at END
+        FROM command_permissions
+        WHERE LOWER(username) = ?
+        AND (expires_at IS NULL OR expires_at > datetime('now'))
+        ORDER BY mode, command_name;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return result;
+
+    stmt.bind_text(1, username);
+
+    while(stmt.step() == SQLITE_ROW) {
+        string command_name = stmt.column_text(0);
+        string mode = stmt.column_text(1);
+        string granted_by = stmt.column_text(2);
+        string notes = stmt.column_text(3);
+        string expires = stmt.column_text(4);
+
+        string line = "/" + command_name;
+        if(mode == "deny") line += " [BLOQUEADO]";
+        else line += " [LIBERADO]";
+        if(granted_by != "") line += " por " + granted_by;
+        if(expires != "") line += " ate " + expires;
+        if(notes != "") line += " (" + notes + ")";
+
+        result.insert_last(line);
+    }
+
+    return result;
+}
+
+string[] get_command_grantees(string command_name) {
+    string[] result;
+
+    if(!database_initialized || bancoJogo is null) return result;
+
+    command_name = string_to_lower_case(command_name);
+
+    string query = """
+        SELECT username, mode,
+               CASE WHEN expires_at IS NULL THEN '' ELSE expires_at END
+        FROM command_permissions
+        WHERE command_name = ?
+        AND (expires_at IS NULL OR expires_at > datetime('now'))
+        ORDER BY mode, username;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return result;
+
+    stmt.bind_text(1, command_name);
+
+    while(stmt.step() == SQLITE_ROW) {
+        string username = stmt.column_text(0);
+        string mode = stmt.column_text(1);
+        string expires = stmt.column_text(2);
+
+        string line = username;
+        if(mode == "deny") line += " [BLOQUEADO]";
+        else line += " [LIBERADO]";
+        if(expires != "") line += " ate " + expires;
+
+        result.insert_last(line);
+    }
+
+    return result;
+}
+
+// ----------------------------------------------------------------------------
+// Exigencias de cargo por comando
+// ----------------------------------------------------------------------------
+
+int get_command_min_role(string command_name) {
+    if(!database_initialized || bancoJogo is null) return ROLE_LEVEL_ADMIN;
+
+    command_name = string_to_lower_case(command_name);
+
+    string query = "SELECT min_role_level FROM command_requirements WHERE command_name = ?;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return ROLE_LEVEL_ADMIN;
+
+    stmt.bind_text(1, command_name);
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+
+    return ROLE_LEVEL_ADMIN;
+}
+
+string get_command_allowed_roles_raw(string command_name) {
+    if(!database_initialized || bancoJogo is null) return "";
+
+    command_name = string_to_lower_case(command_name);
+
+    string query = "SELECT allowed_roles FROM command_requirements WHERE command_name = ?;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return "";
+
+    stmt.bind_text(1, command_name);
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0);
+    }
+
+    return "";
+}
+
+string[] get_command_allowed_roles(string command_name) {
+    string[] result;
+
+    string raw = get_command_allowed_roles_raw(command_name);
+    if(raw == "") return result;
+
+    string[] parts = raw.split(",");
+    for(uint i = 0; i < parts.length(); i++) {
+        string role = string_to_lower_case(parts[i].trim_whitespace());
+        if(role != "") result.insert_last(role);
+    }
+
+    return result;
+}
+
+bool set_command_requirement(string command_name, int min_role_level, string allowed_roles, string updated_by = "system") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    command_name = string_to_lower_case(command_name);
+    if(command_name == "") return false;
+
+    if(min_role_level < ROLE_LEVEL_PLAYER) min_role_level = ROLE_LEVEL_PLAYER;
+    if(min_role_level > ROLE_LEVEL_DEV) min_role_level = ROLE_LEVEL_DEV;
+
+    string query = """
+        INSERT OR REPLACE INTO command_requirements (command_name, min_role_level, allowed_roles, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'));
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar set_command_requirement: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, command_name);
+    stmt.bind_int(2, min_role_level);
+    stmt.bind_text(3, allowed_roles);
+    stmt.bind_text(4, updated_by);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao gravar exigencia de comando: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    clear_permission_cache();
+    debug_log("OK - Exigencia do comando '" + command_name + "' definida por " + updated_by +
+              " (nivel=" + min_role_level + ", cargos='" + allowed_roles + "')");
+    return true;
+}
+
+string describe_command_requirement(string command_name) {
+    string[] allowed = get_command_allowed_roles(command_name);
+
+    if(allowed.length() > 0) {
+        return "cargos: " + join(allowed, ", ");
+    }
+
+    int level = get_command_min_role(command_name);
+    string name = "nivel " + level;
+
+    if(level >= ROLE_LEVEL_DEV) name += " (dev)";
+    else if(level >= ROLE_LEVEL_ADMIN) name += " (admin)";
+    else if(level >= ROLE_LEVEL_MODERATOR) name += " (moderador)";
+    else if(level >= ROLE_LEVEL_BUILDER) name += " (construtor)";
+    else if(level >= ROLE_LEVEL_EVENT_MANAGER) name += " (gerente de eventos)";
+    else if(level >= ROLE_LEVEL_TRANSLATOR) name += " (tradutor)";
+    else if(level >= ROLE_LEVEL_VIP) name += " (VIP)";
+    else name += " (qualquer jogador)";
+
+    return name;
+}
+
+// ----------------------------------------------------------------------------
+// Regra de cargo (substitui o corpo hardcoded de can_use_command)
+// ----------------------------------------------------------------------------
+
+bool passes_role_requirement(string username, string command_name) {
+    if(username == "") return false;
+
+    // Short-circuit de dev, igual ao original de commands.nvgt.
+    if(has_role(username, "dev")) return true;
+
+    string[] allowed = get_command_allowed_roles(command_name);
+
+    if(allowed.length() > 0) {
+        for(uint i = 0; i < allowed.length(); i++) {
+            if(has_role(username, allowed[i])) return true;
+        }
+        return false;
+    }
+
+    return get_player_role_level(username) >= get_command_min_role(command_name);
+}
+
+// ----------------------------------------------------------------------------
+// Cache de permissao (obrigatorio: sem ele cada comando digitado dispara
+// varios SELECTs). Guarda "1"/"0" como texto, formato ja usado em outros
+// dicionarios do projeto.
+// ----------------------------------------------------------------------------
+
+dictionary command_permission_cache;
+
+string build_permission_cache_key(string username, string command_name) {
+    return string_to_lower_case(username) + "|" + string_to_lower_case(command_name);
+}
+
+bool cached_can_use(string username, string command_name, bool &out result) {
+    result = false;
+
+    string key = build_permission_cache_key(username, command_name);
+    if(!command_permission_cache.exists(key)) return false;
+
+    string value;
+    if(!command_permission_cache.get(key, value)) return false;
+
+    result = (value == "1");
+    return true;
+}
+
+void cache_permission(string username, string command_name, bool allowed) {
+    if(command_permission_cache.get_size() >= uint(CMD_PERM_CACHE_MAX)) {
+        command_permission_cache.delete_all();
+    }
+
+    string value = "0";
+    if(allowed) value = "1";
+
+    string key = build_permission_cache_key(username, command_name);
+    command_permission_cache.set(key, value);
+}
+
+void invalidate_permission_cache(string username) {
+    if(username == "") return;
+
+    string prefix = string_to_lower_case(username) + "|";
+    uint plen = prefix.length();
+
+    string[] keys = command_permission_cache.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        if(keys[i].length() < plen) continue;
+        if(keys[i].substr(0, plen) == prefix) {
+            command_permission_cache.delete(keys[i]);
+        }
+    }
+}
+
+void clear_permission_cache() {
+    command_permission_cache.delete_all();
+}
+
+// ----------------------------------------------------------------------------
+// Helpers dos comandos
+// ----------------------------------------------------------------------------
+
+// Monta o array 'parsed' no formato que os cmd_*(int, string[]) esperam:
+// parsed[0] = "/comando", parsed[1..] = argumentos. Fica aqui para que
+// commands.nvgt precise apenas dos ramos else-if de despacho.
+string[] build_command_parsed(string command, string[] args) {
+    string[] parsed;
+    parsed.insert_last("/" + command);
+    for(uint i = 0; i < args.length(); i++) {
+        parsed.insert_last(args[i]);
+    }
+    return parsed;
+}
+
+bool cmdperm_require_dev(int index) {
+    if(index < 0 || index >= int(players.length())) return false;
+
+    if(!check_is_dev(players[index].charname)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Apenas desenvolvedores podem gerenciar permissões de comandos.", 0);
+        return false;
+    }
+    return true;
+}
+
+bool cmdperm_account_exists(string username) {
+    if(username == "") return false;
+    if(get_player_index_from(username) >= 0) return true;
+    if(player_exists_in_database(username)) return true;
+    if(player_exists_in_database(string_to_lower_case(username))) return true;
+    return false;
+}
+
+string cmdperm_clean_command(string raw) {
+    string cleaned = raw.replace("/", "");
+    return string_to_lower_case(cleaned.trim_whitespace());
+}
+
+// ----------------------------------------------------------------------------
+// Comandos de administracao
+// ----------------------------------------------------------------------------
+
+// /addcomando <jogador> <comando> [minutos]
+void cmd_addcomando(int index, string[] parsed) {
+    if(!cmdperm_require_dev(index)) return;
+
+    if(parsed.length() < 3) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /addcomando <jogador> <comando> [minutos]", 0);
+        return;
+    }
+
+    string target = parsed[1];
+    string command_name = cmdperm_clean_command(parsed[2]);
+    int minutes = 0;
+
+    if(parsed.length() > 3) {
+        minutes = string_to_number(parsed[3]);
+        if(minutes < 0) minutes = 0;
+    }
+
+    if(command_name == "") {
+        send_reliable_text(players[index].peer_id, "msgnormal Nome de comando inválido.", 0);
+        return;
+    }
+
+    if(!cmdperm_account_exists(target)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Jogador '" + target + "' não encontrado.", 0);
+        return;
+    }
+
+    // Regra herdada do BGT: nao faz sentido reautorizar quem ja esta autorizado.
+    if(has_command_grant(target, command_name)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Este jogador já está autorizado a usar o comando " + command_name + ".", 0);
+        return;
+    }
+
+    string admin_name = players[index].charname;
+    string notes = "";
+    if(minutes > 0) notes = "temporario";
+
+    if(!grant_command(target, command_name, admin_name, minutes, notes)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao liberar o comando. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    string duracao = " permanentemente";
+    if(minutes > 0) duracao = " por " + minutes + " minutos";
+
+    send_reliable_text(players[index].peer_id, "msgnormal Comando /" + command_name + " liberado para " + target + duracao + ".", 0);
+
+    int target_index = get_player_index_from(target);
+    if(target_index >= 0) {
+        send_reliable_text(players[target_index].peer_id, "msgnormal Você recebeu acesso ao comando /" + command_name + duracao + ".", 0);
+    }
+
+    eadm(admin_name + " concedeu acesso ao comando " + command_name + " para " + target + ".", "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "grant_command " + command_name + " -> " + target + duracao,
+               "", 0, 0, 0, "", target, "");
+}
+
+// /removecomando <jogador> <comando>
+void cmd_removecomando(int index, string[] parsed) {
+    if(!cmdperm_require_dev(index)) return;
+
+    if(parsed.length() < 3) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /removecomando <jogador> <comando>", 0);
+        return;
+    }
+
+    string target = parsed[1];
+    string command_name = cmdperm_clean_command(parsed[2]);
+
+    if(command_name == "") {
+        send_reliable_text(players[index].peer_id, "msgnormal Nome de comando inválido.", 0);
+        return;
+    }
+
+    if(!has_command_grant(target, command_name) && !has_command_deny(target, command_name)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Este jogador não tem nenhuma permissão especial para este comando; não faz sentido tentar remover.", 0);
+        return;
+    }
+
+    string admin_name = players[index].charname;
+
+    if(!revoke_command(target, command_name, admin_name)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao remover a permissão. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal Permissão do comando /" + command_name + " removida de " + target + ".", 0);
+
+    int target_index = get_player_index_from(target);
+    if(target_index >= 0) {
+        send_reliable_text(players[target_index].peer_id, "msgnormal Seu acesso especial ao comando /" + command_name + " foi removido.", 0);
+    }
+
+    eadm(admin_name + " removeu o acesso ao comando " + command_name + " de " + target + ".", "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "revoke_command " + command_name + " -> " + target,
+               "", 0, 0, 0, "", target, "");
+}
+
+// /negarcomando <jogador> <comando> [motivo]
+void cmd_negarcomando(int index, string[] parsed) {
+    if(!cmdperm_require_dev(index)) return;
+
+    if(parsed.length() < 3) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /negarcomando <jogador> <comando> [motivo]", 0);
+        return;
+    }
+
+    string target = parsed[1];
+    string command_name = cmdperm_clean_command(parsed[2]);
+
+    if(command_name == "") {
+        send_reliable_text(players[index].peer_id, "msgnormal Nome de comando inválido.", 0);
+        return;
+    }
+
+    string reason = "";
+    for(uint i = 3; i < parsed.length(); i++) {
+        if(reason != "") reason += " ";
+        reason += parsed[i];
+    }
+    if(reason == "") reason = "Sem motivo informado";
+    if(reason.length() > 200) reason = reason.substr(0, 200);
+
+    if(!cmdperm_account_exists(target)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Jogador '" + target + "' não encontrado.", 0);
+        return;
+    }
+
+    string admin_name = players[index].charname;
+
+    if(check_is_dev(target)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Você não pode bloquear comandos de um desenvolvedor.", 0);
+        return;
+    }
+
+    if(!deny_command(target, command_name, admin_name, reason)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao bloquear o comando. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal Comando /" + command_name + " bloqueado para " + target + ". Motivo: " + reason, 0);
+
+    int target_index = get_player_index_from(target);
+    if(target_index >= 0) {
+        send_reliable_text(players[target_index].peer_id, "msgnormal Seu acesso ao comando /" + command_name + " foi bloqueado. Motivo: " + reason, 0);
+    }
+
+    eadm(admin_name + " bloqueou o comando " + command_name + " para " + target + ". Motivo: " + reason, "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "deny_command " + command_name + " -> " + target + " (" + reason + ")",
+               "", 0, 0, 0, "", target, "");
+}
+
+// /permcomandos [jogador]
+void cmd_permcomandos(int index, string[] parsed) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string target = players[index].charname;
+
+    if(parsed.length() >= 2) {
+        if(!check_is_mod(players[index].charname)) {
+            send_reliable_text(players[index].peer_id, "msgnormal Você só pode consultar as suas próprias permissões.", 0);
+            return;
+        }
+        target = parsed[1];
+    }
+
+    string[] lines = get_player_command_grants(target);
+
+    if(lines.length() == 0) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + target + " não possui permissões especiais de comando.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal === PERMISSÕES DE COMANDO DE " + target + " ===", 0);
+    for(uint i = 0; i < lines.length(); i++) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + lines[i], 0);
+    }
+}
+
+// /quempode <comando>
+void cmd_quempode(int index, string[] parsed) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    if(!check_is_mod(players[index].charname)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Você não tem permissão para usar este comando.", 0);
+        return;
+    }
+
+    if(parsed.length() < 2) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /quempode <comando>", 0);
+        return;
+    }
+
+    string command_name = cmdperm_clean_command(parsed[1]);
+
+    if(command_name == "") {
+        send_reliable_text(players[index].peer_id, "msgnormal Nome de comando inválido.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal === QUEM PODE USAR /" + command_name + " ===", 0);
+    send_reliable_text(players[index].peer_id, "msgnormal Exigência de cargo: " + describe_command_requirement(command_name), 0);
+
+    string[] lines = get_command_grantees(command_name);
+
+    if(lines.length() == 0) {
+        send_reliable_text(players[index].peer_id, "msgnormal Nenhuma permissão individual registrada para este comando.", 0);
+        return;
+    }
+
+    for(uint i = 0; i < lines.length(); i++) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + lines[i], 0);
+    }
+}
+
+// /setcmdcargo <comando> <nivel|cargos_csv>
+void cmd_setcmdcargo(int index, string[] parsed) {
+    if(!cmdperm_require_dev(index)) return;
+
+    if(parsed.length() < 3) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /setcmdcargo <comando> <nivel|cargos_csv>", 0);
+        send_reliable_text(players[index].peer_id, "msgnormal Niveis: 0=jogador, 1=vip, 2=tradutor, 3=eventos, 4=construtor, 5=moderador, 8=admin, 10=dev", 0);
+        send_reliable_text(players[index].peer_id, "msgnormal Exemplo de cargos: /setcmdcargo newmap builder,dev", 0);
+        return;
+    }
+
+    string command_name = cmdperm_clean_command(parsed[1]);
+
+    if(command_name == "") {
+        send_reliable_text(players[index].peer_id, "msgnormal Nome de comando inválido.", 0);
+        return;
+    }
+
+    string spec = parsed[2].trim_whitespace();
+    string admin_name = players[index].charname;
+
+    int min_level = ROLE_LEVEL_ADMIN;
+    string allowed_roles = "";
+
+    if(is_valid_number(spec)) {
+        min_level = string_to_number(spec);
+    } else {
+        string[] parts = spec.split(",");
+        string[] valid_parts;
+
+        for(uint i = 0; i < parts.length(); i++) {
+            string role = string_to_lower_case(parts[i].trim_whitespace());
+            if(role == "") continue;
+            if(!is_valid_role(role)) {
+                send_reliable_text(players[index].peer_id, "msgnormal Cargo inválido: " + role, 0);
+                send_reliable_text(players[index].peer_id, "msgnormal Cargos disponiveis: dev, admin, moderator, builder, translator, event_manager, vip", 0);
+                return;
+            }
+            valid_parts.insert_last(role);
+        }
+
+        if(valid_parts.length() == 0) {
+            send_reliable_text(players[index].peer_id, "msgnormal Informe ao menos um cargo válido ou um nível numérico.", 0);
+            return;
+        }
+
+        allowed_roles = join(valid_parts, ",");
+    }
+
+    if(!set_command_requirement(command_name, min_level, allowed_roles, admin_name)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao definir a exigência. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal Exigência de /" + command_name + " atualizada: " + describe_command_requirement(command_name), 0);
+
+    eadm(admin_name + " alterou a exigência do comando " + command_name + " para " + describe_command_requirement(command_name) + ".", "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "set_command_requirement " + command_name + " = " + describe_command_requirement(command_name));
+}

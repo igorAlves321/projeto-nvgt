@@ -1,0 +1,581 @@
+// ============================================================================
+// ataque_aereo.nvgt - Sistema de Ataque Aereo
+// ----------------------------------------------------------------------------
+// Migrado de "servidor reino test/includes/bots/misilavion.bgt" (BGT original).
+//
+// No BGT o ataque era disparado pelo pacote "armaavion" (aviao bombardeiro),
+// com fuso de 150ms, raio Manhattan de 50 e dano plano de random(30000, 40000).
+// Aqui o gatilho virou item + comando (nao existe aviao pilotavel no projeto),
+// o fuso subiu para 3s (para o aviso sonoro fazer sentido), o raio virou
+// euclidiano de 25 com falloff via get_damage() e tudo e persistido em sqlite.
+//
+// O prefixo de lasthit gerado aqui e "ataque_aereo_<nome>", tratado no bloco de
+// morte de player.nvgt (que tambem continua aceitando o legado "misilavion_").
+// ============================================================================
+
+const int AEREO_RAIO = 25;
+const int AEREO_DANO_BASE = 35000;
+const uint64 AEREO_FUSO_MS = 3000;
+const uint64 AEREO_COOLDOWN_MS = 300000;
+const uint64 AEREO_COOLDOWN_SEGUNDOS = AEREO_COOLDOWN_MS / 1000;
+const string AEREO_ITEM = "míssil";
+const string AEREO_ITEM_ALT = "missil";
+const bool AEREO_FOGO_AMIGO = false;
+const uint AEREO_MAX_ATIVOS = 24;
+
+// ----------------------------------------------------------------------------
+// Entidade
+// ----------------------------------------------------------------------------
+
+class ataque_aereo {
+	int x, y;
+	string mapa, atacante;
+	timer tvoo;
+	bool avisado = false;
+
+	ataque_aereo(int cx, int cy, string cmapa, string catacante) {
+		x = cx;
+		y = cy;
+		mapa = cmapa;
+		atacante = catacante;
+		tvoo.restart();
+	}
+}
+
+// Espelha "misilavions" do BGT / "misseisguiados" de missilguiado.nvgt.
+ataque_aereo@[] ataques_aereos;
+
+// ----------------------------------------------------------------------------
+// Banco de dados
+// ----------------------------------------------------------------------------
+
+void criar_tabelas_ataque_aereo() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_ataque_aereo - Banco Nao inicializado");
+		return;
+	}
+
+	debug_log("Criando tabelas de ataque aereo...");
+
+	string create_log = """
+		CREATE TABLE IF NOT EXISTS ataques_aereos_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			atacante TEXT NOT NULL,
+			mapa TEXT NOT NULL,
+			x INTEGER,
+			y INTEGER,
+			vitimas INTEGER DEFAULT 0,
+			dano_total INTEGER DEFAULT 0,
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_log) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela ataques_aereos_log: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela ataques_aereos_log criada/verificada");
+	}
+
+	string create_index = "CREATE INDEX IF NOT EXISTS idx_ataques_aereos_atacante ON ataques_aereos_log(atacante);";
+	bancoJogo.execute(create_index);
+
+	string create_stats = """
+		CREATE TABLE IF NOT EXISTS ataques_aereos_stats (
+			username TEXT PRIMARY KEY,
+			total_disparos INTEGER DEFAULT 0,
+			total_vitimas INTEGER DEFAULT 0,
+			total_dano INTEGER DEFAULT 0,
+			ultimo_disparo INTEGER DEFAULT 0
+		);
+	""";
+
+	if(bancoJogo.execute(create_stats) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela ataques_aereos_stats: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela ataques_aereos_stats criada/verificada");
+	}
+}
+
+// Le a linha de estatisticas do jogador. Retorna false quando nunca disparou.
+// ultimo_disparo volta como texto porque guarda um time_stamp() (uint64) e o
+// binding de inteiros do projeto e de 32 bits.
+bool ler_stats_ataque_aereo(const string&in username, int&out disparos, int&out vitimas,
+                            int&out dano, string&out ultimo) {
+	disparos = 0;
+	vitimas = 0;
+	dano = 0;
+	ultimo = "0";
+
+	if(!database_initialized || bancoJogo is null) return false;
+	if(username == "") return false;
+
+	string query = """
+		SELECT total_disparos, total_vitimas, total_dano, ultimo_disparo
+		FROM ataques_aereos_stats
+		WHERE LOWER(username) = ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar ler_stats_ataque_aereo: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, string_to_lower_case(username));
+
+	if(stmt.step() != SQLITE_ROW) return false;
+
+	disparos = stmt.column_int(0);
+	vitimas = stmt.column_int(1);
+	dano = stmt.column_int(2);
+	ultimo = stmt.column_text(3);
+	if(ultimo == "") ultimo = "0";
+
+	return true;
+}
+
+uint64 ultimo_ataque_aereo_de(const string&in username) {
+	int disparos = 0, vitimas = 0, dano = 0;
+	string ultimo = "0";
+	if(!ler_stats_ataque_aereo(username, disparos, vitimas, dano, ultimo)) return 0;
+	return uint64(parse_uint(ultimo));
+}
+
+void registrar_ataque_aereo(const string&in atacante, const string&in mapa, int x, int y,
+                            int vitimas, int dano_total) {
+	if(!database_initialized || bancoJogo is null) return;
+	if(atacante == "") return;
+
+	string insert_log = """
+		INSERT INTO ataques_aereos_log (atacante, mapa, x, y, vitimas, dano_total)
+		VALUES (?, ?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(insert_log);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar registrar_ataque_aereo (log): " + bancoJogo.get_last_error_text());
+	} else {
+		stmt.bind_text(1, atacante);
+		stmt.bind_text(2, mapa);
+		stmt.bind_int(3, x);
+		stmt.bind_int(4, y);
+		stmt.bind_int(5, vitimas);
+		stmt.bind_int(6, dano_total);
+
+		if(stmt.step() != SQLITE_DONE) {
+			debug_log("ERRO ao inserir ataques_aereos_log: " + bancoJogo.get_last_error_text());
+		}
+	}
+
+	int disparos = 0, vits = 0, dano = 0;
+	string ultimo = "0";
+	ler_stats_ataque_aereo(atacante, disparos, vits, dano, ultimo);
+
+	string upsert = """
+		INSERT OR REPLACE INTO ataques_aereos_stats
+			(username, total_disparos, total_vitimas, total_dano, ultimo_disparo)
+		VALUES (?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt2 = bancoJogo.prepare(upsert);
+	if(@stmt2 == null) {
+		debug_log("ERRO ao preparar registrar_ataque_aereo (stats): " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt2.bind_text(1, string_to_lower_case(atacante));
+	stmt2.bind_int(2, disparos + 1);
+	stmt2.bind_int(3, vits + vitimas);
+	stmt2.bind_int(4, dano + dano_total);
+	stmt2.bind_text(5, "" + time_stamp());
+
+	if(stmt2.step() != SQLITE_DONE) {
+		debug_log("ERRO ao salvar ataques_aereos_stats: " + bancoJogo.get_last_error_text());
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+// O item aparece no inventario com acento ("míssil") vindo do menu do cliente,
+// mas special_prices em commands.nvgt registra a chave sem acento ("missil").
+// Aceitamos as duas grafias para compra e consumo nunca divergirem.
+int aereo_itens_disponiveis(player@ p) {
+	if(p is null) return 0;
+	return p.inv_item_number(AEREO_ITEM) + p.inv_item_number(AEREO_ITEM_ALT);
+}
+
+bool aereo_consumir_item(player@ p) {
+	if(p is null) return false;
+
+	if(p.inv_item_number(AEREO_ITEM) > 0) {
+		p.inv_remove_item(AEREO_ITEM, 1);
+		return true;
+	}
+	if(p.inv_item_number(AEREO_ITEM_ALT) > 0) {
+		p.inv_remove_item(AEREO_ITEM_ALT, 1);
+		return true;
+	}
+	return false;
+}
+
+// Envia uma mensagem para todos os jogadores de um mapa.
+// Usa server_broadcast (network.nvgt) porque ele compara players[i].map, o
+// campo que changemap() realmente atualiza. broadcast_to_map (server.nvgt)
+// compara map_name, que changemap() nao toca.
+void aereo_broadcast_mapa(const string&in mapa, const string&in mensagem) {
+	server_broadcast(mensagem, mapa);
+}
+
+bool tem_ataque_aereo_pendente(const string&in atacante) {
+	for(uint i = 0; i < ataques_aereos.length(); i++) {
+		if(ataques_aereos[i] is null) continue;
+		if(string_compare_insensitive(ataques_aereos[i].atacante, atacante)) return true;
+	}
+	return false;
+}
+
+// Substitui o random(30000, 40000) plano do BGT por dano com falloff.
+int calcular_dano_aereo(int dist) {
+	if(dist < 0) dist = 0;
+	int dano = get_damage(AEREO_DANO_BASE, dist, AEREO_RAIO);
+	if(dano < 0) dano = 0;
+	return dano;
+}
+
+bool alvo_imune_ao_ataque_aereo(int alvo_index, const string&in atacante) {
+	if(alvo_index < 0 || alvo_index >= int(players.length())) return true;
+
+	player@ alvo = @players[alvo_index];
+	if(alvo is null) return true;
+	if(alvo.peer_id == 0) return true;
+
+	// O proprio atacante nunca se atinge (regra herdada do BGT).
+	if(string_compare_insensitive(alvo.charname, atacante)) return true;
+
+	if(alvo.afk) return true;
+	if(alvo.pacifico == 1) return true;
+
+	// O misilavion.bgt nao isentava novatos; isentamos, como bombaatomicaloop().
+	if(alvo.newbie) return true;
+
+	// godmode so e ligado por dev (cmd_god em admin_commands.nvgt).
+	if(alvo.godmode) return true;
+
+	if(is_in_safezone(alvo.x, alvo.y, alvo.map)) return true;
+
+	if(!AEREO_FOGO_AMIGO) {
+		int party_atacante = get_party_index(atacante);
+		if(party_atacante >= 0 && party_atacante == get_party_index(alvo.charname)) return true;
+	}
+
+	return false;
+}
+
+// ----------------------------------------------------------------------------
+// Disparo
+// ----------------------------------------------------------------------------
+
+bool pode_disparar_ataque_aereo(int player_index, string &out motivo) {
+	motivo = "";
+
+	if(player_index < 0 || player_index >= int(players.length())) {
+		motivo = "Erro interno: jogador Nao encontrado.";
+		return false;
+	}
+
+	player@ p = @players[player_index];
+	if(p is null) {
+		motivo = "Erro interno: jogador Nao encontrado.";
+		return false;
+	}
+
+	if(!pvp) {
+		motivo = "O PvP esta desativado no servidor.";
+		return false;
+	}
+
+	if(p.pacifico == 1) {
+		motivo = "Voce esta em modo pacifico e Nao pode chamar um ataque aereo.";
+		return false;
+	}
+
+	if(p.newbie) {
+		motivo = "Novatos Nao podem chamar um ataque aereo.";
+		return false;
+	}
+
+	if(p.afk) {
+		motivo = "Voce esta ausente. Volte ao jogo antes de chamar um ataque aereo.";
+		return false;
+	}
+
+	if(is_in_safezone(p.x, p.y, p.map)) {
+		motivo = "Voce esta em uma zona segura e Nao pode chamar um ataque aereo aqui.";
+		return false;
+	}
+
+	if(aereo_itens_disponiveis(p) < 1) {
+		motivo = "Voce precisa de 1x " + AEREO_ITEM + " para chamar um ataque aereo.";
+		return false;
+	}
+
+	if(ataques_aereos.length() >= AEREO_MAX_ATIVOS) {
+		motivo = "Ha ataques aereos demais em andamento. Tente novamente em instantes.";
+		return false;
+	}
+
+	if(tem_ataque_aereo_pendente(p.charname)) {
+		motivo = "Voce ja tem um ataque aereo a caminho.";
+		return false;
+	}
+
+	uint64 ultimo = ultimo_ataque_aereo_de(p.charname);
+	if(ultimo > 0) {
+		uint64 agora = time_stamp();
+		if(agora > ultimo) {
+			uint64 decorrido = agora - ultimo;
+			if(decorrido < AEREO_COOLDOWN_SEGUNDOS) {
+				uint64 restante = AEREO_COOLDOWN_SEGUNDOS - decorrido;
+				motivo = "Aguarde " + restante + " segundos antes de chamar outro ataque aereo.";
+				return false;
+			}
+		} else {
+			// Relogio do sistema recuou: trata como recarga cheia.
+			motivo = "Aguarde " + AEREO_COOLDOWN_SEGUNDOS + " segundos antes de chamar outro ataque aereo.";
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Coloca o ataque na fila e toca o aviso de "incoming" no mapa alvo.
+void agendar_ataque_aereo(int x, int y, const string&in mapa, const string&in atacante) {
+	ataque_aereo a(x, y, mapa, atacante);
+	ataques_aereos.insert_last(a);
+
+	aereo_broadcast_mapa(mapa, "play notify_blip.ogg " + x + " " + y);
+
+	debug_log("AEREO: ataque agendado por " + atacante + " em " + mapa + " (" + x + ", " + y + ")");
+}
+
+void disparar_ataque_aereo(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!aereo_consumir_item(p)) {
+		send_reliable_text(p.peer_id, "msg2 Voce precisa de 1x " + AEREO_ITEM + " para chamar um ataque aereo.", 0);
+		return;
+	}
+
+	agendar_ataque_aereo(p.x, p.y, p.map, p.charname);
+
+	send_reliable_text(p.peer_id, "msg2 Ataque aereo solicitado! Os avioes chegam em " +
+		(AEREO_FUSO_MS / 1000) + " segundos. Saia da area!", 0);
+	send_reliable_text(p.peer_id, "ps notify_blip.ogg", 0);
+
+	save_player_to_database(players[player_index]);
+}
+
+// ----------------------------------------------------------------------------
+// Detonacao
+// ----------------------------------------------------------------------------
+
+void detonar_ataque_aereo(uint idx) {
+	if(idx >= ataques_aereos.length()) return;
+
+	ataque_aereo@ a = @ataques_aereos[idx];
+	if(a is null) {
+		ataques_aereos.remove_at(idx);
+		return;
+	}
+
+	// Copia tudo antes de remover: o atacante pode ter deslogado durante o fuso,
+	// entao nada aqui pode depender de players[] conter o atacante.
+	int ax = a.x;
+	int ay = a.y;
+	string mapa = a.mapa;
+	string atacante = a.atacante;
+
+	ataques_aereos.remove_at(idx);
+
+	aereo_broadcast_mapa(mapa, "play rpgexplode.ogg " + ax + " " + ay + " " + mapa);
+
+	int vitimas = 0;
+	int dano_total = 0;
+	int mortos = 0;
+
+	for(uint i = 0; i < players.length(); i++) {
+		player@ alvo = @players[i];
+		if(alvo is null) continue;
+		if(alvo.peer_id == 0) continue;
+		if(alvo.map != mapa) continue;
+		if(alvo_imune_ao_ataque_aereo(int(i), atacante)) continue;
+		if(alvo.health <= 0) continue;
+
+		int dist = int(get_distance(ax, ay, alvo.x, alvo.y));
+		if(dist > AEREO_RAIO) continue;
+
+		int dano = calcular_dano_aereo(dist);
+		if(dano <= 0) continue;
+
+		alvo.health -= dano;
+		alvo.lasthit = "ataque_aereo_" + atacante;
+
+		vitimas++;
+		dano_total += dano;
+
+		aereo_broadcast_mapa(mapa, "inithurt " + alvo.voice + " " + alvo.x + " " + alvo.y);
+		send_reliable_text(alvo.peer_id, "msg2 Voce foi atingido pelo ataque aereo de " +
+			atacante + "! (-" + dano + " de vida)", 0);
+
+		if(alvo.health <= 0) {
+			mortos++;
+			update_achievement_progress(atacante, "kills", 1);
+		}
+	}
+
+	registrar_ataque_aereo(atacante, mapa, ax, ay, vitimas, dano_total);
+	log_action(atacante, "ataque_aereo", "vitimas=" + vitimas, mapa, ax, ay, 0);
+	if(vitimas > 0) update_statistics("combat", vitimas);
+
+	int aidx = get_player_index_from(atacante);
+	if(aidx > -1) {
+		send_reliable_text(players[aidx].peer_id, "msg2 Seu ataque aereo atingiu " + vitimas +
+			" jogador(es) causando " + dano_total + " de dano. Mortes: " + mortos + ".", 0);
+	}
+
+	debug_log("AEREO: detonado em " + mapa + " (" + ax + ", " + ay + ") por " + atacante +
+		" - vitimas: " + vitimas + ", dano: " + dano_total + ", mortes: " + mortos);
+}
+
+// Percorre de tras pra frente para nao pular elementos ao remover:
+// o misilavionloop.bgt original tinha exatamente esse bug.
+void ataque_aereo_loop() {
+	for(int i = int(ataques_aereos.length()) - 1; i >= 0; i--) {
+		ataque_aereo@ a = @ataques_aereos[i];
+		if(a is null) {
+			ataques_aereos.remove_at(i);
+			continue;
+		}
+
+		if(!a.avisado && a.tvoo.elapsed >= AEREO_FUSO_MS / 2) {
+			a.avisado = true;
+			aereo_broadcast_mapa(a.mapa, "play notify_blip.ogg " + a.x + " " + a.y);
+		}
+
+		if(a.tvoo.elapsed >= AEREO_FUSO_MS) {
+			detonar_ataque_aereo(uint(i));
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Comandos
+// ----------------------------------------------------------------------------
+
+void cmd_ataqueaereo(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string motivo = "";
+	if(!pode_disparar_ataque_aereo(player_index, motivo)) {
+		send_reliable_text(players[player_index].peer_id, "msg2 " + motivo, 0);
+		return;
+	}
+
+	disparar_ataque_aereo(player_index);
+}
+
+void cmd_aereostats(int player_index, string alvo = "") {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string nome = alvo.trim_whitespace();
+	if(nome == "") nome = players[player_index].charname;
+
+	int disparos = 0, vitimas = 0, dano = 0;
+	string ultimo = "0";
+	bool tem = ler_stats_ataque_aereo(nome, disparos, vitimas, dano, ultimo);
+
+	uint peer = players[player_index].peer_id;
+
+	send_reliable_text(peer, "msg2 === Ataque Aereo: " + nome + " ===", 0);
+
+	if(!tem || disparos <= 0) {
+		send_reliable_text(peer, "msg2 Nenhum ataque aereo registrado.", 0);
+		return;
+	}
+
+	send_reliable_text(peer, "msg2 Disparos: " + disparos, 0);
+	send_reliable_text(peer, "msg2 Jogadores atingidos: " + vitimas, 0);
+	send_reliable_text(peer, "msg2 Dano total: " + dano, 0);
+
+	uint64 ts = uint64(parse_uint(ultimo));
+	if(ts == 0) {
+		send_reliable_text(peer, "msg2 Ultimo disparo: desconhecido", 0);
+		return;
+	}
+
+	uint64 agora = time_stamp();
+	if(agora <= ts) {
+		send_reliable_text(peer, "msg2 Ultimo disparo: agora mesmo", 0);
+		send_reliable_text(peer, "msg2 Recarga: " + AEREO_COOLDOWN_SEGUNDOS + " segundos restantes", 0);
+		return;
+	}
+
+	uint64 decorrido = agora - ts;
+	send_reliable_text(peer, "msg2 Ultimo disparo: ha " + decorrido + " segundos", 0);
+
+	if(decorrido >= AEREO_COOLDOWN_SEGUNDOS) {
+		send_reliable_text(peer, "msg2 Recarga: pronta", 0);
+	} else {
+		send_reliable_text(peer, "msg2 Recarga: " + (AEREO_COOLDOWN_SEGUNDOS - decorrido) + " segundos restantes", 0);
+	}
+}
+
+void cmd_aereoem(int player_index, string alvo) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	uint peer = players[player_index].peer_id;
+
+	if(!is_admin(player_index)) {
+		send_reliable_text(peer, "msg2 Voce Nao tem permissao para usar este comando!", 0);
+		return;
+	}
+
+	string nome = alvo.trim_whitespace();
+	if(nome == "") {
+		send_reliable_text(peer, "msg2 Uso: /aereoem <jogador>", 0);
+		return;
+	}
+
+	int alvo_index = get_player_index_from(nome);
+	if(alvo_index < 0 || alvo_index >= int(players.length())) {
+		send_reliable_text(peer, "msg2 Jogador '" + nome + "' Nao esta online.", 0);
+		return;
+	}
+
+	if(ataques_aereos.length() >= AEREO_MAX_ATIVOS) {
+		send_reliable_text(peer, "msg2 Ha ataques aereos demais em andamento. Tente novamente em instantes.", 0);
+		return;
+	}
+
+	player@ t = @players[alvo_index];
+	if(t is null) return;
+
+	// Nao consome item e ignora a recarga: e ferramenta administrativa.
+	// As isencoes do alvo continuam valendo na detonacao.
+	agendar_ataque_aereo(t.x, t.y, t.map, players[player_index].charname);
+
+	send_reliable_text(peer, "msg2 Ataque aereo enviado sobre " + t.charname +
+		" em " + t.map + " (" + t.x + ", " + t.y + ").", 0);
+
+	log_action(players[player_index].charname, "aereoem", "alvo=" + t.charname,
+		t.map, t.x, t.y, 0);
+
+	debug_log("ADMIN: " + players[player_index].charname + " disparou ataque aereo sobre " +
+		t.charname + " em " + t.map + " (" + t.x + ", " + t.y + ")");
+}

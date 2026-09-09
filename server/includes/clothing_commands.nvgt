@@ -1,0 +1,278 @@
+// ============================================================================
+// clothing_commands.nvgt - Comandos e roteador de rede do sistema de roupas
+// ----------------------------------------------------------------------------
+// Depende de server/includes/clothing_catalog.nvgt.
+//
+// Equivalencias com o BGT:
+//   /vestir      == usar(index, nitem) na parte que percorre clothes[] (re_server_test.bgt:1424)
+//   /tirar       == retirar(index, nitem, notify)  (re_server_test.bgt:1737)
+//   /roupas      == list_equipped_clothing
+//   /verroupas   == vestindo(index)                (voids.bgt:849)
+//   /novaroupa   == new_clothe                     (net.bgt:2483)
+//   /deletarroupa== delete_clothe                  (net.bgt:2507)
+//   /listarroupas== list_clothes                   (net.bgt:2500)
+// ============================================================================
+
+const string USO_NOVAROUPA =
+	"novaroupa <nome=parte=descricao=som_vestir=som_tirar=publico=desgasta=desgaste=protecao[=especial]>";
+
+// ---------------------------------------------------------------------------
+// Helpers locais
+// ---------------------------------------------------------------------------
+void enviar_roupas(int player_index, string texto) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + texto, 0);
+}
+
+bool pode_editar_catalogo_roupas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	return check_is_builder_index(player_index);
+}
+
+bool pode_apagar_catalogo_roupas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	return check_is_admin_index(player_index);
+}
+
+string partes_do_corpo_conhecidas() {
+	return PARTE_CABECA + ", " + PARTE_ROSTO + ", " + PARTE_TRONCO + ", " + PARTE_PERNAS +
+	       ", " + PARTE_PES + ", " + PARTE_MAOS + ", " + PARTE_CANELAS + ", " + PARTE_ESCUDO +
+	       ", " + PARTE_PULSEIRA + ", " + PARTE_ANEL + ", " + PARTE_BRACO + ", " +
+	       PARTE_PULSO + ", " + PARTE_COSTAS;
+}
+
+// ---------------------------------------------------------------------------
+// /vestir <roupa>
+// ---------------------------------------------------------------------------
+void cmd_vestir(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	if(alvo == "") {
+		enviar_roupas(player_index, "Uso: /vestir <roupa>");
+		return;
+	}
+
+	int resultado = vestir_roupa(player_index, alvo);
+
+	if(resultado == -2) {
+		enviar_roupas(player_index, "'" + alvo + "' nao e uma peca de roupa.");
+	} else if(resultado == -1) {
+		enviar_roupas(player_index, "Voce nao tem esta peca no inventario.");
+	} else if(resultado == 0) {
+		enviar_roupas(player_index, "Voce ja esta usando esta peca.");
+	} else if(resultado == 1) {
+		enviar_roupas(player_index, "Nao e recomendavel vestir muitas pecas no mesmo lugar do corpo.");
+	} else {
+		roupa@ r = obter_roupa(alvo);
+		string texto = "Voce vestiu: " + alvo;
+		if(@r != null && r.descricao != "") texto += " - " + r.descricao;
+		enviar_roupas(player_index, texto);
+		enviar_roupas(player_index, "Protecao total: " + players[player_index].clothing_protection + "%");
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /tirar <roupa>
+// ---------------------------------------------------------------------------
+void cmd_tirar(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	if(alvo == "") {
+		enviar_roupas(player_index, "Uso: /tirar <roupa>");
+		return;
+	}
+
+	if(tirar_roupa(player_index, alvo, true) == 1) {
+		enviar_roupas(player_index, "Protecao total: " + players[player_index].clothing_protection + "%");
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /roupas
+// ---------------------------------------------------------------------------
+void cmd_roupas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	enviar_roupas(player_index, listar_roupas_vestidas(player_index));
+}
+
+// ---------------------------------------------------------------------------
+// /verroupas
+// ---------------------------------------------------------------------------
+void cmd_verroupas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string texto = descrever_roupas_de(player_index, player_index);
+	if(texto.trim_whitespace() == "") texto = "Nao ha nada para ver por aqui.";
+	enviar_roupas(player_index, texto);
+}
+
+// ---------------------------------------------------------------------------
+// /novaroupa (builder / admin / dev)
+// ---------------------------------------------------------------------------
+void cmd_novaroupa(int player_index, string dados) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	if(!pode_editar_catalogo_roupas(player_index)) {
+		enviar_roupas(player_index, "Voce nao tem permissao para editar o catalogo de roupas.");
+		return;
+	}
+
+	if(!database_initialized || bancoJogo is null) {
+		enviar_roupas(player_index, "Banco de dados nao inicializado.");
+		return;
+	}
+
+	string bruto = dados.trim_whitespace();
+	if(bruto == "") {
+		enviar_roupas(player_index, "Uso: /" + USO_NOVAROUPA);
+		enviar_roupas(player_index, "Partes do corpo conhecidas: " + partes_do_corpo_conhecidas());
+		return;
+	}
+
+	string[] campos = bruto.split("=");
+	if(campos.length() < 9) {
+		enviar_roupas(player_index, "Dados incompletos. Uso: /" + USO_NOVAROUPA);
+		return;
+	}
+
+	string nome = normalizar_nome_de_roupa(campos[0]);
+	if(nome == "") {
+		enviar_roupas(player_index, "Nome da peca invalido.");
+		return;
+	}
+
+	if(roupa_existe(nome)) {
+		enviar_roupas(player_index, "Esta peca ja existe.");
+		return;
+	}
+
+	string parte = normalizar_nome_de_roupa(campos[1]);
+	if(parte == "") {
+		enviar_roupas(player_index, "Parte do corpo invalida. Conhecidas: " + partes_do_corpo_conhecidas());
+		return;
+	}
+
+	roupa nova;
+	nova.nome = nome;
+	nova.parte_corpo = parte;
+	nova.descricao = campos[2].trim_whitespace();
+	nova.som_vestir = campos[3].trim_whitespace();
+	nova.som_tirar = campos[4].trim_whitespace();
+	nova.mostrar_para_todos = string_to_number(campos[5].trim_whitespace()) != 0 ? 1 : 0;
+	nova.permite_desgaste = string_to_number(campos[6].trim_whitespace()) != 0 ? 1 : 0;
+	nova.desgaste_por_tiro = string_to_float(campos[7].trim_whitespace());
+	nova.protecao = string_to_float(campos[8].trim_whitespace());
+	nova.especial = (campos.length() > 9) ? campos[9].trim_whitespace().lower() : "";
+
+	if(nova.protecao < 0 || nova.protecao > PROTECAO_MAXIMA_ROUPAS) {
+		enviar_roupas(player_index, "Protecao deve ficar entre 0 e " + PROTECAO_MAXIMA_ROUPAS + " (percentual).");
+		return;
+	}
+
+	if(nova.desgaste_por_tiro < 0 || nova.desgaste_por_tiro > 100) {
+		enviar_roupas(player_index, "Desgaste por tiro deve ficar entre 0 e 100.");
+		return;
+	}
+
+	if(!salvar_roupa(nova, players[player_index].charname)) {
+		enviar_roupas(player_index, "Falha ao salvar a peca no catalogo.");
+		return;
+	}
+
+	enviar_roupas(player_index, "Peca criada: " + nova.linha_de_catalogo());
+	notify_admins("Uma nova peca de roupa foi criada por " + players[player_index].charname +
+	              ", o nome dela e " + nova.nome + ".", "notify5.ogg");
+	debug_log("ROUPAS: " + players[player_index].charname + " criou a peca " + nova.nome);
+}
+
+// ---------------------------------------------------------------------------
+// /deletarroupa (admin / dev)
+// ---------------------------------------------------------------------------
+void cmd_deletarroupa(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	if(!pode_apagar_catalogo_roupas(player_index)) {
+		enviar_roupas(player_index, "Voce nao tem permissao para remover pecas do catalogo.");
+		return;
+	}
+
+	string alvo = normalizar_nome_de_roupa(nome);
+	if(alvo == "") {
+		enviar_roupas(player_index, "Uso: /deletarroupa <nome>");
+		return;
+	}
+
+	if(indice_roupa(alvo) < 0) {
+		enviar_roupas(player_index, "Esta peca nao existe no catalogo.");
+		return;
+	}
+
+	if(!remover_roupa_do_catalogo(alvo, players[player_index].charname)) {
+		enviar_roupas(player_index, "Falha ao remover a peca do catalogo.");
+		return;
+	}
+
+	enviar_roupas(player_index, "Peca removida do catalogo: " + alvo);
+	notify_admins(players[player_index].charname + " removeu a peca de roupa chamada " + alvo + ".", "notify5.ogg");
+	debug_log("ROUPAS: " + players[player_index].charname + " removeu a peca " + alvo);
+}
+
+// ---------------------------------------------------------------------------
+// /listarroupas (builder / admin / dev)
+// ---------------------------------------------------------------------------
+void cmd_listarroupas(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	if(!pode_editar_catalogo_roupas(player_index)) {
+		enviar_roupas(player_index, "Voce nao tem permissao para ver o catalogo de roupas.");
+		return;
+	}
+
+	if(catalogo_roupas.length() == 0) {
+		enviar_roupas(player_index, "O catalogo de roupas esta vazio.");
+		return;
+	}
+
+	string lista = "Catalogo de roupas (" + catalogo_roupas.length() + " pecas):\r\n";
+	for(uint i = 0; i < catalogo_roupas.length(); i++) {
+		lista += catalogo_roupas[i].linha_de_catalogo() + "\r\n";
+	}
+
+	enviar_roupas(player_index, lista);
+}
+
+// ---------------------------------------------------------------------------
+// Roteador de rede: CLOTHING:wear|<peca>
+// (definido aqui e nao em network_handlers.nvgt para nao tocar naquele arquivo;
+//  o NVGT junta todos os includes num escopo unico, entao o dispatch funciona.)
+// ---------------------------------------------------------------------------
+void handle_clothing(player@ p, string data) {
+	if(!network_require_non_empty(p, "handle_clothing", data)) return;
+
+	string[] parts = split_pipe_trimmed(data);
+	if(parts.length() < 1 || parts[0] == "") {
+		network_log_invalid_payload(p, "handle_clothing", "acao ausente", data);
+		return;
+	}
+
+	string action = parts[0].lower();
+
+	debug_log("[CLOTHING] " + p.name + " - clothing: " + action);
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) return;
+
+	if((action == "wear" || action == "vestir") && parts.length() >= 2) {
+		cmd_vestir(player_index, join_parts_from(parts, 1, "_"));
+	} else if((action == "remove" || action == "tirar") && parts.length() >= 2) {
+		cmd_tirar(player_index, join_parts_from(parts, 1, "_"));
+	} else if(action == "list" || action == "roupas") {
+		cmd_roupas(player_index);
+	} else if(action == "look" || action == "verroupas") {
+		cmd_verroupas(player_index);
+	} else {
+		network_send_action_error(p, "Clothing", action);
+	}
+}

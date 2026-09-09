@@ -1,0 +1,831 @@
+
+// Sistema de vinculos sociais 1:1 exclusivos e persistentes (casamento e pacto de sangue).
+// Porte adaptado de "includes/marriages.bgt" do Reino Elemental (BGT) para NVGT + sqlite3.
+// A fonte da verdade e SEMPRE a tabela "casamentos" do banco. O dicionario cache_vinculos
+// e apenas otimizacao e precisa ser invalidado em criar_vinculo()/romper_vinculo().
+
+const string VINCULO_CASAMENTO = "casamento";
+const string VINCULO_PACTO = "pacto";
+
+// Propostas pendentes (padrao pending_invites de party.nvgt).
+const string PROPOSTA_CASAMENTO = "casamento";
+const string PROPOSTA_PACTO = "pacto";
+const string PROPOSTA_DIVORCIO = "divorcio";
+const string PROPOSTA_ROMPER_PACTO = "romper_pacto";
+
+// Tempos. O BGT usava tempomarried=120000 e tempoparabatai=120000 (re_server_test.bgt:78).
+const int PROPOSTA_EXPIRA_MS = 120000;
+const int CERIMONIA_ANUNCIO_MS = 2000;
+const int CERIMONIA_VOTOS_MS = 45000;
+const int CERIMONIA_SELAGEM_MS = 120000;
+const int CASAMENTOS_TICK_MS = 250;
+
+// Teleporte ate o conjuge. Substitui o item "runa_dorada" do BGT (re_server_test.bgt:1610)
+// e a magia "salvacion_del_amor" (player.bgt:667), que dependiam de itens inexistentes aqui.
+const uint64 IRATE_COOLDOWN_MS = 300000;
+
+// Preco do rompimento do pacto. No BGT custava 1000 gc + 2000000000 mgerems + 500000000
+// elementales (marriages.bgt:81-88); nada disso existe no projeto, entao vira ouro.
+const int PACTO_CUSTO_ROMPER = 5000;
+
+// Bonus derivado e NAO persistente: +10% de XP com o conjuge no mesmo mapa.
+// Substitui o +3000/+10000 de saludfangelical do BGT, que inflaria max_hp a cada relogin.
+const double CASAMENTO_BONUS_XP = 0.10;
+
+class vinculo_proposta {
+	string proponente;
+	string alvo;
+	string tipo;
+	timer criado_em;
+
+	vinculo_proposta(string proponente_nome, string alvo_nome, string tipo_vinculo) {
+		this.proponente = proponente_nome;
+		this.alvo = alvo_nome;
+		this.tipo = tipo_vinculo;
+		this.criado_em.restart();
+	}
+
+	bool expirou() {
+		return this.criado_em.elapsed >= PROPOSTA_EXPIRA_MS;
+	}
+}
+
+class cerimonia {
+	string jogador_a;
+	string jogador_b;
+	string tipo;
+	string mapa;
+	int x;
+	int y;
+	int etapa;
+	timer t;
+
+	cerimonia(string nome_a, string nome_b, string tipo_vinculo, string mapa_cerimonia, int px, int py) {
+		this.jogador_a = nome_a;
+		this.jogador_b = nome_b;
+		this.tipo = tipo_vinculo;
+		this.mapa = mapa_cerimonia;
+		this.x = px;
+		this.y = py;
+		this.etapa = 0;
+		this.t.restart();
+	}
+
+	bool envolve(string nome) {
+		return this.jogador_a == nome || this.jogador_b == nome;
+	}
+}
+
+// Cooldown do /irate. Guardado em array de handles (e nao em dictionary) para nao depender
+// de conversao numerica implicita do dictionary, como party.nvgt evita gravando string.
+class vinculo_cooldown {
+	string nome;
+	uint64 quando;
+
+	vinculo_cooldown(string nome_jogador, uint64 momento) {
+		this.nome = nome_jogador;
+		this.quando = momento;
+	}
+}
+
+vinculo_proposta@[] propostas_ativas;
+cerimonia@[] cerimonias_ativas;
+vinculo_cooldown@[] cooldowns_irate;
+dictionary cache_vinculos;
+timer casamentos_tick;
+
+// Devolve os milissegundos que ainda faltam para o jogador poder usar o /irate.
+int irate_tempo_restante(string nome) {
+	string n = normalizar_nome(nome);
+	uint64 agora = ticks();
+
+	for(uint i = 0; i < cooldowns_irate.length(); i++) {
+		if(cooldowns_irate[i] is null) continue;
+		if(cooldowns_irate[i].nome != n) continue;
+		uint64 passou = agora - cooldowns_irate[i].quando;
+		if(passou >= IRATE_COOLDOWN_MS) return 0;
+		return int(IRATE_COOLDOWN_MS - passou);
+	}
+
+	return 0;
+}
+
+void irate_marcar_uso(string nome) {
+	string n = normalizar_nome(nome);
+	uint64 agora = ticks();
+
+	for(uint i = 0; i < cooldowns_irate.length(); i++) {
+		if(cooldowns_irate[i] is null) continue;
+		if(cooldowns_irate[i].nome != n) continue;
+		cooldowns_irate[i].quando = agora;
+		return;
+	}
+
+	vinculo_cooldown cd(n, agora);
+	cooldowns_irate.insert_last(cd);
+}
+
+void create_casamentos_tables() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_casamentos_tables - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela casamentos...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS casamentos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tipo TEXT NOT NULL DEFAULT 'casamento',
+			jogador_a TEXT NOT NULL,
+			jogador_b TEXT NOT NULL,
+			casado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			local TEXT DEFAULT '',
+			celebrante TEXT DEFAULT '',
+			ativo INTEGER NOT NULL DEFAULT 1,
+			terminado_em DATETIME DEFAULT NULL,
+			terminado_por TEXT DEFAULT ''
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela casamentos: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	debug_log("OK - Tabela casamentos criada/verificada");
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_casamentos_a ON casamentos(jogador_a, tipo, ativo);");
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_casamentos_b ON casamentos(jogador_b, tipo, ativo);");
+
+	// Indices unicos parciais exigem sqlite >= 3.8.0. Se o plugin for mais antigo o
+	// execute() falha, so registramos no log: criar_vinculo() valida a unicidade
+	// consultando o banco antes de cada INSERT, entao o sistema continua correto.
+	if(bancoJogo.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_casamentos_unico_a ON casamentos(tipo, jogador_a) WHERE ativo = 1;") != SQLITE_OK) {
+		debug_log("AVISO: indice unico parcial de casamentos indisponível (sqlite antigo): " + bancoJogo.get_last_error_text());
+	}
+	if(bancoJogo.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_casamentos_unico_b ON casamentos(tipo, jogador_b) WHERE ativo = 1;") != SQLITE_OK) {
+		debug_log("AVISO: indice unico parcial de casamentos indisponível (sqlite antigo): " + bancoJogo.get_last_error_text());
+	}
+}
+
+string normalizar_nome(string nome) {
+	return string_to_lower_case(nome.trim_whitespace());
+}
+
+string chave_cache_vinculo(string nome, string tipo) {
+	return tipo + ":" + normalizar_nome(nome);
+}
+
+bool casamentos_indice_valido(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	return !(players[player_index] is null);
+}
+
+// get_player_index_from() (player.nvgt:1833) compara nome exato. Os vinculos ficam
+// gravados em minusculas, entao precisamos de uma busca insensivel a maiusculas.
+int indice_jogador_por_nome(string nome) {
+	if(nome == "") return -1;
+
+	int idx = get_player_index_from(nome);
+	if(idx >= 0) return idx;
+
+	string alvo = normalizar_nome(nome);
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(normalizar_nome(players[i].charname) == alvo) return int(i);
+		if(normalizar_nome(players[i].name) == alvo) return int(i);
+	}
+	return -1;
+}
+
+string nome_exibicao(string nome) {
+	int idx = indice_jogador_por_nome(nome);
+	if(idx >= 0) return players[idx].charname;
+	return nome;
+}
+
+bool vinculo_jogador_online(string nome) {
+	return indice_jogador_por_nome(nome) >= 0;
+}
+
+string nome_do_vinculo(string tipo) {
+	if(tipo == VINCULO_PACTO) return "pacto de sangue";
+	return "casamento";
+}
+
+string titulo_parceiro(string tipo) {
+	if(tipo == VINCULO_PACTO) return "parceiro de pacto";
+	return "cônjuge";
+}
+
+void invalidar_cache_vinculo(string nome, string tipo) {
+	string chave = chave_cache_vinculo(nome, tipo);
+	if(cache_vinculos.exists(chave)) cache_vinculos.delete(chave);
+}
+
+void invalidar_cache_todos_os_tipos(string nome) {
+	invalidar_cache_vinculo(nome, VINCULO_CASAMENTO);
+	invalidar_cache_vinculo(nome, VINCULO_PACTO);
+}
+
+string consultar_parceiro_no_banco(string nome, string tipo) {
+	if(!database_initialized || bancoJogo is null) return "";
+
+	string alvo = normalizar_nome(nome);
+	if(alvo == "") return "";
+
+	string query = """
+		SELECT jogador_a, jogador_b FROM casamentos
+		WHERE tipo = ? AND ativo = 1 AND (jogador_a = ? OR jogador_b = ?)
+		ORDER BY id DESC LIMIT 1;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar consulta de vinculo: " + bancoJogo.get_last_error_text());
+		return "";
+	}
+
+	stmt.bind_text(1, tipo);
+	stmt.bind_text(2, alvo);
+	stmt.bind_text(3, alvo);
+
+	if(stmt.step() == SQLITE_ROW) {
+		string a = stmt.column_text(0);
+		string b = stmt.column_text(1);
+		if(a == alvo) return b;
+		return a;
+	}
+
+	return "";
+}
+
+string get_parceiro(string nome, string tipo) {
+	string alvo = normalizar_nome(nome);
+	if(alvo == "") return "";
+
+	string chave = chave_cache_vinculo(alvo, tipo);
+	if(cache_vinculos.exists(chave)) {
+		string em_cache = "";
+		cache_vinculos.get(chave, em_cache);
+		return em_cache;
+	}
+
+	string parceiro = consultar_parceiro_no_banco(alvo, tipo);
+	cache_vinculos.set(chave, parceiro);
+	return parceiro;
+}
+
+bool tem_vinculo(string nome, string tipo) {
+	return get_parceiro(nome, tipo) != "";
+}
+
+bool criar_vinculo(string a, string b, string tipo, string local, string celebrante) {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_vinculo - Banco não inicializado");
+		return false;
+	}
+
+	string na = normalizar_nome(a);
+	string nb = normalizar_nome(b);
+
+	if(na == "" || nb == "" || na == nb) {
+		debug_log("ERRO: criar_vinculo - nomes inválidos (" + na + " / " + nb + ")");
+		return false;
+	}
+
+	// Validacao de unicidade direto no banco: nao confiamos no cache aqui, e o indice
+	// unico parcial pode nao existir em sqlite antigo.
+	if(consultar_parceiro_no_banco(na, tipo) != "") return false;
+	if(consultar_parceiro_no_banco(nb, tipo) != "") return false;
+
+	// O par e sempre ordenado para que "ana+bia" e "bia+ana" nunca virem dois vinculos.
+	string primeiro = na;
+	string segundo = nb;
+	if(primeiro > segundo) {
+		primeiro = nb;
+		segundo = na;
+	}
+
+	string query = """
+		INSERT INTO casamentos (tipo, jogador_a, jogador_b, local, celebrante, ativo)
+		VALUES (?, ?, ?, ?, ?, 1);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar INSERT de vinculo: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, tipo);
+	stmt.bind_text(2, primeiro);
+	stmt.bind_text(3, segundo);
+	stmt.bind_text(4, local);
+	stmt.bind_text(5, celebrante);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao gravar vinculo: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	cache_vinculos.set(chave_cache_vinculo(na, tipo), nb);
+	cache_vinculos.set(chave_cache_vinculo(nb, tipo), na);
+
+	int idx_a = indice_jogador_por_nome(na);
+	int mx = 0;
+	int my = 0;
+	if(idx_a >= 0) {
+		mx = players[idx_a].x;
+		my = players[idx_a].y;
+	}
+
+	log_action(na, "CASAMENTO", "Vinculo de " + nome_do_vinculo(tipo) + " criado com " + nb,
+	           local, mx, my, 0, "celebrante=" + celebrante, nb);
+
+	debug_log("CASAMENTOS: " + nome_do_vinculo(tipo) + " criado entre " + na + " e " + nb + " em " + local);
+	return true;
+}
+
+bool romper_vinculo(string nome, string tipo, string quem_rompeu) {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: romper_vinculo - Banco não inicializado");
+		return false;
+	}
+
+	string alvo = normalizar_nome(nome);
+	if(alvo == "") return false;
+
+	string parceiro = consultar_parceiro_no_banco(alvo, tipo);
+	if(parceiro == "") return false;
+
+	string query = """
+		UPDATE casamentos
+		SET ativo = 0, terminado_em = CURRENT_TIMESTAMP, terminado_por = ?
+		WHERE tipo = ? AND ativo = 1 AND (jogador_a = ? OR jogador_b = ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar UPDATE de rompimento: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, normalizar_nome(quem_rompeu));
+	stmt.bind_text(2, tipo);
+	stmt.bind_text(3, alvo);
+	stmt.bind_text(4, alvo);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao romper vinculo: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	// O cache tem de sumir dos DOIS lados, senao um deles continua "casado" em memoria.
+	invalidar_cache_vinculo(alvo, tipo);
+	invalidar_cache_vinculo(parceiro, tipo);
+
+	log_action(alvo, "CASAMENTO", "Vinculo de " + nome_do_vinculo(tipo) + " rompido com " + parceiro,
+	           "", 0, 0, 0, "rompido_por=" + normalizar_nome(quem_rompeu), parceiro);
+
+	debug_log("CASAMENTOS: " + nome_do_vinculo(tipo) + " entre " + alvo + " e " + parceiro + " rompido por " + quem_rompeu);
+	return true;
+}
+
+int dias_de_vinculo(string nome, string tipo) {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	string alvo = normalizar_nome(nome);
+	if(alvo == "") return 0;
+
+	string query = """
+		SELECT CAST(julianday('now') - julianday(casado_em) AS INTEGER)
+		FROM casamentos
+		WHERE tipo = ? AND ativo = 1 AND (jogador_a = ? OR jogador_b = ?)
+		ORDER BY id DESC LIMIT 1;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return 0;
+
+	stmt.bind_text(1, tipo);
+	stmt.bind_text(2, alvo);
+	stmt.bind_text(3, alvo);
+
+	if(stmt.step() == SQLITE_ROW) {
+		int dias = stmt.column_int(0);
+		if(dias < 0) dias = 0;
+		return dias;
+	}
+
+	return 0;
+}
+
+string get_local_do_vinculo(string nome, string tipo) {
+	if(!database_initialized || bancoJogo is null) return "";
+
+	string alvo = normalizar_nome(nome);
+	if(alvo == "") return "";
+
+	string query = """
+		SELECT local, celebrante FROM casamentos
+		WHERE tipo = ? AND ativo = 1 AND (jogador_a = ? OR jogador_b = ?)
+		ORDER BY id DESC LIMIT 1;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return "";
+
+	stmt.bind_text(1, tipo);
+	stmt.bind_text(2, alvo);
+	stmt.bind_text(3, alvo);
+
+	if(stmt.step() == SQLITE_ROW) {
+		string local = stmt.column_text(0);
+		string celebrante = stmt.column_text(1);
+		if(celebrante != "") return local + " (celebrado por " + celebrante + ")";
+		return local;
+	}
+
+	return "";
+}
+
+string[] listar_vinculos_ativos(string tipo, int limite = 20) {
+	string[] resultado;
+
+	if(!database_initialized || bancoJogo is null) return resultado;
+	if(limite <= 0) limite = 20;
+
+	string query = """
+		SELECT jogador_a, jogador_b,
+		       CAST(julianday('now') - julianday(casado_em) AS INTEGER)
+		FROM casamentos
+		WHERE tipo = ? AND ativo = 1
+		ORDER BY casado_em ASC
+		LIMIT ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar listagem de vinculos: " + bancoJogo.get_last_error_text());
+		return resultado;
+	}
+
+	stmt.bind_text(1, tipo);
+	stmt.bind_int(2, limite);
+
+	while(stmt.step() == SQLITE_ROW) {
+		string a = stmt.column_text(0);
+		string b = stmt.column_text(1);
+		int dias = stmt.column_int(2);
+		if(dias < 0) dias = 0;
+		resultado.insert_last(nome_exibicao(a) + " e " + nome_exibicao(b) + " - " + dias + " dia(s)");
+	}
+
+	return resultado;
+}
+
+void sync_vinculo_para_cliente(string nome) {
+	int idx = indice_jogador_por_nome(nome);
+	if(idx < 0) return;
+
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+	string pactuado = get_parceiro(nome, VINCULO_PACTO);
+
+	// O cliente ja trata set_married_variable/set_parabatai_variable
+	// (cliente/includes/net.nvgt:1103 e cliente/includes/net/sync_handlers.nvgt:97).
+	if(conjuge != "") {
+		send_reliable_text(players[idx].peer_id, "set_married_variable " + nome_exibicao(conjuge), 0);
+	} else {
+		send_reliable_text(players[idx].peer_id, "unset_married_variable", 0);
+	}
+
+	if(pactuado != "") {
+		send_reliable_text(players[idx].peer_id, "set_parabatai_variable " + nome_exibicao(pactuado), 0);
+	} else {
+		send_reliable_text(players[idx].peer_id, "unset_parabatai_variable", 0);
+	}
+}
+
+void load_player_marriage(player@ p) {
+	if(p is null) return;
+
+	string nome = normalizar_nome(p.charname);
+	if(nome == "") return;
+
+	// Releitura obrigatoria: o jogador pode ter sido casado/divorciado enquanto estava fora.
+	invalidar_cache_todos_os_tipos(nome);
+
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+	string pactuado = get_parceiro(nome, VINCULO_PACTO);
+
+	sync_vinculo_para_cliente(nome);
+
+	if(conjuge != "") {
+		int dias = dias_de_vinculo(nome, VINCULO_CASAMENTO);
+		send_reliable_text(p.peer_id, "msg2 [Casamento] Você está casado(a) com " + nome_exibicao(conjuge) + " há " + dias + " dia(s).", 0);
+		if(vinculo_jogador_online(conjuge)) {
+			int idx_conjuge = indice_jogador_por_nome(conjuge);
+			if(idx_conjuge >= 0) {
+				send_reliable_text(players[idx_conjuge].peer_id, "msg2 [Casamento] Seu cônjuge " + p.charname + " acabou de entrar no jogo.", 0);
+				send_reliable_text(players[idx_conjuge].peer_id, "ps notify5.ogg", 0);
+			}
+		}
+	}
+
+	if(pactuado != "") {
+		int dias = dias_de_vinculo(nome, VINCULO_PACTO);
+		send_reliable_text(p.peer_id, "msg2 [Pacto] Seu pacto de sangue com " + nome_exibicao(pactuado) + " dura há " + dias + " dia(s).", 0);
+	}
+
+	debug_log("CASAMENTOS: vinculos de " + p.charname + " carregados (casamento=" + conjuge + ", pacto=" + pactuado + ")");
+}
+
+void anunciar_no_mapa(string mapa, string mensagem, string som = "") {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(!players[i].is_logged_in || !players[i].online) continue;
+		if(players[i].map != mapa) continue;
+		send_reliable_text(players[i].peer_id, "msg2 " + mensagem, 0);
+		if(som != "") send_reliable_text(players[i].peer_id, "ps " + som, 0);
+	}
+}
+
+void anunciar_global(string mensagem, string som = "") {
+	broadcast_all("msg2 " + mensagem);
+	if(som == "") return;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(!players[i].is_logged_in || !players[i].online) continue;
+		send_reliable_text(players[i].peer_id, "ps " + som, 0);
+	}
+}
+
+void avisar_jogador(string nome, string mensagem, string som = "") {
+	int idx = indice_jogador_por_nome(nome);
+	if(idx < 0) return;
+	send_reliable_text(players[idx].peer_id, "msg2 " + mensagem, 0);
+	if(som != "") send_reliable_text(players[idx].peer_id, "ps " + som, 0);
+}
+
+int indice_proposta_para(string alvo, string tipo) {
+	string n = normalizar_nome(alvo);
+	for(uint i = 0; i < propostas_ativas.length(); i++) {
+		if(propostas_ativas[i] is null) continue;
+		if(propostas_ativas[i].tipo != tipo) continue;
+		if(propostas_ativas[i].alvo == n) return int(i);
+	}
+	return -1;
+}
+
+int indice_proposta_entre(string proponente, string alvo, string tipo) {
+	string np = normalizar_nome(proponente);
+	string na = normalizar_nome(alvo);
+	for(uint i = 0; i < propostas_ativas.length(); i++) {
+		if(propostas_ativas[i] is null) continue;
+		if(propostas_ativas[i].tipo != tipo) continue;
+		if(propostas_ativas[i].proponente == np && propostas_ativas[i].alvo == na) return int(i);
+	}
+	return -1;
+}
+
+void registrar_proposta(string proponente, string alvo, string tipo) {
+	// Uma proposta por proponente e por tipo: a nova substitui a anterior.
+	for(int i = int(propostas_ativas.length()) - 1; i >= 0; i--) {
+		if(propostas_ativas[i] is null) {
+			propostas_ativas.remove_at(i);
+			continue;
+		}
+		if(propostas_ativas[i].tipo == tipo && propostas_ativas[i].proponente == normalizar_nome(proponente)) {
+			propostas_ativas.remove_at(i);
+		}
+	}
+
+	vinculo_proposta pr(normalizar_nome(proponente), normalizar_nome(alvo), tipo);
+	propostas_ativas.insert_last(pr);
+}
+
+void remover_propostas_de(string nome) {
+	string n = normalizar_nome(nome);
+	for(int i = int(propostas_ativas.length()) - 1; i >= 0; i--) {
+		if(propostas_ativas[i] is null) {
+			propostas_ativas.remove_at(i);
+			continue;
+		}
+		if(propostas_ativas[i].proponente == n || propostas_ativas[i].alvo == n) {
+			propostas_ativas.remove_at(i);
+		}
+	}
+}
+
+void expirar_propostas() {
+	for(int i = int(propostas_ativas.length()) - 1; i >= 0; i--) {
+		if(propostas_ativas[i] is null) {
+			propostas_ativas.remove_at(i);
+			continue;
+		}
+		if(!propostas_ativas[i].expirou()) continue;
+
+		string proponente = propostas_ativas[i].proponente;
+		string alvo = propostas_ativas[i].alvo;
+		string tipo = propostas_ativas[i].tipo;
+		propostas_ativas.remove_at(i);
+
+		if(tipo == PROPOSTA_CASAMENTO) {
+			avisar_jogador(proponente, "Seu pedido de casamento a " + nome_exibicao(alvo) + " expirou sem resposta.");
+			avisar_jogador(alvo, "O pedido de casamento de " + nome_exibicao(proponente) + " expirou.");
+		} else if(tipo == PROPOSTA_PACTO) {
+			avisar_jogador(proponente, "Sua proposta de pacto de sangue a " + nome_exibicao(alvo) + " expirou sem resposta.");
+			avisar_jogador(alvo, "A proposta de pacto de sangue de " + nome_exibicao(proponente) + " expirou.");
+		} else if(tipo == PROPOSTA_DIVORCIO) {
+			avisar_jogador(proponente, "Seu pedido de divórcio expirou sem resposta.");
+			avisar_jogador(alvo, "O pedido de divórcio de " + nome_exibicao(proponente) + " expirou.");
+		} else if(tipo == PROPOSTA_ROMPER_PACTO) {
+			avisar_jogador(proponente, "Seu pedido de rompimento do pacto expirou sem resposta.");
+			avisar_jogador(alvo, "O pedido de rompimento do pacto de " + nome_exibicao(proponente) + " expirou.");
+		}
+	}
+}
+
+bool esta_em_cerimonia(string nome) {
+	string n = normalizar_nome(nome);
+	for(uint i = 0; i < cerimonias_ativas.length(); i++) {
+		if(cerimonias_ativas[i] is null) continue;
+		if(cerimonias_ativas[i].envolve(n)) return true;
+	}
+	return false;
+}
+
+void iniciar_cerimonia(string a, string b, string tipo, string mapa, int x, int y) {
+	cerimonia c(normalizar_nome(a), normalizar_nome(b), tipo, mapa, x, y);
+	cerimonias_ativas.insert_last(c);
+
+	debug_log("CASAMENTOS: cerimônia de " + nome_do_vinculo(tipo) + " agendada entre " + a + " e " + b + " em " + mapa);
+}
+
+void finalizar_cerimonia(cerimonia@ c) {
+	if(c is null) return;
+
+	string exib_a = nome_exibicao(c.jogador_a);
+	string exib_b = nome_exibicao(c.jogador_b);
+
+	if(!criar_vinculo(c.jogador_a, c.jogador_b, c.tipo, c.mapa, "")) {
+		avisar_jogador(c.jogador_a, "A cerimônia foi interrompida: um dos dois já possui um vínculo ativo.");
+		avisar_jogador(c.jogador_b, "A cerimônia foi interrompida: um dos dois já possui um vínculo ativo.");
+		debug_log("CASAMENTOS: cerimônia entre " + c.jogador_a + " e " + c.jogador_b + " falhou ao criar o vínculo");
+		return;
+	}
+
+	remover_propostas_de(c.jogador_a);
+	remover_propostas_de(c.jogador_b);
+
+	sync_vinculo_para_cliente(c.jogador_a);
+	sync_vinculo_para_cliente(c.jogador_b);
+
+	if(c.tipo == VINCULO_CASAMENTO) {
+		// Equivalente a mensagem global de marriages.bgt:21.
+		anunciar_global("Neste momento a boda de " + exib_a + " e " + exib_b + " se consuma, dando fé e legalidade ao sagrado matrimônio entre estas duas pessoas.", "victory.ogg");
+		avisar_jogador(c.jogador_a, "Você agora está casado(a) com " + exib_b + ". Use /casal para conversar em particular e /irate para ir até seu cônjuge.");
+		avisar_jogador(c.jogador_b, "Você agora está casado(a) com " + exib_a + ". Use /casal para conversar em particular e /irate para ir até seu cônjuge.");
+	} else {
+		// Equivalente a marriages.bgt:53.
+		anunciar_global("Pela bênção dos deuses, a partir de agora " + exib_a + " e " + exib_b + " estão pactuados para sempre!", "trovao7.ogg");
+		avisar_jogador(c.jogador_a, "O pacto de sangue com " + exib_b + " foi selado. Use /pactochat para falar com seu parceiro de pacto.");
+		avisar_jogador(c.jogador_b, "O pacto de sangue com " + exib_a + " foi selado. Use /pactochat para falar com seu parceiro de pacto.");
+	}
+}
+
+void avancar_cerimonias() {
+	for(int i = int(cerimonias_ativas.length()) - 1; i >= 0; i--) {
+		cerimonia@ c = @cerimonias_ativas[i];
+		if(c is null) {
+			cerimonias_ativas.remove_at(i);
+			continue;
+		}
+
+		string exib_a = nome_exibicao(c.jogador_a);
+		string exib_b = nome_exibicao(c.jogador_b);
+
+		if(c.etapa == 0) {
+			if(c.t.elapsed < CERIMONIA_ANUNCIO_MS) continue;
+			c.etapa = 1;
+			if(c.tipo == VINCULO_CASAMENTO) {
+				anunciar_global("Dentro de alguns instantes a boda de " + exib_a + " e " + exib_b + " será realizada.", "notify_trumpet.ogg");
+				anunciar_no_mapa(c.mapa, "Os noivos tomam seus lugares. O silêncio toma conta do lugar.");
+			} else {
+				anunciar_global("Dentro de alguns instantes o pacto de sangue entre " + exib_a + " e " + exib_b + " está prestes a se realizar!", "notify5.ogg");
+				anunciar_no_mapa(c.mapa, "A luz do altar se intensifica, iluminando todos os que estão ao seu lado.");
+			}
+			continue;
+		}
+
+		if(c.etapa == 1) {
+			if(c.t.elapsed < CERIMONIA_VOTOS_MS) continue;
+			c.etapa = 2;
+			if(c.tipo == VINCULO_CASAMENTO) {
+				anunciar_no_mapa(c.mapa, exib_a + " e " + exib_b + " trocam seus votos diante de todos.");
+				avisar_jogador(c.jogador_a, "Você declara seus votos a " + exib_b + ".");
+				avisar_jogador(c.jogador_b, "Você declara seus votos a " + exib_a + ".");
+			} else {
+				anunciar_no_mapa(c.mapa, "O chão treme enquanto " + exib_a + " e " + exib_b + " misturam seu sangue diante dos quatro elementos.");
+				avisar_jogador(c.jogador_a, "Você sela o pacto com seu próprio sangue.");
+				avisar_jogador(c.jogador_b, "Você sela o pacto com seu próprio sangue.");
+			}
+			continue;
+		}
+
+		if(c.t.elapsed < CERIMONIA_SELAGEM_MS) continue;
+
+		finalizar_cerimonia(c);
+		cerimonias_ativas.remove_at(i);
+	}
+}
+
+// Chamado a cada iteracao do laco principal do servidor. Todo o trabalho e guardado por
+// timer.elapsed: nada de broadcast por iteracao. A fila cerimonias_ativas resolve a
+// limitacao do BGT, que so suportava uma cerimonia por vez (globais wedding/tmarried).
+void casamentos_loop() {
+	if(casamentos_tick.elapsed < CASAMENTOS_TICK_MS) return;
+	casamentos_tick.restart();
+
+	expirar_propostas();
+	avancar_cerimonias();
+}
+
+bool casal_no_mesmo_mapa(int player_index) {
+	if(!casamentos_indice_valido(player_index)) return false;
+
+	string conjuge = get_parceiro(players[player_index].charname, VINCULO_CASAMENTO);
+	if(conjuge == "") return false;
+
+	int idx = indice_jogador_por_nome(conjuge);
+	if(idx < 0) return false;
+
+	return players[idx].map == players[player_index].map;
+}
+
+// Bonus de XP derivado (nao persistente). Espelha party_distribute_xp() de party.nvgt.
+void casamento_bonus_xp(int player_index, int xp_base) {
+	if(!casamentos_indice_valido(player_index)) return;
+	if(xp_base <= 0) return;
+	if(!casal_no_mesmo_mapa(player_index)) return;
+
+	int bonus = int(xp_base * CASAMENTO_BONUS_XP);
+	if(bonus <= 0) return;
+
+	players[player_index].xp += bonus;
+	send_reliable_text(players[player_index].peer_id, "msg2 [Casamento] +XP ao lado do seu cônjuge: " + bonus, 0);
+}
+
+// Dispatcher do prefixo MARRIAGE:, no padrao handle_party/handle_guild de network_handlers.nvgt.
+void handle_marriage(player@ p, string data) {
+
+	if(!network_require_non_empty(p, "handle_marriage", data)) return;
+	string[] parts = split_pipe_trimmed(data);
+	if(parts.length() < 1 || parts[0] == "") {
+		network_log_invalid_payload(p, "handle_marriage", "acao ausente", data);
+		return;
+	}
+
+	string action = parts[0];
+
+	debug_log("[MARRIAGE] " + p.name + " - marriage: " + action);
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) return;
+
+	if((action == "propose" || action == "marry") && parts.length() >= 2) {
+		cmd_casar(player_index, parts[1]);
+	} else if(action == "accept") {
+		cmd_aceitarcasamento(player_index);
+	} else if(action == "decline" || action == "refuse") {
+		cmd_recusarcasamento(player_index);
+	} else if(action == "divorce") {
+		cmd_divorciar(player_index);
+	} else if(action == "acceptdivorce") {
+		cmd_aceitardivorcio(player_index);
+	} else if(action == "chat" && parts.length() >= 2) {
+		cmd_casalchat(player_index, join_parts_from(parts, 1, "|"));
+	} else if(action == "info" || action == "status") {
+		cmd_meucasal(player_index);
+	} else if(action == "who" && parts.length() >= 2) {
+		cmd_casadocom(player_index, parts[1]);
+	} else if(action == "list") {
+		cmd_casamentos(player_index);
+	} else if(action == "tp" || action == "goto") {
+		cmd_irate(player_index);
+	} else if(action == "pact" && parts.length() >= 2) {
+		cmd_pacto(player_index, parts[1]);
+	} else if(action == "pactaccept") {
+		cmd_aceitarpacto(player_index);
+	} else if(action == "pactbreak") {
+		cmd_romperpacto(player_index);
+	} else if(action == "pactchat" && parts.length() >= 2) {
+		cmd_pactochat(player_index, join_parts_from(parts, 1, "|"));
+	} else if(action == "pactinfo") {
+		cmd_meupacto(player_index);
+	} else {
+		network_send_action_error(p, "Marriage", action);
+	}
+}

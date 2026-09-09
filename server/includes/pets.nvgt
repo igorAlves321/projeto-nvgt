@@ -1,0 +1,710 @@
+// ============================================================================
+//  SISTEMA DE PETS (companheiro cachorro)
+// ----------------------------------------------------------------------------
+//  Porte do "cachorromascota" do BGT original
+//  (servidor reino test/includes/bots/cachorromascota.bgt, jaula.bgt, voids.bgt).
+//
+//  Diferencas de projeto em relacao ao BGT:
+//   - Persistencia em sqlite (tabela player_pets) no lugar de cachorromascotas.usr.
+//   - Um pet por jogador, garantido pela UNIQUE(dono) da tabela.
+//   - A "jaula" gerada como mapa (jaula_del_cachorro_de_<dono>.map) NAO foi
+//     portada: nao existe plantillas/jaula.map no projeto. O "lar" do pet virou
+//     estado virtual: quando o dono desconecta o pet apenas fica ativo = false,
+//     preservando mapa/x/y no banco.
+//   - O indice do dono NUNCA e cacheado: remove_player() faz players.erase(i) e
+//     invalida todos os indices acima. Resolvemos por get_player_index_from()
+//     a cada tick, como party.nvgt faz.
+//   - A penalidade de morte do BGT (-100 niveis) nao foi portada: alem de
+//     desproporcional, cachorromascotaMuere() desreferenciava players[-1] quando
+//     o dono estava offline e derrubava o servidor.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Constantes de balanceamento (proprias; os numeros do BGT eram insustentaveis:
+// 30 min ate a fome e 40 s para perder 1000-2000 de uma vida total de 2000-2300)
+// ---------------------------------------------------------------------------
+const int PET_PASSO_MS = 200;              // intervalo minimo entre passos
+const int PET_SOM_MS = 4000;               // base do intervalo de sons ambiente
+const int PET_FOME_MS = 3600000;           // 1 hora ativa ate ficar com fome
+const int PET_PENALIDADE_MS = 600000;      // 10 minutos por ciclo de dano
+const int PET_PERSIST_MS = 60000;          // autosave do pet a cada 60 s
+const int PET_DANO_MIN = 150;
+const int PET_DANO_MAX = 300;
+const int PET_CURA_MIN = 500;
+const int PET_CURA_MAX = 1200;
+const int PET_VIDA_INICIAL_MIN = 2000;
+const int PET_VIDA_INICIAL_MAX = 3000;
+const double PET_VIDA_MAXIMA = 3000;
+const int PET_CUSTO_RENOMEAR = 5000;       // em gold (guild custa 10000)
+const int PET_DISTANCIA_SEGUIR = 2;        // BGT: anda quando abs(dx) > 2
+const int PET_XP_ALIMENTAR_MIN = 50;
+const int PET_XP_ALIMENTAR_MAX = 150;
+
+const string PET_ITEM_ADOCAO = "filhote_de_cachorro";
+const string PET_ITEM_RACAO = "racao_para_cachorro";
+const string PET_ESPECIE_PADRAO = "cachorro";
+
+// ---------------------------------------------------------------------------
+// Classe do pet
+// ---------------------------------------------------------------------------
+class pet {
+	int id = 0;
+	string dono = "";
+	string nome = "";
+	string especie = "cachorro";
+
+	string mapa = "test";
+	int mapindex = -1;
+	int x = 0;
+	int y = 0;
+
+	double vida = 2000;
+	double vida_maxima = 3000;
+
+	bool preso = false;
+	bool no_colo = false;
+	bool ativo = false;
+	bool com_fome = false;
+
+	int fome = 0;
+	int vezes_alimentado = 0;
+
+	timer t_passo;
+	timer t_som;
+	timer t_fome;
+	timer t_penalidade;
+	timer t_persist;
+
+	pet() {
+	}
+
+	pet(string dono_novo, string nome_novo, string mapa_novo, int px, int py, double vida_nova) {
+		this.dono = dono_novo;
+		this.nome = nome_novo;
+		this.mapa = mapa_novo;
+		this.x = px;
+		this.y = py;
+		this.vida = vida_nova;
+		this.vida_maxima = PET_VIDA_MAXIMA;
+		if(this.vida > this.vida_maxima) this.vida = this.vida_maxima;
+		this.mapindex = get_map_index_from(this.mapa);
+	}
+
+	string get_apelido() {
+		if(this.nome != "" && this.nome != "default") return this.nome;
+		return "cachorrinho de " + this.dono;
+	}
+
+	string get_estado() {
+		if(!this.ativo) return "dormindo";
+		if(this.no_colo) return "no colo";
+		if(this.preso) return "preso";
+		if(this.com_fome) return "com fome";
+		return "te seguindo";
+	}
+
+	string getdesc() {
+		return this.get_apelido() + ", " + this.get_estado() + ", com " + int(this.vida) + " de vida.";
+	}
+
+	void reiniciar_timers() {
+		this.t_passo.restart();
+		this.t_som.restart();
+		this.t_fome.restart();
+		this.t_penalidade.restart();
+		this.t_persist.restart();
+	}
+
+	void curar(double quantidade) {
+		this.vida += quantidade;
+		if(this.vida > this.vida_maxima) this.vida = this.vida_maxima;
+	}
+}
+
+pet@[] pets;
+
+// ---------------------------------------------------------------------------
+// Consultas em memoria
+// ---------------------------------------------------------------------------
+int get_pet_index(string dono) {
+	for(uint i = 0; i < pets.length(); i++) {
+		if(pets[i] is null) continue;
+		if(pets[i].dono == dono) return int(i);
+	}
+	return -1;
+}
+
+pet@ get_pet_de(string dono) {
+	int idx = get_pet_index(dono);
+	if(idx >= 0) return pets[idx];
+	return null;
+}
+
+bool jogador_tem_pet(string dono) {
+	return get_pet_index(dono) >= 0;
+}
+
+bool pet_nome_valido(string nome) {
+	if(nome.length() < 3 || nome.length() > 20) return false;
+	if(nome.find(" ") > -1) return false;
+	if(nome.find("\t") > -1) return false;
+	if(string_to_lower_case(nome) == "default") return false;
+	return true;
+}
+
+// Mapas onde o pet nao pode ser invocado/seguir (regra herdada do BGT: /llamar
+// recusava em helicóptero_de_guerra e arena). Comparacao sem acento de proposito.
+bool pet_mapa_proibido(string mapa) {
+	if(mapa == "") return true;
+	if(mapa == "arena") return true;
+	if(mapa.find("helic") == 0) return true;
+	if(mapa.find("jaula_del_cachorro_de_") == 0) return true;
+	return false;
+}
+
+// ---------------------------------------------------------------------------
+// Banco de dados
+// ---------------------------------------------------------------------------
+void create_pets_table() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_pets_table - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela player_pets...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS player_pets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			dono TEXT NOT NULL,
+			nome TEXT DEFAULT '',
+			especie TEXT DEFAULT 'cachorro',
+			mapa TEXT NOT NULL DEFAULT 'test',
+			x INTEGER DEFAULT 0,
+			y INTEGER DEFAULT 0,
+			vida REAL DEFAULT 2000,
+			vida_maxima REAL DEFAULT 3000,
+			preso INTEGER DEFAULT 0,
+			fome INTEGER DEFAULT 0,
+			com_fome INTEGER DEFAULT 0,
+			vezes_alimentado INTEGER DEFAULT 0,
+			morto INTEGER DEFAULT 0,
+			nascido_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			ultima_refeicao DATETIME DEFAULT CURRENT_TIMESTAMP,
+			morto_em DATETIME DEFAULT NULL,
+			UNIQUE(dono)
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela player_pets: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	debug_log("OK - Tabela player_pets criada/verificada");
+
+	string create_index = "CREATE INDEX IF NOT EXISTS idx_player_pets_dono ON player_pets(dono);";
+	bancoJogo.execute(create_index);
+
+	pet_registrar_itens();
+}
+
+// Registra os dois itens do sistema no catalogo (items.nvgt). Feito aqui porque
+// seed_default_items() so roda com a tabela items vazia; assim os itens tambem
+// aparecem em servidores que ja tem catalogo populado.
+// racao_para_cachorro NAO entra em consumables.nvgt: use_item() aplica o efeito
+// no proprio jogador e nao aceita alvo; o consumo e explicito em cmd_alimentar().
+void pet_registrar_itens() {
+	if(!database_initialized) return;
+
+	if(!item_exists_in_database(PET_ITEM_ADOCAO)) {
+		create_item(PET_ITEM_ADOCAO, "Filhote de cachorro",
+			"Um filhote esperando por um lar. Use /adotar <nome> para adota-lo.",
+			"misc", "pet",
+			0, 0, 0, 0, false, 1, 1.0, 0, "rare", 0.0, false, false, true, "", "");
+	}
+
+	if(!item_exists_in_database(PET_ITEM_RACAO)) {
+		create_item(PET_ITEM_RACAO, "Racao para cachorro",
+			"Comida do seu pet. Use /alimentar quando ele estiver com fome.",
+			"consumable", "pet",
+			0, 0, 0, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "", "");
+	}
+}
+
+void carregar_pets() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: carregar_pets - Banco não inicializado");
+		return;
+	}
+
+	pets.resize(0);
+
+	string query = """
+		SELECT id, dono, nome, especie, mapa, x, y, vida, vida_maxima,
+		       preso, fome, com_fome, vezes_alimentado
+		FROM player_pets
+		WHERE morto = 0;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar query carregar_pets: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	while(stmt.step() == SQLITE_ROW) {
+		pet pt;
+		pt.id = stmt.column_int(0);
+		pt.dono = stmt.column_text(1);
+		pt.nome = stmt.column_text(2);
+		pt.especie = stmt.column_text(3);
+		pt.mapa = stmt.column_text(4);
+		pt.x = stmt.column_int(5);
+		pt.y = stmt.column_int(6);
+		pt.vida = stmt.column_double(7);
+		pt.vida_maxima = stmt.column_double(8);
+		pt.preso = stmt.column_int(9) != 0;
+		pt.fome = stmt.column_int(10);
+		pt.com_fome = stmt.column_int(11) != 0;
+		pt.vezes_alimentado = stmt.column_int(12);
+
+		if(pt.especie == "") pt.especie = PET_ESPECIE_PADRAO;
+		if(pt.mapa == "") pt.mapa = "test";
+		if(pt.vida_maxima <= 0) pt.vida_maxima = PET_VIDA_MAXIMA;
+		if(pt.vida > pt.vida_maxima) pt.vida = pt.vida_maxima;
+
+		// Dorme ate o dono conectar; mapindex e resolvido sob demanda porque
+		// carregar_pets() roda no PASSO 4 e os mapas so entram no PASSO 5.
+		pt.ativo = false;
+		pt.no_colo = false;
+		pt.mapindex = -1;
+
+		pets.insert_last(pt);
+	}
+
+	debug_log("PET: " + pets.length() + " pets carregados do banco");
+}
+
+bool pet_inserir(pet@ pt) {
+	if(pt is null) return false;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	// A tabela tem UNIQUE(dono): limpa um eventual registro morto antigo do
+	// mesmo dono antes de inserir o novo filhote.
+	sqlite3statement@ del = bancoJogo.prepare("DELETE FROM player_pets WHERE dono = ?;");
+	if(del !is null) {
+		del.bind_text(1, pt.dono);
+		del.step();
+	}
+
+	string query = """
+		INSERT INTO player_pets
+			(dono, nome, especie, mapa, x, y, vida, vida_maxima,
+			 preso, fome, com_fome, vezes_alimentado, morto)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar insert de pet: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, pt.dono);
+	stmt.bind_text(2, pt.nome);
+	stmt.bind_text(3, pt.especie);
+	stmt.bind_text(4, pt.mapa);
+	stmt.bind_int(5, pt.x);
+	stmt.bind_int(6, pt.y);
+	stmt.bind_double(7, pt.vida);
+	stmt.bind_double(8, pt.vida_maxima);
+	stmt.bind_int(9, pt.preso ? 1 : 0);
+	stmt.bind_int(10, pt.fome);
+	stmt.bind_int(11, pt.com_fome ? 1 : 0);
+	stmt.bind_int(12, pt.vezes_alimentado);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao inserir pet de " + pt.dono + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	sqlite3statement@ sel = bancoJogo.prepare("SELECT id FROM player_pets WHERE dono = ? LIMIT 1;");
+	if(sel !is null) {
+		sel.bind_text(1, pt.dono);
+		if(sel.step() == SQLITE_ROW) pt.id = sel.column_int(0);
+	}
+
+	debug_log("PET: pet de " + pt.dono + " inserido no banco (id " + pt.id + ")");
+	return true;
+}
+
+bool pet_salvar(pet@ pt) {
+	if(pt is null) return false;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = """
+		UPDATE player_pets
+		SET nome = ?, mapa = ?, x = ?, y = ?, vida = ?, preso = ?,
+		    fome = ?, com_fome = ?, vezes_alimentado = ?
+		WHERE dono = ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar update de pet: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, pt.nome);
+	stmt.bind_text(2, pt.mapa);
+	stmt.bind_int(3, pt.x);
+	stmt.bind_int(4, pt.y);
+	stmt.bind_double(5, pt.vida);
+	stmt.bind_int(6, pt.preso ? 1 : 0);
+	stmt.bind_int(7, pt.fome);
+	stmt.bind_int(8, pt.com_fome ? 1 : 0);
+	stmt.bind_int(9, pt.vezes_alimentado);
+	stmt.bind_text(10, pt.dono);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool pet_registrar_refeicao(pet@ pt) {
+	if(pt is null) return false;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(
+		"UPDATE player_pets SET ultima_refeicao = CURRENT_TIMESTAMP WHERE dono = ?;");
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, pt.dono);
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool pet_apagar(string dono) {
+	int idx = get_pet_index(dono);
+	if(idx >= 0) pets.remove_at(uint(idx));
+
+	if(!database_initialized || bancoJogo is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM player_pets WHERE dono = ?;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar delete de pet: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, dono);
+	bool ok = stmt.step() == SQLITE_DONE;
+	if(ok) debug_log("PET: pet de " + dono + " removido do banco");
+	return ok;
+}
+
+// Chamado por changename() (legacy_compat.nvgt): renomeia o dono no banco e em
+// memoria de uma vez so.
+void pet_transferir_dono(string dono_antigo, string dono_novo) {
+	if(dono_antigo == "" || dono_novo == "" || dono_antigo == dono_novo) return;
+
+	if(database_initialized && bancoJogo !is null) {
+		sqlite3statement@ stmt = bancoJogo.prepare("UPDATE player_pets SET dono = ? WHERE dono = ?;");
+		if(stmt !is null) {
+			stmt.bind_text(1, dono_novo);
+			stmt.bind_text(2, dono_antigo);
+			stmt.step();
+		}
+	}
+
+	pet@ pt = get_pet_de(dono_antigo);
+	if(pt !is null) {
+		pt.dono = dono_novo;
+		debug_log("PET: dono do pet transferido de " + dono_antigo + " para " + dono_novo);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Notificacao
+// ---------------------------------------------------------------------------
+void pet_avisar_dono(pet@ pt, string mensagem, string som = "") {
+	if(pt is null) return;
+	int idx = get_player_index_from(pt.dono);
+	if(idx < 0) return;
+	send_reliable_text(players[idx].peer_id, "msg2 " + mensagem, 0);
+	if(som != "") send_reliable_text(players[idx].peer_id, "ps " + som, 0);
+}
+
+void pet_notificar_por_mail(string dono, string assunto, string corpo) {
+	mailbox@ mb = get_mailbox(dono);
+	if(mb is null) return;
+	if(mb.is_full()) {
+		debug_log("PET: caixa de " + dono + " cheia, aviso do pet nao entregue");
+		return;
+	}
+	player_mail_message msg(mb.next_message_id, "Canil do Reino", dono, assunto, corpo);
+	mb.add_message(msg);
+	mb.save();
+}
+
+// ---------------------------------------------------------------------------
+// Descricao para o "olhar em volta" (map_query_methods.nvgt)
+// ---------------------------------------------------------------------------
+string pets_getdesc_no_mapa(int mapindex, int px, int py, int range) {
+	if(pets.length() == 0) return "";
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return "";
+	if(server_maps[mapindex] is null) return "";
+
+	string mapname = server_maps[mapindex].name;
+	string a = "";
+
+	for(uint i = 0; i < pets.length(); i++) {
+		pet@ pt = pets[i];
+		if(pt is null) continue;
+		if(pt.mapa != mapname) continue;
+		// Ordem correta dos argumentos: get_distance(x1, y1, x2, y2)
+		if(get_distance(px, py, pt.x, pt.y) > double(range)) continue;
+		a += " " + pt.getdesc();
+	}
+
+	return a;
+}
+
+// ---------------------------------------------------------------------------
+// Comportamento
+// ---------------------------------------------------------------------------
+void pet_sons_ambiente(pet@ pt) {
+	if(pt is null) return;
+	if(pt.t_som.elapsed < uint64(PET_SOM_MS + random(1000, 3200))) return;
+	pt.t_som.restart();
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+
+	string ss = "cachorronervoso" + random(1, 4) + ".ogg";
+	server_maps[mi].send_packet(5, "play_npc " + ss, pt.x, pt.y);
+}
+
+void pet_seguir_dono(pet@ pt, int dono_index) {
+	if(pt is null) return;
+	if(pt.preso) return;
+	if(dono_index < 0 || dono_index >= int(players.length())) return;
+
+	player@ dono = players[dono_index];
+	if(dono is null) return;
+
+	if(is_game_disabled(dono.x, dono.y, dono.map)) return;
+	if(pet_mapa_proibido(dono.map)) return;
+
+	if(pt.mapa != dono.map) {
+		pt.mapa = dono.map;
+		pt.mapindex = get_map_index_from(pt.mapa);
+		pt.x = dono.x;
+		pt.y = dono.y;
+		return;
+	}
+
+	if(pt.no_colo) {
+		pt.x = dono.x;
+		pt.y = dono.y;
+	}
+}
+
+void pet_passo(pet@ pt, int dono_index) {
+	if(pt is null) return;
+	if(pt.preso || pt.no_colo) return;
+	if(dono_index < 0 || dono_index >= int(players.length())) return;
+
+	player@ dono = players[dono_index];
+	if(dono is null) return;
+	if(dono.afk) return;
+	if(pt.mapa != dono.map) return;
+
+	if(pt.t_passo.elapsed < uint64(PET_PASSO_MS)) return;
+	pt.t_passo.restart();
+
+	int dx = dono.x - pt.x;
+	if(abs(dx) <= PET_DISTANCIA_SEGUIR) {
+		// Ja esta ao lado do dono: apenas acompanha a altura, sem tocar passo.
+		pt.y = dono.y;
+		return;
+	}
+
+	int novo_x = pt.x + (dx > 0 ? 1 : -1);
+	if(is_game_disabled(novo_x, pt.y, pt.mapa)) return;
+
+	pt.x = novo_x;
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+
+	string ss = get_tile_at(pt.x, pt.y, pt.mapa);
+	if(ss == "") return;
+	server_maps[mi].send_packet(5, "play_npc " + ss + "step" + random(1, 5) + ".ogg", pt.x, pt.y);
+}
+
+void pet_ciclo_fome(pet@ pt, int dono_index) {
+	if(pt is null) return;
+
+	if(!pt.com_fome) {
+		if(pt.t_fome.elapsed < uint64(PET_FOME_MS)) return;
+		pt.t_fome.restart();
+		pt.t_penalidade.restart();
+		pt.com_fome = true;
+		pt.fome += 1;
+		pet_avisar_dono(pt, "Seu " + pt.get_apelido() + " está precisando de comida e água! Use /alimentar.", "alarm3.ogg");
+		pet_salvar(pt);
+		return;
+	}
+
+	if(pt.t_penalidade.elapsed < uint64(PET_PENALIDADE_MS)) return;
+	pt.t_penalidade.restart();
+
+	pt.fome += 1;
+	pt.vida -= random(PET_DANO_MIN, PET_DANO_MAX);
+	if(pt.vida < 0) pt.vida = 0;
+
+	if(pt.vida <= 0) {
+		pet_morrer(pt, "fome");
+		return;
+	}
+
+	pet_avisar_dono(pt, "Seu " + pt.get_apelido() + " está enfraquecendo de fome. Restam " + int(pt.vida) + " de vida.", "alarm3.ogg");
+	pet_salvar(pt);
+}
+
+void pet_morrer(pet@ pt, string motivo) {
+	if(pt is null) return;
+
+	string apelido = pt.get_apelido();
+	string dono = pt.dono;
+
+	// Marca inativo antes de sair do array: quem chamou (pets_loop) usa isso
+	// para nao continuar processando um pet que ja morreu nesta iteracao.
+	pt.ativo = false;
+	pt.vida = 0;
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(5, "play_npc m_cachorro.ogg", pt.x, pt.y);
+	}
+
+	if(database_initialized && bancoJogo !is null) {
+		sqlite3statement@ stmt = bancoJogo.prepare(
+			"UPDATE player_pets SET morto = 1, vida = 0, morto_em = CURRENT_TIMESTAMP WHERE dono = ?;");
+		if(stmt !is null) {
+			stmt.bind_text(1, dono);
+			stmt.step();
+		}
+	}
+
+	int idx = get_pet_index(dono);
+	if(idx >= 0) pets.remove_at(uint(idx));
+
+	string texto = "";
+	if(motivo == "fome") {
+		texto = "O adorável " + apelido + " não aguentou por muito tempo e morreu por falta de comida e água. Se você não é capaz de cuidar de um filhote, por que o adotou?";
+	} else if(motivo == "admin") {
+		texto = "Seu " + apelido + " foi retirado de você por um administrador.";
+	} else {
+		texto = "Seu " + apelido + " não resistiu e morreu.";
+	}
+
+	int dono_index = get_player_index_from(dono);
+	if(dono_index >= 0) {
+		send_reliable_text(players[dono_index].peer_id, "msg2 " + texto, 0);
+		send_reliable_text(players[dono_index].peer_id, "ps alarm3.ogg", 0);
+	} else {
+		pet_notificar_por_mail(dono, "Seu pet morreu", texto);
+	}
+
+	debug_log("PET: pet de " + dono + " morreu (" + motivo + ")");
+}
+
+// ---------------------------------------------------------------------------
+// Ciclo de vida (login / logout)
+// ---------------------------------------------------------------------------
+void pet_dono_conectou(string charname) {
+	pet@ pt = get_pet_de(charname);
+	if(pt is null) return;
+
+	pt.ativo = true;
+	pt.no_colo = false;
+	pt.reiniciar_timers();
+
+	int idx = get_player_index_from(charname);
+	if(idx >= 0 && idx < int(players.length()) && players[idx] !is null && !pt.preso) {
+		if(!pet_mapa_proibido(players[idx].map)) {
+			pt.mapa = players[idx].map;
+			pt.x = players[idx].x;
+			pt.y = players[idx].y;
+		}
+	}
+
+	pt.mapindex = get_map_index_from(pt.mapa);
+	pet_salvar(pt);
+
+	if(idx >= 0) {
+		send_reliable_text(players[idx].peer_id, "msg2 Seu " + pt.get_apelido() + " acorda e vem correndo até você.", 0);
+		if(pt.com_fome) {
+			send_reliable_text(players[idx].peer_id, "msg2 Ele ainda está com fome! Use /alimentar.", 0);
+		}
+	}
+
+	debug_log("PET: pet de " + charname + " acordou em " + pt.mapa + " (" + pt.x + "," + pt.y + ")");
+}
+
+void pet_dono_desconectou(string charname) {
+	pet@ pt = get_pet_de(charname);
+	if(pt is null) return;
+
+	pt.no_colo = false;
+	pet_salvar(pt);
+	pt.ativo = false;
+
+	debug_log("PET: pet de " + charname + " voltou a dormir");
+}
+
+// ---------------------------------------------------------------------------
+// Loop principal (chamado uma vez por iteracao do main loop do servidor).
+// Tudo e gated por timer por pet; pets inativos saem na primeira linha.
+// O indice do dono e sempre resolvido de novo, nunca cacheado.
+// ---------------------------------------------------------------------------
+void pets_loop() {
+	if(pets.length() == 0) return;
+
+	for(int i = int(pets.length()) - 1; i >= 0; i--) {
+		pet@ pt = pets[uint(i)];
+		if(pt is null) {
+			pets.remove_at(uint(i));
+			continue;
+		}
+		if(!pt.ativo) continue;
+
+		int dono_index = get_player_index_from(pt.dono);
+		if(dono_index < 0) {
+			// O dono sumiu sem passar por pet_dono_desconectou(): dorme o pet.
+			pet_salvar(pt);
+			pt.ativo = false;
+			pt.no_colo = false;
+			continue;
+		}
+
+		if(pt.vida <= 0) {
+			pet_morrer(pt, "ferimentos");
+			continue;
+		}
+
+		pt.mapindex = get_map_index_from(pt.mapa);
+
+		pet_sons_ambiente(pt);
+		pet_seguir_dono(pt, dono_index);
+		pet_passo(pt, dono_index);
+		pet_ciclo_fome(pt, dono_index);
+
+		// pet_ciclo_fome() pode ter matado o pet e o tirado do array.
+		if(!pt.ativo) continue;
+
+		if(pt.t_persist.elapsed >= uint64(PET_PERSIST_MS)) {
+			pt.t_persist.restart();
+			pet_salvar(pt);
+		}
+	}
+}

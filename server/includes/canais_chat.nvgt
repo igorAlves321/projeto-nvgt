@@ -1,0 +1,698 @@
+// ==========================================================================
+// Catálogo de canais de chat.
+//
+// Porta do BGT original:
+//   - load_channels() / save_channels()      (re_server_test.bgt:2390 e 2407)
+//     O dicionário global 'channels' + o arquivo channels.db viraram a tabela
+//     sqlite 'canais_chat'.
+//   - get_channels(index)                    (voids.bgt:2938)  -> enviar_canais()
+//   - /chats                                 (voids.bgt:2925)  -> cmd_canais()
+//   - /add_chat_channel <nome>               (voids.bgt:1113)  -> cmd_addcanal()
+//   - /send_channels <jogador>               (voids.bgt:1121)  -> cmd_sendcanais()
+//   - roteamento por players[i].idiomachat   (net.bgt:1330)    -> já existe em
+//     server/includes/chat_advanced.nvgt (process_chat_message /
+//     broadcast_to_chat_channel). Aqui entra só o CATÁLOGO, a persistência
+//     dele, a validação e os comandos.
+//
+// Formato de rede preservado do BGT: o pacote "channels" leva uma linha por
+// canal no formato "rotulo=nome", separadas por \r\n. É exatamente o que o
+// cliente espera em cliente/includes/net.nvgt:1151.
+//
+// O campo técnico gravado em players.idiomachat é o 'nome' do canal; o
+// 'rotulo' é apenas o texto exibido ao jogador.
+// ==========================================================================
+
+const string CANAL_PADRAO = "pt";
+const string CANAL_DESATIVADO = "Desativado";
+
+const int CANAL_MAX_NOME = 32;
+const int CANAL_MAX_ROTULO = 48;
+
+class canal_chat {
+	int id = 0;
+	string nome = "";
+	string rotulo = "";
+	string descricao = "";
+	bool apenas_admin = false;
+	bool ativo = true;
+	int ordem = 0;
+
+	// Linha no formato que o cliente monta o menu de chat: "rotulo=nome".
+	string linha_menu() {
+		return rotulo + "=" + nome;
+	}
+}
+
+// Cache em memória do catálogo (evita um SELECT a cada /canais e a cada login).
+canal_chat@[] canais_cache;
+
+// --------------------------------------------------------------------------
+// Helpers gerais
+// --------------------------------------------------------------------------
+
+// Usado por canais_chat.nvgt e por noticias.nvgt para resolver o índice do
+// jogador a partir do peer que mandou o pacote cru.
+int indice_jogador_por_peer(uint64 peer_id) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(uint64(players[i].peer_id) == peer_id) return int(i);
+	}
+	return -1;
+}
+
+// Nome técnico: sem espaços e sem os separadores usados nos pacotes.
+bool canal_nome_valido(string nome) {
+	if(nome == "") return false;
+	if(int(nome.length()) > CANAL_MAX_NOME) return false;
+	if(nome.find(" ") >= 0) return false;
+	if(nome.find("=") >= 0) return false;
+	if(nome.find("|") >= 0) return false;
+	if(nome.find(";") >= 0) return false;
+	if(nome.find("\r") >= 0) return false;
+	if(nome.find("\n") >= 0) return false;
+	return true;
+}
+
+// Rótulo exibido: pode ter espaços, mas não os separadores.
+bool canal_rotulo_valido(string rotulo) {
+	if(rotulo == "") return false;
+	if(int(rotulo.length()) > CANAL_MAX_ROTULO) return false;
+	if(rotulo.find("=") >= 0) return false;
+	if(rotulo.find("|") >= 0) return false;
+	if(rotulo.find(";") >= 0) return false;
+	if(rotulo.find("\r") >= 0) return false;
+	if(rotulo.find("\n") >= 0) return false;
+	return true;
+}
+
+void canal_msg(int player_index, string mensagem) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + mensagem, 0);
+}
+
+// --------------------------------------------------------------------------
+// Tabela
+// --------------------------------------------------------------------------
+
+void create_canais_chat_table() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_canais_chat_table - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela canais_chat...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS canais_chat (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			nome TEXT NOT NULL UNIQUE,
+			rotulo TEXT NOT NULL,
+			descricao TEXT DEFAULT '',
+			apenas_admin INTEGER DEFAULT 0,
+			ativo INTEGER DEFAULT 1,
+			ordem INTEGER DEFAULT 0,
+			criado_por TEXT DEFAULT 'system',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela canais_chat: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_canais_chat_ativo ON canais_chat(ativo, ordem);");
+
+	debug_log("OK - Tabela canais_chat criada/verificada");
+}
+
+int canais_total_no_banco() {
+	if(!database_initialized || bancoJogo is null) return -1;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM canais_chat;");
+	if(@stmt == null) return -1;
+
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+
+	return -1;
+}
+
+bool canal_inserir_no_banco(string nome, string rotulo, string descricao, bool apenas_admin, int ordem, string criador) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = """
+		INSERT INTO canais_chat (nome, rotulo, descricao, apenas_admin, ativo, ordem, criado_por)
+		VALUES (?, ?, ?, ?, 1, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("CANAIS: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, nome);
+	stmt.bind_text(2, rotulo);
+	stmt.bind_text(3, descricao);
+	stmt.bind_int(4, apenas_admin ? 1 : 0);
+	stmt.bind_int(5, ordem);
+	stmt.bind_text(6, criador);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("CANAIS: erro ao gravar canal '" + nome + "': " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	return true;
+}
+
+// Só semeia quando a tabela está vazia; senão um canal desativado por um
+// admin voltaria a aparecer a cada boot.
+void seed_canais_padrao() {
+	int total = canais_total_no_banco();
+	if(total != 0) return;
+
+	debug_log("CANAIS: semeando catálogo padrão de canais de chat...");
+
+	// A lista abaixo é exatamente a que o cliente tinha fixa em
+	// cliente/client.nvgt:382-388, mais 'livre' e 'comercio' herdados do
+	// channels.db do BGT.
+	canal_inserir_no_banco(CANAL_DESATIVADO, "Desativar chat", "Não recebe nem envia mensagens no chat geral.", false, 0, "system");
+	canal_inserir_no_banco("ar", "Arabic", "Canal em árabe.", false, 1, "system");
+	canal_inserir_no_banco("en", "English", "Canal em inglês.", false, 2, "system");
+	canal_inserir_no_banco("es", "Español", "Canal em espanhol.", false, 3, "system");
+	canal_inserir_no_banco("fr", "Français", "Canal em francês.", false, 4, "system");
+	canal_inserir_no_banco("pl", "Persian", "Canal em persa.", false, 5, "system");
+	canal_inserir_no_banco("pt", "Português", "Canal em português.", false, 6, "system");
+	canal_inserir_no_banco("livre", "Livre", "Papo livre, qualquer idioma.", false, 7, "system");
+	canal_inserir_no_banco("comercio", "Comércio", "Compra, venda e troca de itens.", false, 8, "system");
+
+	debug_log("CANAIS: catálogo padrão semeado");
+}
+
+// --------------------------------------------------------------------------
+// Cache
+// --------------------------------------------------------------------------
+
+void recarregar_canais() {
+	canais_cache.resize(0);
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		SELECT id, nome, rotulo, descricao, apenas_admin, ativo, ordem
+		FROM canais_chat
+		ORDER BY ordem, nome;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("CANAIS: erro ao preparar select de canais: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	while(stmt.step() == SQLITE_ROW) {
+		canal_chat@ c = canal_chat();
+		c.id = stmt.column_int(0);
+		c.nome = stmt.column_text(1);
+		c.rotulo = stmt.column_text(2);
+		c.descricao = stmt.column_text(3);
+		c.apenas_admin = (stmt.column_int(4) != 0);
+		c.ativo = (stmt.column_int(5) != 0);
+		c.ordem = stmt.column_int(6);
+		canais_cache.insert_last(@c);
+	}
+
+	debug_log("CANAIS: " + canais_cache.length() + " canais carregados em cache");
+}
+
+void init_canais_chat() {
+	create_canais_chat_table();
+	seed_canais_padrao();
+	recarregar_canais();
+}
+
+// Devolve o canal mesmo que esteja inativo (necessário para o login detectar
+// que o jogador está preso num canal desativado).
+canal_chat@ get_canal(string nome) {
+	if(nome == "") return null;
+	string alvo = nome.lower();
+	for(uint i = 0; i < canais_cache.length(); i++) {
+		if(canais_cache[i] is null) continue;
+		if(canais_cache[i].nome.lower() == alvo) return canais_cache[i];
+	}
+	return null;
+}
+
+// Só considera canais ativos.
+bool canal_existe(string nome) {
+	canal_chat@ c = get_canal(nome);
+	return (c !is null && c.ativo);
+}
+
+string[] canais_listar(bool incluir_inativos = false) {
+	string[] linhas;
+	for(uint i = 0; i < canais_cache.length(); i++) {
+		if(canais_cache[i] is null) continue;
+		if(!incluir_inativos && !canais_cache[i].ativo) continue;
+		linhas.insert_last(canais_cache[i].linha_menu());
+	}
+	return linhas;
+}
+
+// Formato exato esperado por cliente/includes/net.nvgt:1151.
+// Usamos join() e não linear(): o split() do NVGT não descarta strings vazias
+// (o string_split(..., false) do BGT descartava), então um \r\n final criaria
+// um item vazio no menu de canais do cliente.
+string canais_serializado() {
+	return join(canais_listar(), "\r\n");
+}
+
+void enviar_canais(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	string dados = canais_serializado();
+	if(dados == "") {
+		send_reliable_text(players[player_index].peer_id, "msg2 Não há canais de chat disponíveis no momento.", 0);
+		return;
+	}
+
+	send_reliable_text(players[player_index].peer_id, "channels " + dados, 0);
+}
+
+// --------------------------------------------------------------------------
+// Consultas
+// --------------------------------------------------------------------------
+
+bool jogador_pode_entrar(string username, string canal) {
+	canal_chat@ c = get_canal(canal);
+	if(c is null || !c.ativo) return false;
+	if(c.apenas_admin && !check_is_admin(username)) return false;
+	return true;
+}
+
+int canal_contar_online(string nome) {
+	if(nome == "") return 0;
+	int total = 0;
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		if(players[i].idiomachat == nome) total++;
+	}
+	return total;
+}
+
+// Aviso simples de entrada/saída para quem está no canal.
+void canal_avisar(string canal, string mensagem, string excluir_username = "") {
+	if(canal == "" || canal == CANAL_DESATIVADO) return;
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		if(players[i].idiomachat != canal) continue;
+		if(excluir_username != "" && players[i].charname == excluir_username) continue;
+		send_reliable_text(players[i].peer_id, "msg2 " + mensagem, 0);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Troca de canal
+// --------------------------------------------------------------------------
+
+bool definir_canal_jogador(int player_index, string canal) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = @players[player_index];
+	if(p is null) return false;
+
+	canal = canal.trim_whitespace();
+	if(canal == "") {
+		canal_msg(player_index, "[ERRO] Informe o canal. Use /canais para ver a lista.");
+		return false;
+	}
+
+	canal_chat@ c = get_canal(canal);
+	if(c is null || !c.ativo) {
+		canal_msg(player_index, "[ERRO] O canal '" + canal + "' não existe. Use /canais para ver a lista.");
+		return false;
+	}
+
+	if(c.apenas_admin && !check_is_admin(p.charname)) {
+		canal_msg(player_index, "[ERRO] O canal " + c.rotulo + " é restrito à equipe do servidor.");
+		return false;
+	}
+
+	if(p.idiomachat == c.nome) {
+		canal_msg(player_index, "Você já está no canal " + c.rotulo + ".");
+		return false;
+	}
+
+	string anterior = p.idiomachat;
+	canal_avisar(anterior, p.charname + " saiu do canal.", p.charname);
+
+	p.idiomachat = c.nome;
+	save_player_to_database(p);
+	send_configs_to_client(p);
+
+	if(c.nome == CANAL_DESATIVADO) {
+		canal_msg(player_index, "Seu chat foi desativado. Use /canal <nome> para voltar a conversar.");
+	} else {
+		canal_avisar(c.nome, p.charname + " entrou no canal.", p.charname);
+		canal_msg(player_index, "Você entrou no canal " + c.rotulo + " (" + c.nome + "). Online aqui: " + canal_contar_online(c.nome) + ".");
+		if(c.descricao != "") canal_msg(player_index, c.descricao);
+	}
+
+	debug_log("CANAIS: " + p.charname + " trocou de '" + anterior + "' para '" + c.nome + "'");
+	return true;
+}
+
+// Chamado no login: um canal removido/renomeado não pode deixar o jogador
+// isolado num canal de uma pessoa só.
+void canal_validar_jogador(player@ p) {
+	if(p is null) return;
+
+	// Sem catálogo carregado (falha de banco) não mexemos em nada.
+	if(canais_cache.length() == 0) return;
+
+	string atual = p.idiomachat.trim_whitespace();
+
+	if(atual == "" || atual == "null") {
+		p.idiomachat = CANAL_PADRAO;
+		save_player_to_database(p);
+		return;
+	}
+
+	canal_chat@ c = get_canal(atual);
+
+	if(c !is null && c.ativo) {
+		// Normaliza para o nome canônico gravado no catálogo.
+		if(c.nome != p.idiomachat) {
+			p.idiomachat = c.nome;
+			save_player_to_database(p);
+		}
+		return;
+	}
+
+	p.idiomachat = CANAL_PADRAO;
+	save_player_to_database(p);
+
+	canal_chat@ padrao = get_canal(CANAL_PADRAO);
+	string rotulo_padrao = padrao is null ? CANAL_PADRAO : padrao.rotulo;
+
+	send_reliable_text(p.peer_id, "msg2 O canal de chat '" + atual + "' não existe mais. Você foi movido para " + rotulo_padrao + ".", 0);
+	debug_log("CANAIS: " + p.charname + " estava no canal inválido '" + atual + "' e foi movido para " + CANAL_PADRAO);
+}
+
+// --------------------------------------------------------------------------
+// Administração do catálogo
+// --------------------------------------------------------------------------
+
+bool canal_criar(string nome, string rotulo, string criador, bool apenas_admin = false) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	nome = nome.trim_whitespace();
+	rotulo = rotulo.trim_whitespace();
+
+	if(!canal_nome_valido(nome)) return false;
+	if(!canal_rotulo_valido(rotulo)) return false;
+
+	canal_chat@ existente = get_canal(nome);
+
+	if(existente !is null) {
+		if(existente.ativo) return false;
+
+		// Canal soft-deletado: reativa em vez de duplicar (nome é UNIQUE).
+		sqlite3statement@ up = bancoJogo.prepare("UPDATE canais_chat SET ativo = 1, rotulo = ?, apenas_admin = ?, criado_por = ? WHERE nome = ?;");
+		if(@up == null) return false;
+
+		up.bind_text(1, rotulo);
+		up.bind_int(2, apenas_admin ? 1 : 0);
+		up.bind_text(3, criador);
+		up.bind_text(4, existente.nome);
+
+		if(up.step() != SQLITE_DONE) {
+			debug_log("CANAIS: erro ao reativar canal '" + nome + "': " + bancoJogo.get_last_error_text());
+			return false;
+		}
+
+		recarregar_canais();
+		debug_log("CANAIS: " + criador + " reativou o canal '" + nome + "'");
+		return true;
+	}
+
+	int proxima_ordem = 0;
+	sqlite3statement@ ord = bancoJogo.prepare("SELECT COALESCE(MAX(ordem), 0) + 1 FROM canais_chat;");
+	if(@ord != null && ord.step() == SQLITE_ROW) proxima_ordem = ord.column_int(0);
+
+	if(!canal_inserir_no_banco(nome, rotulo, "", apenas_admin, proxima_ordem, criador)) return false;
+
+	recarregar_canais();
+	debug_log("CANAIS: " + criador + " criou o canal '" + nome + "' (" + rotulo + ")");
+	return true;
+}
+
+// Soft delete: nunca DELETE físico. Jogadores offline com players.idiomachat
+// apontando para o canal continuariam válidos no banco, por isso movemos
+// todo mundo (online e offline) para o canal padrão.
+bool canal_remover(string nome, string quem) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	nome = nome.trim_whitespace();
+
+	canal_chat@ c = get_canal(nome);
+	if(c is null || !c.ativo) return false;
+
+	if(c.nome == CANAL_PADRAO || c.nome == CANAL_DESATIVADO) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE canais_chat SET ativo = 0 WHERE nome = ?;");
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, c.nome);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("CANAIS: erro ao desativar canal '" + c.nome + "': " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	// Move quem estava offline no canal.
+	sqlite3statement@ mv = bancoJogo.prepare("UPDATE players SET idiomachat = ? WHERE idiomachat = ?;");
+	if(@mv != null) {
+		mv.bind_text(1, CANAL_PADRAO);
+		mv.bind_text(2, c.nome);
+		mv.step();
+	}
+
+	string nome_removido = c.nome;
+	string rotulo_removido = c.rotulo;
+
+	recarregar_canais();
+
+	// Move quem estava online no canal.
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		if(players[i].idiomachat != nome_removido) continue;
+
+		players[i].idiomachat = CANAL_PADRAO;
+		save_player_to_database(players[i]);
+		send_configs_to_client(players[i]);
+		send_reliable_text(players[i].peer_id, "msg2 O canal " + rotulo_removido + " foi desativado. Você foi movido para o canal padrão.", 0);
+		enviar_canais(int(i));
+	}
+
+	eadm(quem + " desativou o canal de chat " + rotulo_removido + " (" + nome_removido + ").", "notify5.ogg");
+	debug_log("CANAIS: " + quem + " desativou o canal '" + nome_removido + "'");
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// Comandos
+// --------------------------------------------------------------------------
+
+void cmd_canais(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	bool admin = check_is_admin(p.charname);
+
+	canal_msg(player_index, "Canais de chat disponíveis:");
+
+	int mostrados = 0;
+	for(uint i = 0; i < canais_cache.length(); i++) {
+		canal_chat@ c = canais_cache[i];
+		if(c is null || !c.ativo) continue;
+		if(c.apenas_admin && !admin) continue;
+
+		string linha = c.rotulo + " (/canal " + c.nome + ")";
+		if(c.nome != CANAL_DESATIVADO) linha += " - " + canal_contar_online(c.nome) + " online";
+		if(c.apenas_admin) linha += " [equipe]";
+		if(p.idiomachat == c.nome) linha += " <- você está aqui";
+
+		canal_msg(player_index, linha);
+		mostrados++;
+	}
+
+	if(mostrados == 0) {
+		canal_msg(player_index, "Nenhum canal disponível no momento.");
+	} else {
+		canal_msg(player_index, "Use /canal <nome> para entrar em um canal.");
+	}
+
+	// Alimenta também o menu de canais do cliente (pacote "channels").
+	enviar_canais(player_index);
+}
+
+void cmd_canal(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	nome = nome.trim_whitespace();
+
+	if(nome == "") {
+		canal_chat@ atual = get_canal(p.idiomachat);
+		if(atual is null) {
+			canal_msg(player_index, "Seu canal de chat atual: " + p.idiomachat + " (não está no catálogo).");
+		} else if(atual.nome == CANAL_DESATIVADO) {
+			canal_msg(player_index, "Seu chat está desativado. Use /canal <nome> para entrar em um canal.");
+		} else {
+			canal_msg(player_index, "Seu canal de chat atual: " + atual.rotulo + " (" + atual.nome + ") - " + canal_contar_online(atual.nome) + " online.");
+		}
+		canal_msg(player_index, "Use /canais para ver todos os canais.");
+		return;
+	}
+
+	definir_canal_jogador(player_index, nome);
+}
+
+void cmd_addcanal(int player_index, string nome, string rotulo) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!check_is_admin(p.charname)) {
+		canal_msg(player_index, "[ERRO] Você não tem permissão para isso.");
+		return;
+	}
+
+	nome = nome.trim_whitespace();
+	rotulo = rotulo.trim_whitespace();
+
+	if(!canal_nome_valido(nome)) {
+		canal_msg(player_index, "[ERRO] Nome inválido. Use até " + CANAL_MAX_NOME + " caracteres, sem espaços e sem = | ;");
+		return;
+	}
+
+	if(!canal_rotulo_valido(rotulo)) {
+		canal_msg(player_index, "[ERRO] Rótulo inválido. Use até " + CANAL_MAX_ROTULO + " caracteres, sem = | ;");
+		return;
+	}
+
+	if(canal_existe(nome)) {
+		// Mensagem herdada do BGT (/add_chat_channel, voids.bgt:1117).
+		canal_msg(player_index, "[ERRO] Este canal de chat já existe...");
+		return;
+	}
+
+	if(!canal_criar(nome, rotulo, p.charname)) {
+		canal_msg(player_index, "[ERRO] Não foi possível criar o canal.");
+		return;
+	}
+
+	canal_msg(player_index, "Canal " + rotulo + " (" + nome + ") criado.");
+	eadm(p.charname + " adicionou o canal de chat " + rotulo + " (" + nome + ").", "notify5.ogg");
+
+	// Todo mundo online recebe o catálogo novo.
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].is_logged_in) enviar_canais(int(i));
+	}
+}
+
+void cmd_delcanal(int player_index, string nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!check_is_admin(p.charname)) {
+		canal_msg(player_index, "[ERRO] Você não tem permissão para isso.");
+		return;
+	}
+
+	nome = nome.trim_whitespace();
+
+	if(nome == CANAL_PADRAO || nome == CANAL_DESATIVADO) {
+		canal_msg(player_index, "[ERRO] Os canais " + CANAL_PADRAO + " e " + CANAL_DESATIVADO + " não podem ser removidos.");
+		return;
+	}
+
+	if(!canal_existe(nome)) {
+		canal_msg(player_index, "[ERRO] O canal '" + nome + "' não existe ou já está desativado.");
+		return;
+	}
+
+	if(!canal_remover(nome, p.charname)) {
+		canal_msg(player_index, "[ERRO] Não foi possível desativar o canal.");
+		return;
+	}
+
+	canal_msg(player_index, "Canal '" + nome + "' desativado. Quem estava nele foi movido para " + CANAL_PADRAO + ".");
+}
+
+void cmd_sendcanais(int player_index, string alvo) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!check_is_admin(p.charname)) {
+		canal_msg(player_index, "[ERRO] Você não tem permissão para isso.");
+		return;
+	}
+
+	alvo = alvo.trim_whitespace();
+
+	int alvo_index = get_player_index_from(alvo);
+	if(alvo_index < 0) {
+		canal_msg(player_index, "[ERRO] Jogador '" + alvo + "' não está online.");
+		return;
+	}
+
+	enviar_canais(alvo_index);
+	canal_msg(player_index, "Lista de canais reenviada para " + players[alvo_index].charname + ".");
+}
+
+// --------------------------------------------------------------------------
+// Pacotes crus vindos do cliente
+//
+// Precisa ser chamado em process_player_command() ANTES de process_command().
+// Devolve false rápido para não interceptar comandos alheios.
+// --------------------------------------------------------------------------
+
+bool handle_canais_packet(uint64 peer_id, string command) {
+	if(command == "") return false;
+
+	// Pedido de catálogo (equivale ao get_channels() do BGT).
+	if(command == "get_channels") {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		enviar_canais(idx);
+		return true;
+	}
+
+	// Callback do menu de canais do cliente: "canais_sel <nome>".
+	if(command.find("canais_sel ") == 0) {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+
+		string nome = command.substr(11).trim_whitespace();
+		if(nome == "") {
+			canal_msg(idx, "[ERRO] Canal inválido.");
+			return true;
+		}
+
+		definir_canal_jogador(idx, nome);
+		return true;
+	}
+
+	return false;
+}

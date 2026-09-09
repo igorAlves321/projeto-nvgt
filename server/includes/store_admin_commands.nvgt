@@ -1,0 +1,316 @@
+// =====================================================================
+// store_admin_commands.nvgt - Comandos de administracao das lojas
+// ---------------------------------------------------------------------
+// Substitui os pacotes do canal 14 do BGT (add_item_for_sale,
+// remove_item_for_sale, replace_item_for_sale, add_item_to_store,
+// remove_item_on_store, manage_stores, show_store, delete_store) por
+// comandos de texto do sistema de commands.nvgt.
+// =====================================================================
+
+bool loja_admin_autorizado(player@ p) {
+	if(p is null) return false;
+	if(check_is_admin(p.charname)) return true;
+
+	p.send_message("say Voce nao tem permissao para gerenciar lojas.");
+	return false;
+}
+
+string loja_juntar_args(string[] args, uint inicio) {
+	string resultado = "";
+	for(uint i = inicio; i < args.length(); i++) {
+		if(resultado != "") resultado += " ";
+		resultado += args[i];
+	}
+	return resultado;
+}
+
+// ---------------------------------------------------------------------
+// /lojaadd <item> <moeda> <preco> <codigo> <descricao>
+// ---------------------------------------------------------------------
+bool cmd_loja_add(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	if(args.length() < 5) {
+		p.send_message("say Uso: /lojaadd <item> <moeda> <preco> <codigo> <descricao>");
+		p.send_message("say Moedas aceitas: reais, stryx, creditos, gold, euro ou o nome de um item do inventario.");
+		return false;
+	}
+
+	string item = args[0];
+	string moeda = args[1];
+	double preco = parse_float(args[2]);
+	int codigo = int(parse_int(args[3]));
+	string descricao = loja_juntar_args(args, 4);
+
+	if(preco < 0) {
+		p.send_message("say Preco invalido.");
+		return false;
+	}
+
+	if(codigo < LOJA_CODIGO_MINIMO || codigo > LOJA_CODIGO_MAXIMO) {
+		p.send_message("say O codigo deve ser um numero entre " + LOJA_CODIGO_MINIMO + " e " + LOJA_CODIGO_MAXIMO + ".");
+		return false;
+	}
+
+	if(!loja_adicionar_item(item, moeda, preco, descricao, codigo, p.charname)) {
+		p.send_message("say Nao foi possivel adicionar o item. Verifique se o nome ou o codigo ja existem.");
+		return false;
+	}
+
+	send_reliable_text(p.peer_id, "msg2 Item " + item + " adicionado ao catalogo por " + loja_formatar_valor(preco) + " " + moeda + " (codigo " + codigo + ").", 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojadel <item>
+// ---------------------------------------------------------------------
+bool cmd_loja_del(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	if(args.length() < 1) {
+		p.send_message("say Uso: /lojadel <item>");
+		return false;
+	}
+
+	string item = args[0];
+
+	if(!loja_remover_item(item)) {
+		p.send_message("say Item '" + item + "' nao encontrado no catalogo.");
+		return false;
+	}
+
+	send_reliable_text(p.peer_id, "msg2 Item " + item + " removido do catalogo da loja.", 0);
+	eadm(p.charname + " removeu o item " + item + " do catalogo da loja.");
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojaedit <item> <campo> <valor>
+// ---------------------------------------------------------------------
+bool cmd_loja_edit(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	if(args.length() < 3) {
+		p.send_message("say Uso: /lojaedit <item> <campo> <valor>");
+		p.send_message("say Campos: moeda, preco, descricao, codigo, estoque, nivel_minimo, vendavel, taxa_venda");
+		return false;
+	}
+
+	string item = args[0];
+	string campo = args[1];
+	string valor = loja_juntar_args(args, 2);
+
+	if(!loja_editar_item(item, campo, valor)) {
+		p.send_message("say Nao foi possivel editar. Confira o item, o campo e o valor informados.");
+		return false;
+	}
+
+	send_reliable_text(p.peer_id, "msg2 " + item + ": " + campo + " agora vale " + valor + ".", 0);
+	eadm(p.charname + " alterou o campo " + campo + " do item " + item + " para " + valor + ".");
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojaestoque add|del|limpar|preco <loja> [item] [preco] [moeda]
+// ---------------------------------------------------------------------
+bool cmd_loja_estoque(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	if(args.length() < 2) {
+		p.send_message("say Uso: /lojaestoque add|del|limpar|preco <loja> [item] [preco] [moeda]");
+		return false;
+	}
+
+	string acao = args[0].lower();
+	string loja = args[1];
+
+	if(acao == "limpar") {
+		if(!loja_limpar_loja(loja)) {
+			p.send_message("say Nao foi possivel limpar a loja '" + loja + "'.");
+			return false;
+		}
+		send_reliable_text(p.peer_id, "msg2 Todos os vinculos da loja " + loja + " foram removidos.", 0);
+		eadm(p.charname + " limpou o estoque da loja " + loja + ".");
+		return true;
+	}
+
+	if(args.length() < 3) {
+		p.send_message("say Uso: /lojaestoque " + acao + " <loja> <item>");
+		return false;
+	}
+
+	string item = args[2];
+
+	if(acao == "add") {
+		if(loja_buscar_item(item) is null) {
+			p.send_message("say O item '" + item + "' nao esta no catalogo. Use /lojaadd primeiro.");
+			return false;
+		}
+		if(!loja_vincular_item(loja, item, p.charname)) {
+			p.send_message("say Nao foi possivel vincular o item a loja.");
+			return false;
+		}
+		send_reliable_text(p.peer_id, "msg2 " + item + " agora e vendido na loja " + loja + ".", 0);
+		eadm(p.charname + " adicionou o item " + item + " a loja " + loja + ".");
+		return true;
+	}
+
+	if(acao == "del") {
+		if(!loja_desvincular_item(loja, item)) {
+			p.send_message("say Nao foi possivel remover o item da loja.");
+			return false;
+		}
+		send_reliable_text(p.peer_id, "msg2 " + item + " nao e mais vendido na loja " + loja + ".", 0);
+		eadm(p.charname + " removeu o item " + item + " da loja " + loja + ".");
+		return true;
+	}
+
+	if(acao == "preco") {
+		if(args.length() < 4) {
+			p.send_message("say Uso: /lojaestoque preco <loja> <item> <preco> [moeda]");
+			return false;
+		}
+		double preco = parse_float(args[3]);
+		string moeda = args.length() > 4 ? args[4] : loja_moeda_final(item);
+		if(!loja_definir_preco_na_loja(loja, item, preco, moeda)) {
+			p.send_message("say Nao foi possivel definir o preco especifico da loja.");
+			return false;
+		}
+		send_reliable_text(p.peer_id, "msg2 Na loja " + loja + ", " + item + " passa a custar " + loja_formatar_valor(preco) + " " + moeda + ".", 0);
+		return true;
+	}
+
+	p.send_message("say Acao invalida. Use add, del, limpar ou preco.");
+	return false;
+}
+
+// ---------------------------------------------------------------------
+// /lojas
+// ---------------------------------------------------------------------
+bool cmd_lojas(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	string[] lojas = loja_listar_lojas();
+
+	if(lojas.length() == 0) {
+		p.send_message("say Nenhuma loja configurada no servidor.");
+		return true;
+	}
+
+	string texto = "=== LOJAS DO SERVIDOR (" + lojas.length() + ") ===\r\n";
+	for(uint i = 0; i < lojas.length(); i++) {
+		string[] partes = lojas[i].split("|");
+		if(partes.length() < 4) continue;
+		texto += partes[0] + " | mapa: " + partes[1] + " | area: " + partes[2] + " | itens: " + partes[3] + "\r\n";
+	}
+
+	send_reliable_text(p.peer_id, "say " + texto, 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojarecarregar
+// ---------------------------------------------------------------------
+bool cmd_loja_recarregar(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	carregar_catalogo_loja(true);
+	send_reliable_text(p.peer_id, "msg2 Catalogo recarregado: " + loja_catalogo.length() + " itens.", 0);
+	debug_log("LOJA: catalogo recarregado por " + p.charname);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojagerenciar - abre o gerenciador no cliente
+// ---------------------------------------------------------------------
+bool cmd_loja_gerenciar(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	send_reliable_text(p.peer_id, "loja_gerenciar " + loja_payload_gerenciador(), 0);
+	debug_log("LOJA: gerenciador aberto por " + p.charname);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojaitens <loja> - devolve o pacote loja_estoque para o cliente
+// ---------------------------------------------------------------------
+bool cmd_loja_itens(player@ p, string[] args) {
+	if(!loja_admin_autorizado(p)) return false;
+
+	if(args.length() < 1) {
+		p.send_message("say Uso: /lojaitens <loja>");
+		return false;
+	}
+
+	string loja = loja_normalizar_nome(args[0]);
+	send_reliable_text(p.peer_id, "loja_estoque " + loja + "|" + loja_payload_estoque(loja), 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// /lojacomprar <quantidade> <codigo_ou_item> [loja]
+// Caminho unico de compra: aplica desconto VIP, evento, estoque,
+// nivel minimo, slots de inventario e registro de transacao.
+// ---------------------------------------------------------------------
+bool cmd_loja_comprar(player@ p, string[] args) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) {
+		p.send_message("say Erro interno: jogador nao encontrado.");
+		return false;
+	}
+
+	if(args.length() < 2) {
+		p.send_message("say Uso: /lojacomprar <quantidade> <item> [loja]");
+		return false;
+	}
+
+	int quantidade = int(parse_int(args[0]));
+	string identificador = args[1];
+	string loja = args.length() > 2 ? args[2] : "";
+
+	return loja_processar_compra(player_index, loja, identificador, quantidade);
+}
+
+// ---------------------------------------------------------------------
+// /lojavender <item> <quantidade> [loja]
+// ---------------------------------------------------------------------
+bool cmd_loja_vender(player@ p, string[] args) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) {
+		p.send_message("say Erro interno: jogador nao encontrado.");
+		return false;
+	}
+
+	if(args.length() < 2) {
+		p.send_message("say Uso: /lojavender <item> <quantidade>");
+		return false;
+	}
+
+	string item = args[0];
+	int quantidade = int(parse_int(args[1]));
+	string loja = args.length() > 2 ? args[2] : "";
+
+	return loja_processar_venda(player_index, loja, item, quantidade);
+}
+
+// ---------------------------------------------------------------------
+// Substituto de cmd_store(): abre a loja pedida (ou a "mista") com o
+// payload ja montado, respeitando o tipo de loja.
+// ---------------------------------------------------------------------
+bool cmd_loja_abrir(player@ p, string[] args) {
+	if(p is null) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) {
+		p.send_message("say Erro interno: jogador nao encontrado.");
+		return false;
+	}
+
+	string loja = args.length() > 0 ? args[0] : "mista";
+	loja_abrir_para(player_index, loja);
+	return true;
+}

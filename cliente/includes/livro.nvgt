@@ -1,0 +1,278 @@
+
+// =====================================================================
+// Leitor de livros
+// Migrado de "cliente pruebas/includes/book.bgt" (class book / class page).
+//
+// Diferencas em relacao ao BGT:
+//  - as paginas chegam ja separadas por uma linha inteira "#pagina"; o BGT
+//    usava string_split(conteudo, "page"), que partia o livro em qualquer
+//    palavra contendo "page";
+//  - o cabecalho e lido linha a linha (chave=valor) ate o primeiro "#pagina",
+//    sem o "break" no primeiro "music" que o BGT fazia;
+//  - ao fechar, o leitor avisa o servidor da pagina mais distante alcancada
+//    ("LIVRO:progresso"), que alimenta livros_lidos, conquistas e quests.
+//
+// Os sons misc190..misc194.ogg do BGT nao existem neste projeto; os nomes
+// ficam nestas constantes para serem trocados quando os assets chegarem.
+// =====================================================================
+
+const string LIVRO_DELIM_PAGINA = "#pagina";
+const string LIVRO_SOM_ABRIR = "menuopen.ogg";
+const string LIVRO_SOM_FECHAR = "menuvolta.ogg";
+const string LIVRO_SOM_PAGINA_DIREITA = "papelembrulha.ogg";
+const string LIVRO_SOM_PAGINA_ESQUERDA = "papelembrulha.ogg";
+const string LIVRO_SOM_DESCRICAO = "menuenter.ogg";
+
+class pagina_livro {
+	string conteudo;
+
+	pagina_livro() {
+		this.conteudo = "";
+	}
+
+	pagina_livro(string texto) {
+		this.conteudo = texto;
+	}
+
+	string[] get_linhas() {
+		string[] resultado;
+		if(conteudo == "") return resultado;
+
+		string normalizado = conteudo.replace("\r\n", "\n");
+		normalizado = normalizado.replace("\r", "\n");
+		string[] cruas = normalizado.split("\n");
+		for(uint i = 0; i < cruas.length(); i++) {
+			string linha = cruas[i].trim_whitespace();
+			if(linha == "") continue;
+			resultado.insert_last(linha);
+		}
+		return resultado;
+	}
+}
+
+class leitor_livro {
+	string slug;
+	string idioma;
+	string titulo;
+	string descricao;
+	string musica;
+	int slot_musica = -1;
+	int pagina_max_lida = 0;
+	bool ativo = false;
+	pagina_livro@[] paginas;
+
+	void resetar() {
+		slug = "";
+		idioma = "";
+		titulo = "";
+		descricao = "";
+		musica = "";
+		pagina_max_lida = 0;
+		paginas.resize(0);
+		if(slot_musica > -1) {
+			spool.destroy_sound(slot_musica);
+			slot_musica = -1;
+		}
+	}
+
+	void adicionar_pagina(string texto) {
+		pagina_livro pg(texto);
+		paginas.insert_last(pg);
+	}
+
+	bool carregar(string payload) {
+		resetar();
+
+		if(payload.trim_whitespace() == "") {
+			speak(pu.get_value("LIVRO_INEXISTENTE"), true);
+			return false;
+		}
+
+		string normalizado = payload.replace("\r\n", "\n");
+		normalizado = normalizado.replace("\r", "\n");
+		string[] linhas = normalizado.split("\n");
+
+		bool em_pagina = false;
+		string atual = "";
+
+		for(uint i = 0; i < linhas.length(); i++) {
+			string linha = linhas[i];
+
+			if(linha.trim_whitespace() == LIVRO_DELIM_PAGINA) {
+				if(em_pagina) adicionar_pagina(atual);
+				em_pagina = true;
+				atual = "";
+				continue;
+			}
+
+			if(!em_pagina) {
+				int pos = linha.find("=");
+				if(pos > 0) {
+					string chave = linha.substr(0, pos).trim_whitespace().lower();
+					string valor = linha.substr(pos + 1).trim_whitespace();
+					if(chave == "slug") slug = valor;
+					else if(chave == "idioma") idioma = valor;
+					else if(chave == "titulo") titulo = valor;
+					else if(chave == "descricao") descricao = valor;
+					else if(chave == "musica") musica = valor;
+				}
+				continue;
+			}
+
+			if(atual != "") atual += "\r\n";
+			atual += linha;
+		}
+
+		if(em_pagina) adicionar_pagina(atual);
+
+		if(paginas.length() == 0) {
+			speak(pu.get_value("LIVRO_INEXISTENTE"), true);
+			resetar();
+			return false;
+		}
+		return true;
+	}
+
+	void enviar_progresso() {
+		if(slug == "" || pagina_max_lida <= 0) return;
+		send_to_server("LIVRO:progresso|" + slug + "|" + pagina_max_lida, 0, true);
+	}
+
+	// Laco bloqueante com wait(5), no mesmo formato de menul()/menul2() em
+	// legacy_compat.nvgt. O BGT chamava mainloop() aqui; neste projeto os
+	// leitores bloqueantes nao bombeiam o loop principal.
+	void ler() {
+		if(paginas.length() == 0) return;
+		if(ativo) return;
+
+		int pagina_atual = -1;
+		int linha_atual = -1;
+		string[] linhas;
+
+		reset_all_forced_keys();
+		key_hold iup(KEY_UP, 500, 50);
+		key_hold idown(KEY_DOWN, 500, 50);
+		key_hold ileft(KEY_LEFT, 500, 50);
+		key_hold iright(KEY_RIGHT, 500, 50);
+
+		ativo = true;
+		emchat = true;
+
+		spool.play_stationary(LIVRO_SOM_ABRIR, false);
+		send_to_server("draw " + LIVRO_SOM_ABRIR, 0, true);
+		string cabecalho = (titulo != "" ? titulo : pu.get_value("LIVRO_SEM_TITULO"));
+		cabecalho += ". " + pu.get_value("LIVRO_AJUDA_LEITOR");
+		speak(cabecalho, true);
+
+		if(musica != "") {
+			slot_musica = spool.play_stationary(musica, true);
+		}
+
+		while(true) {
+			wait(5);
+
+			if(is_connected && heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
+				heartbeat_timer.restart();
+				send_unreliable(peer_id, "heartbeat", 0);
+			}
+
+			if(key_pressed(KEY_ESCAPE)) {
+				spool.play_stationary(LIVRO_SOM_FECHAR, false);
+				send_to_server("draw " + LIVRO_SOM_FECHAR, 0, true);
+				break;
+			}
+
+			if(iright.pressing() && pagina_atual < int(paginas.length()) - 1) {
+				pagina_atual++;
+				linha_atual = -1;
+				linhas = paginas[pagina_atual].get_linhas();
+				if(pagina_atual + 1 > pagina_max_lida) pagina_max_lida = pagina_atual + 1;
+				speak(pu.get_value("LIVRO_PAGINA") + " " + (pagina_atual + 1), true);
+				spool.play_stationary(LIVRO_SOM_PAGINA_DIREITA, false);
+				send_to_server("draw " + LIVRO_SOM_PAGINA_DIREITA, 0, true);
+				continue;
+			}
+
+			if(ileft.pressing() && pagina_atual > 0) {
+				pagina_atual--;
+				linha_atual = -1;
+				linhas = paginas[pagina_atual].get_linhas();
+				speak(pu.get_value("LIVRO_PAGINA") + " " + (pagina_atual + 1), true);
+				spool.play_stationary(LIVRO_SOM_PAGINA_ESQUERDA, false);
+				send_to_server("draw " + LIVRO_SOM_PAGINA_ESQUERDA, 0, true);
+				continue;
+			}
+
+			if(idown.pressing() && linha_atual < int(linhas.length()) - 1) {
+				linha_atual++;
+				speak(linhas[linha_atual], true);
+				continue;
+			}
+
+			if(iup.pressing() && linha_atual > 0) {
+				linha_atual--;
+				speak(linhas[linha_atual], true);
+				continue;
+			}
+
+			if(key_pressed(KEY_HOME) && linhas.length() > 0) {
+				linha_atual = 0;
+				speak(linhas[linha_atual], true);
+				continue;
+			}
+
+			if(key_pressed(KEY_END) && linhas.length() > 0) {
+				linha_atual = int(linhas.length()) - 1;
+				speak(linhas[linha_atual], true);
+				continue;
+			}
+
+			if(key_pressed(KEY_D)) {
+				speak(descricao != "" ? descricao : pu.get_value("LIVRO_SEM_DESCRICAO"), true);
+				spool.play_stationary(LIVRO_SOM_DESCRICAO, false);
+				send_to_server("draw " + LIVRO_SOM_DESCRICAO, 0, true);
+				continue;
+			}
+
+			if(key_pressed(KEY_P)) {
+				if(pagina_atual >= 0) {
+					speak(pu.get_value("LIVRO_PAGINA") + " " + (pagina_atual + 1) + " " + pu.get_value("LIVRO_DE") + " " + int(paginas.length()), true);
+				}
+				else {
+					speak(pu.get_value("LIVRO_NENHUMA_PAGINA"), true);
+				}
+				continue;
+			}
+
+			if(key_pressed(KEY_T)) {
+				speak(titulo != "" ? titulo : pu.get_value("LIVRO_SEM_TITULO"), true);
+				continue;
+			}
+
+			bool ctrl_down = key_down(KEY_LCONTROL) || key_down(KEY_RCONTROL);
+			if(ctrl_down && key_pressed(KEY_C) && pagina_atual >= 0) {
+				clipboard_copy_text(paginas[pagina_atual].conteudo);
+				speak(pu.get_value("LIVRO_COPIADO"), true);
+				continue;
+			}
+		}
+
+		emchat = false;
+		ativo = false;
+		enviar_progresso();
+		resetar();
+		reset_all_forced_keys();
+	}
+}
+
+leitor_livro livro_atual;
+
+// Chamada pelo handler de rede quando chega "livro_abrir".
+void abrir_livro(string payload) {
+	if(livro_atual.ativo) {
+		debug_log("livro_abrir ignorado: já existe um livro aberto.");
+		return;
+	}
+	if(!livro_atual.carregar(payload)) return;
+	livro_atual.ler();
+}

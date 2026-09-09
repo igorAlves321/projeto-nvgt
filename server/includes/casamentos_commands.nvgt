@@ -1,0 +1,736 @@
+
+#include "casamentos.nvgt"
+
+// Comandos de casamento e pacto de sangue.
+// Porte de: net.bgt (confirmmarried/marry/divorc/divorce/parabatai/message_to_couple/
+// message_to_parabatai/wm2/wp) e marriages.bgt do Reino Elemental.
+// O protocolo send_menu() do BGT nao existe no cliente NVGT, entao toda confirmacao usa
+// o padrao de convite pendente do party.nvgt (propostas_ativas + /aceitar...).
+
+bool casamentos_exige_jogador(int player_index) {
+	if(!casamentos_indice_valido(player_index)) {
+		debug_log("CASAMENTOS: índice de jogador inválido: " + player_index);
+		return false;
+	}
+	return true;
+}
+
+void casamentos_erro(int player_index, string mensagem) {
+	send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + mensagem, 0);
+}
+
+void casamentos_aviso(int player_index, string mensagem) {
+	send_reliable_text(players[player_index].peer_id, "msg2 " + mensagem, 0);
+}
+
+// ============================ CASAMENTO ============================
+
+void cmd_casar(int player_index, string alvo) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string alvo_limpo = alvo.trim_whitespace();
+
+	if(alvo_limpo == "") {
+		casamentos_erro(player_index, "Uso: /casar <jogador>");
+		return;
+	}
+
+	if(normalizar_nome(alvo_limpo) == normalizar_nome(nome)) {
+		casamentos_erro(player_index, "Você não pode se casar consigo mesmo!");
+		return;
+	}
+
+	if(tem_vinculo(nome, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, "Você já é casado(a) com " + nome_exibicao(get_parceiro(nome, VINCULO_CASAMENTO)) + ". Use /divorciar antes.");
+		return;
+	}
+
+	int alvo_idx = indice_jogador_por_nome(alvo_limpo);
+	if(alvo_idx < 0) {
+		casamentos_erro(player_index, alvo_limpo + " não está online. A cerimônia exige os dois presentes.");
+		return;
+	}
+
+	string alvo_nome = players[alvo_idx].charname;
+
+	if(tem_vinculo(alvo_nome, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, nome_exibicao(alvo_nome) + " já é casado(a).");
+		return;
+	}
+
+	if(esta_em_cerimonia(nome) || esta_em_cerimonia(alvo_nome)) {
+		casamentos_erro(player_index, "Uma cerimônia já está em andamento. Aguarde o fim dela.");
+		return;
+	}
+
+	if(indice_proposta_entre(nome, alvo_nome, PROPOSTA_CASAMENTO) >= 0) {
+		casamentos_erro(player_index, "Você já pediu " + nome_exibicao(alvo_nome) + " em casamento. Aguarde a resposta.");
+		return;
+	}
+
+	registrar_proposta(nome, alvo_nome, PROPOSTA_CASAMENTO);
+
+	casamentos_aviso(player_index, "Você pediu " + nome_exibicao(alvo_nome) + " em casamento. O pedido expira em 2 minutos.");
+	send_reliable_text(players[alvo_idx].peer_id, "msg2 " + nome + " te pediu em casamento!", 0);
+	send_reliable_text(players[alvo_idx].peer_id, "msg2 Use /aceitarcasamento para aceitar ou /recusarcasamento para recusar.", 0);
+	send_reliable_text(players[alvo_idx].peer_id, "ps notify5.ogg", 0);
+
+	debug_log("CASAMENTOS: " + nome + " pediu " + alvo_nome + " em casamento");
+}
+
+void cmd_aceitarcasamento(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+
+	int prop_idx = indice_proposta_para(nome, PROPOSTA_CASAMENTO);
+	if(prop_idx < 0) {
+		casamentos_erro(player_index, "Você não tem nenhum pedido de casamento pendente!");
+		return;
+	}
+
+	string proponente = propostas_ativas[prop_idx].proponente;
+	propostas_ativas.remove_at(prop_idx);
+
+	int prop_player = indice_jogador_por_nome(proponente);
+	if(prop_player < 0) {
+		casamentos_erro(player_index, nome_exibicao(proponente) + " não está mais online. O pedido foi cancelado.");
+		return;
+	}
+
+	if(tem_vinculo(nome, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, "Você já é casado(a).");
+		return;
+	}
+
+	if(tem_vinculo(proponente, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, nome_exibicao(proponente) + " já se casou com outra pessoa.");
+		return;
+	}
+
+	if(esta_em_cerimonia(nome) || esta_em_cerimonia(proponente)) {
+		casamentos_erro(player_index, "Uma cerimônia já está em andamento.");
+		return;
+	}
+
+	iniciar_cerimonia(proponente, nome, VINCULO_CASAMENTO,
+	                  players[prop_player].map, players[prop_player].x, players[prop_player].y);
+
+	casamentos_aviso(player_index, "Você aceitou o pedido de " + nome_exibicao(proponente) + ". A cerimônia vai começar!");
+	send_reliable_text(players[prop_player].peer_id, "msg2 " + nome + " aceitou o seu pedido de casamento!", 0);
+
+	debug_log("CASAMENTOS: " + nome + " aceitou o pedido de " + proponente);
+}
+
+void cmd_recusarcasamento(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+
+	int prop_idx = indice_proposta_para(nome, PROPOSTA_CASAMENTO);
+	if(prop_idx < 0) {
+		casamentos_erro(player_index, "Você não tem nenhum pedido de casamento pendente!");
+		return;
+	}
+
+	string proponente = propostas_ativas[prop_idx].proponente;
+	propostas_ativas.remove_at(prop_idx);
+
+	casamentos_aviso(player_index, "Você recusou o pedido de casamento de " + nome_exibicao(proponente) + ".");
+	avisar_jogador(proponente, nome + " recusou o seu pedido de casamento.");
+
+	debug_log("CASAMENTOS: " + nome + " recusou o pedido de " + proponente);
+}
+
+void cmd_divorciar(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+
+	if(conjuge == "") {
+		casamentos_erro(player_index, "Você não é casado(a) com ninguém.");
+		return;
+	}
+
+	int conjuge_idx = indice_jogador_por_nome(conjuge);
+
+	// Se o conjuge esta offline nao ha como pedir consentimento: o divorcio e imediato.
+	// O BGT simplesmente abortava, deixando o jogador preso ao vinculo.
+	if(conjuge_idx < 0) {
+		if(!romper_vinculo(nome, VINCULO_CASAMENTO, nome)) {
+			casamentos_erro(player_index, "Não foi possível registrar o divórcio. Tente novamente.");
+			return;
+		}
+		remover_propostas_de(nome);
+		sync_vinculo_para_cliente(nome);
+		casamentos_aviso(player_index, "Seu cônjuge " + nome_exibicao(conjuge) + " está offline. O divórcio foi registrado imediatamente.");
+		debug_log("CASAMENTOS: " + nome + " se divorciou de " + conjuge + " (cônjuge offline)");
+		return;
+	}
+
+	// Se o conjuge ja pediu divorcio a mim, este comando confirma.
+	int pedido_dele = indice_proposta_entre(conjuge, nome, PROPOSTA_DIVORCIO);
+	if(pedido_dele >= 0) {
+		cmd_aceitardivorcio(player_index);
+		return;
+	}
+
+	if(indice_proposta_entre(nome, conjuge, PROPOSTA_DIVORCIO) >= 0) {
+		casamentos_erro(player_index, "Você já pediu o divórcio. Aguarde a resposta de " + nome_exibicao(conjuge) + ".");
+		return;
+	}
+
+	registrar_proposta(nome, conjuge, PROPOSTA_DIVORCIO);
+
+	casamentos_aviso(player_index, "Você pediu o divórcio a " + nome_exibicao(conjuge) + ". O pedido expira em 2 minutos.");
+	send_reliable_text(players[conjuge_idx].peer_id, "msg2 " + nome + " pediu o divórcio.", 0);
+	send_reliable_text(players[conjuge_idx].peer_id, "msg2 Use /aceitardivorcio para confirmar o fim do casamento.", 0);
+	send_reliable_text(players[conjuge_idx].peer_id, "ps notify5.ogg", 0);
+
+	debug_log("CASAMENTOS: " + nome + " pediu divórcio a " + conjuge);
+}
+
+void cmd_aceitardivorcio(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+
+	int prop_idx = indice_proposta_para(nome, PROPOSTA_DIVORCIO);
+	if(prop_idx < 0) {
+		casamentos_erro(player_index, "Ninguém pediu divórcio a você.");
+		return;
+	}
+
+	string proponente = propostas_ativas[prop_idx].proponente;
+	propostas_ativas.remove_at(prop_idx);
+
+	if(get_parceiro(nome, VINCULO_CASAMENTO) == "") {
+		casamentos_erro(player_index, "Você não é casado(a) com ninguém.");
+		return;
+	}
+
+	if(!romper_vinculo(nome, VINCULO_CASAMENTO, nome)) {
+		casamentos_erro(player_index, "Não foi possível registrar o divórcio. Tente novamente.");
+		return;
+	}
+
+	remover_propostas_de(nome);
+	remover_propostas_de(proponente);
+	sync_vinculo_para_cliente(nome);
+	sync_vinculo_para_cliente(proponente);
+
+	// Equivalente a mensagem do BGT em net.bgt:443.
+	casamentos_aviso(player_index, "Vocês deixaram a graça do matrimônio para voltar a ser pessoas solteiras. Podem ir em paz.");
+	avisar_jogador(proponente, "Vocês deixaram a graça do matrimônio para voltar a ser pessoas solteiras. Podem ir em paz.", "notify5.ogg");
+
+	debug_log("CASAMENTOS: divórcio entre " + nome + " e " + proponente + " concluído");
+}
+
+void cmd_casalchat(int player_index, string mensagem) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string texto = mensagem.trim_whitespace();
+	if(texto == "") {
+		casamentos_erro(player_index, "Uso: /casal <mensagem>");
+		return;
+	}
+
+	if(!players[player_index].can_send_message()) return;
+
+	string nome = players[player_index].charname;
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+
+	if(conjuge == "") {
+		casamentos_erro(player_index, "Você não é casado(a) com ninguém.");
+		return;
+	}
+
+	int conjuge_idx = indice_jogador_por_nome(conjuge);
+	if(conjuge_idx < 0) {
+		// Mensagem herdada de net.bgt:576.
+		casamentos_erro(player_index, "Não faz muito sentido escrever neste canal com seu cônjuge desconectado, faz?");
+		return;
+	}
+
+	string linha = "msg2 [Casal] " + nome + ": " + texto;
+	send_reliable_text(players[player_index].peer_id, linha, 0);
+	send_reliable_text(players[player_index].peer_id, "ps message.ogg", 0);
+	send_reliable_text(players[conjuge_idx].peer_id, linha, 0);
+	send_reliable_text(players[conjuge_idx].peer_id, "ps message.ogg", 0);
+
+	players[player_index].register_message();
+}
+
+void cmd_meucasal(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+
+	if(conjuge == "") {
+		casamentos_aviso(player_index, "Você está solteiro(a). Use /casar <jogador> para pedir alguém em casamento.");
+		return;
+	}
+
+	int dias = dias_de_vinculo(nome, VINCULO_CASAMENTO);
+	string local = get_local_do_vinculo(nome, VINCULO_CASAMENTO);
+	bool online = vinculo_jogador_online(conjuge);
+
+	casamentos_aviso(player_index, "=== Seu casamento ===");
+	casamentos_aviso(player_index, "Cônjuge: " + nome_exibicao(conjuge) + " (" + (online ? "Online" : "Offline") + ")");
+	casamentos_aviso(player_index, "Tempo de união: " + dias + " dia(s)");
+	if(local != "") casamentos_aviso(player_index, "Local da cerimônia: " + local);
+	if(dias > 0 && dias % 365 == 0) {
+		casamentos_aviso(player_index, "Hoje é o aniversário de casamento de vocês! Parabéns!");
+	}
+	if(casal_no_mesmo_mapa(player_index)) {
+		casamentos_aviso(player_index, "Seu cônjuge está no mesmo mapa: bônus de +10% de XP ativo.");
+	}
+}
+
+void cmd_casadocom(int player_index, string alvo) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string alvo_limpo = alvo.trim_whitespace();
+	if(alvo_limpo == "") {
+		casamentos_erro(player_index, "Uso: /casadocom <jogador>");
+		return;
+	}
+
+	// Porte de /wm2 (net.bgt:1794): funciona tambem com o alvo offline, consultando o banco.
+	string parceiro = get_parceiro(alvo_limpo, VINCULO_CASAMENTO);
+	string exibicao = nome_exibicao(alvo_limpo);
+
+	if(parceiro == "") {
+		if(!vinculo_jogador_online(alvo_limpo) && !player_exists_in_database(alvo_limpo)) {
+			casamentos_erro(player_index, "Jogador não encontrado.");
+			return;
+		}
+		casamentos_aviso(player_index, exibicao + " está solteiro(a).");
+		return;
+	}
+
+	int dias = dias_de_vinculo(alvo_limpo, VINCULO_CASAMENTO);
+	casamentos_aviso(player_index, exibicao + " é casado(a) com " + nome_exibicao(parceiro) + " há " + dias + " dia(s).");
+}
+
+void cmd_casamentos(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string[] lista = listar_vinculos_ativos(VINCULO_CASAMENTO, 20);
+
+	if(lista.length() == 0) {
+		casamentos_aviso(player_index, "Ainda não há nenhum casamento registrado no reino.");
+		return;
+	}
+
+	casamentos_aviso(player_index, "=== Casamentos ativos (" + lista.length() + ") ===");
+	for(uint i = 0; i < lista.length(); i++) {
+		casamentos_aviso(player_index, (i + 1) + ". " + lista[i]);
+	}
+}
+
+void cmd_irate(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string conjuge = get_parceiro(nome, VINCULO_CASAMENTO);
+
+	if(conjuge == "") {
+		casamentos_erro(player_index, "Você não é casado(a) com ninguém.");
+		return;
+	}
+
+	int conjuge_idx = indice_jogador_por_nome(conjuge);
+	if(conjuge_idx < 0) {
+		// Mensagem herdada de re_server_test.bgt:1613.
+		casamentos_erro(player_index, "Você não pode fazer isso: seu cônjuge não se encontra nesta dimensão.");
+		return;
+	}
+
+	if(conjuge_idx == player_index) {
+		casamentos_erro(player_index, "Você já está onde deveria estar.");
+		return;
+	}
+
+	int restante_ms = irate_tempo_restante(nome);
+	if(restante_ms > 0) {
+		int restante = restante_ms / 1000;
+		if(restante < 1) restante = 1;
+		casamentos_erro(player_index, "Aguarde " + restante + " segundo(s) para usar o vínculo novamente.");
+		return;
+	}
+
+	string destino = players[conjuge_idx].map;
+	int dx = players[conjuge_idx].x;
+	int dy = players[conjuge_idx].y;
+
+	irate_marcar_uso(nome);
+
+	move_player_to_map(player_index, destino, dx, dy);
+	players[player_index].map_name = destino;
+	players[player_index].mapaatual = destino;
+
+	send_reliable_text(players[player_index].peer_id, "ps teleport.ogg", 0);
+	casamentos_aviso(player_index, "Olá, meu bem. Você foi levado(a) até " + players[conjuge_idx].charname + ".");
+	send_reliable_text(players[conjuge_idx].peer_id, "msg2 " + nome + " apareceu ao seu lado. Venha até mim...", 0);
+	send_reliable_text(players[conjuge_idx].peer_id, "ps teleport.ogg", 0);
+
+	debug_log("CASAMENTOS: " + nome + " se teleportou até o cônjuge " + conjuge + " em " + destino);
+}
+
+// ============================ PACTO DE SANGUE ============================
+// "Parabatai" e termo da franquia The Mortal Instruments: nas mensagens e comandos
+// em portugues virou "pacto de sangue". Os NOMES DE PACOTE set_parabatai_variable e
+// parabataimsg foram mantidos porque o cliente ja os usa.
+
+void cmd_pacto(int player_index, string alvo) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string alvo_limpo = alvo.trim_whitespace();
+
+	if(alvo_limpo == "") {
+		casamentos_erro(player_index, "Uso: /pacto <jogador>");
+		return;
+	}
+
+	if(normalizar_nome(alvo_limpo) == normalizar_nome(nome)) {
+		casamentos_erro(player_index, "Lástima que este ritual não funcione de maneira solitária...");
+		return;
+	}
+
+	if(tem_vinculo(nome, VINCULO_PACTO)) {
+		casamentos_erro(player_index, "Você já tem um pacto de sangue com " + nome_exibicao(get_parceiro(nome, VINCULO_PACTO)) + ".");
+		return;
+	}
+
+	int alvo_idx = indice_jogador_por_nome(alvo_limpo);
+	if(alvo_idx < 0) {
+		casamentos_erro(player_index, alvo_limpo + " não está online. O ritual exige os dois presentes.");
+		return;
+	}
+
+	string alvo_nome = players[alvo_idx].charname;
+
+	if(players[alvo_idx].map != players[player_index].map) {
+		casamentos_erro(player_index, "O ritual só funciona com os dois no mesmo lugar.");
+		return;
+	}
+
+	if(tem_vinculo(alvo_nome, VINCULO_PACTO)) {
+		casamentos_erro(player_index, nome_exibicao(alvo_nome) + " já tem um pacto de sangue.");
+		return;
+	}
+
+	// No BGT o conjuge era explicitamente excluido da lista de candidatos (net.bgt:349).
+	if(normalizar_nome(alvo_nome) == get_parceiro(nome, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, "Seu cônjuge não pode ser também seu parceiro de pacto.");
+		return;
+	}
+
+	if(esta_em_cerimonia(nome) || esta_em_cerimonia(alvo_nome)) {
+		casamentos_erro(player_index, "Um ritual já está em andamento. Aguarde o fim dele.");
+		return;
+	}
+
+	if(indice_proposta_entre(nome, alvo_nome, PROPOSTA_PACTO) >= 0) {
+		casamentos_erro(player_index, "Você já propôs o pacto a " + nome_exibicao(alvo_nome) + ". Aguarde a resposta.");
+		return;
+	}
+
+	registrar_proposta(nome, alvo_nome, PROPOSTA_PACTO);
+
+	casamentos_aviso(player_index, "Você propôs um pacto de sangue a " + nome_exibicao(alvo_nome) + ". A proposta expira em 2 minutos.");
+	send_reliable_text(players[alvo_idx].peer_id, "msg2 A luz do altar muda de amarela para um púrpura intenso e envolve você. Em sua mente se grava o nome de " + nome + ".", 0);
+	send_reliable_text(players[alvo_idx].peer_id, "msg2 Use /aceitarpacto para aceitar o pacto de sangue.", 0);
+	send_reliable_text(players[alvo_idx].peer_id, "ps notify5.ogg", 0);
+
+	debug_log("CASAMENTOS: " + nome + " propôs pacto a " + alvo_nome);
+}
+
+void cmd_aceitarpacto(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+
+	int prop_idx = indice_proposta_para(nome, PROPOSTA_PACTO);
+	if(prop_idx < 0) {
+		casamentos_erro(player_index, "Você não tem nenhuma proposta de pacto pendente!");
+		return;
+	}
+
+	string proponente = propostas_ativas[prop_idx].proponente;
+	propostas_ativas.remove_at(prop_idx);
+
+	int prop_player = indice_jogador_por_nome(proponente);
+	if(prop_player < 0) {
+		// Equivalente ao aborto de parabatai_loop() quando alguem cai (marriages.bgt:33).
+		casamentos_erro(player_index, nome_exibicao(proponente) + " não se encontra mais nesta dimensão. A proposta foi cancelada.");
+		return;
+	}
+
+	if(tem_vinculo(nome, VINCULO_PACTO)) {
+		casamentos_erro(player_index, "Você já tem um pacto de sangue.");
+		return;
+	}
+
+	if(tem_vinculo(proponente, VINCULO_PACTO)) {
+		casamentos_erro(player_index, nome_exibicao(proponente) + " já pactuou com outra pessoa.");
+		return;
+	}
+
+	if(esta_em_cerimonia(nome) || esta_em_cerimonia(proponente)) {
+		casamentos_erro(player_index, "Um ritual já está em andamento.");
+		return;
+	}
+
+	iniciar_cerimonia(proponente, nome, VINCULO_PACTO,
+	                  players[prop_player].map, players[prop_player].x, players[prop_player].y);
+
+	casamentos_aviso(player_index, "Você aceitou o pacto de sangue com " + nome_exibicao(proponente) + ". O ritual vai começar!");
+	send_reliable_text(players[prop_player].peer_id, "msg2 " + nome + " aceitou o pacto de sangue!", 0);
+
+	debug_log("CASAMENTOS: " + nome + " aceitou o pacto de " + proponente);
+}
+
+void cmd_romperpacto(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string parceiro = get_parceiro(nome, VINCULO_PACTO);
+
+	if(parceiro == "") {
+		casamentos_erro(player_index, "Você não tem nenhum pacto de sangue.");
+		return;
+	}
+
+	if(players[player_index].gold < PACTO_CUSTO_ROMPER) {
+		// Mensagem herdada de voids.bgt:680.
+		casamentos_erro(player_index, "Você não tem o necessário para pagar o preço desta decisão. Custa " + PACTO_CUSTO_ROMPER + " de ouro.");
+		return;
+	}
+
+	int parceiro_idx = indice_jogador_por_nome(parceiro);
+
+	// Parceiro offline: nao ha como pedir consentimento, o rompimento e imediato.
+	if(parceiro_idx < 0) {
+		if(!romper_vinculo(nome, VINCULO_PACTO, nome)) {
+			casamentos_erro(player_index, "Não foi possível registrar o rompimento. Tente novamente.");
+			return;
+		}
+		players[player_index].gold -= PACTO_CUSTO_ROMPER;
+		remover_propostas_de(nome);
+		sync_vinculo_para_cliente(nome);
+		casamentos_aviso(player_index, "O chão treme e todo o recinto se sacode. A união de vocês se dissolveu. (-" + PACTO_CUSTO_ROMPER + " de ouro)");
+		debug_log("CASAMENTOS: " + nome + " rompeu o pacto com " + parceiro + " (parceiro offline)");
+		return;
+	}
+
+	// Se o parceiro ja pediu o rompimento, este comando confirma. Assim mantemos o
+	// consentimento mutuo do BGT (parabatai_confirm_remove) sem inventar novo comando.
+	int pedido_dele = indice_proposta_entre(parceiro, nome, PROPOSTA_ROMPER_PACTO);
+	if(pedido_dele >= 0) {
+		propostas_ativas.remove_at(pedido_dele);
+
+		if(players[parceiro_idx].gold < PACTO_CUSTO_ROMPER) {
+			casamentos_erro(player_index, "Seu parceiro de pacto não tem o necessário para pagar o preço desta decisão.");
+			casamentos_erro(parceiro_idx, "Você não tem o necessário para pagar o preço desta decisão.");
+			return;
+		}
+
+		if(!romper_vinculo(nome, VINCULO_PACTO, nome)) {
+			casamentos_erro(player_index, "Não foi possível registrar o rompimento. Tente novamente.");
+			return;
+		}
+
+		players[player_index].gold -= PACTO_CUSTO_ROMPER;
+		players[parceiro_idx].gold -= PACTO_CUSTO_ROMPER;
+
+		remover_propostas_de(nome);
+		remover_propostas_de(parceiro);
+		sync_vinculo_para_cliente(nome);
+		sync_vinculo_para_cliente(parceiro);
+
+		anunciar_no_mapa(players[player_index].map, "O chão treme, e todo o recinto se sacode...", "trovao7.ogg");
+		casamentos_aviso(player_index, "A união de " + nome + " e " + nome_exibicao(parceiro) + " se dissolveu. (-" + PACTO_CUSTO_ROMPER + " de ouro)");
+		casamentos_aviso(parceiro_idx, "A união de " + nome + " e " + players[parceiro_idx].charname + " se dissolveu. (-" + PACTO_CUSTO_ROMPER + " de ouro)");
+
+		debug_log("CASAMENTOS: pacto entre " + nome + " e " + parceiro + " rompido por consentimento mútuo");
+		return;
+	}
+
+	if(indice_proposta_entre(nome, parceiro, PROPOSTA_ROMPER_PACTO) >= 0) {
+		casamentos_erro(player_index, "Você já pediu o rompimento. Aguarde a resposta de " + nome_exibicao(parceiro) + ".");
+		return;
+	}
+
+	registrar_proposta(nome, parceiro, PROPOSTA_ROMPER_PACTO);
+
+	casamentos_aviso(player_index, "Você pediu o rompimento do pacto. Aguarde a confirmação de " + nome_exibicao(parceiro) + ".");
+	send_reliable_text(players[parceiro_idx].peer_id, "msg2 " + nome + " quer desfazer a sagrada união do pacto de sangue. Você concorda?", 0);
+	send_reliable_text(players[parceiro_idx].peer_id, "msg2 Use /romperpacto para confirmar. Custa " + PACTO_CUSTO_ROMPER + " de ouro para cada um.", 0);
+	send_reliable_text(players[parceiro_idx].peer_id, "ps notify5.ogg", 0);
+
+	debug_log("CASAMENTOS: " + nome + " pediu o rompimento do pacto com " + parceiro);
+}
+
+void cmd_pactochat(int player_index, string mensagem) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string texto = mensagem.trim_whitespace();
+	if(texto == "") {
+		casamentos_erro(player_index, "Uso: /pactochat <mensagem>");
+		return;
+	}
+
+	if(!players[player_index].can_send_message()) return;
+
+	string nome = players[player_index].charname;
+	string parceiro = get_parceiro(nome, VINCULO_PACTO);
+
+	if(parceiro == "") {
+		casamentos_erro(player_index, "Você não tem nenhum pacto de sangue.");
+		return;
+	}
+
+	int parceiro_idx = indice_jogador_por_nome(parceiro);
+	if(parceiro_idx < 0) {
+		// Mensagem herdada de net.bgt:590.
+		casamentos_erro(player_index, "Não faz muito sentido escrever neste canal com seu parceiro de pacto desconectado, faz?");
+		return;
+	}
+
+	string linha = "msg2 [Pacto] " + nome + ": " + texto;
+	send_reliable_text(players[player_index].peer_id, linha, 0);
+	send_reliable_text(players[player_index].peer_id, "ps message.ogg", 0);
+	send_reliable_text(players[parceiro_idx].peer_id, linha, 0);
+	send_reliable_text(players[parceiro_idx].peer_id, "ps message.ogg", 0);
+
+	players[player_index].register_message();
+}
+
+void cmd_meupacto(int player_index) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	string nome = players[player_index].charname;
+	string parceiro = get_parceiro(nome, VINCULO_PACTO);
+
+	if(parceiro == "") {
+		casamentos_aviso(player_index, "Você não tem nenhum pacto de sangue. Use /pacto <jogador> para propor um.");
+		return;
+	}
+
+	int dias = dias_de_vinculo(nome, VINCULO_PACTO);
+	string local = get_local_do_vinculo(nome, VINCULO_PACTO);
+	bool online = vinculo_jogador_online(parceiro);
+
+	casamentos_aviso(player_index, "=== Seu pacto de sangue ===");
+	casamentos_aviso(player_index, "Parceiro: " + nome_exibicao(parceiro) + " (" + (online ? "Online" : "Offline") + ")");
+	casamentos_aviso(player_index, "Tempo de pacto: " + dias + " dia(s)");
+	if(local != "") casamentos_aviso(player_index, "Local do ritual: " + local);
+	casamentos_aviso(player_index, "Romper o pacto custa " + PACTO_CUSTO_ROMPER + " de ouro para cada um.");
+}
+
+// ============================ ADMINISTRACAO ============================
+
+void cmd_forcardivorcio(int player_index, string alvo) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	if(!check_is_admin(players[player_index].charname)) {
+		casamentos_erro(player_index, "Você não tem permissão para isso!");
+		return;
+	}
+
+	string alvo_limpo = alvo.trim_whitespace();
+	if(alvo_limpo == "") {
+		casamentos_erro(player_index, "Uso: /forcardivorcio <jogador>");
+		return;
+	}
+
+	string parceiro = get_parceiro(alvo_limpo, VINCULO_CASAMENTO);
+	if(parceiro == "") {
+		casamentos_erro(player_index, nome_exibicao(alvo_limpo) + " não é casado(a) com ninguém.");
+		return;
+	}
+
+	string admin_nome = players[player_index].charname;
+
+	if(!romper_vinculo(alvo_limpo, VINCULO_CASAMENTO, admin_nome)) {
+		casamentos_erro(player_index, "Não foi possível romper o vínculo.");
+		return;
+	}
+
+	remover_propostas_de(alvo_limpo);
+	remover_propostas_de(parceiro);
+	sync_vinculo_para_cliente(alvo_limpo);
+	sync_vinculo_para_cliente(parceiro);
+
+	casamentos_aviso(player_index, "Casamento entre " + nome_exibicao(alvo_limpo) + " e " + nome_exibicao(parceiro) + " desfeito.");
+	avisar_jogador(alvo_limpo, "Um administrador desfez o seu casamento.", "notify5.ogg");
+	avisar_jogador(parceiro, "Um administrador desfez o seu casamento.", "notify5.ogg");
+
+	debug_log("ADMIN: " + admin_nome + " forçou o divórcio de " + alvo_limpo + " e " + parceiro);
+}
+
+void cmd_forcarcasamento(int player_index, string a, string b) {
+	if(!casamentos_exige_jogador(player_index)) return;
+
+	if(!check_is_admin(players[player_index].charname)) {
+		casamentos_erro(player_index, "Você não tem permissão para isso!");
+		return;
+	}
+
+	string na = a.trim_whitespace();
+	string nb = b.trim_whitespace();
+
+	if(na == "" || nb == "") {
+		casamentos_erro(player_index, "Uso: /forcarcasamento <jogador_a> <jogador_b>");
+		return;
+	}
+
+	if(normalizar_nome(na) == normalizar_nome(nb)) {
+		casamentos_erro(player_index, "Os dois nomes são a mesma pessoa.");
+		return;
+	}
+
+	if(!vinculo_jogador_online(na) && !player_exists_in_database(na)) {
+		casamentos_erro(player_index, "Jogador não encontrado: " + na);
+		return;
+	}
+
+	if(!vinculo_jogador_online(nb) && !player_exists_in_database(nb)) {
+		casamentos_erro(player_index, "Jogador não encontrado: " + nb);
+		return;
+	}
+
+	if(tem_vinculo(na, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, nome_exibicao(na) + " já é casado(a).");
+		return;
+	}
+
+	if(tem_vinculo(nb, VINCULO_CASAMENTO)) {
+		casamentos_erro(player_index, nome_exibicao(nb) + " já é casado(a).");
+		return;
+	}
+
+	string admin_nome = players[player_index].charname;
+	string local = players[player_index].map;
+
+	if(!criar_vinculo(na, nb, VINCULO_CASAMENTO, local, admin_nome)) {
+		casamentos_erro(player_index, "Não foi possível registrar o casamento.");
+		return;
+	}
+
+	remover_propostas_de(na);
+	remover_propostas_de(nb);
+	sync_vinculo_para_cliente(na);
+	sync_vinculo_para_cliente(nb);
+
+	casamentos_aviso(player_index, nome_exibicao(na) + " e " + nome_exibicao(nb) + " agora estão casados.");
+	anunciar_global("Por decreto do reino, " + nome_exibicao(na) + " e " + nome_exibicao(nb) + " estão unidos em matrimônio!", "victory.ogg");
+
+	debug_log("ADMIN: " + admin_nome + " casou " + na + " com " + nb);
+}

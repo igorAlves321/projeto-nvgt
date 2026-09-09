@@ -1,0 +1,447 @@
+// ============================================================================
+//  COMANDOS DO SISTEMA DE PETS
+// ----------------------------------------------------------------------------
+//  Substitui as interacoes soltas do BGT:
+//    /llamar                       -> /chamar
+//    frases magicas "ven, sube." / "vamos, baja."   -> /colo (toggle)
+//    hook da cama ("Una cama bastante comoda...")   -> /amarrar (toggle)
+//    maquina de comida / item paquete_de_comida...  -> /alimentar
+//    mtext name_puppy + pergamino_sanguinolento     -> /adotar <nome>
+//    mtext rnc / rnc2                               -> /renomearpet <nome>
+//    /spc                                           -> /darpet (admin)
+//    /destroy2                                      -> /matarpet (admin)
+//
+//  Observacao: o comando "/prender" ja existe no projeto (prisao de jogador,
+//  admin_moderation_commands.nvgt), por isso o toggle de amarrar o pet virou
+//  "/amarrar" e a funcao se chama cmd_amarrarpet().
+// ============================================================================
+
+bool pet_index_valido(int player_index) {
+	return player_index >= 0 && player_index < int(players.length()) && players[player_index] !is null;
+}
+
+void pet_msg(int player_index, string texto) {
+	if(!pet_index_valido(player_index)) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + texto, 0);
+}
+
+void pet_som(int player_index, string arquivo) {
+	if(!pet_index_valido(player_index)) return;
+	send_reliable_text(players[player_index].peer_id, "ps " + arquivo, 0);
+}
+
+// Retorna o pet do jogador ou null, ja avisando quem nao tem nenhum.
+pet@ pet_do_jogador(int player_index, bool avisar = true) {
+	if(!pet_index_valido(player_index)) return null;
+	pet@ pt = get_pet_de(players[player_index].charname);
+	if(pt is null && avisar) {
+		pet_msg(player_index, "Você não tem um pet. Procure a zona de canis e use /adotar <nome>.");
+	}
+	return pt;
+}
+
+// ---------------------------------------------------------------------------
+// /adotar <nome>
+// ---------------------------------------------------------------------------
+void cmd_adotar(int player_index, string nome) {
+	if(!pet_index_valido(player_index)) return;
+	player@ p = players[player_index];
+
+	if(jogador_tem_pet(p.charname)) {
+		pet_msg(player_index, "Você já tem um pet. Use /pet para ver como ele está.");
+		return;
+	}
+
+	if(p.inv_item_number(PET_ITEM_ADOCAO) < 1) {
+		pet_msg(player_index, "Você precisa de um filhote de cachorro para adotar. Procure a zona de canis.");
+		return;
+	}
+
+	if(!pet_nome_valido(nome)) {
+		pet_msg(player_index, "O nome do seu cachorro deve ter entre 3 e 20 caracteres, sem espaços, e não pode ser 'default'.");
+		return;
+	}
+
+	if(pet_mapa_proibido(p.map)) {
+		pet_msg(player_index, "Não é recomendável invocar o filhote aqui.");
+		return;
+	}
+
+	if(is_game_disabled(p.x, p.y, p.map)) {
+		pet_msg(player_index, "Você não pode fazer isso neste lugar.");
+		return;
+	}
+
+	pet pt(p.charname, nome, p.map, p.x, p.y, random(PET_VIDA_INICIAL_MIN, PET_VIDA_INICIAL_MAX));
+	pt.especie = PET_ESPECIE_PADRAO;
+
+	if(!pet_inserir(pt)) {
+		pet_msg(player_index, "Não foi possível registrar seu pet agora. Tente novamente mais tarde.");
+		return;
+	}
+
+	pt.ativo = true;
+	pt.reiniciar_timers();
+	pets.insert_last(pt);
+
+	p.inv_add_item(PET_ITEM_ADOCAO, -1);
+
+	pet_msg(player_index, "Seu cachorrinho apareceu! Agora ele se chama " + pt.nome + ".");
+	pet_msg(player_index, "Cuide bem dele: use /alimentar quando ele ficar com fome.");
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(5, "play_npc cachorronervoso1.ogg", pt.x, pt.y);
+	}
+
+	debug_log("PET: " + p.charname + " adotou o pet '" + pt.nome + "'");
+}
+
+// Hook da zona de canis (interactions.nvgt). Entrega o token de adocao.
+void pet_zona_de_adocao(int player_index) {
+	if(!pet_index_valido(player_index)) return;
+	player@ p = players[player_index];
+
+	if(jogador_tem_pet(p.charname)) {
+		pet_msg(player_index, "Os filhotes latem para você, mas você já tem um pet em casa.");
+		return;
+	}
+
+	if(p.inv_item_number(PET_ITEM_ADOCAO) > 0) {
+		pet_msg(player_index, "Você já está com um filhote nos braços. Use /adotar <nome> para dar um nome a ele.");
+		return;
+	}
+
+	p.inv_add_item(PET_ITEM_ADOCAO, 1);
+	pet_msg(player_index, "Você adota um lindo filhote de cachorro! Use /adotar <nome> para dar um nome a ele.");
+	pet_som(player_index, "notify8.ogg");
+}
+
+// ---------------------------------------------------------------------------
+// /pet  (aliases: /cachorro, /meupet)
+// ---------------------------------------------------------------------------
+void cmd_pet(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	pet_msg(player_index, "=== Seu pet ===");
+	pet_msg(player_index, "Nome: " + pt.get_apelido() + " (" + pt.especie + ")");
+	pet_msg(player_index, "Vida: " + int(pt.vida) + "/" + int(pt.vida_maxima));
+	pet_msg(player_index, "Estado: " + pt.get_estado());
+	pet_msg(player_index, "Local: " + pt.mapa + " (" + pt.x + ", " + pt.y + ")");
+	string s_fome = pt.com_fome ? "com fome! use /alimentar" : "alimentado";
+	pet_msg(player_index, "Fome: " + s_fome);
+	pet_msg(player_index, "Vezes alimentado: " + pt.vezes_alimentado);
+}
+
+// ---------------------------------------------------------------------------
+// /chamar  (aliases: /llamar, /callpet)  — substitui o /llamar do BGT
+// ---------------------------------------------------------------------------
+void cmd_chamar(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+
+	if(pt.preso) {
+		pet_msg(player_index, "Seu " + pt.get_apelido() + " está amarrado. Use /amarrar para soltá-lo.");
+		return;
+	}
+
+	if(pet_mapa_proibido(p.map)) {
+		pet_msg(player_index, "Você não pode chamar seu pet para este lugar.");
+		return;
+	}
+
+	if(is_game_disabled(p.x, p.y, p.map)) {
+		pet_msg(player_index, "Você não pode chamar seu pet aqui.");
+		return;
+	}
+
+	pt.mapa = p.map;
+	pt.x = p.x;
+	pt.y = p.y;
+	pt.mapindex = get_map_index_from(pt.mapa);
+	pt.ativo = true;
+	pt.t_passo.restart();
+
+	pet_salvar(pt);
+
+	pet_msg(player_index, "Você chama seu " + pt.get_apelido() + ", e ele vem correndo.");
+
+	int mi = pt.mapindex;
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(5, "play_npc cachorronervoso" + random(1, 4) + ".ogg", pt.x, pt.y);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /colo  — substitui as frases "ven, sube." / "vamos, baja." do BGT
+// ---------------------------------------------------------------------------
+void cmd_colo(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+
+	if(pt.no_colo) {
+		pt.no_colo = false;
+		pet_msg(player_index, "O " + pt.get_apelido() + " desce do seu colo e passa a te seguir à distância.");
+		pet_salvar(pt);
+		return;
+	}
+
+	if(pt.preso) {
+		pet_msg(player_index, "Seu " + pt.get_apelido() + " está amarrado. Use /amarrar para soltá-lo primeiro.");
+		return;
+	}
+
+	if(pt.mapa != p.map) {
+		pet_msg(player_index, "Seu " + pt.get_apelido() + " não está aqui. Use /chamar.");
+		return;
+	}
+
+	pt.no_colo = true;
+	pt.x = p.x;
+	pt.y = p.y;
+	pet_msg(player_index, "O " + pt.get_apelido() + " se aninha nos seus braços.");
+	pet_salvar(pt);
+}
+
+// ---------------------------------------------------------------------------
+// /amarrar  (alias: /petprender)  — substitui o hook da cama do BGT
+// ---------------------------------------------------------------------------
+void cmd_amarrarpet(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+
+	if(pt.preso) {
+		pt.preso = false;
+		pet_msg(player_index, "Você desamarra seu " + pt.get_apelido() + ".");
+		pet_salvar(pt);
+		return;
+	}
+
+	if(pt.mapa != p.map) {
+		pet_msg(player_index, "Seu " + pt.get_apelido() + " não está aqui. Use /chamar.");
+		return;
+	}
+
+	pt.preso = true;
+	pt.no_colo = false;
+	pt.x = p.x;
+	pt.y = p.y;
+	pet_msg(player_index, "Você amarra seu " + pt.get_apelido() + " aqui. Ele vai esperar por você.");
+	pet_salvar(pt);
+}
+
+// ---------------------------------------------------------------------------
+// /alimentar  (alias: /feed)
+// ---------------------------------------------------------------------------
+void cmd_alimentar(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+
+	if(!pt.com_fome) {
+		pet_msg(player_index, "Parece que ainda não é hora de fazer isso.");
+		return;
+	}
+
+	if(p.inv_item_number(PET_ITEM_RACAO) < 1) {
+		pet_msg(player_index, "Você não tem ração para cachorro.");
+		return;
+	}
+
+	p.inv_add_item(PET_ITEM_RACAO, -1);
+
+	pt.com_fome = false;
+	pt.fome = 0;
+	pt.vezes_alimentado += 1;
+	pt.t_fome.restart();
+	pt.t_penalidade.restart();
+	pt.curar(random(PET_CURA_MIN, PET_CURA_MAX));
+
+	pet_salvar(pt);
+	pet_registrar_refeicao(pt);
+
+	ganhaxp(p.charname, random(PET_XP_ALIMENTAR_MIN, PET_XP_ALIMENTAR_MAX));
+	gc(p.charname, random(1, 3));
+
+	pet_msg(player_index, "Você alimenta seu " + pt.get_apelido() + ". Ele parece contente! Vida: " + int(pt.vida) + "/" + int(pt.vida_maxima));
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(5, "play_npc cachorronervoso" + random(1, 4) + ".ogg", pt.x, pt.y);
+	}
+
+	debug_log("PET: " + p.charname + " alimentou o pet (" + pt.vezes_alimentado + " vezes no total)");
+}
+
+// ---------------------------------------------------------------------------
+// /renomearpet <nome>  (alias: /rnc)
+// ---------------------------------------------------------------------------
+void cmd_renomearpet(int player_index, string nome) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+
+	if(!pet_nome_valido(nome)) {
+		pet_msg(player_index, "O nome do seu cachorro deve ter entre 3 e 20 caracteres, sem espaços, e não pode ser 'default'.");
+		return;
+	}
+
+	if(pt.nome == nome) {
+		pet_msg(player_index, "Seu cachorro já tem esse nome.");
+		return;
+	}
+
+	bool gratis = (pt.nome == "" || pt.nome == "default");
+
+	if(!gratis) {
+		if(p.gold < PET_CUSTO_RENOMEAR) {
+			pet_msg(player_index, "Renomear o pet custa " + PET_CUSTO_RENOMEAR + " gold e você não tem o suficiente.");
+			return;
+		}
+		p.gold -= PET_CUSTO_RENOMEAR;
+	}
+
+	pt.nome = nome;
+	pet_salvar(pt);
+
+	if(gratis) {
+		pet_msg(player_index, "O nome do seu cachorro foi definido como " + nome + ".");
+	} else {
+		pet_msg(player_index, "O nome do seu cachorro foi alterado para " + nome + " por " + PET_CUSTO_RENOMEAR + " gold.");
+	}
+
+	debug_log("PET: " + p.charname + " renomeou o pet para '" + nome + "'");
+}
+
+// ---------------------------------------------------------------------------
+// /libertarpet
+// ---------------------------------------------------------------------------
+void cmd_libertarpet(int player_index) {
+	pet@ pt = pet_do_jogador(player_index);
+	if(pt is null) return;
+
+	player@ p = players[player_index];
+	string apelido = pt.get_apelido();
+
+	int mi = get_map_index_from(pt.mapa);
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(5, "play_npc cachorronervoso" + random(1, 4) + ".ogg", pt.x, pt.y);
+	}
+
+	pet_apagar(p.charname);
+
+	pet_msg(player_index, "Você abre mão do " + apelido + ". Ele volta para o canil, à espera de um novo lar.");
+	debug_log("PET: " + p.charname + " libertou o pet '" + apelido + "'");
+}
+
+// ---------------------------------------------------------------------------
+// /petinfo <jogador>  (admin)
+// ---------------------------------------------------------------------------
+void cmd_petinfo(int player_index, string alvo) {
+	if(!pet_index_valido(player_index)) return;
+
+	if(!check_is_admin_index(player_index)) {
+		pet_msg(player_index, "Você não tem permissão para usar este comando.");
+		return;
+	}
+
+	pet@ pt = get_pet_de(alvo);
+	if(pt is null) {
+		pet_msg(player_index, alvo + " não tem um pet vivo.");
+		return;
+	}
+
+	pet_msg(player_index, "=== Pet de " + pt.dono + " ===");
+	pet_msg(player_index, "Id: " + pt.id + " | Nome: " + pt.get_apelido() + " | Espécie: " + pt.especie);
+	pet_msg(player_index, "Vida: " + int(pt.vida) + "/" + int(pt.vida_maxima));
+	pet_msg(player_index, "Local: " + pt.mapa + " (" + pt.x + ", " + pt.y + ")");
+	string s_ativo = pt.ativo ? "sim" : "não (dormindo)";
+	string s_preso = pt.preso ? "sim" : "não";
+	string s_colo = pt.no_colo ? "sim" : "não";
+	string s_fome = pt.com_fome ? "sim" : "não";
+	pet_msg(player_index, "Ativo: " + s_ativo + " | Amarrado: " + s_preso + " | No colo: " + s_colo);
+	pet_msg(player_index, "Com fome: " + s_fome + " | Ciclos de fome: " + pt.fome + " | Vezes alimentado: " + pt.vezes_alimentado);
+}
+
+// ---------------------------------------------------------------------------
+// /darpet <jogador> <nome>  (admin) — substitui o /spc do BGT
+// ---------------------------------------------------------------------------
+void cmd_darpet(int player_index, string alvo, string nome) {
+	if(!pet_index_valido(player_index)) return;
+
+	if(!check_is_admin_index(player_index)) {
+		pet_msg(player_index, "Você não tem permissão para usar este comando.");
+		return;
+	}
+
+	int alvo_index = get_player_index_from(alvo);
+	if(alvo_index < 0) {
+		pet_msg(player_index, "Jogador '" + alvo + "' não está online.");
+		return;
+	}
+
+	player@ destino = players[alvo_index];
+	if(destino is null) return;
+
+	if(jogador_tem_pet(destino.charname)) {
+		pet_msg(player_index, destino.charname + " já tem um pet.");
+		return;
+	}
+
+	if(!pet_nome_valido(nome)) {
+		pet_msg(player_index, "Nome inválido: use de 3 a 20 caracteres, sem espaços, e diferente de 'default'.");
+		return;
+	}
+
+	pet pt(destino.charname, nome, destino.map, destino.x, destino.y,
+		random(PET_VIDA_INICIAL_MIN, PET_VIDA_INICIAL_MAX));
+	pt.especie = PET_ESPECIE_PADRAO;
+
+	if(!pet_inserir(pt)) {
+		pet_msg(player_index, "Falha ao registrar o pet no banco.");
+		return;
+	}
+
+	pt.ativo = true;
+	pt.reiniciar_timers();
+	pets.insert_last(pt);
+
+	pet_msg(player_index, "Pronto. " + destino.charname + " agora tem o pet '" + nome + "'.");
+	send_reliable_text(destino.peer_id, "msg2 Um cachorrinho chamado " + nome + " apareceu ao seu lado!", 0);
+	send_reliable_text(destino.peer_id, "ps notify8.ogg", 0);
+
+	debug_log("PET: " + players[player_index].charname + " deu o pet '" + nome + "' para " + destino.charname);
+}
+
+// ---------------------------------------------------------------------------
+// /matarpet <jogador>  (admin) — substitui o /destroy2 do BGT
+// ---------------------------------------------------------------------------
+void cmd_matarpet(int player_index, string alvo) {
+	if(!pet_index_valido(player_index)) return;
+
+	if(!check_is_admin_index(player_index)) {
+		pet_msg(player_index, "Você não tem permissão para usar este comando.");
+		return;
+	}
+
+	pet@ pt = get_pet_de(alvo);
+	if(pt is null) {
+		pet_msg(player_index, alvo + " não tem um pet vivo.");
+		return;
+	}
+
+	string dono = pt.dono;
+	pet_morrer(pt, "admin");
+
+	pet_msg(player_index, "Pronto. O pet de " + dono + " foi removido.");
+	debug_log("PET: " + players[player_index].charname + " matou o pet de " + dono);
+}

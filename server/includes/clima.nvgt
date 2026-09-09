@@ -1,0 +1,1053 @@
+#include "globals.nvgt"
+
+// ============================================================================
+// SISTEMA DE CLIMA DO MUNDO
+// ----------------------------------------------------------------------------
+// Porte do ciclo de chuva do servidor BGT (re_server_test.bgt:998-1110), que
+// nunca foi migrado. A metade cliente ja existia e estava orfa:
+//   cliente/includes/clima.nvgt          -> chuva()
+//   cliente/includes/net.nvgt            -> chuvaativa / fimchuva / volumechuva
+//   cliente/includes/map.nvgt            -> "teto:" define somchuva
+//   cliente/includes/net/channel0_...    -> "pst <arquivo>" (trovoes)
+//
+// Regras de negocio herdadas do BGT:
+//   - intervalo seco longo entre chuvas (BGT: chuvatempo = 2000000 ms fixo)
+//   - chuva com duracao propria         (BGT: 500000 ms fixo)
+//   - envelope de volume: entra em -12 dB, sobe ate -2 dB nos primeiros ~48 s,
+//     segura, e desce de volta a -12 dB nos ultimos ~50 s
+//   - "chuvaativa <n>" com n = random(3, 4) (o cliente ignora o numero, mas o
+//     pacote continua sendo enviado no mesmo formato por compatibilidade)
+//   - "fimchuva" + "volumechuva -12" no encerramento
+//
+// O que este porte acrescenta (o BGT nao tinha):
+//   - clima por mapa: mapa com "teto:none" (interior) nao recebe chuva
+//   - ressincronizacao: quem loga ou troca de mapa no meio da chuva recebe o
+//     estado atual (no BGT o jogador ficava mudo ate a proxima transicao)
+//   - persistencia em sqlite (o clima sobrevive a um restart)
+//   - estacoes derivadas de game_time.day_number
+//   - trovoes de verdade (no BGT as flags trov1..trov10 tinham corpo vazio)
+//   - substituicao das ~20 flags trov*/volumechuva* por uma unica rampa linear
+// ============================================================================
+
+const string CLIMA_LIMPO = "limpo";
+const string CLIMA_NUBLADO = "nublado";
+const string CLIMA_CHUVA = "chuva";
+const string CLIMA_TEMPESTADE = "tempestade";
+
+// Volume em NVGT 0.90 e escala dB no proprio .volume do sound.
+// O BGT chegava a mandar "volumechuva 1000" (valor absurdo); aqui tudo passa
+// por clima_clamp_volume() antes de sair pela rede.
+const int CLIMA_VOL_MIN = -30;
+const int CLIMA_VOL_MAX = 0;
+const int CLIMA_VOL_SILENCIO = -12;   // BGT: volume de entrada e de saida da chuva
+const int CLIMA_VOL_CHUVA_FRACA = -9;
+const int CLIMA_VOL_CHUVA = -6;
+const int CLIMA_VOL_TEMPESTADE = -2;  // BGT: pico real do envelope
+
+const int CLIMA_RAMPA_INTERVALO = 1000;  // ms entre passos da rampa
+const int CLIMA_RAMPA_PASSO = 2;         // dB por passo (BGT subia de 2 em 2)
+
+const int CLIMA_DURACAO_SECO_MIN = 1200000;   // 20 min
+const int CLIMA_DURACAO_SECO_MAX = 2400000;   // 40 min (BGT usava 2000000 fixo)
+const int CLIMA_DURACAO_CHUVA_MIN = 300000;   // 5 min
+const int CLIMA_DURACAO_CHUVA_MAX = 600000;   // 10 min (BGT usava 500000 fixo)
+const int CLIMA_FADE_OUT_MS = 50000;          // BGT: fade final comeca ~50 s antes
+
+const int CLIMA_TROVAO_MIN = 15000;
+const int CLIMA_TROVAO_MAX = 90000;
+const int CLIMA_TROVOES_TOTAL = 20;           // trovão1.ogg .. trovão20.ogg
+
+const int CLIMA_TICK_INTERVALO = 500;
+const int CLIMA_AUTOSAVE_INTERVALO = 300000;  // 5 min
+
+const int CLIMA_MINUTOS_MAX = 240;            // teto de /setclima
+
+bool clima_sistema_pronto = false;
+bool clima_ciclo_automatico = true;
+
+dictionary clima_config_permite;   // map_name -> int (1 = recebe chuva)
+dictionary clima_config_fixo;      // map_name -> string (condicao travada)
+
+// Palavras que denunciam um mapa de interior. Serve so para a semeadura
+// inicial de clima_config; depois disso vale o que estiver no banco.
+string[] CLIMA_PALAVRAS_INTERIOR = {
+	"jaula", "casa", "apartamento", "apartament", "caverna", "cueva", "gruta",
+	"banheiro", "laboratorio", "mina_", "minaouro", "tunel", "hotel", "loja",
+	"tienda", "banco", "hospital", "prisao", "prision", "carcel", "metro",
+	"subterran", "interior", "sala", "quarto", "porao", "sotano", "cripta",
+	"dungeon", "masmorra", "calabozo", "armazem", "deposito", "galpao",
+	"joyer", "biblioteca", "escola", "igreja", "templo_int", "arena_int"
+};
+
+// ============================================================================
+// ESTADO
+// ============================================================================
+
+class clima_mundo {
+	string condicao = "limpo";
+	int intensidade = 0;
+	int volume_atual = -12;
+	int volume_alvo = -12;
+	string origem = "automatico";
+	string estacao = "primavera";
+
+	int numero_chuva = 4;      // BGT: random(3, 4), enviado em "chuvaativa <n>"
+	int duracao_alvo = 0;      // ms; <= 0 significa "sem prazo definido"
+	int proximo_trovao = 30000;
+	int trovoes_disparados = 0;
+
+	timer duracao;
+	timer rampa_timer;
+	timer trovao_timer;
+	timer tick_timer;
+	timer autosave_timer;
+
+	clima_mundo() {
+		duracao.restart();
+		rampa_timer.restart();
+		trovao_timer.restart();
+		tick_timer.restart();
+		autosave_timer.restart();
+	}
+
+	bool esta_chovendo() {
+		return condicao == CLIMA_CHUVA || condicao == CLIMA_TEMPESTADE;
+	}
+
+	int tempo_restante() {
+		if(duracao_alvo <= 0) return -1;
+		int restante = duracao_alvo - int(duracao.elapsed);
+		return restante > 0 ? restante : 0;
+	}
+
+	string descricao_humana() {
+		if(condicao == CLIMA_TEMPESTADE) return "Tempestade";
+		if(condicao == CLIMA_CHUVA) {
+			if(intensidade >= 3) return "Chuva forte";
+			if(intensidade == 2) return "Chuva";
+			return "Garoa";
+		}
+		if(condicao == CLIMA_NUBLADO) return "Nublado";
+		return "Céu limpo";
+	}
+
+	void tick() {
+		if(int(tick_timer.elapsed) < CLIMA_TICK_INTERVALO) return;
+		tick_timer.restart();
+
+		clima_rampa_volume();
+
+		if(condicao == CLIMA_TEMPESTADE && int(trovao_timer.elapsed) >= proximo_trovao) {
+			trovao_timer.restart();
+			clima_disparar_trovao();
+		}
+
+		if(duracao_alvo > 0 && int(duracao.elapsed) >= duracao_alvo) {
+			if(clima_ciclo_automatico) {
+				clima_avancar_ciclo();
+			} else {
+				duracao.restart();
+			}
+		}
+
+		if(int(autosave_timer.elapsed) >= CLIMA_AUTOSAVE_INTERVALO) {
+			autosave_timer.restart();
+			clima_salvar_estado();
+		}
+	}
+}
+
+clima_mundo clima;
+
+// ============================================================================
+// UTILITARIOS
+// ============================================================================
+
+int clima_clamp_volume(int v) {
+	if(v < CLIMA_VOL_MIN) return CLIMA_VOL_MIN;
+	if(v > CLIMA_VOL_MAX) return CLIMA_VOL_MAX;
+	return v;
+}
+
+bool clima_condicao_valida(string condicao) {
+	return condicao == CLIMA_LIMPO || condicao == CLIMA_NUBLADO ||
+	       condicao == CLIMA_CHUVA || condicao == CLIMA_TEMPESTADE;
+}
+
+bool clima_condicao_molhada(string condicao) {
+	return condicao == CLIMA_CHUVA || condicao == CLIMA_TEMPESTADE;
+}
+
+int clima_volume_pico(string condicao, int intensidade) {
+	if(condicao == CLIMA_TEMPESTADE) return CLIMA_VOL_TEMPESTADE;
+	if(condicao == CLIMA_CHUVA) {
+		if(intensidade >= 3) return CLIMA_VOL_TEMPESTADE;
+		if(intensidade == 2) return CLIMA_VOL_CHUVA;
+		return CLIMA_VOL_CHUVA_FRACA;
+	}
+	return CLIMA_VOL_SILENCIO;
+}
+
+int clima_intensidade_padrao(string condicao) {
+	if(condicao == CLIMA_TEMPESTADE) return 3;
+	if(condicao == CLIMA_CHUVA) return 2;
+	return 0;
+}
+
+// Resolve o mapa do jogador sem confiar em map_name/mapaatual: changemap()
+// (globals.nvgt:343) so escreve players[i].map e players[i].mapindex.
+int clima_resolver_mapindex(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return -1;
+	int mapindex = players[player_index].mapindex;
+	if(mapindex >= 0 && mapindex < int(server_maps.length())) return mapindex;
+	return get_map_index_from(players[player_index].map);
+}
+
+string clima_nome_mapa(int mapindex) {
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return "";
+	return server_maps[mapindex].name;
+}
+
+// ============================================================================
+// ESTACOES
+// ----------------------------------------------------------------------------
+// Deriva de game_time.day_number (systems_advanced.nvgt), a unica autoridade de
+// tempo realmente viva no main loop. calendar.nvgt existe mas calendar_loop() e
+// check_time_events() nunca sao chamados, entao get_current_season() de la nunca
+// avanca; usar aquilo aqui criaria uma segunda autoridade de tempo morta.
+// 30 dias por mes, 3 meses por estacao, 12 meses por ano.
+// ============================================================================
+
+string clima_estacao_atual() {
+	int dia = game_time.day_number;
+	if(dia < 1) dia = 1;
+	int mes = ((dia - 1) / 30) % 12;
+	int estacao = mes / 3;
+	if(estacao == 0) return "primavera";
+	if(estacao == 1) return "verão";
+	if(estacao == 2) return "outono";
+	return "inverno";
+}
+
+int clima_peso_condicao(string condicao, string estacao) {
+	if(estacao == "inverno") {
+		if(condicao == CLIMA_LIMPO) return 20;
+		if(condicao == CLIMA_NUBLADO) return 30;
+		if(condicao == CLIMA_CHUVA) return 35;
+		if(condicao == CLIMA_TEMPESTADE) return 15;
+	}
+	else if(estacao == "outono") {
+		if(condicao == CLIMA_LIMPO) return 30;
+		if(condicao == CLIMA_NUBLADO) return 30;
+		if(condicao == CLIMA_CHUVA) return 30;
+		if(condicao == CLIMA_TEMPESTADE) return 10;
+	}
+	else if(estacao == "primavera") {
+		if(condicao == CLIMA_LIMPO) return 40;
+		if(condicao == CLIMA_NUBLADO) return 25;
+		if(condicao == CLIMA_CHUVA) return 25;
+		if(condicao == CLIMA_TEMPESTADE) return 10;
+	}
+	else {
+		// verao
+		if(condicao == CLIMA_LIMPO) return 60;
+		if(condicao == CLIMA_NUBLADO) return 20;
+		if(condicao == CLIMA_CHUVA) return 12;
+		if(condicao == CLIMA_TEMPESTADE) return 8;
+	}
+	return 10;
+}
+
+string clima_sortear_proxima_condicao() {
+	string estacao = clima_estacao_atual();
+	string[] opcoes = {CLIMA_LIMPO, CLIMA_NUBLADO, CLIMA_CHUVA, CLIMA_TEMPESTADE};
+
+	int total = 0;
+	int[] pesos;
+	for(uint i = 0; i < opcoes.length(); i++) {
+		int peso = clima_peso_condicao(opcoes[i], estacao);
+		if(peso < 0) peso = 0;
+		pesos.insert_last(peso);
+		total += peso;
+	}
+
+	if(total <= 0) return CLIMA_LIMPO;
+
+	int sorteio = random(1, total);
+	int acumulado = 0;
+	for(uint i = 0; i < opcoes.length(); i++) {
+		acumulado += pesos[i];
+		if(sorteio <= acumulado) return opcoes[i];
+	}
+	return CLIMA_LIMPO;
+}
+
+// ============================================================================
+// BANCO DE DADOS
+// ============================================================================
+
+void create_clima_tables() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_clima_tables - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabelas de clima...");
+
+	string create_estado = """
+		CREATE TABLE IF NOT EXISTS clima_estado (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			condicao TEXT DEFAULT 'limpo',
+			intensidade INTEGER DEFAULT 0,
+			volume INTEGER DEFAULT -12,
+			iniciado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			duracao_ms INTEGER DEFAULT 0,
+			estacao TEXT DEFAULT 'primavera',
+			origem TEXT DEFAULT 'automatico'
+		);
+	""";
+
+	if(bancoJogo.execute(create_estado) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela clima_estado: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela clima_estado criada/verificada");
+	}
+
+	string create_config = """
+		CREATE TABLE IF NOT EXISTS clima_config (
+			map_name TEXT PRIMARY KEY,
+			permite_chuva INTEGER DEFAULT 1,
+			permite_neve INTEGER DEFAULT 0,
+			clima_fixo TEXT DEFAULT '',
+			peso_chuva INTEGER DEFAULT 100,
+			alterado_por TEXT DEFAULT 'system',
+			alterado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_config) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela clima_config: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela clima_config criada/verificada");
+	}
+
+	string create_historico = """
+		CREATE TABLE IF NOT EXISTS clima_historico (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			condicao TEXT NOT NULL,
+			intensidade INTEGER DEFAULT 0,
+			estacao TEXT DEFAULT '',
+			origem TEXT DEFAULT 'automatico',
+			iniciado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			terminado_em DATETIME DEFAULT NULL
+		);
+	""";
+
+	if(bancoJogo.execute(create_historico) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela clima_historico: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela clima_historico criada/verificada");
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_clima_historico_inicio ON clima_historico(iniciado_em);");
+}
+
+void clima_salvar_estado() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR REPLACE INTO clima_estado
+			(id, condicao, intensidade, volume, iniciado_em, duracao_ms, estacao, origem)
+		VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar clima_salvar_estado: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, clima.condicao);
+	stmt.bind_int(2, clima.intensidade);
+	stmt.bind_int(3, clima.volume_atual);
+	stmt.bind_int(4, clima.duracao_alvo);
+	stmt.bind_text(5, clima.estacao);
+	stmt.bind_text(6, clima.origem);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao salvar clima_estado: " + bancoJogo.get_last_error_text());
+	}
+}
+
+void clima_carregar_estado() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = "SELECT condicao, intensidade, volume, duracao_ms, estacao, origem FROM clima_estado WHERE id = 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar clima_carregar_estado: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	if(stmt.step() == SQLITE_ROW) {
+		string condicao = stmt.column_text(0);
+		if(!clima_condicao_valida(condicao)) condicao = CLIMA_LIMPO;
+
+		clima.condicao = condicao;
+		clima.intensidade = stmt.column_int(1);
+		clima.volume_atual = clima_clamp_volume(stmt.column_int(2));
+		clima.duracao_alvo = stmt.column_int(3);
+		clima.estacao = stmt.column_text(4);
+		clima.origem = stmt.column_text(5);
+
+		if(clima.duracao_alvo <= 0) clima.duracao_alvo = clima_duracao_padrao(clima.condicao);
+		clima.volume_alvo = clima.esta_chovendo() ? clima_volume_pico(clima.condicao, clima.intensidade) : CLIMA_VOL_SILENCIO;
+
+		debug_log("CLIMA: estado restaurado do banco -> " + clima.condicao + " (intensidade " + clima.intensidade + ")");
+	} else {
+		debug_log("CLIMA: nenhum estado salvo, semeando 'limpo'");
+		clima.condicao = CLIMA_LIMPO;
+		clima.intensidade = 0;
+		clima.volume_atual = CLIMA_VOL_SILENCIO;
+		clima.volume_alvo = CLIMA_VOL_SILENCIO;
+		clima.origem = "automatico";
+		clima.duracao_alvo = clima_duracao_padrao(CLIMA_LIMPO);
+		clima_salvar_estado();
+	}
+}
+
+void clima_historico_fechar() {
+	if(!database_initialized || bancoJogo is null) return;
+	bancoJogo.execute("UPDATE clima_historico SET terminado_em = CURRENT_TIMESTAMP WHERE terminado_em IS NULL;");
+}
+
+void clima_historico_abrir(string condicao, int intensidade, string estacao, string origem) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT INTO clima_historico (condicao, intensidade, estacao, origem)
+		VALUES (?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar clima_historico_abrir: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, condicao);
+	stmt.bind_int(2, intensidade);
+	stmt.bind_text(3, estacao);
+	stmt.bind_text(4, origem);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao gravar clima_historico: " + bancoJogo.get_last_error_text());
+	}
+}
+
+// ============================================================================
+// CONFIGURACAO POR MAPA
+// ============================================================================
+
+bool clima_nome_parece_interior(string map_name) {
+	string nome = string_to_lower_case(map_name);
+	for(uint i = 0; i < CLIMA_PALAVRAS_INTERIOR.length(); i++) {
+		if(nome.find(CLIMA_PALAVRAS_INTERIOR[i]) >= 0) return true;
+	}
+	return false;
+}
+
+void clima_config_cache_set(string map_name, int permite, string fixo) {
+	clima_config_permite.set(map_name, permite);
+	clima_config_fixo.set(map_name, fixo);
+}
+
+void clima_carregar_config() {
+	clima_config_permite.delete_all();
+	clima_config_fixo.delete_all();
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = "SELECT map_name, permite_chuva, clima_fixo FROM clima_config;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar clima_carregar_config: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	int total = 0;
+	while(stmt.step() == SQLITE_ROW) {
+		string nome = stmt.column_text(0);
+		int permite = stmt.column_int(1);
+		string fixo = stmt.column_text(2);
+		if(!clima_condicao_valida(fixo)) fixo = "";
+		clima_config_cache_set(nome, permite, fixo);
+		total++;
+	}
+
+	debug_log("CLIMA: " + total + " configuracoes de mapa carregadas");
+}
+
+// Semeia clima_config para todo mapa carregado que ainda nao tem linha.
+// Sem isso a primeira tempestade choveria dentro de casa: apenas 1 dos mapas
+// do projeto traz linha "teto:" e o cliente assume ceu aberto por default
+// (cliente/includes/map.nvgt:138 -> somchuva = "rain4.ogg").
+void clima_semear_config() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR IGNORE INTO clima_config (map_name, permite_chuva, permite_neve, clima_fixo, peso_chuva, alterado_por)
+		VALUES (?, ?, 0, '', 100, 'system');
+	""";
+
+	int novos = 0;
+	for(uint i = 0; i < server_maps.length(); i++) {
+		string nome = server_maps[i].name;
+		if(nome == "") continue;
+		if(clima_config_permite.exists(nome)) continue;
+
+		int permite = 1;
+		if(server_maps[i].ceiling_sound == "none") permite = 0;
+		else if(clima_nome_parece_interior(nome)) permite = 0;
+
+		sqlite3statement@ stmt = bancoJogo.prepare(query);
+		if(@stmt == null) continue;
+		stmt.bind_text(1, nome);
+		stmt.bind_int(2, permite);
+		stmt.step();
+
+		clima_config_cache_set(nome, permite, "");
+		novos++;
+	}
+
+	if(novos > 0) debug_log("CLIMA: " + novos + " mapas semeados em clima_config");
+}
+
+bool clima_mapa_permite(string map_name) {
+	if(map_name == "") return false;
+	int permite = 1;
+	if(clima_config_permite.exists(map_name)) {
+		clima_config_permite.get(map_name, permite);
+	}
+	return permite != 0;
+}
+
+string clima_mapa_fixo(string map_name) {
+	if(map_name == "") return "";
+	string fixo = "";
+	if(clima_config_fixo.exists(map_name)) {
+		clima_config_fixo.get(map_name, fixo);
+	}
+	if(!clima_condicao_valida(fixo)) return "";
+	return fixo;
+}
+
+void clima_set_mapa(string map_name, bool permite_chuva, string clima_fixo) {
+	if(map_name == "") return;
+	if(!clima_condicao_valida(clima_fixo)) clima_fixo = "";
+
+	if(database_initialized && bancoJogo !is null) {
+		string query = """
+			INSERT OR REPLACE INTO clima_config
+				(map_name, permite_chuva, permite_neve, clima_fixo, peso_chuva, alterado_por, alterado_em)
+			VALUES (?, ?, 0, ?, 100, ?, CURRENT_TIMESTAMP);
+		""";
+
+		sqlite3statement@ stmt = bancoJogo.prepare(query);
+		if(@stmt == null) {
+			debug_log("ERRO ao preparar clima_set_mapa: " + bancoJogo.get_last_error_text());
+		} else {
+			stmt.bind_text(1, map_name);
+			stmt.bind_int(2, permite_chuva ? 1 : 0);
+			stmt.bind_text(3, clima_fixo);
+			stmt.bind_text(4, "admin");
+			if(stmt.step() != SQLITE_DONE) {
+				debug_log("ERRO ao salvar clima_config de " + map_name + ": " + bancoJogo.get_last_error_text());
+			}
+		}
+	}
+
+	clima_config_cache_set(map_name, permite_chuva ? 1 : 0, clima_fixo);
+}
+
+// Elegibilidade do mapa. Atencao a semantica do cliente:
+//   ceiling_sound == ""          -> ceu aberto, cliente usa rain4.ogg (default)
+//   ceiling_sound == "none"      -> interior, nao deve receber chuva
+//   ceiling_sound == "<arquivo>" -> ceu aberto com som proprio (ex.: telhado.ogg)
+bool mapa_recebe_clima(int mapindex) {
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return false;
+
+	string teto = server_maps[mapindex].ceiling_sound;
+	if(teto == "none" || teto == "nenhum" || teto == "0") return false;
+
+	return clima_mapa_permite(server_maps[mapindex].name);
+}
+
+bool clima_esta_chovendo_no_mapa(int mapindex) {
+	if(!mapa_recebe_clima(mapindex)) return false;
+	string fixo = clima_mapa_fixo(clima_nome_mapa(mapindex));
+	if(fixo != "") return clima_condicao_molhada(fixo);
+	return clima.esta_chovendo();
+}
+
+// ============================================================================
+// REDE
+// ============================================================================
+
+void clima_enviar_para_jogador(int player_index) {
+	if(!clima_sistema_pronto) return;
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	int mapindex = clima_resolver_mapindex(player_index);
+	string nome_mapa = clima_nome_mapa(mapindex);
+
+	string condicao = clima.condicao;
+	int intensidade = clima.intensidade;
+	int volume = clima.volume_atual;
+
+	string fixo = clima_mapa_fixo(nome_mapa);
+	if(fixo != "") {
+		condicao = fixo;
+		intensidade = clima_intensidade_padrao(fixo);
+		volume = clima_volume_pico(fixo, intensidade);
+	}
+
+	bool audivel = clima_condicao_molhada(condicao) && mapa_recebe_clima(mapindex);
+	if(!audivel) volume = CLIMA_VOL_SILENCIO;
+	volume = clima_clamp_volume(volume);
+
+	uint64 peer = players[player_index].peer_id;
+
+	// Pacotes legados primeiro (clientes antigos so entendem estes). A ordem
+	// importa: chuva() no cliente reseta o volume para -12, entao "chuvaativa"
+	// tem de chegar antes de "volumechuva".
+	if(audivel) {
+		send_reliable_text(peer, "chuvaativa " + clima.numero_chuva, 0);
+		send_reliable_text(peer, "volumechuva " + volume, 0);
+	} else {
+		send_reliable_text(peer, "fimchuva", 0);
+		send_reliable_text(peer, "volumechuva " + CLIMA_VOL_SILENCIO, 0);
+	}
+
+	// Pacote novo: condicao, intensidade, volume e se a chuva e audivel aqui.
+	send_reliable_text(peer, "clima " + condicao + " " + intensidade + " " + volume + " " + (audivel ? 1 : 0), 0);
+}
+
+void clima_broadcast_condicao() {
+	if(!clima_sistema_pronto) return;
+	for(uint i = 0; i < players.length(); i++) {
+		clima_enviar_para_jogador(int(i));
+	}
+}
+
+// Só o volume: nao reenvia "clima" nem "chuvaativa", que fariam o cliente
+// fechar e recarregar o loop de chuva a cada segundo.
+void clima_broadcast_volume() {
+	if(!clima_sistema_pronto) return;
+
+	for(uint i = 0; i < players.length(); i++) {
+		int mapindex = clima_resolver_mapindex(int(i));
+		if(!mapa_recebe_clima(mapindex)) continue;
+		if(clima_mapa_fixo(clima_nome_mapa(mapindex)) != "") continue;
+		if(!clima.esta_chovendo()) continue;
+
+		send_reliable_text(players[i].peer_id, "volumechuva " + clima_clamp_volume(clima.volume_atual), 0);
+	}
+}
+
+void clima_notificar(int mapindex, string msg) {
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return;
+	for(uint i = 0; i < players.length(); i++) {
+		if(clima_resolver_mapindex(int(i)) != mapindex) continue;
+		send_reliable_text(players[i].peer_id, "msg2 " + msg, 0);
+	}
+}
+
+void clima_notificar_ceu_aberto(string msg) {
+	for(uint i = 0; i < players.length(); i++) {
+		int mapindex = clima_resolver_mapindex(int(i));
+		if(!mapa_recebe_clima(mapindex)) continue;
+		if(clima_mapa_fixo(clima_nome_mapa(mapindex)) != "") continue;
+		send_reliable_text(players[i].peer_id, "msg2 " + msg, 0);
+	}
+}
+
+// ============================================================================
+// RAMPA DE VOLUME
+// ----------------------------------------------------------------------------
+// Substitui as ~20 flags trov1..trov10 / volumechuva1..volumechuva10 do BGT
+// (re_server_test.bgt:1030-1105) por uma unica interpolacao linear.
+// ============================================================================
+
+void clima_rampa_volume() {
+	if(clima.esta_chovendo()) {
+		int restante = clima.tempo_restante();
+		if(restante >= 0 && restante <= CLIMA_FADE_OUT_MS) {
+			clima.volume_alvo = CLIMA_VOL_SILENCIO;
+		} else {
+			clima.volume_alvo = clima_volume_pico(clima.condicao, clima.intensidade);
+		}
+	} else {
+		clima.volume_alvo = CLIMA_VOL_SILENCIO;
+	}
+
+	clima.volume_alvo = clima_clamp_volume(clima.volume_alvo);
+	if(clima.volume_atual == clima.volume_alvo) return;
+	if(int(clima.rampa_timer.elapsed) < CLIMA_RAMPA_INTERVALO) return;
+	clima.rampa_timer.restart();
+
+	if(clima.volume_atual < clima.volume_alvo) {
+		clima.volume_atual += CLIMA_RAMPA_PASSO;
+		if(clima.volume_atual > clima.volume_alvo) clima.volume_atual = clima.volume_alvo;
+	} else {
+		clima.volume_atual -= CLIMA_RAMPA_PASSO;
+		if(clima.volume_atual < clima.volume_alvo) clima.volume_atual = clima.volume_alvo;
+	}
+
+	clima.volume_atual = clima_clamp_volume(clima.volume_atual);
+	clima_broadcast_volume();
+}
+
+// ============================================================================
+// TROVOES
+// ----------------------------------------------------------------------------
+// No BGT as flags trov1..trov10 tinham corpo vazio: o trovao nunca tocava.
+// Aqui ele existe de fato, usando trovão1.ogg .. trovão20.ogg (presentes em
+// cliente/sounds/) e o handler "pst" de channel0_handlers.nvgt:128.
+// ============================================================================
+
+void clima_disparar_trovao() {
+	if(clima.condicao != CLIMA_TEMPESTADE) return;
+
+	string arquivo = "trovão" + random(1, CLIMA_TROVOES_TOTAL) + ".ogg";
+	int ouvintes = 0;
+
+	for(uint i = 0; i < players.length(); i++) {
+		int mapindex = clima_resolver_mapindex(int(i));
+		if(!mapa_recebe_clima(mapindex)) continue;
+		send_reliable_text(players[i].peer_id, "pst " + arquivo, 0);
+		ouvintes++;
+	}
+
+	clima.trovoes_disparados++;
+	if(clima.trovoes_disparados == 1 && ouvintes > 0) {
+		clima_notificar_ceu_aberto("Um trovão ecoa ao longe.");
+	}
+
+	clima.proximo_trovao = random(CLIMA_TROVAO_MIN, CLIMA_TROVAO_MAX);
+}
+
+// ============================================================================
+// TRANSICAO
+// ============================================================================
+
+int clima_duracao_padrao(string condicao) {
+	if(clima_condicao_molhada(condicao)) return random(CLIMA_DURACAO_CHUVA_MIN, CLIMA_DURACAO_CHUVA_MAX);
+	return random(CLIMA_DURACAO_SECO_MIN, CLIMA_DURACAO_SECO_MAX);
+}
+
+void clima_aplicar_ganchos_tempestade() {
+	for(uint i = 0; i < players.length(); i++) {
+		int mapindex = clima_resolver_mapindex(int(i));
+		if(!mapa_recebe_clima(mapindex)) continue;
+
+		quest_update_explore(players[i].charname, "tempestade");
+		update_achievement_progress(players[i].charname, "tempestades_vividas", 1);
+	}
+}
+
+// UNICO ponto de mudanca de estado do clima.
+void clima_transicao(string nova_condicao, int intensidade, int duracao_ms, string origem) {
+	if(!clima_condicao_valida(nova_condicao)) {
+		debug_log("CLIMA: condicao invalida ignorada: " + nova_condicao);
+		return;
+	}
+
+	if(intensidade < 0) intensidade = 0;
+	if(intensidade > 3) intensidade = 3;
+	if(clima_condicao_molhada(nova_condicao) && intensidade == 0) {
+		intensidade = clima_intensidade_padrao(nova_condicao);
+	}
+	if(!clima_condicao_molhada(nova_condicao)) intensidade = 0;
+
+	if(origem == "") origem = "automatico";
+	if(duracao_ms <= 0) duracao_ms = clima_duracao_padrao(nova_condicao);
+
+	bool chovia = clima.esta_chovendo();
+	bool vai_chover = clima_condicao_molhada(nova_condicao);
+	string anterior = clima.condicao;
+
+	clima_historico_fechar();
+
+	clima.condicao = nova_condicao;
+	clima.intensidade = intensidade;
+	clima.origem = origem;
+	clima.estacao = clima_estacao_atual();
+	clima.duracao_alvo = duracao_ms;
+	clima.duracao.restart();
+	clima.rampa_timer.restart();
+	clima.trovao_timer.restart();
+	clima.trovoes_disparados = 0;
+	clima.proximo_trovao = random(CLIMA_TROVAO_MIN, CLIMA_TROVAO_MAX);
+
+	if(vai_chover) {
+		clima.numero_chuva = random(3, 4);   // BGT: numerochuva = random(3, 4)
+		if(!chovia) clima.volume_atual = CLIMA_VOL_SILENCIO;
+		clima.volume_alvo = clima_volume_pico(nova_condicao, intensidade);
+	} else {
+		clima.volume_atual = CLIMA_VOL_SILENCIO;
+		clima.volume_alvo = CLIMA_VOL_SILENCIO;
+	}
+
+	clima_historico_abrir(clima.condicao, clima.intensidade, clima.estacao, clima.origem);
+	clima_salvar_estado();
+	clima_broadcast_condicao();
+
+	if(vai_chover && !chovia) {
+		if(nova_condicao == CLIMA_TEMPESTADE) clima_notificar_ceu_aberto("Uma tempestade se forma no céu.");
+		else clima_notificar_ceu_aberto("Começou a chover.");
+	}
+	else if(!vai_chover && chovia) {
+		clima_notificar_ceu_aberto("A chuva parou.");
+	}
+	else if(vai_chover && chovia && anterior != nova_condicao) {
+		if(nova_condicao == CLIMA_TEMPESTADE) clima_notificar_ceu_aberto("A chuva vira tempestade.");
+		else clima_notificar_ceu_aberto("A tempestade se acalma e vira chuva.");
+	}
+
+	if(nova_condicao == CLIMA_TEMPESTADE) clima_aplicar_ganchos_tempestade();
+
+	debug_log("CLIMA: " + anterior + " -> " + clima.condicao + " (intensidade " + clima.intensidade +
+	          ", " + (clima.duracao_alvo / 60000) + " min, origem " + clima.origem + ", estacao " + clima.estacao + ")");
+}
+
+void clima_avancar_ciclo() {
+	string proxima = clima_sortear_proxima_condicao();
+
+	// Nunca repetir a mesma condicao duas vezes seguidas e sempre dar um
+	// respiro seco depois da chuva (o BGT alternava chuva/seco rigidamente).
+	if(clima.esta_chovendo() && clima_condicao_molhada(proxima)) {
+		proxima = CLIMA_NUBLADO;
+	}
+	else if(proxima == clima.condicao) {
+		if(clima.condicao == CLIMA_LIMPO) proxima = CLIMA_NUBLADO;
+		else proxima = CLIMA_LIMPO;
+	}
+
+	int intensidade = 0;
+	if(proxima == CLIMA_CHUVA) intensidade = random(1, 2);
+	else if(proxima == CLIMA_TEMPESTADE) intensidade = 3;
+
+	clima_transicao(proxima, intensidade, clima_duracao_padrao(proxima), "automatico");
+}
+
+// ============================================================================
+// CICLO DE VIDA
+// ============================================================================
+
+void init_clima_system() {
+	debug_log("Inicializando sistema de clima...");
+
+	clima_carregar_config();
+	clima_semear_config();
+	clima_carregar_estado();
+
+	clima.estacao = clima_estacao_atual();
+	clima.duracao.restart();
+	clima.rampa_timer.restart();
+	clima.trovao_timer.restart();
+	clima.tick_timer.restart();
+	clima.autosave_timer.restart();
+	clima.proximo_trovao = random(CLIMA_TROVAO_MIN, CLIMA_TROVAO_MAX);
+	clima.numero_chuva = random(3, 4);
+
+	clima_sistema_pronto = true;
+
+	debug_log("OK - Clima: " + clima.descricao_humana() + " | estacao: " + clima.estacao +
+	          " | mapas configurados: " + clima_config_permite.get_size());
+}
+
+void clima_loop() {
+	if(!clima_sistema_pronto) return;
+	clima.tick();
+}
+
+// ============================================================================
+// COMANDOS
+// ============================================================================
+
+void cmd_clima(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	uint64 peer = players[player_index].peer_id;
+
+	if(!clima_sistema_pronto) {
+		send_reliable_text(peer, "msg2 O sistema de clima ainda não foi inicializado.", 0);
+		return;
+	}
+
+	int mapindex = clima_resolver_mapindex(player_index);
+	string nome_mapa = clima_nome_mapa(mapindex);
+	string fixo = clima_mapa_fixo(nome_mapa);
+
+	send_reliable_text(peer, "msg2 === Clima do mundo ===", 0);
+	send_reliable_text(peer, "msg2 Condição: " + clima.descricao_humana(), 0);
+
+	if(clima.esta_chovendo()) {
+		send_reliable_text(peer, "msg2 Intensidade: " + clima.intensidade + " de 3", 0);
+	}
+
+	send_reliable_text(peer, "msg2 Estação: " + clima.estacao + " (dia " + game_time.day_number + ")", 0);
+
+	int restante = clima.tempo_restante();
+	if(restante > 0) {
+		int minutos = restante / 60000;
+		if(minutos <= 0) send_reliable_text(peer, "msg2 Deve mudar a qualquer momento.", 0);
+		else send_reliable_text(peer, "msg2 Deve durar mais uns " + minutos + " minutos.", 0);
+	}
+
+	if(fixo != "") {
+		send_reliable_text(peer, "msg2 Este lugar tem clima próprio e constante: " + fixo + ".", 0);
+	}
+	else if(mapa_recebe_clima(mapindex)) {
+		if(clima.esta_chovendo()) send_reliable_text(peer, "msg2 Você está a céu aberto e sente a chuva.", 0);
+		else send_reliable_text(peer, "msg2 Você está a céu aberto.", 0);
+	}
+	else {
+		send_reliable_text(peer, "msg2 Você está abrigado; o clima lá fora não te alcança.", 0);
+	}
+
+	if(!clima_ciclo_automatico) {
+		send_reliable_text(peer, "msg2 (O ciclo automático de clima está desligado.)", 0);
+	}
+}
+
+void cmd_setclima(int player_index, string[] parsed) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	uint64 peer = players[player_index].peer_id;
+
+	if(!check_is_admin_index(player_index) && !has_role_by_index(player_index, "event_manager")) {
+		send_reliable_text(peer, "msgnormal Você não tem permissão para usar este comando.", 0);
+		return;
+	}
+
+	if(parsed.length() < 2) {
+		send_reliable_text(peer, "msgnormal Uso: /setclima <limpo|nublado|chuva|tempestade> [intensidade 1-3] [minutos]", 0);
+		return;
+	}
+
+	string condicao = string_to_lower_case(parsed[1]);
+	if(condicao == "tormenta") condicao = CLIMA_TEMPESTADE;
+	if(condicao == "lluvia") condicao = CLIMA_CHUVA;
+
+	if(!clima_condicao_valida(condicao)) {
+		send_reliable_text(peer, "msgnormal Condição inválida. Use: limpo, nublado, chuva ou tempestade.", 0);
+		return;
+	}
+
+	int intensidade = clima_intensidade_padrao(condicao);
+	if(parsed.length() >= 3) {
+		int v = string_to_number(parsed[2]);
+		if(v >= 1 && v <= 3) intensidade = v;
+	}
+
+	int duracao_ms = 0;
+	if(parsed.length() >= 4) {
+		int minutos = string_to_number(parsed[3]);
+		if(minutos < 1) minutos = 1;
+		if(minutos > CLIMA_MINUTOS_MAX) minutos = CLIMA_MINUTOS_MAX;
+		duracao_ms = minutos * 60000;
+	}
+
+	clima_transicao(condicao, intensidade, duracao_ms, players[player_index].charname);
+
+	send_reliable_text(peer, "msgnormal Clima alterado para " + clima.descricao_humana() +
+	                   " por " + (clima.duracao_alvo / 60000) + " minutos.", 0);
+
+	debug_log("CLIMA: " + players[player_index].charname + " forçou o clima para " + condicao);
+}
+
+void cmd_climamapa(int player_index, string[] parsed) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	uint64 peer = players[player_index].peer_id;
+
+	if(!check_is_builder_index(player_index) && !check_is_admin_index(player_index)) {
+		send_reliable_text(peer, "msgnormal Você não tem permissão para usar este comando.", 0);
+		return;
+	}
+
+	if(parsed.length() < 2) {
+		send_reliable_text(peer, "msgnormal Uso: /climamapa <mapa> <on|off> [limpo|nublado|chuva|tempestade]", 0);
+		send_reliable_text(peer, "msgnormal Use /climamapa aqui <on|off> para o mapa em que você está.", 0);
+		send_reliable_text(peer, "msgnormal Use /climamapa auto <on|off> para ligar/desligar o ciclo automático.", 0);
+		return;
+	}
+
+	string alvo = string_to_lower_case(parsed[1]);
+
+	if(alvo == "auto") {
+		if(parsed.length() < 3) {
+			send_reliable_text(peer, "msgnormal Ciclo automático está " + (clima_ciclo_automatico ? "ligado" : "desligado") + ".", 0);
+			return;
+		}
+		string estado = string_to_lower_case(parsed[2]);
+		clima_ciclo_automatico = (estado == "on" || estado == "sim" || estado == "1" || estado == "ligado");
+		send_reliable_text(peer, "msgnormal Ciclo automático de clima " + (clima_ciclo_automatico ? "ligado" : "desligado") + ".", 0);
+		debug_log("CLIMA: ciclo automatico = " + (clima_ciclo_automatico ? "on" : "off") + " (por " + players[player_index].charname + ")");
+		return;
+	}
+
+	string map_name = parsed[1];
+	if(alvo == "aqui" || alvo == "here") {
+		int mi = clima_resolver_mapindex(player_index);
+		map_name = clima_nome_mapa(mi);
+		if(map_name == "") {
+			send_reliable_text(peer, "msgnormal Não consegui identificar o mapa em que você está.", 0);
+			return;
+		}
+	}
+
+	int mapindex = get_map_index_from(map_name);
+	if(mapindex < 0) {
+		send_reliable_text(peer, "msgnormal Mapa '" + map_name + "' não encontrado.", 0);
+		return;
+	}
+	map_name = server_maps[mapindex].name;
+
+	if(parsed.length() < 3) {
+		send_reliable_text(peer, "msgnormal Mapa " + map_name + ": chuva " +
+		                   (clima_mapa_permite(map_name) ? "permitida" : "bloqueada") +
+		                   ", teto '" + server_maps[mapindex].ceiling_sound + "'.", 0);
+		string f = clima_mapa_fixo(map_name);
+		if(f != "") send_reliable_text(peer, "msgnormal Clima fixo deste mapa: " + f + ".", 0);
+		return;
+	}
+
+	string estado = string_to_lower_case(parsed[2]);
+	bool permite = (estado == "on" || estado == "sim" || estado == "1" || estado == "ligado");
+
+	string fixo = "";
+	if(parsed.length() >= 4) {
+		fixo = string_to_lower_case(parsed[3]);
+		if(fixo == "nenhum" || fixo == "none" || fixo == "-") fixo = "";
+		else if(!clima_condicao_valida(fixo)) {
+			send_reliable_text(peer, "msgnormal Clima fixo inválido. Use limpo, nublado, chuva, tempestade ou nenhum.", 0);
+			return;
+		}
+	}
+
+	clima_set_mapa(map_name, permite, fixo);
+
+	string sufixo = "";
+	if(fixo != "") sufixo = ", clima fixo '" + fixo + "'";
+
+	send_reliable_text(peer, "msgnormal Mapa " + map_name + ": chuva " +
+	                   (permite ? "permitida" : "bloqueada") + sufixo + ".", 0);
+
+	// Ressincroniza quem estiver no mapa afetado.
+	for(uint i = 0; i < players.length(); i++) {
+		if(clima_resolver_mapindex(int(i)) == mapindex) clima_enviar_para_jogador(int(i));
+	}
+
+	debug_log("CLIMA: " + players[player_index].charname + " configurou o mapa " + map_name +
+	          " (permite=" + (permite ? "1" : "0") + ", fixo='" + fixo + "')");
+}

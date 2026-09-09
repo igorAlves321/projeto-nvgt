@@ -1,0 +1,733 @@
+// ==========================================================================
+// Caixa de presente entre jogadores (entrega offline, vários itens por caixa).
+//
+// Porta do BGT original:
+//   - create_gift(index, data)            (voids.bgt:2764) -> cmd_presentear()
+//   - trecho de usar() com caja_de_regalo_ (re_server_test.bgt:1405) -> abrir_presente()
+//   - leitura de players/<nome>/regalo.txt (player.bgt:1227) -> entregar_presentes_pendentes()
+//
+// O array 'regalos' + regalos.db + players/<nome>/regalo.txt do BGT foram
+// substituídos pela tabela sqlite presentes_pendentes.
+// ==========================================================================
+
+const int PRESENTE_MAX_ITENS = 10;
+const int PRESENTE_MAX_QTD = 10000;
+
+const string PRESENTE_ITEM_CAIXA = "caixa_de_presente";
+const string PRESENTE_PREFIXO_CAIXA = "caixa_de_presente_";
+const string PRESENTE_PREFIXO_LEGADO = "caja_de_regalo_";
+
+const string PRESENTE_SOM_ENVIO = "notify2.ogg";
+const string PRESENTE_SOM_ABRIR = "acaixa.ogg";
+
+bool presentes_legado_carregado = false;
+dictionary presentes_legado_conteudo;
+
+// Resultado da leitura de "item:qtd,item:qtd".
+// (Optamos por uma classe em vez dos parâmetros 'string[] &out' do plano:
+//  nenhum arquivo do projeto usa &out com arrays, e a classe é mais segura.)
+class presente_conteudo {
+	string[] itens;
+	int[] quantidades;
+	bool valido = false;
+	string erro = "";
+
+	int total() {
+		return int(itens.length());
+	}
+
+	// "item=qtd, item=qtd" - usado no log de transferências, como no BGT.
+	string resumo() {
+		string texto = "";
+		for(uint i = 0; i < itens.length(); i++) {
+			if(i > 0) texto += ", ";
+			texto += itens[i] + "=" + quantidades[i];
+		}
+		return texto;
+	}
+
+	// "item:qtd,item:qtd" - formato gravado no banco (o mesmo do BGT).
+	string serializar() {
+		string texto = "";
+		for(uint i = 0; i < itens.length(); i++) {
+			if(i > 0) texto += ",";
+			texto += itens[i] + ":" + quantidades[i];
+		}
+		return texto;
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tabelas
+// --------------------------------------------------------------------------
+
+void criar_tabelas_presentes() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_presentes - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela presentes_pendentes...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS presentes_pendentes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			remetente TEXT NOT NULL,
+			destinatario TEXT NOT NULL,
+			conteudo TEXT NOT NULL,
+			mensagem TEXT DEFAULT '',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			entregue INTEGER DEFAULT 0,
+			entregue_em DATETIME DEFAULT NULL,
+			aberto INTEGER DEFAULT 0,
+			aberto_em DATETIME DEFAULT NULL
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela presentes_pendentes: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela presentes_pendentes criada/verificada");
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_presentes_destinatario ON presentes_pendentes(destinatario, entregue);");
+}
+
+// --------------------------------------------------------------------------
+// Leitura do conteúdo
+// --------------------------------------------------------------------------
+
+presente_conteudo@ parse_conteudo_presente(string conteudo) {
+	presente_conteudo resultado;
+
+	conteudo = conteudo.trim_whitespace();
+	if(conteudo == "") {
+		resultado.erro = "Conteúdo do presente vazio.";
+		return resultado;
+	}
+
+	string[] partes = conteudo.split(",");
+
+	for(uint i = 0; i < partes.length(); i++) {
+		string bloco = partes[i].trim_whitespace();
+		if(bloco == "") continue;
+
+		string[] dados = bloco.split(":");
+		if(dados.length() != 2) {
+			resultado.erro = "Formato inválido em '" + bloco + "'. Use item:quantidade.";
+			return resultado;
+		}
+
+		string nome = dados[0].trim_whitespace();
+		string qtd_texto = dados[1].trim_whitespace();
+
+		if(!is_valid_item_name(nome)) {
+			resultado.erro = "Nome de item inválido: '" + nome + "'.";
+			return resultado;
+		}
+
+		int quantidade = 0;
+		if(!network_try_parse_int(qtd_texto, quantidade)) {
+			resultado.erro = "Quantidade inválida para '" + nome + "'.";
+			return resultado;
+		}
+
+		if(quantidade <= 0) {
+			resultado.erro = "A quantidade de '" + nome + "' deve ser maior que 0.";
+			return resultado;
+		}
+
+		if(quantidade > PRESENTE_MAX_QTD) {
+			resultado.erro = "Quantidade máxima por item: " + PRESENTE_MAX_QTD + ".";
+			return resultado;
+		}
+
+		if(nome == PRESENTE_ITEM_CAIXA || nome.find(PRESENTE_PREFIXO_CAIXA) == 0) {
+			resultado.erro = "Não é possível colocar uma caixa de presente dentro de outra.";
+			return resultado;
+		}
+
+		// Soma quantidades quando o mesmo item aparece duas vezes.
+		bool ja_existe = false;
+		for(uint j = 0; j < resultado.itens.length(); j++) {
+			if(resultado.itens[j] == nome) {
+				resultado.quantidades[j] += quantidade;
+				if(resultado.quantidades[j] > PRESENTE_MAX_QTD) {
+					resultado.erro = "Quantidade máxima por item: " + PRESENTE_MAX_QTD + ".";
+					return resultado;
+				}
+				ja_existe = true;
+				break;
+			}
+		}
+
+		if(!ja_existe) {
+			if(int(resultado.itens.length()) >= PRESENTE_MAX_ITENS) {
+				resultado.erro = "Máximo de " + PRESENTE_MAX_ITENS + " itens diferentes por caixa.";
+				return resultado;
+			}
+			resultado.itens.insert_last(nome);
+			resultado.quantidades.insert_last(quantidade);
+		}
+	}
+
+	if(resultado.itens.length() == 0) {
+		resultado.erro = "Conteúdo do presente vazio.";
+		return resultado;
+	}
+
+	resultado.valido = true;
+	return resultado;
+}
+
+// --------------------------------------------------------------------------
+// Utilitários internos
+// --------------------------------------------------------------------------
+
+void presente_msg(int player_index, string texto) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + texto, 0);
+}
+
+// Verifica se o item da caixa está desativado no mapa informado.
+bool presente_caixa_bloqueada_no_mapa(int mapindex) {
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return false;
+	if(server_maps[mapindex] is null) return false;
+	return server_maps[mapindex].is_disabled(PRESENTE_ITEM_CAIXA);
+}
+
+// Recupera o nome da conta como está gravado no banco (corrige diferenças de
+// maiúsculas/minúsculas digitadas pelo jogador).
+string presente_nome_canonico(string username) {
+	if(!database_initialized || bancoJogo is null) return "";
+	if(username == "") return "";
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT username FROM players WHERE username = ? COLLATE NOCASE LIMIT 1;");
+	if(@stmt == null) return "";
+
+	stmt.bind_text(1, username);
+
+	if(stmt.step() == SQLITE_ROW) return stmt.column_text(0);
+
+	return "";
+}
+
+int presente_ultimo_id_inserido() {
+	if(!database_initialized || bancoJogo is null) return -1;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT last_insert_rowid();");
+	if(@stmt == null) return -1;
+
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+
+	return -1;
+}
+
+int presente_inserir(string remetente, string destinatario, string conteudo, string mensagem) {
+	if(!database_initialized || bancoJogo is null) return -1;
+
+	string query = """
+		INSERT INTO presentes_pendentes (remetente, destinatario, conteudo, mensagem)
+		VALUES (?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("PRESENTES: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+		return -1;
+	}
+
+	stmt.bind_text(1, remetente);
+	stmt.bind_text(2, destinatario);
+	stmt.bind_text(3, conteudo);
+	stmt.bind_text(4, mensagem);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("PRESENTES: erro ao gravar presente: " + bancoJogo.get_last_error_text());
+		return -1;
+	}
+
+	return presente_ultimo_id_inserido();
+}
+
+void presente_apagar(int id) {
+	if(!database_initialized || bancoJogo is null) return;
+	if(id <= 0) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM presentes_pendentes WHERE id = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_int(1, id);
+	stmt.step();
+}
+
+// --------------------------------------------------------------------------
+// Envio (/presentear)
+// --------------------------------------------------------------------------
+
+void cmd_presentear(int player_index, string destinatario, string conteudo, string mensagem = "") {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!database_initialized || bancoJogo is null) {
+		presente_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	destinatario = destinatario.trim_whitespace();
+	mensagem = mensagem.trim_whitespace();
+	if(mensagem.length() > 200) mensagem = mensagem.substr(0, 200);
+
+	if(!is_valid_player_name(destinatario)) {
+		presente_msg(player_index, "[ERRO] Nome de jogador inválido!");
+		return;
+	}
+
+	if(destinatario.lower() == p.charname.lower()) {
+		presente_msg(player_index, "[ERRO] Não é possível enviar um presente para você mesmo.");
+		return;
+	}
+
+	string canonico = presente_nome_canonico(destinatario);
+	if(canonico != "") destinatario = canonico;
+
+	if(!player_exists_in_database(destinatario)) {
+		presente_msg(player_index, "[ERRO] Jogador '" + destinatario + "' não encontrado!");
+		return;
+	}
+
+	// Regra do BGT: a caixa não funciona onde o item está desativado.
+	// Aplicada ao mapa de quem envia (a ação é dele) e, quando o destinatário
+	// está online, também ao mapa dele.
+	if(presente_caixa_bloqueada_no_mapa(p.mapindex)) {
+		presente_msg(player_index, "[ERRO] Uma força mágica te impede de fazer isso aqui...");
+		return;
+	}
+
+	int destino_index = get_player_index_from(destinatario);
+	if(destino_index >= 0 && presente_caixa_bloqueada_no_mapa(players[destino_index].mapindex)) {
+		presente_msg(player_index, "[ERRO] Uma força mágica te impede de fazer isso...");
+		return;
+	}
+
+	if(p.inv_item_number(PRESENTE_ITEM_CAIXA) < 1) {
+		presente_msg(player_index, "[ERRO] Você precisa de uma " + PRESENTE_ITEM_CAIXA + " para enviar um presente.");
+		return;
+	}
+
+	presente_conteudo@ pacote = parse_conteudo_presente(conteudo);
+	if(pacote is null || !pacote.valido) {
+		string erro = pacote is null ? "Conteúdo inválido." : pacote.erro;
+		presente_msg(player_index, "[ERRO] " + erro);
+		return;
+	}
+
+	// Confere TODOS os itens ANTES de remover qualquer um (evita sumiço de itens).
+	for(uint i = 0; i < pacote.itens.length(); i++) {
+		if(!item_exists_in_database(pacote.itens[i])) {
+			presente_msg(player_index, "[ERRO] O item '" + pacote.itens[i] + "' não existe no banco de itens.");
+			return;
+		}
+		if(p.inv_item_number(pacote.itens[i]) < pacote.quantidades[i]) {
+			presente_msg(player_index, "[ERRO] Você não tem " + pacote.quantidades[i] + "x " + pacote.itens[i] + ".");
+			return;
+		}
+	}
+
+	// Grava primeiro; só depois mexe no inventário.
+	int presente_id = presente_inserir(p.charname, destinatario, pacote.serializar(), mensagem);
+	if(presente_id <= 0) {
+		presente_msg(player_index, "[ERRO] Falha ao registrar o presente. Nada foi retirado do seu inventário.");
+		return;
+	}
+
+	string[] removidos;
+	int[] removidos_qtd;
+	bool falhou = false;
+
+	for(uint i = 0; i < pacote.itens.length(); i++) {
+		if(!remove_item_with_sync(p, pacote.itens[i], pacote.quantidades[i])) {
+			falhou = true;
+			break;
+		}
+		removidos.insert_last(pacote.itens[i]);
+		removidos_qtd.insert_last(pacote.quantidades[i]);
+	}
+
+	if(!falhou && !remove_item_with_sync(p, PRESENTE_ITEM_CAIXA, 1)) {
+		falhou = true;
+	}
+
+	if(falhou) {
+		for(uint i = 0; i < removidos.length(); i++) {
+			add_item_with_sync(p, removidos[i], removidos_qtd[i]);
+		}
+		presente_apagar(presente_id);
+		presente_msg(player_index, "[ERRO] Falha ao retirar os itens do seu inventário. O presente foi cancelado.");
+		debug_log("PRESENTES: envio cancelado (rollback) de " + p.charname + " para " + destinatario);
+		return;
+	}
+
+	presente_msg(player_index, "Você enviou um presente para " + destinatario + ".");
+	send_reliable_text(p.peer_id, "ps2 " + PRESENTE_SOM_ENVIO + " 130", 0);
+
+	save_transfer(p.charname, destinatario, PRESENTE_ITEM_CAIXA, "com " + pacote.resumo(), 1);
+	log_action(p.charname, "presente_enviado", "Enviou caixa de presente #" + presente_id +
+	           " com " + pacote.resumo(), p.map_name, 0, 0, 0, mensagem, destinatario,
+	           PRESENTE_ITEM_CAIXA);
+
+	debug_log("PRESENTES: " + p.charname + " enviou o presente #" + presente_id +
+	          " para " + destinatario + " (" + pacote.resumo() + ")");
+
+	if(destino_index >= 0 && players[destino_index].is_logged_in) {
+		entregar_presentes_pendentes(destino_index);
+	}
+}
+
+// Entrada usada pela cadeia de comandos: /presentear <jogador> <itens> [| mensagem]
+// Junta os argumentos de volta para aceitar "item:1, item:2" com espaços.
+void cmd_presentear_args(int player_index, string[] args) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	if(args.length() < 2) {
+		presente_msg(player_index, "Uso: /presentear <jogador> <item>:<qtd>[,<item>:<qtd>] [| mensagem]");
+		return;
+	}
+
+	string destinatario = args[0];
+
+	string resto = "";
+	for(uint i = 1; i < args.length(); i++) {
+		if(resto != "") resto += " ";
+		resto += args[i];
+	}
+
+	string conteudo = resto;
+	string mensagem = "";
+
+	int barra = resto.find("|");
+	if(barra >= 0) {
+		conteudo = resto.substr(0, barra);
+		mensagem = resto.substr(barra + 1).trim_whitespace();
+	}
+
+	// Nomes de itens não têm espaço, então podemos aceitar "item:1, item:2".
+	conteudo = conteudo.replace(" ", "");
+
+	cmd_presentear(player_index, destinatario, conteudo, mensagem);
+}
+
+// --------------------------------------------------------------------------
+// Entrega das caixas pendentes (login / envio com o destinatário online)
+// --------------------------------------------------------------------------
+
+void entregar_presentes_pendentes(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(!database_initialized || bancoJogo is null) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+	if(!p.is_logged_in) return;
+
+	string query = """
+		SELECT id, remetente FROM presentes_pendentes
+		WHERE destinatario = ? AND entregue = 0
+		ORDER BY id;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("PRESENTES: erro ao consultar pendentes: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+
+	int[] ids;
+	string[] remetentes;
+
+	while(stmt.step() == SQLITE_ROW) {
+		ids.insert_last(stmt.column_int(0));
+		remetentes.insert_last(stmt.column_text(1));
+	}
+
+	if(ids.length() == 0) return;
+
+	int entregues = 0;
+
+	for(uint i = 0; i < ids.length(); i++) {
+		string item_caixa = PRESENTE_PREFIXO_CAIXA + ids[i];
+
+		if(!add_item_with_sync(p, item_caixa, 1)) {
+			debug_log("PRESENTES: falha ao entregar a caixa #" + ids[i] + " para " + p.charname);
+			continue;
+		}
+
+		sqlite3statement@ upd = bancoJogo.prepare("UPDATE presentes_pendentes SET entregue = 1, entregue_em = CURRENT_TIMESTAMP WHERE id = ?;");
+		if(@upd != null) {
+			upd.bind_int(1, ids[i]);
+			upd.step();
+		}
+
+		presente_msg(player_index, "Você recebeu uma caixa de presente de " + remetentes[i] + "! (caixa #" + ids[i] + ")");
+		send_reliable_text(p.peer_id, "ps2 " + PRESENTE_SOM_ENVIO + " 130", 0);
+		entregues++;
+	}
+
+	if(entregues > 0) {
+		presente_msg(player_index, "Use a caixa no inventário para abrir o presente.");
+		debug_log("PRESENTES: " + entregues + " caixa(s) entregue(s) para " + p.charname);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Abertura da caixa
+// --------------------------------------------------------------------------
+
+void abrir_presente(int player_index, string item_name) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(item_name.find(PRESENTE_PREFIXO_CAIXA) != 0) return;
+
+	if(!database_initialized || bancoJogo is null) {
+		presente_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	string sufixo = item_name.substr(PRESENTE_PREFIXO_CAIXA.length());
+	int presente_id = 0;
+	if(!network_try_parse_int(sufixo, presente_id) || presente_id <= 0) {
+		presente_msg(player_index, "[ERRO] Caixa de presente inválida.");
+		return;
+	}
+
+	if(p.inv_item_number(item_name) < 1) {
+		presente_msg(player_index, "[ERRO] Você não tem essa caixa de presente.");
+		return;
+	}
+
+	string query = """
+		SELECT conteudo, remetente, mensagem FROM presentes_pendentes
+		WHERE id = ? AND destinatario = ? AND aberto = 0
+		LIMIT 1;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		presente_msg(player_index, "[ERRO] Falha ao consultar o presente.");
+		return;
+	}
+
+	stmt.bind_int(1, presente_id);
+	stmt.bind_text(2, p.charname);
+
+	if(stmt.step() != SQLITE_ROW) {
+		presente_msg(player_index, "[ERRO] Esta caixa de presente não é sua ou já foi aberta.");
+		return;
+	}
+
+	string conteudo = stmt.column_text(0);
+	string remetente = stmt.column_text(1);
+	string mensagem = stmt.column_text(2);
+
+	presente_conteudo@ pacote = parse_conteudo_presente(conteudo);
+	if(pacote is null || !pacote.valido) {
+		presente_msg(player_index, "[ERRO] O conteúdo desta caixa está corrompido. Avise um administrador.");
+		debug_log("PRESENTES: conteúdo corrompido na caixa #" + presente_id + " ('" + conteudo + "')");
+		return;
+	}
+
+	// Remove a caixa ANTES de entregar, para não duplicar itens se algo falhar.
+	if(!remove_item_with_sync(p, item_name, 1)) {
+		presente_msg(player_index, "[ERRO] Falha ao abrir a caixa de presente.");
+		return;
+	}
+
+	sqlite3statement@ upd = bancoJogo.prepare("UPDATE presentes_pendentes SET aberto = 1, aberto_em = CURRENT_TIMESTAMP WHERE id = ?;");
+	if(@upd != null) {
+		upd.bind_int(1, presente_id);
+		upd.step();
+	}
+
+	presente_msg(player_index, "Você abriu a caixa de presente de " + remetente + ":");
+
+	for(uint i = 0; i < pacote.itens.length(); i++) {
+		add_item_with_sync(p, pacote.itens[i], pacote.quantidades[i]);
+		presente_msg(player_index, "" + pacote.quantidades[i] + "x " + pacote.itens[i]);
+	}
+
+	if(mensagem != "") {
+		presente_msg(player_index, "Mensagem de " + remetente + ": " + mensagem);
+	}
+
+	send_reliable_text(p.peer_id, "ps " + PRESENTE_SOM_ABRIR, 0);
+	server_broadcast("play " + PRESENTE_SOM_ABRIR + " " + p.x + " " + p.y, p.map);
+
+	log_action(p.charname, "presente_aberto", "Abriu a caixa #" + presente_id + " com " +
+	           pacote.resumo(), p.map_name, 0, 0, 0, remetente, remetente, PRESENTE_ITEM_CAIXA);
+
+	debug_log("PRESENTES: " + p.charname + " abriu a caixa #" + presente_id +
+	          " de " + remetente + " (" + pacote.resumo() + ")");
+}
+
+// --------------------------------------------------------------------------
+// Listagem (/presentes)
+// --------------------------------------------------------------------------
+
+void cmd_presentes(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!database_initialized || bancoJogo is null) {
+		presente_msg(player_index, "[ERRO] Banco de dados indisponível.");
+		return;
+	}
+
+	string query = """
+		SELECT id, remetente, mensagem, entregue FROM presentes_pendentes
+		WHERE destinatario = ? AND aberto = 0
+		ORDER BY id;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		presente_msg(player_index, "[ERRO] Falha ao consultar seus presentes.");
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+
+	string[] linhas;
+	while(stmt.step() == SQLITE_ROW) {
+		int id = stmt.column_int(0);
+		string remetente = stmt.column_text(1);
+		string mensagem = stmt.column_text(2);
+		bool entregue = stmt.column_int(3) == 1;
+
+		string linha = "#" + id + " de " + remetente;
+		if(!entregue) linha += " (a caminho)";
+		if(mensagem != "") linha += " - \"" + mensagem + "\"";
+
+		linhas.insert_last(linha);
+	}
+
+	if(linhas.length() == 0) {
+		presente_msg(player_index, "[ERRO] Você não tem nenhuma caixa de presente fechada.");
+		return;
+	}
+
+	presente_msg(player_index, "=== Caixas de presente (" + linhas.length() + ") ===");
+	for(uint i = 0; i < linhas.length(); i++) {
+		presente_msg(player_index, linhas[i]);
+	}
+	presente_msg(player_index, "Use a caixa no inventário para abrir.");
+}
+
+// --------------------------------------------------------------------------
+// Migração do formato antigo (players/<nome>/regalo.txt + regalos.db)
+// --------------------------------------------------------------------------
+
+// Carrega uma única vez o regalos.db do BGT ("destinatario=conteudo=id" por linha),
+// para recuperar o conteúdo das caixas que ficaram no regalo.txt.
+void carregar_presentes_legado() {
+	if(presentes_legado_carregado) return;
+	presentes_legado_carregado = true;
+
+	if(!file_exists("regalos.db")) return;
+
+	file f;
+	if(!f.open("regalos.db", "r")) return;
+
+	string conteudo = f.read();
+	f.close();
+
+	string[] linhas = conteudo.split("\r\n");
+	int carregados = 0;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+
+		string[] partes = linha.split("=");
+		if(partes.length() < 3) continue;
+
+		string id_legado = partes[partes.length() - 1].trim_whitespace();
+		if(id_legado == "") continue;
+
+		presentes_legado_conteudo.set(id_legado, partes[1]);
+		carregados++;
+	}
+
+	debug_log("PRESENTES: " + carregados + " presentes legados carregados de regalos.db");
+}
+
+string presente_conteudo_legado(string id_legado) {
+	carregar_presentes_legado();
+
+	if(!presentes_legado_conteudo.exists(id_legado)) return "";
+
+	string conteudo = "";
+	presentes_legado_conteudo.get(id_legado, conteudo);
+	return conteudo;
+}
+
+// Substitui o bloco morto de player.nvgt que lia players/<nome>/regalo.txt.
+// Converte cada linha do arquivo em uma linha de presentes_pendentes e apaga o arquivo.
+void importar_regalo_txt_legado(string charname) {
+	string caminho = "players/" + charname + "/regalo.txt";
+	if(!file_exists(caminho)) return;
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	file f;
+	if(!f.open(caminho, "r")) return;
+
+	string conteudo = f.read();
+	f.close();
+
+	string[] linhas = conteudo.split("\r\n");
+	int importados = 0;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+
+		string id_legado = "";
+		if(linha.find(PRESENTE_PREFIXO_LEGADO) == 0) {
+			id_legado = linha.substr(PRESENTE_PREFIXO_LEGADO.length());
+		} else if(linha.find(PRESENTE_PREFIXO_CAIXA) == 0) {
+			id_legado = linha.substr(PRESENTE_PREFIXO_CAIXA.length());
+		} else {
+			continue;
+		}
+
+		string conteudo_legado = presente_conteudo_legado(id_legado);
+		presente_conteudo@ pacote = parse_conteudo_presente(conteudo_legado);
+
+		if(pacote is null || !pacote.valido) {
+			debug_log("PRESENTES: caixa legada " + id_legado + " de " + charname +
+			          " sem conteúdo recuperável; ignorada.");
+			continue;
+		}
+
+		int novo_id = presente_inserir("legado", charname, pacote.serializar(),
+		                               "Presente recuperado do servidor antigo");
+		if(novo_id > 0) importados++;
+	}
+
+	file_delete(caminho);
+
+	if(importados > 0) {
+		debug_log("PRESENTES: " + importados + " caixa(s) legada(s) importada(s) para " + charname);
+
+		int idx = get_player_index_from(charname);
+		if(idx >= 0) entregar_presentes_pendentes(idx);
+	}
+}

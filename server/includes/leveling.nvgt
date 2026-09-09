@@ -1,0 +1,765 @@
+// ==========================================================================
+// SISTEMA DE PROGRESSAO / NIVEIS
+// Porte de subir_nivel / ganhaxp / ganhaxpequipo / dar_elementales
+// (re_server_test.bgt:2162-2306) para o NVGT, unificando as tres curvas de
+// XP conflitantes que existiam no projeto (level*1000, level*10 e o DEFAULT
+// 100 do schema) em uma unica curva e finalmente persistindo o resultado.
+//
+// Dono unico das colunas: level, experience, xp_requerida, reencarnacoes,
+// avisanivel, avisaxp, avisareencarnacao, bonus_vida_reencarnacao e
+// bonus_baculo_reencarnacao da tabela players.
+// ==========================================================================
+
+// --------------------------------------------------------------------------
+// Constantes de balanceamento
+// --------------------------------------------------------------------------
+
+// Curva base do BGT: xprequerida = level * 100 (re_server_test.bgt:2182).
+const int XP_BASE_POR_NIVEL = 100;
+
+// Piso e teto da curva. O piso evita o laco infinito descrito nos riscos
+// (xprequerida <= 0 faz o while de subir_nivel nunca terminar).
+const int XP_REQUERIDA_MINIMA = 100;
+const int XP_REQUERIDA_MAXIMA = 1000000000;
+
+// player.xp e int (player.nvgt:192) e ADMIN_MAX_XP e 999999999
+// (admin_commands.nvgt:5): dois /givexp seguidos estourariam o int.
+const int XP_MAXIMO_ACUMULADO = 2000000000;
+
+// Fase angelical do BGT: a cada 30000 niveis o jogador reencarna.
+const int LIMITE_REENCARNACAO = 30000;
+const int REENCARNACAO_BONUS_VIDA = 1000;
+const int REENCARNACAO_BONUS_BACULO = 50;
+
+// Guardas de iteracao. O BGT usava "while(...) { netloop(); ... }" e travava
+// o servidor inteiro se a condicao nunca fechasse.
+const int MAX_NIVEIS_POR_GANHO = 1000;
+const int MAX_REENCARNACOES_POR_GANHO = 50;
+
+// Ganho de vida maxima por nivel (comportamento herdado do check_level_up
+// que este arquivo substitui).
+const double VIDA_POR_NIVEL = 100.0;
+
+// Fatia de XP repassada a cada membro do grupo. O BGT dava XP cheia a todos
+// os membros elegiveis, entao 1.0 mantem a regra original.
+const double PARTY_XP_SHARE = 1.0;
+
+// Fatia de XP creditada a guild do jogador (guilds.nvgt:154 add_xp).
+const double GUILD_XP_SHARE = 0.1;
+
+// Chaves de server_config (sobrevivem a um /reboot).
+const string LEVELING_CONFIG_XPESPECIAL = "xpespecial";
+const string LEVELING_CONFIG_XPESPECIAL_MULT = "xpespecial_multiplicador";
+const string LEVELING_CONFIG_DOUBLEXP = "doublexp";
+
+// Multiplicador da "xp especial" do BGT (xp*6, re_server_test.bgt:2249).
+// Vive aqui e nao em globals.nvgt porque e novo do NVGT.
+int xpespecial_multiplicador = 6;
+
+// Origem registrada no proximo evento de progressao. Permite dar sentido a
+// coluna progressao_log.origem sem mudar a assinatura de ganhaxp(), que tem
+// cerca de 15 chamadores espalhados pelo servidor.
+string progressao_origem_atual = "jogo";
+
+void definir_origem_progressao(string origem) {
+	if(origem == "") origem = "jogo";
+	progressao_origem_atual = origem;
+}
+
+// --------------------------------------------------------------------------
+// Curva de XP
+// --------------------------------------------------------------------------
+
+// Curva unica do projeto. base = nivel * 100 (a curva real do BGT dentro do
+// laco de subir_nivel); cada reencarnacao encarece 100%.
+int xp_para_proximo_nivel(int nivel, int reencarnacoes) {
+	if(nivel < 1) nivel = 1;
+	if(reencarnacoes < 0) reencarnacoes = 0;
+	if(reencarnacoes > 100000) reencarnacoes = 100000;
+
+	double total = double(nivel) * double(XP_BASE_POR_NIVEL) * double(1 + reencarnacoes);
+
+	if(total < double(XP_REQUERIDA_MINIMA)) total = double(XP_REQUERIDA_MINIMA);
+	if(total > double(XP_REQUERIDA_MAXIMA)) total = double(XP_REQUERIDA_MAXIMA);
+
+	return int(total);
+}
+
+int somar_xp_saturado(int atual, int ganho) {
+	if(atual < 0) atual = 0;
+	if(ganho < 0) ganho = 0;
+
+	double soma = double(atual) + double(ganho);
+	if(soma > double(XP_MAXIMO_ACUMULADO)) return XP_MAXIMO_ACUMULADO;
+
+	return int(soma);
+}
+
+// --------------------------------------------------------------------------
+// Banco de dados
+// --------------------------------------------------------------------------
+
+void create_progressao_table() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_progressao_table - Banco nao inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela progressao_log...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS progressao_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			tipo TEXT NOT NULL,
+			valor INTEGER DEFAULT 0,
+			nivel_anterior INTEGER DEFAULT 0,
+			origem TEXT DEFAULT '',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela progressao_log: " + bancoJogo.get_last_error_text());
+	} else {
+		debug_log("OK - Tabela progressao_log criada/verificada");
+	}
+
+	string create_index = "CREATE INDEX IF NOT EXISTS idx_progressao_username ON progressao_log(username);";
+	bancoJogo.execute(create_index);
+}
+
+int ler_config_progressao(string chave, int padrao) {
+	if(!database_initialized || bancoJogo is null) return padrao;
+
+	string query = "SELECT value FROM server_config WHERE key = ? LIMIT 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return padrao;
+
+	stmt.bind_text(1, chave);
+
+	if(stmt.step() == SQLITE_ROW) {
+		int valor = 0;
+		if(try_parse_int_token(stmt.column_text(0), valor)) return valor;
+	}
+
+	return padrao;
+}
+
+void gravar_config_progressao(string chave, int valor, string descricao) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		INSERT OR REPLACE INTO server_config (key, value, description, last_modified)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("LEVELING: erro ao preparar gravacao de configuracao: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, chave);
+	stmt.bind_text(2, "" + valor);
+	stmt.bind_text(3, descricao);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("LEVELING: erro ao gravar configuracao '" + chave + "': " + bancoJogo.get_last_error_text());
+	}
+}
+
+void registrar_progressao_log(string username, string tipo, int valor, int nivel_anterior, string origem) {
+	if(!database_initialized || bancoJogo is null) return;
+	if(username == "") return;
+	if(origem == "") origem = "jogo";
+
+	string query = """
+		INSERT INTO progressao_log (username, tipo, valor, nivel_anterior, origem)
+		VALUES (?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("LEVELING: erro ao preparar progressao_log: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, username);
+	stmt.bind_text(2, tipo);
+	stmt.bind_int(3, valor);
+	stmt.bind_int(4, nivel_anterior);
+	stmt.bind_text(5, origem);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("LEVELING: erro ao inserir progressao_log: " + bancoJogo.get_last_error_text());
+	}
+}
+
+// Espelha os campos "vivos" (level/xp, usados pelo jogo) nos campos que o
+// save antigo persistia (player_level/exp) e recoloca xprequerida na curva.
+// Obrigatorio no inicio de save_player_to_database.
+void sync_progressao(player@ p) {
+	if(p is null) return;
+
+	if(p.level < 1) p.level = 1;
+	if(p.xp < 0) p.xp = 0;
+	if(p.reencarnou < 0) p.reencarnou = 0;
+	if(p.bonus_vida_reencarnacao < 0) p.bonus_vida_reencarnacao = 0;
+	if(p.bonus_baculo_reencarnacao < 0) p.bonus_baculo_reencarnacao = 0;
+
+	p.player_level = int(p.level);
+	p.exp = p.xp;
+
+	int esperado = xp_para_proximo_nivel(p.player_level, p.reencarnou);
+	if(p.xprequerida != esperado) p.xprequerida = esperado;
+}
+
+void salvar_progressao(player@ p) {
+	if(!database_initialized || bancoJogo is null || p is null) return;
+
+	string save_name = p.charname;
+	if(save_name == "") save_name = p.name;
+	if(save_name == "") return;
+
+	sync_progressao(p);
+
+	string query = """
+		UPDATE players SET
+			level = ?, experience = ?, xp_requerida = ?, reencarnacoes = ?,
+			avisanivel = ?, avisaxp = ?, avisareencarnacao = ?,
+			bonus_vida_reencarnacao = ?, bonus_baculo_reencarnacao = ?
+		WHERE username = ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("LEVELING: erro ao preparar salvar_progressao: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_int(1, p.player_level);
+	stmt.bind_int(2, p.exp);
+	stmt.bind_int(3, p.xprequerida);
+	stmt.bind_int(4, p.reencarnou);
+	stmt.bind_int(5, p.avisanivel);
+	stmt.bind_int(6, p.avisaxp);
+	stmt.bind_int(7, p.avisareencarnacao);
+	stmt.bind_int(8, p.bonus_vida_reencarnacao);
+	stmt.bind_int(9, p.bonus_baculo_reencarnacao);
+	stmt.bind_text(10, save_name);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("LEVELING: erro ao salvar progressao de " + save_name + ": " + bancoJogo.get_last_error_text());
+	}
+}
+
+// Migra saves criados sob as curvas antigas (level*1000, level*10 ou o
+// DEFAULT 100 do schema). Sem isso, jogadores antigos ou travam (requisito
+// grande demais) ou sobem centenas de niveis no primeiro ganho de XP.
+void recalibrar_xp_requerida(player@ p) {
+	if(p is null) return;
+
+	if(p.level < 1) p.level = 1;
+	if(p.xp < 0) p.xp = 0;
+	if(p.reencarnou < 0) p.reencarnou = 0;
+
+	int antigo = p.xprequerida;
+	int correto = xp_para_proximo_nivel(int(p.level), p.reencarnou);
+
+	if(antigo != correto) {
+		p.xprequerida = correto;
+		debug_log("LEVELING: xprequerida de " + p.charname + " recalibrada de " + antigo + " para " + correto +
+			" (nivel " + int(p.level) + ", reencarnacoes " + p.reencarnou + ")");
+	}
+
+	p.player_level = int(p.level);
+	p.exp = p.xp;
+}
+
+// Reaplica os bonus acumulados de reencarnacao. Chamada no login logo apos
+// load_player_data_complete, porque maxhealth/baculofangelical nao tem coluna
+// propria: quem persiste e bonus_vida_reencarnacao / bonus_baculo_reencarnacao.
+void aplicar_bonus_reencarnacao(player@ p) {
+	if(p is null) return;
+
+	if(p.bonus_vida_reencarnacao < 0) p.bonus_vida_reencarnacao = 0;
+	if(p.bonus_baculo_reencarnacao < 0) p.bonus_baculo_reencarnacao = 0;
+
+	if(p.bonus_vida_reencarnacao > 0) {
+		p.maxhealth += double(p.bonus_vida_reencarnacao);
+		if(p.health > p.maxhealth) p.health = p.maxhealth;
+	}
+
+	if(p.bonus_baculo_reencarnacao > p.baculofangelical) {
+		p.baculofangelical = p.bonus_baculo_reencarnacao;
+	}
+
+	if(p.bonus_vida_reencarnacao > 0 || p.bonus_baculo_reencarnacao > 0) {
+		debug_log("LEVELING: bonus de reencarnacao aplicados a " + p.charname +
+			" (+" + p.bonus_vida_reencarnacao + " vida, baculo " + p.baculofangelical + ")");
+	}
+}
+
+// --------------------------------------------------------------------------
+// Multiplicadores de XP
+// --------------------------------------------------------------------------
+
+// Ordem do BGT: xp base, xp dupla, bencao de diamantes e xp especial.
+// No BGT cada multiplicador somava uma parcela nova sobre a base, entao com
+// tudo ligado o total era xp*9; sozinhos valem x2, x2 e x6 respectivamente.
+// Essa aritmetica e reproduzida aqui.
+int aplicar_multiplicadores_xp(int player_index, int xp_base, string &out descricao) {
+	descricao = "";
+
+	if(xp_base < 0) xp_base = 0;
+	if(player_index < 0 || player_index >= int(players.length())) return xp_base;
+
+	player@ p = @players[player_index];
+	if(p is null) return xp_base;
+
+	double base = double(xp_base);
+	double total = base;
+	string detalhes = "";
+
+	if(doublexp == 1) {
+		double bonus = base;
+		total += bonus;
+		if(detalhes != "") detalhes += ", ";
+		detalhes += "+" + int(bonus) + " pela XP dupla";
+	}
+
+	if(xpespecial == 1) {
+		int mult = xpespecial_multiplicador;
+		if(mult < 2) mult = 2;
+		double bonus = base * double(mult - 1);
+		total += bonus;
+		if(detalhes != "") detalhes += ", ";
+		detalhes += "+" + int(bonus) + " pela XP especial";
+	}
+
+	if(p.bendicion) {
+		double mult = bendicion_xp_mult;
+		if(mult < 1.0) mult = 1.0;
+		double bonus = base * (mult - 1.0);
+		total += bonus;
+		if(detalhes != "") detalhes += ", ";
+		detalhes += "+" + int(bonus) + " pela bencao de diamantes";
+	}
+
+	if(total > double(XP_MAXIMO_ACUMULADO)) total = double(XP_MAXIMO_ACUMULADO);
+	if(total < 0) total = 0;
+
+	if(detalhes != "") descricao = " (" + detalhes + ")";
+
+	return int(total);
+}
+
+// --------------------------------------------------------------------------
+// Notificacoes
+// --------------------------------------------------------------------------
+
+void notificar_nivel(int player_index, int niveis_subidos) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(niveis_subidos <= 0) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	int nivel = int(p.level);
+
+	string proprio;
+	if(niveis_subidos == 1) proprio = "Voce subiu um nivel, alcancando assim o nivel " + nivel + "!";
+	else proprio = "Voce subiu " + niveis_subidos + " niveis, alcancando assim o nivel " + nivel + "!";
+
+	send_reliable_text(p.peer_id, "msg2 " + proprio, 0);
+	send_reliable_text(p.peer_id, "ps level2.ogg", 0);
+
+	string publico;
+	if(niveis_subidos == 1) publico = p.charname + " subiu um nivel, alcancando assim o nivel " + nivel + ".";
+	else publico = p.charname + " subiu " + niveis_subidos + " niveis, alcancando assim o nivel " + nivel + ".";
+
+	// O BGT so avisava quem tinha avisanivel==1. O check_level_up antigo
+	// mandava para TODOS os peers: com quests de 100000 XP isso virava spam.
+	for(uint x = 0; x < players.length(); x++) {
+		if(players[x] is null) continue;
+		if(x == uint(player_index)) continue;
+		if(players[x].avisanivel != 1) continue;
+
+		send_reliable_text(players[x].peer_id, "msg2 " + publico, 0);
+		send_reliable_text(players[x].peer_id, "ps level2.ogg", 0);
+	}
+
+	debug_log("LEVELUP: " + p.charname + " -> nivel " + nivel + " (+" + niveis_subidos + ")");
+}
+
+void notificar_reencarnacao(int player_index, int fases) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(fases <= 0) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	string proprio;
+	if(fases == 1) proprio = "Voce ultrapassou mais uma meta e conseguiu uma nova fase angelical! Agora voce esta na fase " + p.reencarnou + ".";
+	else proprio = "Voce ultrapassou mais uma meta e conseguiu " + fases + " novas fases angelicais! Agora voce esta na fase " + p.reencarnou + ".";
+
+	send_reliable_text(p.peer_id, "msg2 " + proprio, 0);
+	send_reliable_text(p.peer_id, "ps notify_powerup.ogg", 0);
+
+	string publico;
+	if(fases == 1) publico = p.charname + " ultrapassou mais uma meta, conseguindo uma nova fase angelical!";
+	else publico = p.charname + " ultrapassou mais uma meta, conseguindo " + fases + " novas fases angelicais!";
+
+	for(uint x = 0; x < players.length(); x++) {
+		if(players[x] is null) continue;
+		if(x == uint(player_index)) continue;
+		if(players[x].avisareencarnacao != 1) continue;
+
+		send_reliable_text(players[x].peer_id, "msg2 " + publico, 0);
+		send_reliable_text(players[x].peer_id, "ps notify_powerup.ogg", 0);
+	}
+
+	debug_log("REENCARNACAO: " + p.charname + " -> fase " + p.reencarnou + " (+" + fases + ")");
+}
+
+// --------------------------------------------------------------------------
+// Reencarnacao (fase angelical do BGT)
+// --------------------------------------------------------------------------
+
+int processar_reencarnacao(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return 0;
+
+	player@ p = @players[player_index];
+	if(p is null) return 0;
+
+	int fases = 0;
+	int guarda = 0;
+	int nivel_anterior = int(p.level);
+
+	while(int(p.level) >= LIMITE_REENCARNACAO) {
+		guarda++;
+		if(guarda > MAX_REENCARNACOES_POR_GANHO) {
+			debug_log("LEVELING: AVISO - guarda de reencarnacoes acionada para " + p.charname +
+				" (nivel " + int(p.level) + "). Laco abortado.");
+			break;
+		}
+
+		int resto = int(p.level) - LIMITE_REENCARNACAO;
+		if(resto < 0) resto = 0;
+
+		p.reencarnou += 1;
+		p.bonus_vida_reencarnacao += REENCARNACAO_BONUS_VIDA;
+		p.bonus_baculo_reencarnacao += REENCARNACAO_BONUS_BACULO;
+		p.baculofangelical += REENCARNACAO_BONUS_BACULO;
+
+		p.maxhealth += double(REENCARNACAO_BONUS_VIDA);
+		p.health = p.maxhealth;
+
+		p.level = double(1 + resto);
+		p.xprequerida = xp_para_proximo_nivel(int(p.level), p.reencarnou);
+
+		fases++;
+	}
+
+	if(fases > 0) {
+		registrar_progressao_log(p.charname, "reencarnacao", fases, nivel_anterior, progressao_origem_atual);
+	}
+
+	return fases;
+}
+
+// --------------------------------------------------------------------------
+// Subida de nivel
+// --------------------------------------------------------------------------
+
+void subir_nivel(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(p.level < 1) p.level = 1;
+	if(p.xp < 0) p.xp = 0;
+	if(p.reencarnou < 0) p.reencarnou = 0;
+
+	int nivel_anterior = int(p.level);
+	int niveis_subidos = 0;
+	int guarda = 0;
+
+	// A curva e sempre reafirmada antes do laco: saves antigos podiam trazer
+	// xprequerida de outra curva (ou 0, que travaria o while).
+	p.xprequerida = xp_para_proximo_nivel(int(p.level), p.reencarnou);
+
+	while(p.xp >= p.xprequerida) {
+		guarda++;
+		if(guarda > MAX_NIVEIS_POR_GANHO) {
+			debug_log("LEVELING: AVISO - guarda de niveis acionada para " + p.charname +
+				" (nivel " + int(p.level) + ", xp " + p.xp + "). Laco abortado.");
+			break;
+		}
+
+		p.xp -= p.xprequerida;
+		p.level += 1;
+		niveis_subidos++;
+
+		p.maxhealth += VIDA_POR_NIVEL;
+		p.health = p.maxhealth;
+
+		p.xprequerida = xp_para_proximo_nivel(int(p.level), p.reencarnou);
+	}
+
+	int fases = processar_reencarnacao(player_index);
+
+	// settitle() faz I/O (file_exists) e set_achievement_progress() percorre o
+	// banco de conquistas: so vale a pena quando algo realmente mudou.
+	if(niveis_subidos > 0 || fases > 0) {
+		settitle(player_index);
+		set_achievement_progress(p.charname, "level", int(p.level));
+	}
+
+	// Regra do BGT: quando houve fase angelical, so a fase e anunciada.
+	if(fases > 0) {
+		notificar_reencarnacao(player_index, fases);
+	} else if(niveis_subidos > 0) {
+		notificar_nivel(player_index, niveis_subidos);
+	}
+
+	if(niveis_subidos > 0) {
+		registrar_progressao_log(p.charname, "nivel", niveis_subidos, nivel_anterior, progressao_origem_atual);
+	}
+
+	if(niveis_subidos > 0 || fases > 0) {
+		sync_progressao(p);
+		salvar_progressao(p);
+	}
+}
+
+// Mantido apenas como encaminhador: legacy_compat.nvgt ainda chama este nome.
+void check_level_up(int player_index) {
+	subir_nivel(player_index);
+}
+
+// --------------------------------------------------------------------------
+// Ganho de XP
+// --------------------------------------------------------------------------
+
+// Assinatura mantida byte a byte em relacao a systems_advanced.nvgt:401 para
+// nao quebrar os ~15 chamadores existentes.
+void ganhaxp(int player_index, int xp_amount, int gold_amount = 0) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(xp_amount < 0) xp_amount = 0;
+	if(gold_amount < 0) gold_amount = 0;
+
+	string origem = progressao_origem_atual;
+
+	if(xp_amount > 0) {
+		string descricao = "";
+		int xp_final = aplicar_multiplicadores_xp(player_index, xp_amount, descricao);
+
+		p.xp = somar_xp_saturado(p.xp, xp_final);
+
+		if(p.avisaxp == 1) {
+			send_reliable_text(p.peer_id, "msg2 Voce ganhou " + xp_final + " XP" + descricao + ".", 0);
+		}
+
+		guild@ g = get_player_guild(p.charname);
+		if(g !is null) {
+			int xp_guild = int(double(xp_final) * GUILD_XP_SHARE);
+			if(xp_guild > 0) g.add_xp(xp_guild);
+		}
+	}
+
+	if(gold_amount > 0) {
+		p.inv_add_item("coins", gold_amount);
+
+		if(doublegold == 1) {
+			p.inv_add_item("coins", gold_amount);
+			send_reliable_text(p.peer_id, "msg2 Ouro em dobro ativo! Voce recebeu " + (gold_amount * 2) + " coins.", 0);
+		} else {
+			send_reliable_text(p.peer_id, "msg2 Voce recebeu " + gold_amount + " coins.", 0);
+		}
+
+		set_achievement_progress(p.charname, "gold_total", p.gold);
+	}
+
+	// A partilha usa a XP base, exatamente como ganhaxpequipo do BGT: cada
+	// membro recebe os proprios multiplicadores dentro de ganhaxp_equipe.
+	if(xp_amount > 0) ganhaxp_equipe(player_index, xp_amount);
+
+	subir_nivel(player_index);
+
+	progressao_origem_atual = "jogo";
+
+	if(origem != "jogo") {
+		debug_log("LEVELING: " + p.charname + " ganhou " + xp_amount + " XP base (origem: " + origem + ")");
+	}
+}
+
+// XP de equipe. Usa get_player_party() de party.nvgt (o sistema VIVO); o
+// array player.nomesequipe e API morta e ligar o XP nele faria a partilha
+// nunca acontecer. NUNCA chama ganhaxp() para os membros: isso faria cada
+// membro redistribuir para a propria party e entrar em recursao.
+void ganhaxp_equipe(int player_index, int xp_base) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(xp_base <= 0) return;
+
+	player@ origem = @players[player_index];
+	if(origem is null) return;
+
+	party@ grupo = get_player_party(origem.charname);
+	if(grupo is null) return;
+	if(!grupo.share_xp) return;
+
+	int compartilhado = int(double(xp_base) * PARTY_XP_SHARE);
+	if(compartilhado <= 0) return;
+
+	string mapa = origem.map;
+
+	for(uint i = 0; i < grupo.members.length(); i++) {
+		if(grupo.members[i] == origem.charname) continue;
+
+		int idx = get_player_index_from(grupo.members[i]);
+		if(idx < 0) continue;
+
+		player@ m = @players[idx];
+		if(m is null) continue;
+		if(m.afk) continue;
+		if(m.map != mapa) continue;
+
+		string descricao = "";
+		int ganho = aplicar_multiplicadores_xp(idx, compartilhado, descricao);
+		if(ganho <= 0) continue;
+
+		m.xp = somar_xp_saturado(m.xp, ganho);
+
+		if(m.avisaxp == 1) {
+			send_reliable_text(m.peer_id, "msg2 [Grupo] Voce ganhou " + ganho + " XP" + descricao + ".", 0);
+		}
+
+		subir_nivel(idx);
+	}
+}
+
+// Porte adaptado de dar_elementales (re_server_test.bgt:2306). O mecanismo e
+// o mesmo (conta membros elegiveis, divide a quantidade entre eles, honra o
+// gate pacifico/afk), mas o item deixou de ser fixo: "elementales" era a
+// moeda do BGT e nao existe no NVGT, onde a moeda virou "coins"/"reais".
+void distribuir_item_grupo(string nome_lider, string item, int quantidade, bool incluir_pacificos = true) {
+	if(item == "") item = "coins";
+	if(quantidade <= 0) return;
+
+	int lider = get_player_index_from(nome_lider);
+	if(lider < 0) return;
+
+	party@ grupo = get_player_party(nome_lider);
+	if(grupo is null) {
+		// Sem grupo o "lider" fica com tudo, como no BGT (nomesequipe sempre
+		// continha ao menos o proprio nome).
+		players[lider].inv_add_item(item, quantidade);
+		if(item == "coins" && doublegold == 1) players[lider].inv_add_item(item, quantidade);
+		send_reliable_text(players[lider].peer_id, "msg2 Voce recebeu " + quantidade + " " + item + ".", 0);
+		return;
+	}
+
+	int elegiveis = 0;
+	for(uint i = 0; i < grupo.members.length(); i++) {
+		int z = get_player_index_from(grupo.members[i]);
+		if(z < 0) continue;
+		if(players[z] is null) continue;
+		if(players[z].afk) continue;
+		if(players[z].pacifico != 0 && !incluir_pacificos) continue;
+		elegiveis++;
+	}
+
+	if(elegiveis == 0) return;
+
+	int total = quantidade / elegiveis;
+	if(total <= 0) return;
+
+	for(uint i = 0; i < grupo.members.length(); i++) {
+		int z = get_player_index_from(grupo.members[i]);
+		if(z < 0) continue;
+		if(players[z] is null) continue;
+		if(players[z].afk) continue;
+		if(players[z].pacifico != 0 && !incluir_pacificos) continue;
+
+		players[z].inv_add_item(item, total);
+
+		int entregue = total;
+		if(item == "coins" && doublegold == 1) {
+			players[z].inv_add_item(item, total);
+			entregue = total * 2;
+		}
+
+		send_reliable_text(players[z].peer_id, "msg2 Voce recebeu " + entregue + " " + item + " do grupo.", 0);
+	}
+
+	debug_log("LEVELING: " + quantidade + " " + item + " distribuidos entre " + elegiveis + " membros do grupo de " + nome_lider);
+}
+
+// --------------------------------------------------------------------------
+// Formatacao compartilhada (usada pelo /nivel e pelas boas-vindas do login)
+// --------------------------------------------------------------------------
+
+string formatar_progressao(player@ p, bool proprio) {
+	if(p is null) return "Jogador nao encontrado.";
+
+	int nivel = int(p.level);
+	int necessaria = xp_para_proximo_nivel(nivel, p.reencarnou);
+	int falta = necessaria - p.xp;
+	if(falta < 0) falta = 0;
+
+	string patente = p.title;
+	patente = patente.replace("\n", "");
+	patente = patente.trim_whitespace();
+	if(patente == "") patente = "Sem patente";
+
+	string msg;
+	if(proprio) msg = "Voce esta no nivel " + nivel;
+	else msg = p.charname + " esta no nivel " + nivel;
+
+	msg += ", com " + p.xp + " de " + necessaria + " pontos de experiencia";
+	msg += " (faltam " + falta + ")";
+	msg += ", na patente " + patente;
+
+	if(p.reencarnou > 0) msg += ", na fase angelical " + p.reencarnou;
+
+	msg += ".";
+
+	return msg;
+}
+
+// --------------------------------------------------------------------------
+// Inicializacao
+// --------------------------------------------------------------------------
+
+void init_leveling_system() {
+	debug_log("Inicializando sistema de progressao/niveis...");
+
+	create_progressao_table();
+
+	xpespecial = ler_config_progressao(LEVELING_CONFIG_XPESPECIAL, 0);
+	if(xpespecial != 0 && xpespecial != 1) xpespecial = 1;
+
+	xpespecial_multiplicador = ler_config_progressao(LEVELING_CONFIG_XPESPECIAL_MULT, 6);
+	if(xpespecial_multiplicador < 2) xpespecial_multiplicador = 2;
+	if(xpespecial_multiplicador > 100) xpespecial_multiplicador = 100;
+
+	doublexp = ler_config_progressao(LEVELING_CONFIG_DOUBLEXP, doublexp);
+	if(doublexp != 0 && doublexp != 1) doublexp = 1;
+
+	string estado_dupla = "desligada";
+	if(doublexp == 1) estado_dupla = "ligada";
+
+	string estado_especial = "desligada";
+	if(xpespecial == 1) estado_especial = "ligada (x" + xpespecial_multiplicador + ")";
+
+	debug_log("LEVELING: curva = nivel * " + XP_BASE_POR_NIVEL + " * (1 + reencarnacoes)");
+	debug_log("LEVELING: limite de reencarnacao = " + LIMITE_REENCARNACAO + " niveis");
+	debug_log("LEVELING: XP dupla = " + estado_dupla + "; XP especial = " + estado_especial);
+}

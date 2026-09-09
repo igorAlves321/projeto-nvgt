@@ -1,0 +1,663 @@
+// ============================================================================
+// moderation_guard.nvgt
+//
+// 1) Protecao de alvo (porte de is_unbannable, voids.bgt:119-130, que lia
+//    unbannables.txt e era consultado antes de banir/silenciar/prender/kickar
+//    em voids.bgt:1801, 1820, 1882, 1894, 1962, 1976 e 2475).
+//    Aqui roda pelo BANCO, entao funciona com o alvo OFFLINE - que e
+//    exatamente o buraco de cmd_ban hoje (alvo offline pula a checagem).
+//
+// 2) Persistencia dos strikes de spam da classe spam_tracker
+//    (server/includes/chat_advanced.nvgt), que ate agora viviam so na
+//    dictionary player_spam_trackers e sumiam no restart.
+//    As funcoes sao LIVRES (escopo de arquivo) de proposito: a classe
+//    spam_tracker as chama de dentro dos metodos, sem #include dentro do
+//    corpo da classe.
+// ============================================================================
+
+// Se true, quem tem cargo de moderador para cima ganha imunidade automatica.
+// Se o dono do servidor preferir comecar apenas com a tabela explicita
+// moderation_immunity, basta trocar para false: nada mais muda.
+const bool IMMUNITY_ROLE_AUTO = true;
+
+// Espelha os 300000 ms de spam_tracker (chat_advanced.nvgt).
+const int SPAM_MUTE_SECONDS = 300;
+
+// ----------------------------------------------------------------------------
+// Tabela de imunidade
+// ----------------------------------------------------------------------------
+
+void create_immunity_table() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: create_immunity_table - Banco não inicializado");
+        return;
+    }
+
+    debug_log("Criando tabela moderation_immunity...");
+
+    string create_table = """
+        CREATE TABLE IF NOT EXISTS moderation_immunity (
+            username TEXT PRIMARY KEY,
+            added_by TEXT DEFAULT 'system',
+            added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            reason TEXT DEFAULT ''
+        );
+    """;
+
+    if(bancoJogo.execute(create_table) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela moderation_immunity: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela moderation_immunity criada/verificada");
+    }
+
+    migrate_unbannables_file();
+}
+
+// Migracao unica do unbannables.txt do BGT, se o arquivo ainda existir na raiz
+// do servidor. Cada linha e um nome.
+void migrate_unbannables_file() {
+    if(!database_initialized || bancoJogo is null) return;
+    if(!file_exists("unbannables.txt")) return;
+
+    file f;
+    if(!f.open("unbannables.txt", "r")) return;
+
+    string content = f.read();
+    f.close();
+
+    if(content == "") return;
+
+    string[] names = content.split("\r\n");
+    int migrated = 0;
+
+    for(uint i = 0; i < names.length(); i++) {
+        string name = names[i].trim_whitespace();
+        if(name == "") continue;
+        if(has_explicit_immunity(name)) continue;
+        if(add_immunity(name, "migracao", "Importado de unbannables.txt")) migrated++;
+    }
+
+    if(migrated > 0) {
+        debug_log("MIGRAÇÃO: " + migrated + " nomes importados de unbannables.txt para moderation_immunity");
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Consultas de imunidade
+// ----------------------------------------------------------------------------
+
+bool has_explicit_immunity(string username) {
+    if(!database_initialized || bancoJogo is null) return false;
+    if(username == "") return false;
+
+    username = string_to_lower_case(username);
+
+    string query = "SELECT 1 FROM moderation_immunity WHERE LOWER(username) = ?;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, username);
+
+    return (stmt.step() == SQLITE_ROW);
+}
+
+// Porte de is_unbannable(): imune se estiver na tabela explicita OU (quando
+// IMMUNITY_ROLE_AUTO) se tiver cargo de moderador para cima.
+bool is_immune(string username) {
+    if(username == "") return false;
+
+    if(has_explicit_immunity(username)) return true;
+
+    if(IMMUNITY_ROLE_AUTO) {
+        if(get_player_role_level(username) >= ROLE_LEVEL_MODERATOR) return true;
+    }
+
+    return false;
+}
+
+bool is_immune_by_index(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    return is_immune(players[player_index].charname);
+}
+
+// ----------------------------------------------------------------------------
+// Guarda unica de moderacao.
+// Chamada por ban / tempban / kick / silenciar / unsilenciar / prender.
+// Funciona com o alvo OFFLINE porque le tudo do banco.
+// ----------------------------------------------------------------------------
+
+bool can_moderate(string actor_name, string target_name, string &out motivo) {
+    motivo = "";
+
+    if(target_name == "") {
+        motivo = "Nome de jogador inválido.";
+        return false;
+    }
+
+    string actor_lower = string_to_lower_case(actor_name);
+    string target_lower = string_to_lower_case(target_name);
+
+    bool actor_is_dev = check_is_dev(actor_name);
+
+    if(actor_lower == target_lower) {
+        if(actor_is_dev) return true;
+        motivo = "Você não pode aplicar esta punição em si mesmo.";
+        return false;
+    }
+
+    int actor_level = get_player_role_level(actor_name);
+    int target_level = get_player_role_level(target_name);
+    bool target_is_dev = (target_level >= ROLE_LEVEL_DEV);
+
+    // Desenvolvedor e sempre intocavel, inclusive por outro dev
+    // (is_unbannable do BGT era absoluto).
+    if(target_is_dev) {
+        motivo = target_name + " é desenvolvedor e não pode ser punido.";
+        return false;
+    }
+
+    // Dev ignora a imunidade de quem nao e dev.
+    if(actor_is_dev) return true;
+
+    if(has_explicit_immunity(target_name)) {
+        motivo = target_name + " está protegido contra punições.";
+        return false;
+    }
+
+    if(IMMUNITY_ROLE_AUTO && target_level >= ROLE_LEVEL_MODERATOR && actor_level <= target_level) {
+        motivo = "Você não pode punir alguém com hierarquia igual ou superior a sua.";
+        return false;
+    }
+
+    if(actor_level <= ROLE_LEVEL_PLAYER) {
+        motivo = "Você não tem permissão para aplicar punições.";
+        return false;
+    }
+
+    return true;
+}
+
+// Versao curta para quem so quer o booleano.
+bool can_moderate_simple(string actor_name, string target_name) {
+    string motivo;
+    return can_moderate(actor_name, target_name, motivo);
+}
+
+// ----------------------------------------------------------------------------
+// Escrita da imunidade
+// ----------------------------------------------------------------------------
+
+bool add_immunity(string username, string added_by = "system", string reason = "") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username.trim_whitespace());
+    if(username == "") return false;
+
+    string query = """
+        INSERT OR REPLACE INTO moderation_immunity (username, added_by, added_at, reason)
+        VALUES (?, ?, datetime('now'), ?);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar add_immunity: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, added_by);
+    stmt.bind_text(3, reason);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao adicionar imunidade: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("OK - Imunidade concedida a " + username + " por " + added_by);
+    return true;
+}
+
+bool remove_immunity(string username, string removed_by = "system") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = string_to_lower_case(username.trim_whitespace());
+    if(username == "") return false;
+
+    string query = "DELETE FROM moderation_immunity WHERE LOWER(username) = ?;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar remove_immunity: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao remover imunidade: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    debug_log("OK - Imunidade removida de " + username + " por " + removed_by);
+    return true;
+}
+
+string[] list_immunity() {
+    string[] result;
+
+    if(!database_initialized || bancoJogo is null) return result;
+
+    string query = """
+        SELECT username, added_by, reason FROM moderation_immunity
+        ORDER BY username;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return result;
+
+    while(stmt.step() == SQLITE_ROW) {
+        string username = stmt.column_text(0);
+        string added_by = stmt.column_text(1);
+        string reason = stmt.column_text(2);
+
+        string line = username;
+        if(added_by != "") line += " (por " + added_by + ")";
+        if(reason != "") line += ": " + reason;
+
+        result.insert_last(line);
+    }
+
+    return result;
+}
+
+// ----------------------------------------------------------------------------
+// Persistencia dos strikes de spam (spam_tracker de chat_advanced.nvgt)
+// ----------------------------------------------------------------------------
+
+void create_spam_strikes_table() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: create_spam_strikes_table - Banco não inicializado");
+        return;
+    }
+
+    debug_log("Criando tabela spam_strikes...");
+
+    string create_table = """
+        CREATE TABLE IF NOT EXISTS spam_strikes (
+            username TEXT PRIMARY KEY,
+            warnings INTEGER DEFAULT 0,
+            mutes INTEGER DEFAULT 0,
+            muted_until DATETIME DEFAULT NULL,
+            last_offense DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+
+    if(bancoJogo.execute(create_table) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela spam_strikes: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela spam_strikes criada/verificada");
+    }
+
+    cleanup_expired_spam_mutes();
+}
+
+// Limpa mutes ja vencidos no boot, no mesmo molde de cleanup_expired_bans_db().
+// Sem isso um registro antigo (ou uma virada de relogio) poderia devolver um
+// jogador mutado para sempre.
+void cleanup_expired_spam_mutes() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    bancoJogo.execute("UPDATE spam_strikes SET muted_until = NULL WHERE muted_until IS NOT NULL AND muted_until <= datetime('now');");
+}
+
+bool get_spam_strikes(string username, int &out warnings, int &out mutes, int &out mute_seconds_left) {
+    warnings = 0;
+    mutes = 0;
+    mute_seconds_left = 0;
+
+    if(!database_initialized || bancoJogo is null) return false;
+    if(username == "") return false;
+
+    username = string_to_lower_case(username);
+
+    string query = """
+        SELECT warnings, mutes,
+               CASE WHEN muted_until IS NULL OR muted_until <= datetime('now') THEN 0
+                    ELSE CAST((julianday(muted_until) - julianday('now')) * 86400 AS INTEGER) END
+        FROM spam_strikes
+        WHERE LOWER(username) = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, username);
+
+    if(stmt.step() != SQLITE_ROW) return false;
+
+    warnings = stmt.column_int(0);
+    mutes = stmt.column_int(1);
+    mute_seconds_left = stmt.column_int(2);
+
+    if(mute_seconds_left < 0) mute_seconds_left = 0;
+    if(mute_seconds_left > SPAM_MUTE_SECONDS) mute_seconds_left = SPAM_MUTE_SECONDS;
+
+    return true;
+}
+
+void save_spam_strikes(string username, int warnings, int mutes, int mute_seconds) {
+    if(!database_initialized || bancoJogo is null) return;
+    if(username == "") return;
+
+    username = string_to_lower_case(username);
+
+    if(warnings < 0) warnings = 0;
+    if(mutes < 0) mutes = 0;
+    if(mute_seconds < 0) mute_seconds = 0;
+    if(mute_seconds > SPAM_MUTE_SECONDS) mute_seconds = SPAM_MUTE_SECONDS;
+
+    string query;
+    if(mute_seconds > 0) {
+        query = """
+            INSERT OR REPLACE INTO spam_strikes (username, warnings, mutes, muted_until, last_offense)
+            VALUES (?, ?, ?, datetime('now', '+' || ? || ' seconds'), datetime('now'));
+        """;
+    } else {
+        query = """
+            INSERT OR REPLACE INTO spam_strikes (username, warnings, mutes, muted_until, last_offense)
+            VALUES (?, ?, ?, NULL, datetime('now'));
+        """;
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar save_spam_strikes: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    stmt.bind_text(1, username);
+    stmt.bind_int(2, warnings);
+    stmt.bind_int(3, mutes);
+    if(mute_seconds > 0) stmt.bind_int(4, mute_seconds);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao salvar strikes de spam: " + bancoJogo.get_last_error_text());
+    }
+}
+
+void clear_spam_strikes(string username) {
+    if(username == "") return;
+
+    if(database_initialized && bancoJogo !is null) {
+        string query = "DELETE FROM spam_strikes WHERE LOWER(username) = ?;";
+        sqlite3statement@ stmt = bancoJogo.prepare(query);
+        if(@stmt == null) {
+            debug_log("ERRO ao preparar clear_spam_strikes: " + bancoJogo.get_last_error_text());
+        } else {
+            stmt.bind_text(1, string_to_lower_case(username));
+            stmt.step();
+        }
+    }
+
+    if(player_spam_trackers.exists(username)) {
+        spam_tracker@ st = cast<spam_tracker@>(player_spam_trackers[username]);
+        if(st !is null) {
+            st.warnings = 0;
+            st.message_count = 0;
+            st.is_muted = false;
+            st.mute_timer.restart();
+            st.last_message.restart();
+        }
+    }
+}
+
+// Aplica ao tracker em memoria o que esta no banco. Nao usa get_spam_tracker()
+// para nao recursar quando chamada de dentro dele.
+void load_spam_strikes(string username) {
+    if(username == "") return;
+
+    spam_tracker@ st = null;
+
+    if(player_spam_trackers.exists(username)) {
+        @st = cast<spam_tracker@>(player_spam_trackers[username]);
+    } else {
+        spam_tracker fresh;
+        player_spam_trackers.set(username, @fresh);
+        @st = @fresh;
+    }
+
+    if(st is null) return;
+
+    int warnings = 0;
+    int mutes = 0;
+    int remaining = 0;
+
+    if(!get_spam_strikes(username, warnings, mutes, remaining)) return;
+
+    st.warnings = warnings;
+
+    if(remaining > 0) {
+        st.is_muted = true;
+        st.mute_timer.restart();
+        debug_log("ANTICHEAT: " + username + " voltou com mute de spam ativo (" + remaining + "s restantes no banco)");
+    }
+}
+
+// Chamada pela spam_tracker quando o jogador leva o 3o aviso e e mutado.
+void register_spam_mute(string username, int warnings) {
+    if(username == "") return;
+
+    int old_warnings = 0;
+    int old_mutes = 0;
+    int old_remaining = 0;
+    get_spam_strikes(username, old_warnings, old_mutes, old_remaining);
+
+    int total_mutes = old_mutes + 1;
+
+    save_spam_strikes(username, warnings, total_mutes, SPAM_MUTE_SECONDS);
+
+    log_action(username, "ANTICHEAT", "spam_mute avisos=" + warnings + " mutes=" + total_mutes);
+    eadm(username + " foi silenciado automaticamente por spam (avisos=" + warnings + ", mutes=" + total_mutes + ").", "notifybleeps.ogg");
+    debug_log("ANTICHEAT: " + username + " mutado por spam (avisos=" + warnings + ", mutes=" + total_mutes + ")");
+}
+
+// Zera apenas os avisos e o mute no banco, preservando o contador historico de
+// mutes. Usada pelo ramo de expiracao de mute da spam_tracker, onde chamar
+// clear_spam_strikes() causaria reentrancia no proprio tracker.
+void reset_spam_warnings_db(string username) {
+    if(username == "") return;
+
+    int old_warnings = 0;
+    int old_mutes = 0;
+    int old_remaining = 0;
+    get_spam_strikes(username, old_warnings, old_mutes, old_remaining);
+
+    save_spam_strikes(username, 0, old_mutes, 0);
+}
+
+// Chamada pela spam_tracker a cada aviso, para o strike sobreviver ao restart.
+void register_spam_warning(string username, int warnings) {
+    if(username == "") return;
+
+    int old_warnings = 0;
+    int old_mutes = 0;
+    int old_remaining = 0;
+    get_spam_strikes(username, old_warnings, old_mutes, old_remaining);
+
+    save_spam_strikes(username, warnings, old_mutes, old_remaining);
+}
+
+// ----------------------------------------------------------------------------
+// Comandos
+// ----------------------------------------------------------------------------
+
+bool modguard_require_dev(int index) {
+    if(index < 0 || index >= int(players.length())) return false;
+
+    if(!check_is_dev(players[index].charname)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Apenas desenvolvedores podem gerenciar a imunidade de moderação.", 0);
+        return false;
+    }
+    return true;
+}
+
+bool modguard_require_mod(int index) {
+    if(index < 0 || index >= int(players.length())) return false;
+
+    if(!check_is_mod(players[index].charname)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Você não tem permissão para usar este comando.", 0);
+        return false;
+    }
+    return true;
+}
+
+// /imune <jogador> [motivo]
+void cmd_imune(int index, string[] parsed) {
+    if(!modguard_require_dev(index)) return;
+
+    if(parsed.length() < 2) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /imune <jogador> [motivo]", 0);
+        return;
+    }
+
+    string target = parsed[1].trim_whitespace();
+
+    string reason = "";
+    for(uint i = 2; i < parsed.length(); i++) {
+        if(reason != "") reason += " ";
+        reason += parsed[i];
+    }
+    if(reason == "") reason = "Sem motivo informado";
+    if(reason.length() > 200) reason = reason.substr(0, 200);
+
+    if(has_explicit_immunity(target)) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + target + " já está na lista de imunes.", 0);
+        return;
+    }
+
+    string admin_name = players[index].charname;
+
+    if(!add_immunity(target, admin_name, reason)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao adicionar imunidade. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal " + target + " agora está imune a punições. Motivo: " + reason, 0);
+
+    eadm(admin_name + " tornou " + target + " imune a punições. Motivo: " + reason, "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "add_immunity " + target + " (" + reason + ")",
+               "", 0, 0, 0, "", target, "");
+}
+
+// /removerimune <jogador>
+void cmd_removerimune(int index, string[] parsed) {
+    if(!modguard_require_dev(index)) return;
+
+    if(parsed.length() < 2) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /removerimune <jogador>", 0);
+        return;
+    }
+
+    string target = parsed[1].trim_whitespace();
+
+    if(!has_explicit_immunity(target)) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + target + " não está na lista de imunes.", 0);
+        return;
+    }
+
+    string admin_name = players[index].charname;
+
+    if(!remove_immunity(target, admin_name)) {
+        send_reliable_text(players[index].peer_id, "msgnormal Erro ao remover imunidade. Verifique o log do servidor.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal Imunidade de " + target + " removida.", 0);
+
+    eadm(admin_name + " removeu a imunidade de " + target + ".", "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "remove_immunity " + target,
+               "", 0, 0, 0, "", target, "");
+}
+
+// /listaimunes
+void cmd_listaimunes(int index, string[] parsed) {
+    if(!modguard_require_mod(index)) return;
+
+    string[] lines = list_immunity();
+
+    send_reliable_text(players[index].peer_id, "msgnormal === JOGADORES IMUNES ===", 0);
+
+    if(lines.length() == 0) {
+        send_reliable_text(players[index].peer_id, "msgnormal Nenhum jogador na lista explícita de imunes.", 0);
+    } else {
+        for(uint i = 0; i < lines.length(); i++) {
+            send_reliable_text(players[index].peer_id, "msgnormal " + lines[i], 0);
+        }
+    }
+
+    if(IMMUNITY_ROLE_AUTO) {
+        send_reliable_text(players[index].peer_id, "msgnormal Alem destes, todo jogador com cargo de moderador ou superior é imune automaticamente.", 0);
+    }
+}
+
+// /limparspam <jogador>
+void cmd_limparspam(int index, string[] parsed) {
+    if(!modguard_require_mod(index)) return;
+
+    if(parsed.length() < 2) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /limparspam <jogador>", 0);
+        return;
+    }
+
+    string target = parsed[1].trim_whitespace();
+
+    clear_spam_strikes(target);
+
+    // O tracker em memoria usa o charname exato como chave; se o alvo estiver
+    // online, limpa tambem por esse nome.
+    int target_index = get_player_index_from(target);
+    if(target_index >= 0) {
+        clear_spam_strikes(players[target_index].charname);
+        send_reliable_text(players[target_index].peer_id, "msgnormal Seus avisos de spam foram zerados.", 0);
+    }
+
+    string admin_name = players[index].charname;
+
+    send_reliable_text(players[index].peer_id, "msgnormal Avisos de spam de " + target + " zerados.", 0);
+
+    eadm(admin_name + " zerou os avisos de spam de " + target + ".", "notifybleeps.ogg");
+    log_action(admin_name, "ANTICHEAT", "clear_spam_strikes " + target,
+               "", 0, 0, 0, "", target, "");
+}
+
+// /spaminfo <jogador>
+void cmd_spaminfo(int index, string[] parsed) {
+    if(!modguard_require_mod(index)) return;
+
+    if(parsed.length() < 2) {
+        send_reliable_text(players[index].peer_id, "msgnormal Uso: /spaminfo <jogador>", 0);
+        return;
+    }
+
+    string target = parsed[1].trim_whitespace();
+
+    int warnings = 0;
+    int mutes = 0;
+    int remaining = 0;
+
+    if(!get_spam_strikes(target, warnings, mutes, remaining)) {
+        send_reliable_text(players[index].peer_id, "msgnormal " + target + " não possui registro de spam.", 0);
+        return;
+    }
+
+    send_reliable_text(players[index].peer_id, "msgnormal === SPAM DE " + target + " ===", 0);
+    send_reliable_text(players[index].peer_id, "msgnormal Avisos: " + warnings + " de 3", 0);
+    send_reliable_text(players[index].peer_id, "msgnormal Silenciamentos automáticos: " + mutes, 0);
+
+    if(remaining > 0) {
+        send_reliable_text(players[index].peer_id, "msgnormal Silenciado por mais " + remaining + " segundos.", 0);
+    } else {
+        send_reliable_text(players[index].peer_id, "msgnormal Não está silenciado por spam no momento.", 0);
+    }
+}

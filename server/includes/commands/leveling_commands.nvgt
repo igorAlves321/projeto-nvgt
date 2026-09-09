@@ -1,0 +1,176 @@
+// ==========================================================================
+// COMANDOS DO SISTEMA DE PROGRESSAO / NIVEIS
+// Depende de server/includes/leveling.nvgt
+// ==========================================================================
+
+// /nivel [jogador] - nivel, XP atual/necessaria, fase de reencarnacao e patente.
+bool cmd_nivel(player@ player, string[] args) {
+	if(player is null) return false;
+
+	if(args.length() < 1) {
+		player.send_message("msg2 " + formatar_progressao(player, true));
+		return true;
+	}
+
+	string alvo_nome = args[0].trim_whitespace();
+	if(alvo_nome == "") {
+		player.send_message("msg2 " + formatar_progressao(player, true));
+		return true;
+	}
+
+	player@ alvo = get_player_by_name(alvo_nome);
+	if(alvo is null) {
+		player.send_message("say Jogador '" + alvo_nome + "' nao encontrado ou offline.");
+		return false;
+	}
+
+	bool proprio = (alvo.charname == player.charname);
+	player.send_message("msg2 " + formatar_progressao(alvo, proprio));
+	return true;
+}
+
+// /experience|exp|xp - detalhamento da experiencia atual.
+bool cmd_experiencia(player@ player, string[] args) {
+	if(player is null) return false;
+
+	int nivel = int(player.level);
+	int necessaria = xp_para_proximo_nivel(nivel, player.reencarnou);
+	int falta = necessaria - player.xp;
+	if(falta < 0) falta = 0;
+
+	string msg = "Voce tem " + player.xp + " pontos de experiencia.";
+	msg += " Para subir ao nivel " + (nivel + 1) + " voce precisa de " + necessaria;
+	msg += ", ou seja, faltam " + falta + ".";
+
+	string multiplicadores = "";
+	if(doublexp == 1) multiplicadores += "XP dupla";
+	if(xpespecial == 1) {
+		if(multiplicadores != "") multiplicadores += ", ";
+		multiplicadores += "XP especial (x" + xpespecial_multiplicador + ")";
+	}
+	if(player.bendicion) {
+		if(multiplicadores != "") multiplicadores += ", ";
+		multiplicadores += "bencao de diamantes";
+	}
+
+	if(multiplicadores != "") msg += " Multiplicadores ativos: " + multiplicadores + ".";
+
+	player.send_message("msg2 " + msg);
+	return true;
+}
+
+// /nxp - alterna os avisos de XP ganho (o avisaxp do BGT).
+bool cmd_nxp(player@ player, string[] args) {
+	if(player is null) return false;
+
+	player.avisaxp = (player.avisaxp == 0) ? 1 : 0;
+	salvar_progressao(player);
+
+	string status = (player.avisaxp == 0) ? "desativados" : "ativados";
+	player.send_message("say Avisos de XP " + status);
+	return true;
+}
+
+// /nreencarnacao - alterna os avisos de reencarnacao (o avisafangelical do BGT).
+bool cmd_nreencarnacao(player@ player, string[] args) {
+	if(player is null) return false;
+
+	player.avisareencarnacao = (player.avisareencarnacao == 0) ? 1 : 0;
+	salvar_progressao(player);
+
+	string status = (player.avisareencarnacao == 0) ? "desativados" : "ativados";
+	player.send_message("say Avisos de reencarnacao " + status);
+	return true;
+}
+
+// /reencarnacoes - fase atual, bonus acumulados e quanto falta para a proxima.
+bool cmd_reencarnacoes(player@ player, string[] args) {
+	if(player is null) return false;
+
+	int nivel = int(player.level);
+	int faltam = LIMITE_REENCARNACAO - nivel;
+	if(faltam < 0) faltam = 0;
+
+	string msg;
+	if(player.reencarnou <= 0) msg = "Voce ainda nao reencarnou nenhuma vez.";
+	else msg = "Voce esta na fase angelical " + player.reencarnou + ".";
+
+	msg += " Bonus acumulados: +" + player.bonus_vida_reencarnacao + " de vida maxima";
+	msg += " e +" + player.bonus_baculo_reencarnacao + " de baculo angelical.";
+
+	if(faltam <= 0) {
+		msg += " Voce ja alcancou o nivel necessario para a proxima fase.";
+	} else {
+		msg += " Faltam " + faltam + " niveis para a proxima fase (nivel " + LIMITE_REENCARNACAO + ").";
+	}
+
+	msg += " Cada reencarnacao deixa a experiencia necessaria 100% mais cara.";
+
+	player.send_message("msg2 " + msg);
+	return true;
+}
+
+// /xpespecial <on|off|multiplicador> - liga/desliga o multiplicador global de
+// XP (o xpespecial==1 -> xp*6 do BGT) e grava em server_config para que ele
+// sobreviva a um /reboot.
+void cmd_xpespecial(int player_index, string[] args) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
+		send_reliable_text(p.peer_id, "say Voce nao tem permissao.", 0);
+		return;
+	}
+
+	if(args.length() < 1) {
+		string estado = "desligada";
+		if(xpespecial == 1) estado = "ligada (x" + xpespecial_multiplicador + ")";
+		send_reliable_text(p.peer_id, "msg2 A XP especial esta " + estado + ". Uso: /xpespecial <on|off|multiplicador>", 0);
+		return;
+	}
+
+	string opcao = string_to_lower_case(args[0].trim_whitespace());
+	int novo_estado = xpespecial;
+	int novo_mult = xpespecial_multiplicador;
+
+	if(opcao == "on" || opcao == "1" || opcao == "ligar" || opcao == "ativar") {
+		novo_estado = 1;
+	} else if(opcao == "off" || opcao == "0" || opcao == "desligar" || opcao == "desativar") {
+		novo_estado = 0;
+	} else {
+		int valor = 0;
+		if(!try_parse_int_token(opcao, valor)) {
+			send_reliable_text(p.peer_id, "say Uso: /xpespecial <on|off|multiplicador>", 0);
+			return;
+		}
+		if(valor < 2 || valor > 100) {
+			send_reliable_text(p.peer_id, "say O multiplicador deve ficar entre 2 e 100.", 0);
+			return;
+		}
+		novo_mult = valor;
+		novo_estado = 1;
+	}
+
+	xpespecial = novo_estado;
+	xpespecial_multiplicador = novo_mult;
+
+	gravar_config_progressao(LEVELING_CONFIG_XPESPECIAL, xpespecial,
+		"XP especial global: 1 ligada, 0 desligada");
+	gravar_config_progressao(LEVELING_CONFIG_XPESPECIAL_MULT, xpespecial_multiplicador,
+		"Multiplicador aplicado quando a XP especial esta ligada");
+
+	registrar_progressao_log(p.charname, "xp_admin", xpespecial, int(p.level), "admin");
+
+	if(xpespecial == 1) {
+		broadcast_all("msg2 XP especial ativada! Todo ganho de experiencia vale x" + xpespecial_multiplicador + ".");
+		broadcast_all("ps notify_blip2.ogg");
+	} else {
+		broadcast_all("msg2 XP especial desativada. Em breve tem mais!");
+		broadcast_all("ps notify_blip2.ogg");
+	}
+
+	debug_log("ADMIN: " + p.charname + " definiu xpespecial=" + xpespecial +
+		" multiplicador=" + xpespecial_multiplicador);
+}

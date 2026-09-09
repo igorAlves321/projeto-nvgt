@@ -1,0 +1,1177 @@
+
+// =====================================================================
+// Sistema de livros
+// Migrado de "servidor reino test/includes/managebooks.bgt" (createbook,
+// getbook, updatebook, deletebook, renamebook, readbook e /listbooks) e do
+// leitor "cliente pruebas/includes/book.bgt".
+//
+// Adaptacoes ao projeto NVGT:
+//  - armazenamento em sqlite (bancoJogo) no lugar de books/<idioma>/<nome>.txt;
+//  - permissao real via roles.nvgt (check_is_builder_index) no lugar da
+//    permissao implicita do menu de construtor do BGT;
+//  - paginas em linhas proprias (tabela livro_paginas) no lugar do
+//    string_split(conteudo, "page") do BGT, que quebrava em qualquer palavra
+//    contendo "page";
+//  - registro de leitura por jogador (livros_lidos), que alimenta conquistas
+//    e quests - coisa que o BGT nao tinha.
+// =====================================================================
+
+const string LIVRO_IDIOMA_PADRAO = "pt";
+const string LIVRO_DELIM_PAGINA = "#pagina";
+const uint LIVRO_MAX_PAGINA_CHARS = 7000;
+const uint LIVRO_MAX_PAYLOAD_CHARS = 12000;
+const uint LIVRO_MAX_SLUG_CHARS = 64;
+const uint LIVRO_MAX_TITULO_CHARS = 120;
+const uint LIVRO_MAX_DESCRICAO_CHARS = 500;
+const uint LIVRO_MAX_MUSICA_CHARS = 80;
+
+// ---------------------------------------------------------------------
+// Tabelas
+// ---------------------------------------------------------------------
+
+void create_livros_tables() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: create_livros_tables - Banco não inicializado");
+        return;
+    }
+
+    debug_log("Criando tabelas do sistema de livros...");
+
+    string create_livros = """
+        CREATE TABLE IF NOT EXISTS livros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL,
+            idioma TEXT NOT NULL DEFAULT 'pt',
+            titulo TEXT NOT NULL,
+            descricao TEXT DEFAULT '',
+            musica TEXT DEFAULT '',
+            autor TEXT DEFAULT 'system',
+            nivel_minimo INTEGER DEFAULT 0,
+            requer_item TEXT DEFAULT '',
+            publico INTEGER DEFAULT 1,
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(slug, idioma)
+        );
+    """;
+
+    if(bancoJogo.execute(create_livros) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela livros: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela livros criada/verificada");
+    }
+
+    string create_paginas = """
+        CREATE TABLE IF NOT EXISTS livro_paginas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            livro_id INTEGER NOT NULL,
+            numero INTEGER NOT NULL,
+            conteudo TEXT NOT NULL DEFAULT '',
+            UNIQUE(livro_id, numero)
+        );
+    """;
+
+    if(bancoJogo.execute(create_paginas) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela livro_paginas: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela livro_paginas criada/verificada");
+    }
+
+    string create_lidos = """
+        CREATE TABLE IF NOT EXISTS livros_lidos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            idioma TEXT NOT NULL DEFAULT 'pt',
+            paginas_lidas INTEGER DEFAULT 0,
+            total_paginas INTEGER DEFAULT 0,
+            concluido INTEGER DEFAULT 0,
+            primeira_leitura DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ultima_leitura DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, slug)
+        );
+    """;
+
+    if(bancoJogo.execute(create_lidos) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela livros_lidos: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela livros_lidos criada/verificada");
+    }
+
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_livros_slug ON livros(slug);");
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_livro_paginas_livro ON livro_paginas(livro_id);");
+    bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_livros_lidos_username ON livros_lidos(username);");
+
+    debug_log("OK - Sistema de livros pronto");
+}
+
+// ---------------------------------------------------------------------
+// Utilitarios de texto
+// ---------------------------------------------------------------------
+
+string livro_sem_acentos(string texto) {
+    string t = texto;
+    t = t.replace("Á", "A"); t = t.replace("À", "A"); t = t.replace("Ã", "A"); t = t.replace("Â", "A"); t = t.replace("Ä", "A");
+    t = t.replace("á", "a"); t = t.replace("à", "a"); t = t.replace("ã", "a"); t = t.replace("â", "a"); t = t.replace("ä", "a");
+    t = t.replace("É", "E"); t = t.replace("Ê", "E"); t = t.replace("È", "E"); t = t.replace("Ë", "E");
+    t = t.replace("é", "e"); t = t.replace("ê", "e"); t = t.replace("è", "e"); t = t.replace("ë", "e");
+    t = t.replace("Í", "I"); t = t.replace("Î", "I"); t = t.replace("Ì", "I"); t = t.replace("Ï", "I");
+    t = t.replace("í", "i"); t = t.replace("î", "i"); t = t.replace("ì", "i"); t = t.replace("ï", "i");
+    t = t.replace("Ó", "O"); t = t.replace("Õ", "O"); t = t.replace("Ô", "O"); t = t.replace("Ò", "O"); t = t.replace("Ö", "O");
+    t = t.replace("ó", "o"); t = t.replace("õ", "o"); t = t.replace("ô", "o"); t = t.replace("ò", "o"); t = t.replace("ö", "o");
+    t = t.replace("Ú", "U"); t = t.replace("Û", "U"); t = t.replace("Ù", "U"); t = t.replace("Ü", "U");
+    t = t.replace("ú", "u"); t = t.replace("û", "u"); t = t.replace("ù", "u"); t = t.replace("ü", "u");
+    t = t.replace("Ç", "C"); t = t.replace("ç", "c");
+    t = t.replace("Ñ", "N"); t = t.replace("ñ", "n");
+    return t;
+}
+
+// Nunca confiar no slug enviado pelo cliente: o protocolo e separado por
+// espaco (cliente) e por pipe (servidor), entao o slug nao pode conter
+// nenhum dos dois.
+string livro_slugify(string texto) {
+    string origem = livro_sem_acentos(texto).lower().trim_whitespace();
+    string permitidos = "abcdefghijklmnopqrstuvwxyz0123456789_-";
+    string resultado = "";
+
+    for(uint i = 0; i < origem.length(); i++) {
+        string ch = origem.substr(i, 1);
+        if(permitidos.find(ch) >= 0) {
+            resultado += ch;
+            continue;
+        }
+        if(resultado.length() == 0) continue;
+        if(resultado.substr(resultado.length() - 1, 1) == "_") continue;
+        resultado += "_";
+    }
+
+    while(resultado.length() > 0 && resultado.substr(resultado.length() - 1, 1) == "_") {
+        resultado = resultado.substr(0, resultado.length() - 1);
+    }
+    if(resultado.length() > LIVRO_MAX_SLUG_CHARS) resultado = resultado.substr(0, LIVRO_MAX_SLUG_CHARS);
+    return resultado;
+}
+
+string livro_normaliza_idioma(string idioma) {
+    string permitidos = "abcdefghijklmnopqrstuvwxyz";
+    string origem = idioma.lower().trim_whitespace();
+    string resultado = "";
+    for(uint i = 0; i < origem.length(); i++) {
+        string ch = origem.substr(i, 1);
+        if(permitidos.find(ch) >= 0) resultado += ch;
+    }
+    if(resultado == "") return LIVRO_IDIOMA_PADRAO;
+    if(resultado.length() > 5) resultado = resultado.substr(0, 5);
+    return resultado;
+}
+
+// O conteudo de uma pagina nunca pode conter uma linha igual ao delimitador,
+// senao o cliente parte a pagina no meio.
+string livro_sanitiza_conteudo(string conteudo) {
+    string t = conteudo.replace("\r\n", "\n");
+    t = t.replace("\r", "\n");
+    string[] linhas = t.split("\n");
+    string resultado = "";
+    for(uint i = 0; i < linhas.length(); i++) {
+        string linha = linhas[i];
+        if(linha.trim_whitespace() == LIVRO_DELIM_PAGINA) linha = " " + linha;
+        if(i > 0) resultado += "\r\n";
+        resultado += linha;
+    }
+    return resultado;
+}
+
+string livro_corta(string texto, uint limite) {
+    string t = texto.trim_whitespace();
+    if(t.length() > limite) t = t.substr(0, limite);
+    return t;
+}
+
+string livro_mensagem_inexistente(string slug) {
+    // O BGT distinguia "libro" de "folleto" na mensagem de erro (readbook()).
+    if(slug.find("folheto") >= 0 || slug.find("folleto") >= 0) {
+        return "Folheto inexistente ou ilegível.";
+    }
+    return "Livro inexistente ou ilegível.";
+}
+
+// ---------------------------------------------------------------------
+// Permissao
+// ---------------------------------------------------------------------
+
+bool livro_pode_editar(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return false;
+    if(check_is_builder_index(player_index)) return true;
+    send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas construtores podem gerenciar livros.", 0);
+    return false;
+}
+
+// ---------------------------------------------------------------------
+// Consultas basicas
+// ---------------------------------------------------------------------
+
+int get_livro_id(string slug, string idioma) {
+    if(!database_initialized || bancoJogo is null) return -1;
+    if(slug == "") return -1;
+    if(idioma == "") idioma = LIVRO_IDIOMA_PADRAO;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT id FROM livros WHERE slug = ? AND idioma = ?;");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query get_livro_id: " + bancoJogo.get_last_error_text());
+        return -1;
+    }
+    stmt.bind_text(1, slug);
+    stmt.bind_text(2, idioma);
+    if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+    return -1;
+}
+
+// Substitui o fracasso duro do BGT, que so tentava books/<idioma>/ e devolvia
+// "libro inexistente" quando o diretorio daquele idioma nao existia.
+int get_livro_id_com_fallback(string slug, string idioma_preferido, string &out idioma_usado) {
+    idioma_usado = livro_normaliza_idioma(idioma_preferido);
+    if(slug == "") return -1;
+
+    int livro_id = get_livro_id(slug, idioma_usado);
+    if(livro_id > 0) return livro_id;
+
+    if(idioma_usado != LIVRO_IDIOMA_PADRAO) {
+        livro_id = get_livro_id(slug, LIVRO_IDIOMA_PADRAO);
+        if(livro_id > 0) {
+            idioma_usado = LIVRO_IDIOMA_PADRAO;
+            return livro_id;
+        }
+    }
+
+    if(!database_initialized || bancoJogo is null) return -1;
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, idioma FROM livros WHERE slug = ? ORDER BY id ASC LIMIT 1;");
+    if(@stmt == null) return -1;
+    stmt.bind_text(1, slug);
+    if(stmt.step() == SQLITE_ROW) {
+        idioma_usado = stmt.column_text(1);
+        return stmt.column_int(0);
+    }
+    return -1;
+}
+
+int contar_paginas(int livro_id) {
+    if(!database_initialized || bancoJogo is null || livro_id <= 0) return 0;
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM livro_paginas WHERE livro_id = ?;");
+    if(@stmt == null) return 0;
+    stmt.bind_int(1, livro_id);
+    if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+    return 0;
+}
+
+int contar_livros_concluidos(string username) {
+    if(!database_initialized || bancoJogo is null) return 0;
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM livros_lidos WHERE username = ? AND concluido = 1;");
+    if(@stmt == null) return 0;
+    stmt.bind_text(1, string_to_lower_case(username));
+    if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+    return 0;
+}
+
+// ---------------------------------------------------------------------
+// Escrita (construtores)
+// ---------------------------------------------------------------------
+
+bool criar_livro(int player_index, string slug, string titulo, string descricao, string musica, string idioma) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: criar_livro - Banco não inicializado");
+        return false;
+    }
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+    titulo = livro_corta(titulo, LIVRO_MAX_TITULO_CHARS);
+    descricao = livro_corta(descricao, LIVRO_MAX_DESCRICAO_CHARS);
+    musica = livro_corta(musica, LIVRO_MAX_MUSICA_CHARS);
+
+    if(slug == "") {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Nome interno do livro inválido. Use letras, números, hífen ou sublinhado.", 0);
+        return false;
+    }
+    if(titulo == "") titulo = slug;
+
+    if(get_livro_id(slug, idioma) > 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Já existe um livro com esse nome neste idioma.", 0);
+        return false;
+    }
+
+    string query = """
+        INSERT INTO livros (slug, idioma, titulo, descricao, musica, autor)
+        VALUES (?, ?, ?, ?, ?, ?);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query criar_livro: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+    stmt.bind_text(1, slug);
+    stmt.bind_text(2, idioma);
+    stmt.bind_text(3, titulo);
+    stmt.bind_text(4, descricao);
+    stmt.bind_text(5, musica);
+    stmt.bind_text(6, p.charname);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao criar livro: " + bancoJogo.get_last_error_text());
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Não foi possível criar o livro.", 0);
+        return false;
+    }
+
+    eadm(p.charname + " criou o livro " + slug);
+    log_action(p.charname, "livro_criar", slug);
+    send_reliable_text(p.peer_id, "msg2 Livro criado.", 0);
+    debug_log("LIVROS: " + p.charname + " criou o livro " + slug + " (" + idioma + ")");
+    return true;
+}
+
+bool atualizar_livro_meta(int player_index, string slug, string idioma, string titulo, string descricao, string musica) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+    titulo = livro_corta(titulo, LIVRO_MAX_TITULO_CHARS);
+    descricao = livro_corta(descricao, LIVRO_MAX_DESCRICAO_CHARS);
+    musica = livro_corta(musica, LIVRO_MAX_MUSICA_CHARS);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+        return false;
+    }
+    if(titulo == "") titulo = slug;
+
+    string query = """
+        UPDATE livros
+        SET titulo = ?, descricao = ?, musica = ?, atualizado_em = CURRENT_TIMESTAMP
+        WHERE id = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+    stmt.bind_text(1, titulo);
+    stmt.bind_text(2, descricao);
+    stmt.bind_text(3, musica);
+    stmt.bind_int(4, livro_id);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao atualizar livro: " + bancoJogo.get_last_error_text());
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Não foi possível atualizar o livro.", 0);
+        return false;
+    }
+
+    eadm(p.charname + " editou o livro " + slug);
+    log_action(p.charname, "livro_editar", slug);
+    send_reliable_text(p.peer_id, "msg2 Livro atualizado.", 0);
+    return true;
+}
+
+bool definir_acesso_livro(int player_index, string slug, string idioma, int publico, int nivel_minimo, string requer_item) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+    if(nivel_minimo < 0) nivel_minimo = 0;
+    if(publico != 0) publico = 1;
+    requer_item = livro_corta(requer_item, 64);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+        return false;
+    }
+
+    string query = """
+        UPDATE livros
+        SET publico = ?, nivel_minimo = ?, requer_item = ?, atualizado_em = CURRENT_TIMESTAMP
+        WHERE id = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+    stmt.bind_int(1, publico);
+    stmt.bind_int(2, nivel_minimo);
+    stmt.bind_text(3, requer_item);
+    stmt.bind_int(4, livro_id);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao definir acesso do livro: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    log_action(p.charname, "livro_acesso", slug);
+    send_reliable_text(p.peer_id, "msg2 Acesso do livro atualizado.", 0);
+    return true;
+}
+
+// UMA pagina por pacote. O BGT mandava o livro inteiro em "/createbook", o que
+// aqui estouraria NETWORK_HANDLER_MAX_MESSAGE_CHARS e o pacote seria
+// descartado em silencio.
+bool definir_pagina(int player_index, string slug, string idioma, int numero, string conteudo) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+        return false;
+    }
+
+    if(numero < 1) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Número de página inválido.", 0);
+        return false;
+    }
+
+    conteudo = livro_sanitiza_conteudo(conteudo);
+    if(conteudo.length() > LIVRO_MAX_PAGINA_CHARS) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Página grande demais (" + conteudo.length() + " caracteres). O máximo é " + LIVRO_MAX_PAGINA_CHARS + ". Divida em mais páginas.", 0);
+        return false;
+    }
+
+    int total = contar_paginas(livro_id);
+    if(numero > total + 1) numero = total + 1;
+
+    string query = """
+        INSERT OR REPLACE INTO livro_paginas (livro_id, numero, conteudo)
+        VALUES (?, ?, ?);
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return false;
+    stmt.bind_int(1, livro_id);
+    stmt.bind_int(2, numero);
+    stmt.bind_text(3, conteudo);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao gravar página: " + bancoJogo.get_last_error_text());
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Não foi possível salvar a página.", 0);
+        return false;
+    }
+
+    sqlite3statement@ touch = bancoJogo.prepare("UPDATE livros SET atualizado_em = CURRENT_TIMESTAMP WHERE id = ?;");
+    if(@touch != null) {
+        touch.bind_int(1, livro_id);
+        touch.step();
+    }
+
+    log_action(p.charname, "livro_pagina", slug + " #" + numero);
+    send_reliable_text(p.peer_id, "msg2 Página " + numero + " salva.", 0);
+    return true;
+}
+
+bool remover_pagina(int player_index, string slug, string idioma, int numero) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+        return false;
+    }
+    if(numero < 1) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Número de página inválido.", 0);
+        return false;
+    }
+
+    sqlite3statement@ del = bancoJogo.prepare("DELETE FROM livro_paginas WHERE livro_id = ? AND numero = ?;");
+    if(@del == null) return false;
+    del.bind_int(1, livro_id);
+    del.bind_int(2, numero);
+    if(del.step() != SQLITE_DONE) {
+        debug_log("ERRO ao remover página: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    sqlite3statement@ renum = bancoJogo.prepare("UPDATE livro_paginas SET numero = numero - 1 WHERE livro_id = ? AND numero > ?;");
+    if(@renum != null) {
+        renum.bind_int(1, livro_id);
+        renum.bind_int(2, numero);
+        renum.step();
+    }
+
+    sqlite3statement@ touch = bancoJogo.prepare("UPDATE livros SET atualizado_em = CURRENT_TIMESTAMP WHERE id = ?;");
+    if(@touch != null) {
+        touch.bind_int(1, livro_id);
+        touch.step();
+    }
+
+    log_action(p.charname, "livro_delpagina", slug + " #" + numero);
+    send_reliable_text(p.peer_id, "msg2 Página removida.", 0);
+    return true;
+}
+
+// O BGT fazia file_copy + file_delete e deixava qualquer referencia orfa.
+// Aqui o slug tambem e propagado para livros_lidos, senao o historico de
+// leitura (e portanto conquistas e quests) perderia o vinculo.
+bool renomear_livro(int player_index, string slug_antigo, string slug_novo, string idioma) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug_antigo = livro_slugify(slug_antigo);
+    slug_novo = livro_slugify(slug_novo);
+    idioma = livro_normaliza_idioma(idioma);
+
+    if(slug_novo == "") {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Novo nome inválido.", 0);
+        return false;
+    }
+    if(slug_antigo == slug_novo) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] O novo nome é igual ao atual.", 0);
+        return false;
+    }
+
+    int livro_id = get_livro_id(slug_antigo, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug_antigo), 0);
+        return false;
+    }
+    if(get_livro_id(slug_novo, idioma) > 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Já existe um livro com esse nome neste idioma.", 0);
+        return false;
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare("UPDATE livros SET slug = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?;");
+    if(@stmt == null) return false;
+    stmt.bind_text(1, slug_novo);
+    stmt.bind_int(2, livro_id);
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao renomear livro: " + bancoJogo.get_last_error_text());
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Não foi possível renomear o livro.", 0);
+        return false;
+    }
+
+    // UPDATE OR REPLACE porque livros_lidos tem UNIQUE(username, slug): se o
+    // jogador ja tinha lido um livro com o nome novo, a linha antiga cede.
+    sqlite3statement@ prop = bancoJogo.prepare("UPDATE OR REPLACE livros_lidos SET slug = ? WHERE slug = ?;");
+    if(@prop != null) {
+        prop.bind_text(1, slug_novo);
+        prop.bind_text(2, slug_antigo);
+        prop.step();
+    }
+
+    eadm(p.charname + " renomeou o livro " + slug_antigo + " para " + slug_novo);
+    log_action(p.charname, "livro_renomear", slug_antigo + " -> " + slug_novo);
+    send_reliable_text(p.peer_id, "msg2 Livro renomeado.", 0);
+    return true;
+}
+
+bool deletar_livro(int player_index, string slug, string idioma) {
+    if(!livro_pode_editar(player_index)) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+        return false;
+    }
+
+    // Sem ON DELETE CASCADE de proposito: nao dependemos de PRAGMA foreign_keys.
+    sqlite3statement@ delp = bancoJogo.prepare("DELETE FROM livro_paginas WHERE livro_id = ?;");
+    if(@delp != null) {
+        delp.bind_int(1, livro_id);
+        delp.step();
+    }
+
+    sqlite3statement@ dell = bancoJogo.prepare("DELETE FROM livros WHERE id = ?;");
+    if(@dell == null) return false;
+    dell.bind_int(1, livro_id);
+    if(dell.step() != SQLITE_DONE) {
+        debug_log("ERRO ao excluir livro: " + bancoJogo.get_last_error_text());
+        send_reliable_text(p.peer_id, "msg2 [ERRO] Não foi possível excluir o livro.", 0);
+        return false;
+    }
+
+    eadm(p.charname + " eliminou o livro " + slug);
+    log_action(p.charname, "livro_deletar", slug);
+    send_reliable_text(p.peer_id, "msg2 Livro eliminado.", 0);
+    return true;
+}
+
+// ---------------------------------------------------------------------
+// Listagens
+// ---------------------------------------------------------------------
+
+void listar_livros(int player_index, string idioma = "", bool apenas_publicos = true) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(p.peer_id, "msg2 Nenhum livro foi encontrado.", 0);
+        return;
+    }
+
+    string filtro_idioma = (idioma == "") ? "" : livro_normaliza_idioma(idioma);
+
+    string query = "SELECT slug, titulo, idioma FROM livros";
+    if(apenas_publicos && filtro_idioma != "") {
+        query = "SELECT slug, titulo, idioma FROM livros WHERE publico = 1 AND idioma = ?";
+    } else if(apenas_publicos) {
+        query = "SELECT slug, titulo, idioma FROM livros WHERE publico = 1";
+    } else if(filtro_idioma != "") {
+        query = "SELECT slug, titulo, idioma FROM livros WHERE idioma = ?";
+    }
+    query += " ORDER BY titulo ASC;";
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query listar_livros: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    if(filtro_idioma != "") stmt.bind_text(1, filtro_idioma);
+
+    string linhas = "";
+    int total = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        string slug = stmt.column_text(0);
+        string titulo = stmt.column_text(1);
+        string idioma_livro = stmt.column_text(2);
+        if(total > 0) linhas += "\r\n";
+        linhas += slug + "|" + titulo + "|" + idioma_livro;
+        total++;
+    }
+
+    if(total == 0) {
+        // Mesma mensagem do "/listbooks" do BGT, em portugues.
+        send_reliable_text(p.peer_id, "msg2 Nenhum livro foi encontrado.", 0);
+        return;
+    }
+
+    // Dois pacotes distintos de proposito: a lista de leitura abre o menu de
+    // leitura no cliente, a de gerenciamento abre o editor do construtor.
+    string pacote = apenas_publicos ? "livro_lista " : "livro_gerenciar ";
+    send_reliable_text(p.peer_id, pacote + linhas, 0);
+}
+
+// ---------------------------------------------------------------------
+// Envio de livro
+// ---------------------------------------------------------------------
+
+// Substitui o cabecalho "title=/description=/music=" + split(conteudo, "page")
+// do BGT por um delimitador de linha inteira.
+string montar_payload_livro(int livro_id, string titulo, string descricao, string musica) {
+    string payload = "titulo=" + titulo + "\r\ndescricao=" + descricao + "\r\nmusica=" + musica;
+    if(!database_initialized || bancoJogo is null || livro_id <= 0) return payload;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT numero, conteudo FROM livro_paginas WHERE livro_id = ? ORDER BY numero ASC;");
+    if(@stmt == null) return payload;
+    stmt.bind_int(1, livro_id);
+
+    int incluidas = 0;
+    bool truncado = false;
+    while(stmt.step() == SQLITE_ROW) {
+        string conteudo = stmt.column_text(1);
+        string bloco = "\r\n" + LIVRO_DELIM_PAGINA + "\r\n" + conteudo;
+        if(payload.length() + bloco.length() > LIVRO_MAX_PAYLOAD_CHARS) {
+            truncado = true;
+            break;
+        }
+        payload += bloco;
+        incluidas++;
+    }
+
+    if(truncado) {
+        payload += "\r\n" + LIVRO_DELIM_PAGINA + "\r\nEste livro é grande demais para ser enviado inteiro. Páginas exibidas: " + incluidas + ".";
+    }
+    return payload;
+}
+
+void enviar_livro_para_leitura(int player_index, string slug) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    if(slug == "" || !database_initialized || bancoJogo is null) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+
+    string idioma_usado = "";
+    int livro_id = get_livro_id_com_fallback(slug, LIVRO_IDIOMA_PADRAO, idioma_usado);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT titulo, descricao, musica, nivel_minimo, requer_item, publico FROM livros WHERE id = ?;");
+    if(@stmt == null) return;
+    stmt.bind_int(1, livro_id);
+    if(stmt.step() != SQLITE_ROW) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+
+    string titulo = stmt.column_text(0);
+    string descricao = stmt.column_text(1);
+    string musica = stmt.column_text(2);
+    int nivel_minimo = stmt.column_int(3);
+    string requer_item = stmt.column_text(4);
+    int publico = stmt.column_int(5);
+
+    if(publico == 0 && !check_is_builder_index(player_index)) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+    if(nivel_minimo > 0 && int(p.level) < nivel_minimo) {
+        send_reliable_text(p.peer_id, "msg2 Você precisa ser nível " + nivel_minimo + " para compreender este livro.", 0);
+        return;
+    }
+    if(requer_item != "" && !p.inv_item_exists(requer_item)) {
+        send_reliable_text(p.peer_id, "msg2 Você precisa de " + requer_item + " para ler este livro.", 0);
+        return;
+    }
+
+    int total_paginas = contar_paginas(livro_id);
+    if(total_paginas <= 0) {
+        send_reliable_text(p.peer_id, "msg2 Este livro está em branco.", 0);
+        return;
+    }
+
+    string payload = "slug=" + slug + "\r\nidioma=" + idioma_usado + "\r\n" + montar_payload_livro(livro_id, titulo, descricao, musica);
+    send_reliable_text(p.peer_id, "livro_abrir " + payload, 0);
+
+    // Marca a abertura do livro; o progresso real chega depois em
+    // "LIVRO:progresso", quando o jogador fecha o leitor.
+    registrar_leitura(player_index, slug, idioma_usado, 0, total_paginas);
+    debug_log("LIVROS: " + p.charname + " abriu o livro " + slug + " (" + idioma_usado + ", " + total_paginas + " páginas)");
+}
+
+// As paginas vao ANTES do pacote de metadados de proposito: o canal e
+// confiavel e ordenado, entao quando o cliente recebe "livro_dados" ele ja
+// tem todas as paginas no buffer e abre o editor sem precisar esperar.
+void enviar_livro_para_edicao(int player_index, string slug, string idioma) {
+    if(!livro_pode_editar(player_index)) return;
+    if(!database_initialized || bancoJogo is null) return;
+
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    idioma = livro_normaliza_idioma(idioma);
+
+    int livro_id = get_livro_id(slug, idioma);
+    if(livro_id <= 0) {
+        string idioma_usado = "";
+        livro_id = get_livro_id_com_fallback(slug, idioma, idioma_usado);
+        if(livro_id <= 0) {
+            send_reliable_text(p.peer_id, "msg2 [ERRO] " + livro_mensagem_inexistente(slug), 0);
+            return;
+        }
+        idioma = idioma_usado;
+    }
+
+    sqlite3statement@ meta = bancoJogo.prepare("SELECT titulo, descricao, musica FROM livros WHERE id = ?;");
+    if(@meta == null) return;
+    meta.bind_int(1, livro_id);
+    if(meta.step() != SQLITE_ROW) return;
+
+    string titulo = meta.column_text(0);
+    string descricao = meta.column_text(1);
+    string musica = meta.column_text(2);
+
+    int total = 0;
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT numero, conteudo FROM livro_paginas WHERE livro_id = ? ORDER BY numero ASC;");
+    if(@stmt != null) {
+        stmt.bind_int(1, livro_id);
+        while(stmt.step() == SQLITE_ROW) {
+            int numero = stmt.column_int(0);
+            string conteudo = stmt.column_text(1);
+            send_reliable_text(p.peer_id, "livro_pagina " + slug + "|" + numero + "|" + conteudo, 0);
+            total++;
+        }
+    }
+
+    send_reliable_text(p.peer_id, "livro_dados " + slug + "|" + idioma + "|" + titulo + "|" + descricao + "|" + musica + "|" + total, 0);
+}
+
+// ---------------------------------------------------------------------
+// Registro de leitura, conquistas e quests
+// ---------------------------------------------------------------------
+
+void registrar_leitura(int player_index, string slug, string idioma, int paginas_lidas, int total_paginas) {
+    if(!database_initialized || bancoJogo is null) return;
+    if(player_index < 0 || player_index >= int(players.length())) return;
+
+    player@ p = @players[player_index];
+    slug = livro_slugify(slug);
+    if(slug == "") return;
+    idioma = livro_normaliza_idioma(idioma);
+
+    string username = string_to_lower_case(p.charname);
+
+    int anterior = 0;
+    int total_anterior = 0;
+    bool ja_concluido = false;
+    bool existia = false;
+
+    sqlite3statement@ sel = bancoJogo.prepare("SELECT paginas_lidas, total_paginas, concluido FROM livros_lidos WHERE username = ? AND slug = ?;");
+    if(@sel != null) {
+        sel.bind_text(1, username);
+        sel.bind_text(2, slug);
+        if(sel.step() == SQLITE_ROW) {
+            anterior = sel.column_int(0);
+            total_anterior = sel.column_int(1);
+            ja_concluido = (sel.column_int(2) == 1);
+            existia = true;
+        }
+    }
+
+    if(total_paginas <= 0) total_paginas = total_anterior;
+    if(total_paginas < 0) total_paginas = 0;
+    if(paginas_lidas < anterior) paginas_lidas = anterior;
+    if(paginas_lidas < 0) paginas_lidas = 0;
+    if(total_paginas > 0 && paginas_lidas > total_paginas) paginas_lidas = total_paginas;
+
+    int concluido = (total_paginas > 0 && paginas_lidas >= total_paginas) ? 1 : 0;
+    if(ja_concluido) concluido = 1;
+
+    if(existia) {
+        string query = """
+            UPDATE livros_lidos
+            SET idioma = ?, paginas_lidas = ?, total_paginas = ?, concluido = ?, ultima_leitura = CURRENT_TIMESTAMP
+            WHERE username = ? AND slug = ?;
+        """;
+        sqlite3statement@ stmt = bancoJogo.prepare(query);
+        if(@stmt == null) return;
+        stmt.bind_text(1, idioma);
+        stmt.bind_int(2, paginas_lidas);
+        stmt.bind_int(3, total_paginas);
+        stmt.bind_int(4, concluido);
+        stmt.bind_text(5, username);
+        stmt.bind_text(6, slug);
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao atualizar livros_lidos: " + bancoJogo.get_last_error_text());
+            return;
+        }
+    } else {
+        string query = """
+            INSERT INTO livros_lidos (username, slug, idioma, paginas_lidas, total_paginas, concluido)
+            VALUES (?, ?, ?, ?, ?, ?);
+        """;
+        sqlite3statement@ stmt = bancoJogo.prepare(query);
+        if(@stmt == null) return;
+        stmt.bind_text(1, username);
+        stmt.bind_text(2, slug);
+        stmt.bind_text(3, idioma);
+        stmt.bind_int(4, paginas_lidas);
+        stmt.bind_int(5, total_paginas);
+        stmt.bind_int(6, concluido);
+        if(stmt.step() != SQLITE_DONE) {
+            debug_log("ERRO ao inserir em livros_lidos: " + bancoJogo.get_last_error_text());
+            return;
+        }
+    }
+
+    if(concluido == 1 && !ja_concluido) {
+        int total_concluidos = contar_livros_concluidos(username);
+        // set_ e nao update_: total_concluidos e valor absoluto e
+        // update_achievement_progress() soma ao que ja existe.
+        set_achievement_progress(p.charname, "livros_lidos", total_concluidos);
+        quest_update_livro(p.charname, slug);
+        send_reliable_text(p.peer_id, "msg2 Você terminou de ler " + slug + ".", 0);
+        debug_log("LIVROS: " + p.charname + " concluiu a leitura de " + slug + " (total: " + total_concluidos + ")");
+    }
+}
+
+// Espelho de quest_update_explore() (quests.nvgt), com a chave "livro:<slug>".
+void quest_update_livro(string player_name, string slug) {
+    player_quest_log@ qlog = get_player_quest_log(player_name);
+    string objetivo = "livro:" + slug;
+
+    for(uint i = 0; i < qlog.active_quests.length(); i++) {
+        quest_definition@ qdef = get_quest_by_id(qlog.active_quests[i].quest_id);
+        if(qdef is null || qdef.type != QUEST_EXPLORE) continue;
+
+        if(qdef.objectives.exists(objetivo)) {
+            qlog.active_quests[i].update_progress(objetivo, 1);
+
+            int player_idx = get_player_index_from(player_name);
+            if(player_idx >= 0) {
+                send_reliable_text(players[player_idx].peer_id, "msg2 [Quest] Livro lido: " + slug + "!", 0);
+                send_reliable_text(players[player_idx].peer_id, "msg2 [Quest] " + qdef.name + " - Objetivo completo!", 0);
+            }
+        }
+    }
+
+    qlog.save();
+}
+
+// ---------------------------------------------------------------------
+// Itens que sao livros
+// ---------------------------------------------------------------------
+
+// O catalogo de itens (items.nvgt) nao tem tipo nem categoria "livro", entao a
+// convencao e o nome do item, como no BGT (string_contains(nitem, "libro")).
+// Aceita "livro_<slug>" e "folheto_<slug>", alem dos nomes legados em espanhol.
+bool item_e_livro(string item_name) {
+    string n = string_to_lower_case(item_name.trim_whitespace());
+    if(n == "") return false;
+    return n.find("livro") >= 0 || n.find("folheto") >= 0 || n.find("libro") >= 0 || n.find("folleto") >= 0;
+}
+
+string livro_slug_do_item(string item_name) {
+    string n = string_to_lower_case(item_name.trim_whitespace());
+    string[] prefixos = {"livro_", "folheto_", "libro_", "folleto_"};
+    for(uint i = 0; i < prefixos.length(); i++) {
+        if(n.find(prefixos[i]) == 0) {
+            return livro_slugify(n.substr(prefixos[i].length()));
+        }
+    }
+    return livro_slugify(n);
+}
+
+// ---------------------------------------------------------------------
+// Comandos de jogador
+// ---------------------------------------------------------------------
+
+void cmd_livros(int player_index) {
+    listar_livros(player_index, "", true);
+}
+
+void cmd_ler(int player_index, string slug) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    if(slug.trim_whitespace() == "") {
+        players[player_index].send_message("say Uso: /ler <nome_do_livro>");
+        return;
+    }
+    enviar_livro_para_leitura(player_index, slug);
+}
+
+void cmd_livroinfo(int player_index, string slug) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
+
+    slug = livro_slugify(slug);
+    if(slug == "" || !database_initialized || bancoJogo is null) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+
+    string idioma_usado = "";
+    int livro_id = get_livro_id_com_fallback(slug, LIVRO_IDIOMA_PADRAO, idioma_usado);
+    if(livro_id <= 0) {
+        send_reliable_text(p.peer_id, "msg2 " + livro_mensagem_inexistente(slug), 0);
+        return;
+    }
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT titulo, descricao, autor, nivel_minimo, requer_item FROM livros WHERE id = ?;");
+    if(@stmt == null) return;
+    stmt.bind_int(1, livro_id);
+    if(stmt.step() != SQLITE_ROW) return;
+
+    string titulo = stmt.column_text(0);
+    string descricao = stmt.column_text(1);
+    string autor = stmt.column_text(2);
+    int nivel_minimo = stmt.column_int(3);
+    string requer_item = stmt.column_text(4);
+    int total = contar_paginas(livro_id);
+
+    send_reliable_text(p.peer_id, "msg2 === " + titulo + " ===", 0);
+    if(descricao != "") send_reliable_text(p.peer_id, "msg2 " + descricao, 0);
+    send_reliable_text(p.peer_id, "msg2 Nome interno: " + slug + " (" + idioma_usado + ")", 0);
+    send_reliable_text(p.peer_id, "msg2 Autor: " + autor, 0);
+    send_reliable_text(p.peer_id, "msg2 Páginas: " + total, 0);
+    if(nivel_minimo > 0) send_reliable_text(p.peer_id, "msg2 Nível mínimo: " + nivel_minimo, 0);
+    if(requer_item != "") send_reliable_text(p.peer_id, "msg2 Requer o item: " + requer_item, 0);
+
+    sqlite3statement@ lido = bancoJogo.prepare("SELECT paginas_lidas, total_paginas, concluido FROM livros_lidos WHERE username = ? AND slug = ?;");
+    if(@lido != null) {
+        lido.bind_text(1, string_to_lower_case(p.charname));
+        lido.bind_text(2, slug);
+        if(lido.step() == SQLITE_ROW) {
+            int lidas = lido.column_int(0);
+            int total_registrado = lido.column_int(1);
+            bool concluido = (lido.column_int(2) == 1);
+            send_reliable_text(p.peer_id, "msg2 Sua leitura: " + lidas + "/" + total_registrado + (concluido ? " (concluído)" : " (em andamento)"), 0);
+        } else {
+            send_reliable_text(p.peer_id, "msg2 Você ainda não leu este livro.", 0);
+        }
+    }
+    send_reliable_text(p.peer_id, "msg2 ===", 0);
+}
+
+void cmd_meuslivros(int player_index) {
+    if(player_index < 0 || player_index >= int(players.length())) return;
+    player@ p = @players[player_index];
+
+    if(!database_initialized || bancoJogo is null) {
+        send_reliable_text(p.peer_id, "msg2 Você ainda não leu nenhum livro.", 0);
+        return;
+    }
+
+    string query = """
+        SELECT slug, paginas_lidas, total_paginas, concluido
+        FROM livros_lidos
+        WHERE username = ?
+        ORDER BY ultima_leitura DESC;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) return;
+    stmt.bind_text(1, string_to_lower_case(p.charname));
+
+    int total = 0;
+    int concluidos = 0;
+    send_reliable_text(p.peer_id, "msg2 === Seus livros ===", 0);
+    while(stmt.step() == SQLITE_ROW) {
+        string slug = stmt.column_text(0);
+        int lidas = stmt.column_int(1);
+        int total_paginas = stmt.column_int(2);
+        bool concluido = (stmt.column_int(3) == 1);
+        if(concluido) concluidos++;
+        send_reliable_text(p.peer_id, "msg2 - " + slug + ": " + lidas + "/" + total_paginas + (concluido ? " (concluído)" : " (em andamento)"), 0);
+        total++;
+    }
+
+    if(total == 0) {
+        send_reliable_text(p.peer_id, "msg2 Você ainda não leu nenhum livro.", 0);
+        return;
+    }
+    send_reliable_text(p.peer_id, "msg2 Total: " + total + " livros, " + concluidos + " concluídos.", 0);
+    send_reliable_text(p.peer_id, "msg2 ===", 0);
+}
+
+// ---------------------------------------------------------------------
+// Comandos de construtor
+// ---------------------------------------------------------------------
+
+void cmd_criarlivro(int player_index, string slug, string titulo) {
+    criar_livro(player_index, slug, titulo, "", "", LIVRO_IDIOMA_PADRAO);
+}
+
+void cmd_editarlivro(int player_index, string slug) {
+    enviar_livro_para_edicao(player_index, slug, LIVRO_IDIOMA_PADRAO);
+}
+
+void cmd_paginalivro(int player_index, string slug, int numero, string texto) {
+    definir_pagina(player_index, slug, LIVRO_IDIOMA_PADRAO, numero, texto);
+}
+
+void cmd_delpaginalivro(int player_index, string slug, int numero) {
+    remover_pagina(player_index, slug, LIVRO_IDIOMA_PADRAO, numero);
+}
+
+void cmd_renomearlivro(int player_index, string slug_antigo, string slug_novo) {
+    renomear_livro(player_index, slug_antigo, slug_novo, LIVRO_IDIOMA_PADRAO);
+}
+
+void cmd_dellivro(int player_index, string slug) {
+    deletar_livro(player_index, slug, LIVRO_IDIOMA_PADRAO);
+}
+
+// ---------------------------------------------------------------------
+// Handler de rede (mesmo formato de handle_party/handle_guild)
+// ---------------------------------------------------------------------
+
+void handle_livro(player@ p, string data) {
+
+    if(!network_require_non_empty(p, "handle_livro", data)) return;
+    string[] parts = split_pipe_trimmed(data);
+    if(parts.length() < 1 || parts[0] == "") {
+        network_log_invalid_payload(p, "handle_livro", "acao ausente", data);
+        return;
+    }
+
+    string action = parts[0];
+
+    debug_log("[LIVRO] " + p.name + " - livro: " + action);
+
+    int player_index = get_player_index_from(p.charname);
+    if(player_index < 0) return;
+
+    if(action == "listar") {
+        bool gerenciar = (parts.length() >= 2 && parts[1] == "gerenciar");
+        if(gerenciar) {
+            if(!livro_pode_editar(player_index)) return;
+            listar_livros(player_index, "", false);
+        } else {
+            listar_livros(player_index, "", true);
+        }
+    } else if(action == "ler" && parts.length() >= 2) {
+        enviar_livro_para_leitura(player_index, parts[1]);
+    } else if(action == "info" && parts.length() >= 2) {
+        cmd_livroinfo(player_index, parts[1]);
+    } else if(action == "meus") {
+        cmd_meuslivros(player_index);
+    } else if(action == "progresso" && parts.length() >= 3) {
+        int pagina = 0;
+        if(!network_try_parse_int(parts[2], pagina) || pagina < 0) {
+            network_reject_invalid_payload(p, "handle_livro", "progresso inválido", data);
+            return;
+        }
+        registrar_leitura(player_index, parts[1], LIVRO_IDIOMA_PADRAO, pagina, 0);
+    } else if(action == "criar" && parts.length() >= 3) {
+        string descricao = parts.length() >= 4 ? parts[3] : "";
+        string musica = parts.length() >= 5 ? parts[4] : "";
+        string idioma = parts.length() >= 6 ? parts[5] : LIVRO_IDIOMA_PADRAO;
+        criar_livro(player_index, parts[1], parts[2], descricao, musica, idioma);
+    } else if(action == "meta" && parts.length() >= 4) {
+        string descricao = parts.length() >= 5 ? parts[4] : "";
+        string musica = parts.length() >= 6 ? parts[5] : "";
+        atualizar_livro_meta(player_index, parts[1], parts[2], parts[3], descricao, musica);
+    } else if(action == "acesso" && parts.length() >= 5) {
+        int publico = 1;
+        int nivel = 0;
+        if(!network_try_parse_int(parts[3], publico) || !network_try_parse_int(parts[4], nivel)) {
+            network_reject_invalid_payload(p, "handle_livro", "acesso inválido", data);
+            return;
+        }
+        string requer_item = parts.length() >= 6 ? parts[5] : "";
+        definir_acesso_livro(player_index, parts[1], parts[2], publico, nivel, requer_item);
+    } else if(action == "pagina" && parts.length() >= 5) {
+        int numero = 0;
+        if(!network_try_parse_int(parts[3], numero) || numero < 1) {
+            network_reject_invalid_payload(p, "handle_livro", "numero de pagina inválido", data);
+            return;
+        }
+        // O texto pode conter pipes: tudo a partir do indice 4 volta a ser um so.
+        string texto = join_parts_from(parts, 4, "|");
+        definir_pagina(player_index, parts[1], parts[2], numero, texto);
+    } else if(action == "delpagina" && parts.length() >= 4) {
+        int numero = 0;
+        if(!network_try_parse_int(parts[3], numero) || numero < 1) {
+            network_reject_invalid_payload(p, "handle_livro", "numero de pagina inválido", data);
+            return;
+        }
+        remover_pagina(player_index, parts[1], parts[2], numero);
+    } else if(action == "renomear" && parts.length() >= 3) {
+        string idioma = parts.length() >= 4 ? parts[3] : LIVRO_IDIOMA_PADRAO;
+        renomear_livro(player_index, parts[1], parts[2], idioma);
+    } else if(action == "deletar" && parts.length() >= 2) {
+        string idioma = parts.length() >= 3 ? parts[2] : LIVRO_IDIOMA_PADRAO;
+        deletar_livro(player_index, parts[1], idioma);
+    } else if(action == "editar" && parts.length() >= 2) {
+        string idioma = parts.length() >= 3 ? parts[2] : LIVRO_IDIOMA_PADRAO;
+        enviar_livro_para_edicao(player_index, parts[1], idioma);
+    } else {
+        network_send_action_error(p, "Livro", action);
+    }
+}

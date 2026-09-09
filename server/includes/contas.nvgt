@@ -1,0 +1,990 @@
+// ============================================================================
+// Sistema de contas
+// Migrado de:
+//   - re_server_test.bgt: accounts_delete() (arquivamento/exclusao por inatividade),
+//     have_acount() (limite de contas por dispositivo), changepassword()/change_password()
+//     (troca de senha) e reset_player_password() (senha temporaria de administrador).
+//   - includes/login.bgt: restauracao automatica da conta arquivada (players2 -> players).
+//   - includes/voids.bgt (/hm): listagem de contas que compartilham o mesmo dispositivo.
+//
+// Adaptacoes obrigatorias para o projeto NVGT:
+//   - Nao existem os diretorios players/ e players2/. Tudo vira coluna na tabela players
+//     (status, arquivada_em, computer_id, must_change_password, password_changed_at)
+//     mais a tabela de auditoria contas_eventos.
+//   - Os arquivos senha.usr / connected.usr / compid.usr sao substituidos por
+//     password_hash + password_salt, last_login e computer_id.
+//   - O BGT rodava a varredura a cada 60 segundos. Aqui o intervalo e de 1 hora e a
+//     primeira execucao em producao deve ser feita a mao com /purgarcontas simular.
+// ============================================================================
+
+// Dias sem login para a conta ser arquivada (BGT: diff_months >= 6).
+const int CONTA_DIAS_ATE_ARQUIVAR = 180;
+// Dias arquivada antes da exclusao definitiva (BGT: diff_months >= 1 em players2).
+const int CONTA_DIAS_ATE_EXCLUIR = 30;
+// Limite de contas por dispositivo (BGT: "no puedes tener mas de 2 cuentas").
+const int CONTA_MAX_POR_DISPOSITIVO = 2;
+// O limite so pode ser aplicado depois que o pacote xt55 passar a enviar o computer_id.
+const bool CONTA_LIMITE_DISPOSITIVO_ATIVO = false;
+// Intervalo da varredura automatica (1 hora).
+const uint CONTA_INTERVALO_VARREDURA = 3600000;
+// Espera minima entre duas trocas de senha do mesmo jogador (5 minutos).
+const uint CONTA_COOLDOWN_TROCA_SENHA = 300000;
+
+const uint CONTA_SENHA_MIN = 6;
+const uint CONTA_SENHA_MAX = 256;
+const int CONTA_SENHA_TEMPORARIA_TAM = 10;
+const int CONTA_MAX_ITENS_RELATORIO = 25;
+
+const string CONTA_STATUS_ATIVA = "ativa";
+const string CONTA_STATUS_ARQUIVADA = "arquivada";
+
+timer tempo_varredura_contas;
+
+string[] contas_cooldown_nomes;
+uint64[] contas_cooldown_ate;
+
+// ============================================================================
+// Tabela de auditoria
+// ============================================================================
+
+void criar_tabela_contas() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: criar_tabela_contas - Banco não inicializado");
+        return;
+    }
+
+    debug_log("Criando tabela contas_eventos...");
+
+    string create_table = """
+        CREATE TABLE IF NOT EXISTS contas_eventos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            evento TEXT NOT NULL,
+            detalhes TEXT DEFAULT '',
+            autor TEXT DEFAULT 'sistema',
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """;
+
+    if(bancoJogo.execute(create_table) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela contas_eventos: " + bancoJogo.get_last_error_text());
+    } else {
+        debug_log("OK - Tabela contas_eventos criada/verificada");
+    }
+
+    string create_index = "CREATE INDEX IF NOT EXISTS idx_contas_eventos_username ON contas_eventos(username);";
+    bancoJogo.execute(create_index);
+}
+
+void registrar_evento_conta(string username, string evento, string detalhes = "", string autor = "sistema") {
+    if(!database_initialized || bancoJogo is null) return;
+
+    username = username.trim_whitespace();
+    if(username == "" || evento == "") return;
+
+    string query = "INSERT INTO contas_eventos (username, evento, detalhes, autor) VALUES (?, ?, ?, ?);";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar insert de evento | " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    stmt.bind_text(1, username);
+    stmt.bind_text(2, evento);
+    stmt.bind_text(3, detalhes);
+    stmt.bind_text(4, autor);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao gravar evento '" + evento + "' de " + username + " | " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    debug_log("CONTAS: evento '" + evento + "' registrado para " + username + " (autor: " + autor + ")");
+}
+
+string[] get_eventos_conta(string username, int limite = 10) {
+    string[] linhas;
+    if(!database_initialized || bancoJogo is null) return linhas;
+    if(limite <= 0) limite = 10;
+
+    string query = """
+        SELECT evento, detalhes, autor, criado_em
+        FROM contas_eventos
+        WHERE LOWER(username) = ?
+        ORDER BY id DESC
+        LIMIT ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return linhas;
+
+    stmt.bind_text(1, string_to_lower_case(username.trim_whitespace()));
+    stmt.bind_int(2, limite);
+
+    while(stmt.step() == SQLITE_ROW) {
+        string evento = stmt.column_text(0);
+        string detalhes = stmt.column_text(1);
+        string autor = stmt.column_text(2);
+        string quando = stmt.column_text(3);
+        string linha = quando + " - " + evento + " (por " + autor + ")";
+        if(detalhes != "") linha += ": " + detalhes;
+        linhas.insert_last(linha);
+    }
+
+    return linhas;
+}
+
+// ============================================================================
+// Consultas basicas da conta
+// ============================================================================
+
+// Versao case-insensitive de player_exists_in_database() (db_auth.nvgt:13, que usa '=').
+bool conta_existe(string username) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = username.trim_whitespace();
+    if(username == "") return false;
+
+    string query = "SELECT COUNT(*) FROM players WHERE LOWER(username) = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar conta_existe | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        return (stmt.column_int(0) > 0);
+    }
+
+    return false;
+}
+
+// players.username nao tem COLLATE NOCASE. Toda operacao destrutiva precisa da caixa exata.
+string get_username_real(string username) {
+    if(!database_initialized || bancoJogo is null) return "";
+
+    username = username.trim_whitespace();
+    if(username == "") return "";
+
+    string query = "SELECT username FROM players WHERE LOWER(username) = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return "";
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0);
+    }
+
+    return "";
+}
+
+int get_conta_id(string username) {
+    if(!database_initialized || bancoJogo is null) return -1;
+
+    username = username.trim_whitespace();
+    if(username == "") return -1;
+
+    string query = "SELECT id FROM players WHERE LOWER(username) = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return -1;
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+
+    return -1;
+}
+
+// Retorna "" quando a conta nao existe (ou quando a coluna status ainda nao foi migrada).
+string get_status_conta(string username) {
+    if(!database_initialized || bancoJogo is null) return "";
+
+    username = username.trim_whitespace();
+    if(username == "") return "";
+
+    string query = "SELECT status FROM players WHERE LOWER(username) = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return "";
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        string status = stmt.column_text(0).trim_whitespace();
+        if(status == "") return CONTA_STATUS_ATIVA;
+        return string_to_lower_case(status);
+    }
+
+    return "";
+}
+
+bool conta_exige_troca_senha(string username) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    username = username.trim_whitespace();
+    if(username == "") return false;
+
+    string query = "SELECT must_change_password FROM players WHERE LOWER(username) = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return false;
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        return (stmt.column_int(0) == 1);
+    }
+
+    return false;
+}
+
+bool marcar_troca_senha_obrigatoria(string username, bool obrigatorio) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string real = get_username_real(username);
+    if(real == "") return false;
+
+    string query = "UPDATE players SET must_change_password = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar must_change_password | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_int(1, obrigatorio ? 1 : 0);
+    stmt.bind_text(2, real);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao gravar must_change_password de " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    return true;
+}
+
+string get_computer_id_conta(string username) {
+    if(!database_initialized || bancoJogo is null) return "";
+
+    username = username.trim_whitespace();
+    if(username == "") return "";
+
+    string query = "SELECT computer_id FROM players WHERE LOWER(username) = ? LIMIT 1;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return "";
+
+    stmt.bind_text(1, string_to_lower_case(username));
+
+    if(stmt.step() == SQLITE_ROW) {
+        return stmt.column_text(0).trim_whitespace();
+    }
+
+    return "";
+}
+
+// ============================================================================
+// Senha
+// ============================================================================
+
+// PRIMITIVA CENTRAL. Recebe SEMPRE o hash que o cliente calculou (nunca texto puro),
+// gera um salt novo e regrava password_hash/password_salt no mesmo formato do login.
+bool definir_senha_conta(string username, string hash_do_cliente) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    hash_do_cliente = hash_do_cliente.trim_whitespace();
+    if(hash_do_cliente == "") return false;
+
+    string real = get_username_real(username);
+    if(real == "") {
+        debug_log("CONTAS: definir_senha_conta - conta inexistente: " + username);
+        return false;
+    }
+
+    string novo_salt = generate_salt();
+    string novo_hash = hash_password_with_salt(hash_do_cliente, novo_salt);
+
+    string query = "UPDATE players SET password_hash = ?, password_salt = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar update de senha | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, novo_hash);
+    stmt.bind_text(2, novo_salt);
+    stmt.bind_text(3, real);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao gravar nova senha de " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    // Metadados sao best-effort: se a migracao ainda nao rodou, a senha ja foi trocada.
+    string query_meta = "UPDATE players SET password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0 WHERE username = ?;";
+    sqlite3statement@ stmt_meta = bancoJogo.prepare(query_meta);
+    if(stmt_meta is null) {
+        debug_log("CONTAS: AVISO - colunas password_changed_at/must_change_password ausentes (migracao pendente)");
+    } else {
+        stmt_meta.bind_text(1, real);
+        if(stmt_meta.step() != SQLITE_DONE) {
+            debug_log("CONTAS: AVISO - falha ao gravar metadados de senha de " + real);
+        }
+    }
+
+    debug_log("CONTAS: senha regravada para " + real + " (hash omitido por seguranca)");
+    return true;
+}
+
+// Espelha exatamente a comparacao de handle_login (auth.nvgt:101-108), incluindo o
+// fallback legado salt + "::" + senha e o caso de salt vazio.
+bool verificar_senha_conta(string username, string hash_do_cliente) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    hash_do_cliente = hash_do_cliente.trim_whitespace();
+    if(hash_do_cliente == "") return false;
+
+    string real = get_username_real(username);
+    if(real == "") return false;
+
+    string stored_hash = get_player_password_hash(real);
+    string stored_salt = get_player_password_salt(real);
+    if(stored_hash == "") return false;
+
+    if(stored_salt != "" && stored_salt.length() > 0) {
+        string calculated_hash = hash_password_with_salt(hash_do_cliente, stored_salt);
+        string legacy_hash = stored_salt + "::" + hash_do_cliente;
+        return (calculated_hash == stored_hash || legacy_hash == stored_hash);
+    }
+
+    return (hash_do_cliente == stored_hash);
+}
+
+int indice_cooldown_conta(string username_lower) {
+    for(uint i = 0; i < contas_cooldown_nomes.length(); i++) {
+        if(contas_cooldown_nomes[i] == username_lower) return int(i);
+    }
+    return -1;
+}
+
+// Retorna os segundos que faltam para o jogador poder trocar a senha de novo (0 = liberado).
+int cooldown_restante_troca_senha(string username) {
+    string chave = string_to_lower_case(username.trim_whitespace());
+    if(chave == "") return 0;
+
+    int idx = indice_cooldown_conta(chave);
+    if(idx < 0) return 0;
+
+    uint64 agora = ticks();
+    uint64 fim = contas_cooldown_ate[uint(idx)];
+
+    if(agora >= fim) {
+        contas_cooldown_nomes.remove_at(uint(idx));
+        contas_cooldown_ate.remove_at(uint(idx));
+        return 0;
+    }
+
+    return int((fim - agora) / 1000) + 1;
+}
+
+void marcar_cooldown_troca_senha(string username) {
+    string chave = string_to_lower_case(username.trim_whitespace());
+    if(chave == "") return;
+
+    uint64 fim = ticks() + CONTA_COOLDOWN_TROCA_SENHA;
+    int idx = indice_cooldown_conta(chave);
+
+    if(idx >= 0) {
+        contas_cooldown_ate[uint(idx)] = fim;
+        return;
+    }
+
+    contas_cooldown_nomes.insert_last(chave);
+    contas_cooldown_ate.insert_last(fim);
+}
+
+void conta_msg(int index, string texto) {
+    if(index < 0 || index >= int(players.length())) return;
+    send_reliable_text(players[index].peer_id, "msgnormal " + texto, 0);
+}
+
+// /mudarsenha <senha_atual> <senha_nova> - os dois argumentos sao HASHES vindos do cliente.
+// Migra change_password() de re_server_test.bgt:759.
+void cmd_mudarsenha(int index, string hash_atual, string hash_nova) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string username = players[index].charname;
+
+    hash_atual = hash_atual.trim_whitespace();
+    hash_nova = hash_nova.trim_whitespace();
+
+    if(hash_atual.length() < CONTA_SENHA_MIN || hash_atual.length() > CONTA_SENHA_MAX ||
+       hash_nova.length() < CONTA_SENHA_MIN || hash_nova.length() > CONTA_SENHA_MAX) {
+        conta_msg(index, "Erro: Senha invalida.");
+        return;
+    }
+
+    if(hash_atual == hash_nova) {
+        conta_msg(index, "As senhas sao iguais, por favor escreva uma senha diferente.");
+        return;
+    }
+
+    int restante = cooldown_restante_troca_senha(username);
+    if(restante > 0) {
+        conta_msg(index, "Aguarde " + restante + " segundos antes de trocar sua senha novamente.");
+        return;
+    }
+
+    if(!conta_existe(username)) {
+        conta_msg(index, "Erro: Conta nao encontrada.");
+        return;
+    }
+
+    if(!verificar_senha_conta(username, hash_atual)) {
+        conta_msg(index, "Erro: Senha atual errada.");
+        registrar_evento_conta(get_username_real(username), "senha_alterada_falhou", "senha atual incorreta", username);
+        log_to_database("WARNING", "AUTH", "Tentativa de troca de senha com senha atual incorreta", 0, username);
+        return;
+    }
+
+    if(!definir_senha_conta(username, hash_nova)) {
+        conta_msg(index, "Nao foi possivel alterar sua senha. Tente novamente mais tarde.");
+        return;
+    }
+
+    marcar_cooldown_troca_senha(username);
+
+    send_reliable_text(players[index].peer_id, "pass_changed", 0);
+    conta_msg(index, "Sua senha foi alterada com sucesso.");
+
+    string real = get_username_real(username);
+    registrar_evento_conta(real, "senha_alterada", "troca feita pelo proprio jogador", real);
+    log_to_database("INFO", "AUTH", "Senha alterada pelo proprio jogador", 0, real);
+}
+
+// /resetarsenha <jogador> - migra reset_player_password() de re_server_test.bgt:732.
+// A senha temporaria vai APENAS para o peer do admin solicitante (nunca para eadm/broadcast).
+void cmd_resetarsenha(int index, string alvo) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    if(alvo == "") {
+        conta_msg(index, "Uso: /resetarsenha <jogador>");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    if(string_to_lower_case(real) != string_to_lower_case(autor)) {
+        if(get_player_role_level(real) >= get_player_role_level(autor)) {
+            conta_msg(index, "Você não pode redefinir a senha de alguem com cargo igual ou superior ao seu.");
+            return;
+        }
+    }
+
+    string temporaria = generate_token(CONTA_SENHA_TEMPORARIA_TAM, TOKEN_CHARACTERS | TOKEN_NUMBERS);
+    if(temporaria == "") {
+        conta_msg(index, "Erro ao gerar a senha temporaria. Tente novamente.");
+        return;
+    }
+
+    // O cliente sempre envia o hash da senha, nunca o texto puro (cliente/includes/net.nvgt:316),
+    // entao a senha temporaria precisa ser hasheada aqui do mesmo jeito antes de ser gravada.
+    if(!definir_senha_conta(real, hash_password(temporaria))) {
+        conta_msg(index, "Erro ao redefinir a senha de " + real + ".");
+        return;
+    }
+
+    marcar_troca_senha_obrigatoria(real, true);
+
+    conta_msg(index, "Senha temporaria de " + real + ": " + temporaria);
+    conta_msg(index, "Entregue esta senha apenas ao dono da conta. Ela nao foi enviada a mais ninguem.");
+
+    int alvo_index = get_player_index_from(real);
+    if(alvo_index >= 0) {
+        send_reliable_text(players[alvo_index].peer_id, "msgnormal Sua senha foi redefinida por um administrador. Entre em contato com a equipe para receber a senha temporaria.", 0);
+        send_reliable_text(players[alvo_index].peer_id, "terminate senha_resetada", 0);
+        force_disconnect_and_cleanup(players[alvo_index].peer_id, true);
+    }
+
+    eadm(autor + " redefiniu a senha da conta " + real + ".");
+    registrar_evento_conta(real, "senha_resetada", "senha temporaria gerada por administrador", autor);
+    log_to_database("WARNING", "AUTH", "Senha redefinida por administrador (" + autor + ")", 0, real);
+}
+
+// ============================================================================
+// Arquivamento / exclusao
+// ============================================================================
+
+// Substitui o directory_copy players -> players2 do BGT (accounts_delete com temporarily=true).
+bool arquivar_conta(string username, string autor, string motivo) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string real = get_username_real(username);
+    if(real == "") return false;
+
+    if(get_status_conta(real) == CONTA_STATUS_ARQUIVADA) return false;
+
+    string query = "UPDATE players SET status = 'arquivada', arquivada_em = CURRENT_TIMESTAMP WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar arquivamento (migracao pendente?) | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, real);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao arquivar " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    registrar_evento_conta(real, "conta_arquivada", motivo, autor);
+    log_to_database("INFO", "AUTH", "Conta arquivada: " + motivo, 0, real);
+    return true;
+}
+
+// Migra o comportamento de login.bgt:59-63 (players2 -> players ao logar).
+bool restaurar_conta(string username, string autor) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string real = get_username_real(username);
+    if(real == "") return false;
+
+    string query = "UPDATE players SET status = 'ativa', arquivada_em = NULL WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: falha ao preparar restauracao (migracao pendente?) | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, real);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao restaurar " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    registrar_evento_conta(real, "conta_restaurada", "", autor);
+    log_to_database("INFO", "AUTH", "Conta restaurada", 0, real);
+    return true;
+}
+
+bool conta_pode_ser_excluida(string username, string &out motivo) {
+    motivo = "";
+
+    string real = get_username_real(username);
+    if(real == "") {
+        motivo = "conta inexistente";
+        return false;
+    }
+
+    if(get_player_index_from(real) >= 0) {
+        motivo = "o jogador esta online";
+        return false;
+    }
+
+    if(has_role(real, "dev") || has_role(real, "admin")) {
+        motivo = "a conta pertence a equipe";
+        return false;
+    }
+
+    // Best-effort: guilds.nvgt e em memoria, so enxerga guildas carregadas nesta sessao.
+    guild@ g = get_player_guild(real);
+    if(g !is null && g.is_leader(real)) {
+        motivo = "o jogador e lider de uma guilda";
+        return false;
+    }
+
+    if(is_banned_db(real)) {
+        motivo = "existe banimento ativo para a conta";
+        return false;
+    }
+
+    return true;
+}
+
+// O projeto nunca liga PRAGMA foreign_keys, entao as dependencias sao apagadas a mao,
+// na ordem, e o players.id e resolvido ANTES do DELETE final.
+// server_bans, game_history e contas_eventos sao preservados de proposito.
+bool excluir_conta_definitivo(string username, string autor) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string real = get_username_real(username);
+    if(real == "") return false;
+
+    int player_id = get_conta_id(real);
+    if(player_id < 0) {
+        debug_log("CONTAS: exclusao abortada, id nao resolvido para " + real);
+        return false;
+    }
+
+    sqlite3statement@ st_inv = bancoJogo.prepare("DELETE FROM player_inventories WHERE player_id = ?;");
+    if(st_inv !is null) {
+        st_inv.bind_int(1, player_id);
+        if(st_inv.step() != SQLITE_DONE) {
+            debug_log("CONTAS: AVISO - falha ao limpar player_inventories de " + real);
+        }
+    }
+
+    sqlite3statement@ st_ses = bancoJogo.prepare("DELETE FROM player_sessions WHERE player_id = ?;");
+    if(st_ses !is null) {
+        st_ses.bind_int(1, player_id);
+        if(st_ses.step() != SQLITE_DONE) {
+            debug_log("CONTAS: AVISO - falha ao limpar player_sessions de " + real);
+        }
+    }
+
+    sqlite3statement@ st_rol = bancoJogo.prepare("DELETE FROM player_roles WHERE LOWER(username) = ?;");
+    if(st_rol !is null) {
+        st_rol.bind_text(1, string_to_lower_case(real));
+        if(st_rol.step() != SQLITE_DONE) {
+            debug_log("CONTAS: AVISO - falha ao limpar player_roles de " + real);
+        }
+    }
+
+    sqlite3statement@ st_pla = bancoJogo.prepare("DELETE FROM players WHERE id = ?;");
+    if(st_pla is null) {
+        debug_log("CONTAS: falha ao preparar exclusao de " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    st_pla.bind_int(1, player_id);
+    if(st_pla.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao excluir " + real + " | " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    registrar_evento_conta(real, "conta_excluida", "id " + player_id, autor);
+    log_to_database("WARNING", "AUTH", "Conta excluida definitivamente (por " + autor + ")", 0, real);
+    debug_log("CONTAS: conta " + real + " (id " + player_id + ") excluida definitivamente por " + autor);
+    return true;
+}
+
+// Formata a lista igual ao BGT: "a, b y c." -> aqui "a, b e c."
+string formatar_lista_contas(string[] nomes, int limite = 25) {
+    if(nomes.length() == 0) return "";
+
+    int total = int(nomes.length());
+    int mostrar = total;
+    if(limite > 0 && mostrar > limite) mostrar = limite;
+
+    string msg = "";
+    for(int i = 0; i < mostrar; i++) {
+        if(i == 0) msg = nomes[uint(i)];
+        else if(i == mostrar - 1) msg += " e " + nomes[uint(i)];
+        else msg += ", " + nomes[uint(i)];
+    }
+
+    if(mostrar < total) msg += " e mais " + (total - mostrar) + " conta(s)";
+
+    return msg + ".";
+}
+
+// ============================================================================
+// Varredura por inatividade (migra accounts_delete() de re_server_test.bgt:1324)
+// ============================================================================
+
+void varrer_contas_inativas(bool somente_simular, string autor, int index_relatorio = -1) {
+    if(!database_initialized || bancoJogo is null) return;
+
+    string[] candidatas_arquivar;
+    string[] candidatas_excluir;
+    string[] bloqueadas;
+
+    // Estagio 1: contas ativas sem login ha CONTA_DIAS_ATE_ARQUIVAR dias.
+    string q_arquivar = """
+        SELECT username FROM players
+        WHERE (status IS NULL OR status = 'ativa')
+          AND julianday('now') - julianday(COALESCE(last_login, created_at)) >= ?
+        ORDER BY username;
+    """;
+
+    sqlite3statement@ st_arq = bancoJogo.prepare(q_arquivar);
+    if(st_arq is null) {
+        debug_log("CONTAS: varredura abortada, colunas de conta ausentes (migracao pendente?)");
+        return;
+    }
+
+    st_arq.bind_int(1, CONTA_DIAS_ATE_ARQUIVAR);
+    while(st_arq.step() == SQLITE_ROW) {
+        string nome = st_arq.column_text(0).trim_whitespace();
+        if(nome == "") continue;
+        if(get_player_index_from(nome) >= 0) continue;
+        candidatas_arquivar.insert_last(nome);
+    }
+
+    // Estagio 2: contas arquivadas ha CONTA_DIAS_ATE_EXCLUIR dias.
+    string q_excluir = """
+        SELECT username FROM players
+        WHERE status = 'arquivada'
+          AND arquivada_em IS NOT NULL
+          AND julianday('now') - julianday(arquivada_em) >= ?
+        ORDER BY username;
+    """;
+
+    sqlite3statement@ st_exc = bancoJogo.prepare(q_excluir);
+    if(st_exc !is null) {
+        st_exc.bind_int(1, CONTA_DIAS_ATE_EXCLUIR);
+        while(st_exc.step() == SQLITE_ROW) {
+            string nome = st_exc.column_text(0).trim_whitespace();
+            if(nome == "") continue;
+            candidatas_excluir.insert_last(nome);
+        }
+    }
+
+    // A partir daqui nao ha mais cursor aberto sobre players: podemos escrever.
+    string[] arquivadas;
+    string[] excluidas;
+
+    for(uint i = 0; i < candidatas_arquivar.length(); i++) {
+        if(somente_simular) {
+            arquivadas.insert_last(candidatas_arquivar[i]);
+            continue;
+        }
+        if(arquivar_conta(candidatas_arquivar[i], autor, "inatividade de " + CONTA_DIAS_ATE_ARQUIVAR + " dias")) {
+            arquivadas.insert_last(candidatas_arquivar[i]);
+        }
+    }
+
+    for(uint i = 0; i < candidatas_excluir.length(); i++) {
+        string motivo = "";
+        if(!conta_pode_ser_excluida(candidatas_excluir[i], motivo)) {
+            bloqueadas.insert_last(candidatas_excluir[i] + " (" + motivo + ")");
+            continue;
+        }
+        if(somente_simular) {
+            excluidas.insert_last(candidatas_excluir[i]);
+            continue;
+        }
+        if(excluir_conta_definitivo(candidatas_excluir[i], autor)) {
+            excluidas.insert_last(candidatas_excluir[i]);
+        }
+    }
+
+    string prefixo = "";
+    if(somente_simular) prefixo = "[SIMULACAO] ";
+
+    if(arquivadas.length() > 0) {
+        string msg = "";
+        if(somente_simular) msg = prefixo + arquivadas.length() + " conta(s) seriam arquivadas por falta de atividade: " + formatar_lista_contas(arquivadas);
+        else if(arquivadas.length() > 1) msg = "As seguintes " + arquivadas.length() + " contas foram arquivadas por falta de atividade: " + formatar_lista_contas(arquivadas);
+        else msg = "A seguinte conta foi arquivada por falta de atividade: " + formatar_lista_contas(arquivadas);
+        eadm(msg, "notifybleeps.ogg");
+        if(index_relatorio >= 0) conta_msg(index_relatorio, msg);
+    }
+
+    if(excluidas.length() > 0) {
+        string msg = "";
+        if(somente_simular) msg = prefixo + excluidas.length() + " conta(s) seriam excluidas definitivamente: " + formatar_lista_contas(excluidas);
+        else if(excluidas.length() > 1) msg = "As seguintes " + excluidas.length() + " contas foram excluidas de forma definitiva: " + formatar_lista_contas(excluidas);
+        else msg = "A seguinte conta foi excluida de forma definitiva: " + formatar_lista_contas(excluidas);
+        eadm(msg, "notifybleeps.ogg");
+        if(index_relatorio >= 0) conta_msg(index_relatorio, msg);
+    }
+
+    if(index_relatorio >= 0) {
+        if(bloqueadas.length() > 0) {
+            conta_msg(index_relatorio, prefixo + "Contas arquivadas que NAO podem ser excluidas: " + formatar_lista_contas(bloqueadas));
+        }
+        if(arquivadas.length() == 0 && excluidas.length() == 0) {
+            conta_msg(index_relatorio, prefixo + "Nenhuma conta atingiu os limites de inatividade.");
+        }
+    }
+
+    string tipo_varredura = "efetiva";
+    if(somente_simular) tipo_varredura = "simulacao";
+    debug_log("CONTAS: varredura (" + tipo_varredura + ") por " + autor +
+              " - arquivar: " + arquivadas.length() + ", excluir: " + excluidas.length() + ", bloqueadas: " + bloqueadas.length());
+}
+
+// Substitui o eraser de 60000 ms do BGT (re_server_test.bgt:870-874), agressivo demais.
+void loop_contas() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    if(tempo_varredura_contas.elapsed >= CONTA_INTERVALO_VARREDURA) {
+        tempo_varredura_contas.restart();
+        varrer_contas_inativas(false, "sistema");
+    }
+}
+
+// ============================================================================
+// Dispositivo (migra have_acount() do BGT e o /hm de voids.bgt:1342)
+// ============================================================================
+
+string[] contas_do_dispositivo(string computer_id, string ignorar_username = "") {
+    string[] resultado;
+    if(!database_initialized || bancoJogo is null) return resultado;
+
+    computer_id = computer_id.trim_whitespace();
+    if(computer_id == "") return resultado;
+
+    string ignorar = string_to_lower_case(ignorar_username.trim_whitespace());
+
+    string query = """
+        SELECT username FROM players
+        WHERE computer_id = ? AND computer_id != ''
+        ORDER BY username;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) return resultado;
+
+    stmt.bind_text(1, computer_id);
+
+    while(stmt.step() == SQLITE_ROW) {
+        string nome = stmt.column_text(0).trim_whitespace();
+        if(nome == "") continue;
+        if(ignorar != "" && string_to_lower_case(nome) == ignorar) continue;
+        resultado.insert_last(nome);
+    }
+
+    return resultado;
+}
+
+// Enquanto houver clientes antigos em campo o computer_id chega vazio na criacao,
+// e nesse caso o limite NAO deve bloquear ninguem.
+bool dispositivo_atingiu_limite(string computer_id) {
+    computer_id = computer_id.trim_whitespace();
+    if(computer_id == "") return false;
+
+    string[] contas = contas_do_dispositivo(computer_id);
+    return (int(contas.length()) >= CONTA_MAX_POR_DISPOSITIVO);
+}
+
+// Substitui o compid.usr gravado no login pelo BGT (login.bgt:74-76).
+void registrar_dispositivo_conta(string username, string computer_id) {
+    if(!database_initialized || bancoJogo is null) return;
+
+    computer_id = computer_id.trim_whitespace();
+    if(computer_id == "" || computer_id.length() > 128) return;
+
+    string real = get_username_real(username);
+    if(real == "") return;
+
+    string query = "UPDATE players SET computer_id = ? WHERE username = ?;";
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(stmt is null) {
+        debug_log("CONTAS: AVISO - coluna computer_id ausente (migracao pendente)");
+        return;
+    }
+
+    stmt.bind_text(1, computer_id);
+    stmt.bind_text(2, real);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("CONTAS: falha ao gravar computer_id de " + real + " | " + bancoJogo.get_last_error_text());
+    }
+}
+
+// ============================================================================
+// Protecao de log
+// ============================================================================
+
+// server.nvgt grava o comando cru em server_logs ANTES do dispatch. Sem esta guarda
+// todo /mudarsenha e /resetarsenha gravaria os hashes de senha no banco.
+bool comando_e_sensivel(string comando) {
+    string texto = comando.trim_whitespace();
+    if(texto == "") return false;
+
+    string primeiro = texto;
+    int espaco = texto.find(" ");
+    if(espaco > 0) primeiro = texto.substr(0, espaco);
+
+    if(primeiro.length() > 0 && primeiro.substr(0, 1) == "/") primeiro = primeiro.substr(1);
+    primeiro = string_to_lower_case(primeiro);
+
+    if(primeiro == "mudarsenha") return true;
+    if(primeiro == "changepassword") return true;
+    if(primeiro == "trocarsenha") return true;
+    if(primeiro == "resetarsenha") return true;
+    if(primeiro == "resetpassword") return true;
+
+    return false;
+}
+
+// ============================================================================
+// Resumo para /infoconta
+// ============================================================================
+
+string[] get_resumo_conta(string username) {
+    string[] linhas;
+    if(!database_initialized || bancoJogo is null) return linhas;
+
+    string real = get_username_real(username);
+    if(real == "") return linhas;
+
+    string q_base = "SELECT username, email, level, created_at, last_login FROM players WHERE username = ? LIMIT 1;";
+    sqlite3statement@ st_base = bancoJogo.prepare(q_base);
+    if(st_base !is null) {
+        st_base.bind_text(1, real);
+        if(st_base.step() == SQLITE_ROW) {
+            linhas.insert_last("Conta: " + st_base.column_text(0));
+            linhas.insert_last("E-mail: " + st_base.column_text(1));
+            linhas.insert_last("Nivel: " + st_base.column_int(2));
+            linhas.insert_last("Criada em: " + st_base.column_text(3));
+            string ultimo = st_base.column_text(4).trim_whitespace();
+            if(ultimo == "") ultimo = "nunca";
+            linhas.insert_last("Ultimo login: " + ultimo);
+        }
+    }
+
+    string q_extra = "SELECT status, arquivada_em, must_change_password, password_changed_at, computer_id FROM players WHERE username = ? LIMIT 1;";
+    sqlite3statement@ st_extra = bancoJogo.prepare(q_extra);
+    if(st_extra is null) {
+        linhas.insert_last("Estado da conta: indisponivel (migracao de colunas pendente).");
+    } else {
+        st_extra.bind_text(1, real);
+        if(st_extra.step() == SQLITE_ROW) {
+            string status = st_extra.column_text(0).trim_whitespace();
+            if(status == "") status = CONTA_STATUS_ATIVA;
+            linhas.insert_last("Status: " + status);
+
+            string arquivada_em = st_extra.column_text(1).trim_whitespace();
+            if(arquivada_em != "") linhas.insert_last("Arquivada em: " + arquivada_em);
+
+            string exige_troca = "nao";
+            if(st_extra.column_int(2) == 1) exige_troca = "sim";
+            linhas.insert_last("Precisa trocar a senha: " + exige_troca);
+
+            string trocada_em = st_extra.column_text(3).trim_whitespace();
+            if(trocada_em == "") trocada_em = "nunca";
+            linhas.insert_last("Senha alterada em: " + trocada_em);
+
+            string cid = st_extra.column_text(4).trim_whitespace();
+            string tem_dispositivo = "nenhum";
+            if(cid != "") tem_dispositivo = "sim";
+            linhas.insert_last("Dispositivo registrado: " + tem_dispositivo);
+        }
+    }
+
+    string[] cargos = get_player_roles(real);
+    if(cargos.length() > 0) {
+        string lista = "";
+        for(uint i = 0; i < cargos.length(); i++) {
+            if(i > 0) lista += ", ";
+            lista += cargos[i];
+        }
+        linhas.insert_last("Cargos: " + lista);
+    } else {
+        linhas.insert_last("Cargos: nenhum");
+    }
+
+    string esta_online = "nao";
+    if(get_player_index_from(real) >= 0) esta_online = "sim";
+    linhas.insert_last("Online agora: " + esta_online);
+
+    return linhas;
+}

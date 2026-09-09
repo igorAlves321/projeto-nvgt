@@ -1,0 +1,619 @@
+// =====================================================================
+// store_manager_menus.nvgt - Loja do jogador + gerenciador de lojas
+// ---------------------------------------------------------------------
+// Porte de open_store / manage_store / manage_items_for_sale /
+// show_stores / manage_items_on_store do BGT (cliente/includes/tiendas.bgt).
+// Os lacos crus de teclado (left/right/home/end/delete/ctrl+a/ctrl+r do
+// original) foram substituidos por game_menu + input_form + simple_yes_no,
+// que e' a navegacao padronizada deste cliente.
+// =====================================================================
+
+// Quando o servidor manda um payload novo enquanto os menus estao abertos,
+// os lacos precisam sair para o pacote reabrir o gerenciador atualizado.
+bool loja_gerenciador_ativo = false;
+bool loja_gerenciador_recarregar = false;
+bool loja_menu_aberto = false;
+
+string loja_menu_valor(string[] partes, uint indice, string padrao = "") {
+	if(indice < partes.length()) return partes[indice];
+	return padrao;
+}
+
+void loja_pedir_recarga() {
+	loja_gerenciador_recarregar = true;
+	send_to_server("/lojagerenciar", 1, true);
+}
+
+// =====================================================================
+// LOJA DO JOGADOR
+// =====================================================================
+
+// Payload:
+//   #loja=<nome>
+//   item=codigo=preco=moeda=descricao=estoque
+void open_store(string payload) {
+	if(ausente || !player_moveable) return;
+	// Um segundo pacote de loja nao pode reiniciar o game_menu global
+	// enquanto o menu atual ainda esta rodando.
+	if(loja_menu_aberto) return;
+
+	loja_menu_aberto = true;
+	loja_executar_menu_loja(payload);
+	loja_menu_aberto = false;
+}
+
+void loja_executar_menu_loja(string payload) {
+	string[] linhas = payload.split("\r\n");
+	if(linhas.length() == 0) {
+		speak(pu.get_value("Nenhum item disponivel na loja."), true);
+		return;
+	}
+
+	string loja = "";
+	string[] itens;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+		if(linha.find("#loja=") == 0) {
+			loja = linha.substr(6).trim_whitespace();
+			continue;
+		}
+		itens.insert_last(linha);
+	}
+
+	if(itens.length() == 0) {
+		speak(pu.get_value("Nenhum item disponivel na loja."), true);
+		return;
+	}
+
+	while(true) {
+		setupmenu();
+
+		for(uint i = 0; i < itens.length(); i++) {
+			string[] dados = itens[i].split("=");
+			if(dados.length() < 4) continue;
+
+			string nome = dados[0];
+			string codigo = dados[1];
+			string preco = dados[2];
+			string moeda = dados[3];
+			string descricao = loja_menu_valor(dados, 4, "");
+			string estoque = loja_menu_valor(dados, 5, "-1");
+
+			string rotulo = pu.get_value(nome) + " - " + preco + " " + pu.get_value(moeda);
+			if(estoque != "-1") rotulo += ". " + pu.get_value("Restam") + " " + estoque;
+			if(descricao != "") rotulo += ". " + descricao;
+
+			game_menu.add_item(rotulo, codigo);
+		}
+
+		game_menu.add_item(pu.get_value("Voltar"), "voltar");
+
+		string titulo = pu.get_value("Loja");
+		if(loja != "") titulo += " " + pu.get_value(loja);
+		game_menu.intro_text = titulo + ". " + itens.length() + " " + pu.get_value("itens disponiveis") + ".";
+
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "voltar") return;
+
+		string quantidade = prompt_numeric_input(pu.get_value("Quantidade"), pu.get_value("Quantas unidades voce quer comprar?"));
+		if(quantidade == "") continue;
+
+		string comando = "/lojacomprar " + quantidade + " " + selecionado;
+		if(loja != "") comando += " " + loja;
+		send_to_server(comando, 1, true);
+		return;
+	}
+}
+
+// =====================================================================
+// GERENCIADOR DE LOJAS (admin)
+// =====================================================================
+
+// Payload: <linhas do catalogo> \r\n #lojas# \r\n <linhas das lojas>
+void manage_store(string payload) {
+	if(loja_gerenciador_ativo) {
+		// Ja existe um laco em execucao: ele vai sair e o pacote seguinte
+		// reabre o gerenciador com os dados novos.
+		loja_gerenciador_recarregar = true;
+		return;
+	}
+
+	string[] linhas = payload.split("\r\n");
+	string catalogo = "";
+	string lojas = "";
+	bool na_secao_lojas = false;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "#lojas#") {
+			na_secao_lojas = true;
+			continue;
+		}
+		if(linha == "") continue;
+
+		if(na_secao_lojas) {
+			if(lojas != "") lojas += "\r\n";
+			lojas += linha;
+		}
+		else {
+			if(catalogo != "") catalogo += "\r\n";
+			catalogo += linha;
+		}
+	}
+
+	loja_gerenciador_ativo = true;
+	loja_gerenciador_recarregar = false;
+
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Gerenciar itens a venda"), "itens");
+		game_menu.add_item(pu.get_value("Gerenciar itens nas lojas"), "lojas");
+		game_menu.add_item(pu.get_value("Voltar"), "voltar");
+
+		game_menu.intro_text = pu.get_value("Gerenciador de lojas. Escolha uma opcao.");
+		int mres = game_menu.run();
+		if(mres < 0) break;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "voltar") break;
+
+		if(selecionado == "itens") {
+			manage_items_for_sale(catalogo);
+		}
+		else if(selecionado == "lojas") {
+			show_stores(lojas);
+		}
+
+		if(loja_gerenciador_recarregar) break;
+	}
+
+	loja_gerenciador_ativo = false;
+}
+
+// ---------------------------------------------------------------------
+// Catalogo de itens a venda
+// Linhas: item=moeda=preco=descricao=codigo=estoque=nivel_minimo=vendavel=taxa_venda
+// ---------------------------------------------------------------------
+void manage_items_for_sale(string payload) {
+	string[] linhas = payload.split("\r\n");
+
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Adicionar novo item ao catalogo"), "#adicionar");
+
+		int listados = 0;
+		for(uint i = 0; i < linhas.length(); i++) {
+			string linha = linhas[i].trim_whitespace();
+			if(linha == "") continue;
+
+			string[] dados = linha.split("=");
+			if(dados.length() < 5) continue;
+
+			string rotulo = dados[0] + ". " + pu.get_value("Preco") + ": " + dados[2] + " " + dados[1] +
+				". " + pu.get_value("Codigo") + ": " + dados[4] + ". " + dados[3];
+			game_menu.add_item(rotulo, "" + i);
+			listados++;
+		}
+
+		game_menu.add_item(pu.get_value("Voltar"), "#voltar");
+
+		game_menu.intro_text = pu.get_value("Itens a venda no servidor") + ": " + listados + ".";
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "#voltar") return;
+
+		if(selecionado == "#adicionar") {
+			loja_form_adicionar_item();
+			if(loja_gerenciador_recarregar) return;
+			continue;
+		}
+
+		int indice = int(parse_int(selecionado));
+		if(indice < 0 || indice >= int(linhas.length())) continue;
+
+		string[] dados = linhas[indice].split("=");
+		if(dados.length() < 5) continue;
+
+		loja_menu_item_do_catalogo(dados);
+		if(loja_gerenciador_recarregar) return;
+	}
+}
+
+void loja_menu_item_do_catalogo(string[] dados) {
+	string item = dados[0];
+
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Editar dados do item"), "editar");
+		game_menu.add_item(pu.get_value("Excluir item do catalogo"), "excluir");
+		game_menu.add_item(pu.get_value("Voltar"), "voltar");
+
+		game_menu.intro_text = pu.get_value("Item") + ": " + item + ". " + pu.get_value("Escolha o que fazer.");
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "voltar") return;
+
+		if(selecionado == "editar") {
+			loja_form_editar_item(dados);
+			return;
+		}
+
+		if(selecionado == "excluir") {
+			bool confirma = simple_yes_no(pu.get_value("Confirma a exclusao do item ") + item + "?");
+			if(confirma) {
+				send_to_server("/lojadel " + item, 1, true);
+				loja_pedir_recarga();
+			}
+			else {
+				speak(pu.get_value("Cancelado."), true);
+			}
+			return;
+		}
+	}
+}
+
+void loja_form_adicionar_item() {
+	// Todos os campos sao de texto: o campo numerico do input_forms so
+	// aceita digitos (sem ponto decimal e sem sinal negativo).
+	input_form form(pu.get_value("Adicionar item ao catalogo da loja"));
+	form.description = pu.get_value("O codigo deve ser um numero entre 1000 e 9999 e nao pode se repetir.");
+	form.add_text_field("item", pu.get_value("Nome interno do item (sem espacos)"), "", true);
+	form.add_text_field("moeda", pu.get_value("Moeda (reais, stryx, creditos, gold, euro ou nome de item)"), "reais", true);
+	form.add_text_field("preco", pu.get_value("Preco"), "1", true);
+	form.add_text_field("codigo", pu.get_value("Codigo interno (1000 a 9999)"), "1000", true);
+	form.add_text_field("descricao", pu.get_value("Descricao do item"), "", true);
+
+	dictionary@ resultado = form.run();
+	if(form.user_canceled) return;
+
+	string item = "", moeda = "", descricao = "", preco = "", codigo = "";
+	resultado.get("item", item);
+	resultado.get("moeda", moeda);
+	resultado.get("preco", preco);
+	resultado.get("codigo", codigo);
+	resultado.get("descricao", descricao);
+
+	item = item.trim_whitespace();
+	moeda = moeda.trim_whitespace();
+	descricao = descricao.trim_whitespace();
+	preco = preco.trim_whitespace();
+	codigo = codigo.trim_whitespace();
+
+	if(item == "" || moeda == "" || descricao == "" || preco == "" || codigo == "") {
+		speak(pu.get_value("Dados incompletos. Nada foi enviado."), true);
+		return;
+	}
+
+	int codigo_numero = int(parse_int(codigo));
+	if(codigo_numero < 1000 || codigo_numero > 9999) {
+		speak(pu.get_value("O codigo precisa ficar entre 1000 e 9999."), true);
+		return;
+	}
+
+	send_to_server("/lojaadd " + item + " " + moeda + " " + preco + " " + codigo_numero + " " + descricao, 1, true);
+	loja_pedir_recarga();
+}
+
+// dados: item=moeda=preco=descricao=codigo=estoque=nivel_minimo=vendavel=taxa_venda
+void loja_form_editar_item(string[] dados) {
+	string item = dados[0];
+	string moeda_atual = loja_menu_valor(dados, 1, "reais");
+	string preco_atual = loja_menu_valor(dados, 2, "0");
+	string descricao_atual = loja_menu_valor(dados, 3, "");
+	string codigo_atual = loja_menu_valor(dados, 4, "1000");
+	string estoque_atual = loja_menu_valor(dados, 5, "-1");
+	string nivel_atual = loja_menu_valor(dados, 6, "0");
+	string vendavel_atual = loja_menu_valor(dados, 7, "1");
+	string taxa_atual = loja_menu_valor(dados, 8, "0.5");
+
+	// Campos de texto em vez de numericos: o campo numerico do input_forms
+	// so aceita digitos, e aqui precisamos de decimais (preco, taxa_venda)
+	// e de valores negativos (estoque -1 = ilimitado).
+	input_form form(pu.get_value("Editar item") + ": " + item);
+	form.description = pu.get_value("Altere apenas o que precisar. Estoque -1 significa ilimitado.");
+	form.add_text_field("moeda", pu.get_value("Moeda"), moeda_atual, true);
+	form.add_text_field("preco", pu.get_value("Preco"), preco_atual, true);
+	form.add_text_field("descricao", pu.get_value("Descricao"), descricao_atual, true);
+	form.add_text_field("codigo", pu.get_value("Codigo interno (1000 a 9999)"), codigo_atual, true);
+	form.add_text_field("estoque", pu.get_value("Estoque (-1 = ilimitado)"), estoque_atual, true);
+	form.add_text_field("nivel_minimo", pu.get_value("Nivel minimo para comprar"), nivel_atual, true);
+	form.add_text_field("vendavel", pu.get_value("Pode ser revendido? 1 sim, 0 nao"), vendavel_atual, true);
+	form.add_text_field("taxa_venda", pu.get_value("Taxa de recompra (0.5 = metade do preco)"), taxa_atual, true);
+
+	dictionary@ resultado = form.run();
+	if(form.user_canceled) return;
+
+	string nova_moeda = "", nova_descricao = "", novo_preco = "", novo_codigo = "";
+	string novo_estoque = "", novo_nivel = "", novo_vendavel = "", nova_taxa = "";
+	resultado.get("moeda", nova_moeda);
+	resultado.get("preco", novo_preco);
+	resultado.get("descricao", nova_descricao);
+	resultado.get("codigo", novo_codigo);
+	resultado.get("estoque", novo_estoque);
+	resultado.get("nivel_minimo", novo_nivel);
+	resultado.get("vendavel", novo_vendavel);
+	resultado.get("taxa_venda", nova_taxa);
+
+	nova_moeda = nova_moeda.trim_whitespace();
+	nova_descricao = nova_descricao.trim_whitespace();
+	novo_preco = novo_preco.trim_whitespace();
+	novo_codigo = novo_codigo.trim_whitespace();
+	novo_estoque = novo_estoque.trim_whitespace();
+	novo_nivel = novo_nivel.trim_whitespace();
+	novo_vendavel = novo_vendavel.trim_whitespace();
+	nova_taxa = nova_taxa.trim_whitespace();
+
+	bool alterou = false;
+
+	if(nova_moeda != "" && nova_moeda != moeda_atual) {
+		send_to_server("/lojaedit " + item + " moeda " + nova_moeda, 1, true);
+		alterou = true;
+	}
+	if(novo_preco != "" && novo_preco != preco_atual) {
+		send_to_server("/lojaedit " + item + " preco " + novo_preco, 1, true);
+		alterou = true;
+	}
+	if(nova_descricao != "" && nova_descricao != descricao_atual) {
+		send_to_server("/lojaedit " + item + " descricao " + nova_descricao, 1, true);
+		alterou = true;
+	}
+	if(novo_codigo != "" && novo_codigo != codigo_atual) {
+		send_to_server("/lojaedit " + item + " codigo " + novo_codigo, 1, true);
+		alterou = true;
+	}
+	if(novo_estoque != "" && novo_estoque != estoque_atual) {
+		send_to_server("/lojaedit " + item + " estoque " + novo_estoque, 1, true);
+		alterou = true;
+	}
+	if(novo_nivel != "" && novo_nivel != nivel_atual) {
+		send_to_server("/lojaedit " + item + " nivel_minimo " + novo_nivel, 1, true);
+		alterou = true;
+	}
+	if(novo_vendavel != "" && novo_vendavel != vendavel_atual) {
+		send_to_server("/lojaedit " + item + " vendavel " + novo_vendavel, 1, true);
+		alterou = true;
+	}
+	if(nova_taxa != "" && nova_taxa != taxa_atual) {
+		send_to_server("/lojaedit " + item + " taxa_venda " + nova_taxa, 1, true);
+		alterou = true;
+	}
+
+	if(alterou) {
+		speak(pu.get_value("Atualizado."), true);
+		loja_pedir_recarga();
+	}
+	else {
+		speak(pu.get_value("Nada foi alterado."), true);
+	}
+}
+
+// ---------------------------------------------------------------------
+// Lista de lojas
+// Linhas: nome|mapa|minx,maxx,miny,maxy|qtd_itens
+// ---------------------------------------------------------------------
+void show_stores(string payload) {
+	string[] linhas = payload.split("\r\n");
+
+	while(true) {
+		setupmenu();
+
+		int listadas = 0;
+		for(uint i = 0; i < linhas.length(); i++) {
+			string linha = linhas[i].trim_whitespace();
+			if(linha == "") continue;
+
+			string[] dados = linha.split("|");
+			if(dados.length() < 4) continue;
+
+			string rotulo = dados[0] + ". " + pu.get_value("Mapa") + ": " + dados[1] +
+				". " + pu.get_value("Area") + ": " + dados[2] +
+				". " + dados[3] + " " + pu.get_value("itens") + ".";
+			game_menu.add_item(rotulo, dados[0]);
+			listadas++;
+		}
+
+		game_menu.add_item(pu.get_value("Voltar"), "#voltar");
+
+		if(listadas == 0) {
+			speak(pu.get_value("Nenhuma loja configurada no servidor."), true);
+			return;
+		}
+
+		game_menu.intro_text = pu.get_value("Escolha a loja cujo conteudo voce quer ver") + ". " + listadas + " " + pu.get_value("lojas") + ".";
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "#voltar") return;
+
+		loja_menu_acoes_da_loja(selecionado);
+		if(loja_gerenciador_recarregar) return;
+	}
+}
+
+void loja_menu_acoes_da_loja(string loja) {
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Ver e editar os itens desta loja"), "itens");
+		game_menu.add_item(pu.get_value("Adicionar item a esta loja"), "adicionar");
+		game_menu.add_item(pu.get_value("Esvaziar esta loja"), "limpar");
+		game_menu.add_item(pu.get_value("Voltar"), "voltar");
+
+		game_menu.intro_text = pu.get_value("Loja") + ": " + loja + ".";
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "voltar") return;
+
+		if(selecionado == "itens") {
+			// Sai de todos os menus antes de pedir os dados: o servidor
+			// responde com o pacote loja_estoque, que chama
+			// manage_items_on_store(). Se um menu ainda estivesse rodando,
+			// o game_menu global seria reiniciado durante o proprio run().
+			loja_gerenciador_recarregar = true;
+			send_to_server("/lojaitens " + loja, 1, true);
+			return;
+		}
+
+		if(selecionado == "adicionar") {
+			loja_form_vincular_item(loja);
+			if(loja_gerenciador_recarregar) return;
+			continue;
+		}
+
+		if(selecionado == "limpar") {
+			bool confirma = simple_yes_no(pu.get_value("Isso remove todos os itens da loja ") + loja + ". " + pu.get_value("Continuar?"));
+			if(confirma) {
+				send_to_server("/lojaestoque limpar " + loja, 1, true);
+				loja_pedir_recarga();
+			}
+			else {
+				speak(pu.get_value("Cancelado."), true);
+			}
+			return;
+		}
+	}
+}
+
+void loja_form_vincular_item(string loja) {
+	input_form form(pu.get_value("Adicionar item a loja") + " " + loja);
+	form.description = pu.get_value("O item precisa existir no catalogo (use Gerenciar itens a venda).");
+	form.add_text_field("item", pu.get_value("Nome interno do item"), "", true);
+
+	dictionary@ resultado = form.run();
+	if(form.user_canceled) return;
+
+	string item = "";
+	resultado.get("item", item);
+	item = item.trim_whitespace();
+
+	if(item == "") {
+		speak(pu.get_value("Nome invalido."), true);
+		return;
+	}
+
+	send_to_server("/lojaestoque add " + loja + " " + item, 1, true);
+	loja_pedir_recarga();
+}
+
+// ---------------------------------------------------------------------
+// Itens vinculados a uma loja
+// Linhas: item=preco=moeda
+// ---------------------------------------------------------------------
+void manage_items_on_store(string loja, string payload) {
+	// Nunca abrir por cima de um menu que ja esta rodando: o game_menu e'
+	// global e um reset durante o run() de outro menu quebraria a navegacao.
+	if(loja_gerenciador_ativo) {
+		loja_gerenciador_recarregar = true;
+		return;
+	}
+
+	string[] linhas = payload.split("\r\n");
+	loja_gerenciador_ativo = true;
+	loja_gerenciador_recarregar = false;
+
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Adicionar item a esta loja"), "#adicionar");
+
+		int listados = 0;
+		for(uint i = 0; i < linhas.length(); i++) {
+			string linha = linhas[i].trim_whitespace();
+			if(linha == "") continue;
+
+			string[] dados = linha.split("=");
+			if(dados.length() < 1 || dados[0] == "") continue;
+
+			string rotulo = dados[0];
+			if(dados.length() >= 3) {
+				rotulo += ". " + pu.get_value("Preco") + ": " + dados[1] + " " + dados[2];
+			}
+			game_menu.add_item(rotulo, dados[0]);
+			listados++;
+		}
+
+		game_menu.add_item(pu.get_value("Voltar"), "#voltar");
+
+		game_menu.intro_text = pu.get_value("Itens da loja") + " " + loja + ": " + listados + ".";
+		int mres = game_menu.run();
+		if(mres < 0) break;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "#voltar") break;
+
+		if(selecionado == "#adicionar") {
+			loja_form_vincular_item(loja);
+			break;
+		}
+
+		loja_menu_item_da_loja(loja, selecionado);
+		break;
+	}
+
+	loja_gerenciador_ativo = false;
+}
+
+void loja_menu_item_da_loja(string loja, string item) {
+	while(true) {
+		setupmenu();
+		game_menu.add_item(pu.get_value("Definir preco desta loja para o item"), "preco");
+		game_menu.add_item(pu.get_value("Remover item desta loja"), "remover");
+		game_menu.add_item(pu.get_value("Voltar"), "voltar");
+
+		game_menu.intro_text = item + " " + pu.get_value("na loja") + " " + loja + ".";
+		int mres = game_menu.run();
+		if(mres < 0) return;
+
+		string selecionado = game_menu.get_item_id(mres);
+		if(selecionado == "" || selecionado == "voltar") return;
+
+		if(selecionado == "preco") {
+			input_form form(pu.get_value("Preco de") + " " + item + " " + pu.get_value("na loja") + " " + loja);
+			form.description = pu.get_value("Use -1 para voltar a usar o preco do catalogo.");
+			form.add_text_field("preco", pu.get_value("Preco"), "-1", true);
+			form.add_text_field("moeda", pu.get_value("Moeda (deixe em branco para usar a do catalogo)"), "", false);
+
+			dictionary@ resultado = form.run();
+			if(form.user_canceled) return;
+
+			string preco = "", moeda = "";
+			resultado.get("preco", preco);
+			resultado.get("moeda", moeda);
+			preco = preco.trim_whitespace();
+			moeda = moeda.trim_whitespace();
+
+			if(preco == "") {
+				speak(pu.get_value("Preco invalido."), true);
+				return;
+			}
+
+			string comando = "/lojaestoque preco " + loja + " " + item + " " + preco;
+			if(moeda != "") comando += " " + moeda;
+			send_to_server(comando, 1, true);
+			send_to_server("/lojaitens " + loja, 1, true);
+			return;
+		}
+
+		if(selecionado == "remover") {
+			bool confirma = simple_yes_no(pu.get_value("Confirma remover ") + item + pu.get_value(" da loja ") + loja + "?");
+			if(confirma) {
+				send_to_server("/lojaestoque del " + loja + " " + item, 1, true);
+				send_to_server("/lojaitens " + loja, 1, true);
+			}
+			else {
+				speak(pu.get_value("Cancelado."), true);
+			}
+			return;
+		}
+	}
+}

@@ -1,0 +1,469 @@
+
+// =====================================================================
+// Menus de livros (criacao, gerenciamento, edicao e leitura)
+// Migrado de "cliente pruebas/includes/buildermenu.bgt" (booksmenu(),
+// show_books(), updatebook()).
+//
+// Diferenca fundamental em relacao ao BGT: o BGT mandava o livro inteiro num
+// unico pacote ("/createbook <nome> <conteudo completo>"). Aqui isso seria
+// descartado em silencio por NETWORK_HANDLER_MAX_MESSAGE_CHARS (8192), entao
+// o editor salva UMA pagina por pacote ("LIVRO:pagina|...") e valida o
+// tamanho antes de enviar.
+// =====================================================================
+
+const uint LIVRO_MAX_PAGINA_CLIENTE = 7000;
+
+string livro_edit_slug = "";
+string livro_edit_idioma = "pt";
+string livro_edit_titulo = "";
+string livro_edit_descricao = "";
+string livro_edit_musica = "";
+string[] livro_edit_paginas;
+
+// ---------------------------------------------------------------------
+// Utilitarios
+// ---------------------------------------------------------------------
+
+// O input_form so aceita uma linha, entao o construtor escreve a sequencia
+// literal \n para marcar quebra de linha dentro da pagina.
+string livro_texto_para_envio(string texto) {
+	string t = texto.replace("\r\n", "\n");
+	t = t.replace("\r", "\n");
+	t = t.replace("\\n", "\n");
+	t = t.replace("\n", "\r\n");
+	return t;
+}
+
+string livro_texto_para_edicao(string texto) {
+	string t = texto.replace("\r\n", "\n");
+	t = t.replace("\r", "\n");
+	t = t.replace("\n", "\\n");
+	return t;
+}
+
+string livro_resumo(string texto, uint limite = 45) {
+	string t = texto.replace("\r\n", " ");
+	t = t.replace("\n", " ");
+	t = t.trim_whitespace();
+	if(t == "") return pu.get_value("LIVRO_PAGINA_VAZIA");
+	if(t.length() > limite) t = t.substr(0, limite) + "...";
+	return t;
+}
+
+// Menu local, sem background_callback: estes menus sao abertos de dentro do
+// processamento de rede e nao devem reentrar em netloop().
+void livro_config_menu(menu@ m) {
+	@m.pack_file = cast<pack_file@>(sound_default_pack);
+	m.click_sound = "menumove.ogg";
+	m.select_sound = "menuenter.ogg";
+	m.open_sound = "menuopen.ogg";
+	m.edge_sound = "menubounds.ogg";
+	m.wrap = false;
+	m.focus_first_item = false;
+	m.automatic_intro = true;
+}
+
+bool livro_enviar_pagina(string slug, string idioma, int numero, string texto) {
+	string corpo = livro_texto_para_envio(texto);
+	if(corpo.length() > LIVRO_MAX_PAGINA_CLIENTE) {
+		speak(pu.get_value("LIVRO_PAGINA_GRANDE") + " " + int(corpo.length()) + ".", true);
+		return false;
+	}
+	send_to_server("LIVRO:pagina|" + slug + "|" + idioma + "|" + numero + "|" + corpo, 0, true);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// Menu principal de livros (substitui o booksmenu() do BGT)
+// ---------------------------------------------------------------------
+
+void livros_menu() {
+	setupmenu();
+	game_menu.add_item(pu.get_value("LIVRO_CRIAR"), "criar");
+	game_menu.add_item(pu.get_value("LIVRO_GERENCIAR"), "gerenciar");
+	game_menu.add_item(pu.get_value("LIVRO_LISTAR"), "listar");
+	game_menu.add_item(pu.get_value("LIVRO_VOLTAR"), "voltar");
+	game_menu.intro_text = pu.get_value("LIVRO_MENU_TITULO");
+
+	int mres = game_menu.run();
+	if(mres < 0) return;
+	string selected_id = game_menu.get_item_id(mres);
+
+	if(selected_id == "criar") {
+		livros_criar_form();
+	}
+	else if(selected_id == "gerenciar") {
+		send_to_server("LIVRO:listar|gerenciar", 0, true);
+	}
+	else if(selected_id == "listar") {
+		send_to_server("LIVRO:listar", 0, true);
+	}
+}
+
+void livros_criar_form() {
+	input_form form(pu.get_value("LIVRO_CRIAR"));
+	form.description = pu.get_value("LIVRO_CRIAR_DESCRICAO");
+	form.add_text_field("slug", pu.get_value("LIVRO_CAMPO_SLUG"), "", true);
+	form.add_text_field("titulo", pu.get_value("LIVRO_CAMPO_TITULO"), "", true);
+	form.add_text_field("descricao", pu.get_value("LIVRO_CAMPO_DESCRICAO"), "", false);
+	form.add_text_field("musica", pu.get_value("LIVRO_CAMPO_MUSICA"), "", false);
+
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+
+	string slug = "", titulo = "", descricao = "", musica = "";
+	result.get("slug", slug);
+	result.get("titulo", titulo);
+	result.get("descricao", descricao);
+	result.get("musica", musica);
+
+	slug = slug.trim_whitespace();
+	titulo = titulo.trim_whitespace();
+	descricao = descricao.trim_whitespace();
+	musica = musica.trim_whitespace();
+
+	if(slug == "" || titulo == "") {
+		speak(pu.get_value("LIVRO_DADOS_INVALIDOS"), true);
+		return;
+	}
+
+	send_to_server("LIVRO:criar|" + slug + "|" + titulo + "|" + descricao + "|" + musica, 0, true);
+}
+
+// ---------------------------------------------------------------------
+// Lista de leitura (pacote "livro_lista")
+// ---------------------------------------------------------------------
+
+void livros_lista_leitura(string payload) {
+	if(ausente) return;
+
+	string limpo = payload.replace("\r", "");
+	string[] linhas = limpo.split("\n");
+
+	menu lm;
+	livro_config_menu(@lm);
+
+	string[] slugs;
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+		string[] campos = linha.split("|");
+		if(campos.length() < 2) continue;
+		string slug = campos[0].trim_whitespace();
+		string titulo = campos[1].trim_whitespace();
+		if(slug == "") continue;
+		lm.add_item(titulo != "" ? titulo : slug, "" + slugs.length());
+		slugs.insert_last(slug);
+	}
+
+	if(slugs.length() == 0) {
+		speak(pu.get_value("LIVRO_NENHUM"), true);
+		return;
+	}
+
+	lm.intro_text = pu.get_value("LIVRO_LISTA_INTRO");
+	emchat = true;
+	int mres = lm.run();
+	emchat = false;
+	if(mres < 0) return;
+
+	string escolhido = lm.get_item_id(mres);
+	int idx = string_to_number(escolhido);
+	if(idx < 0 || idx >= int(slugs.length())) return;
+
+	send_to_server("LIVRO:ler|" + slugs[idx], 0, true);
+}
+
+// ---------------------------------------------------------------------
+// Gerenciamento (pacote "livro_gerenciar") - equivale ao show_books() do BGT
+// ---------------------------------------------------------------------
+
+void livros_gerenciar(string payload) {
+	if(ausente) return;
+
+	string limpo = payload.replace("\r", "");
+	string[] linhas = limpo.split("\n");
+
+	string[] slugs;
+	string[] rotulos;
+	string[] idiomas;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+		string[] campos = linha.split("|");
+		if(campos.length() < 2) continue;
+		string slug = campos[0].trim_whitespace();
+		if(slug == "") continue;
+		string titulo = campos[1].trim_whitespace();
+		string idioma = campos.length() >= 3 ? campos[2].trim_whitespace() : "pt";
+		if(idioma == "") idioma = "pt";
+		slugs.insert_last(slug);
+		rotulos.insert_last((titulo != "" ? titulo : slug) + ", " + slug + ", " + idioma);
+		idiomas.insert_last(idioma);
+	}
+
+	if(slugs.length() == 0) {
+		speak(pu.get_value("LIVRO_NENHUM"), true);
+		return;
+	}
+
+	reset_all_forced_keys();
+	key_hold iup(KEY_UP, 500, 50);
+	key_hold idown(KEY_DOWN, 500, 50);
+	key_hold ileft(KEY_LEFT, 500, 50);
+	key_hold iright(KEY_RIGHT, 500, 50);
+
+	emchat = true;
+	speak(pu.get_value("LIVRO_GERENCIAR_AJUDA"), true);
+
+	int cursor = 0;
+	speak(rotulos[cursor], true);
+
+	while(true) {
+		wait(5);
+
+		if(is_connected && heartbeat_timer.elapsed >= HEARTBEAT_INTERVAL) {
+			heartbeat_timer.restart();
+			send_unreliable(peer_id, "heartbeat", 0);
+		}
+
+		if(key_pressed(KEY_ESCAPE)) break;
+
+		if((idown.pressing() || iright.pressing()) && cursor < int(slugs.length()) - 1) {
+			cursor++;
+			speak(rotulos[cursor], true);
+			continue;
+		}
+		if((iup.pressing() || ileft.pressing()) && cursor > 0) {
+			cursor--;
+			speak(rotulos[cursor], true);
+			continue;
+		}
+		if(key_pressed(KEY_HOME) && cursor > 0) {
+			cursor = 0;
+			speak(rotulos[cursor], true);
+			continue;
+		}
+		if(key_pressed(KEY_END) && cursor < int(slugs.length()) - 1) {
+			cursor = int(slugs.length()) - 1;
+			speak(rotulos[cursor], true);
+			continue;
+		}
+
+		if(key_pressed(KEY_RETURN) || key_pressed(KEY_NUMPADENTER)) {
+			send_to_server("LIVRO:editar|" + slugs[cursor] + "|" + idiomas[cursor], 0, true);
+			break;
+		}
+
+		bool alt_down = key_down(KEY_LMENU) || key_down(KEY_RMENU);
+
+		if(alt_down && key_pressed(KEY_R)) {
+			input_form form(pu.get_value("LIVRO_RENOMEAR"));
+			form.add_text_field("novo", pu.get_value("LIVRO_CAMPO_SLUG"), slugs[cursor], true);
+			dictionary@ result = form.run();
+			if(!form.user_canceled) {
+				string novo = "";
+				result.get("novo", novo);
+				novo = novo.trim_whitespace();
+				if(novo != "" && novo != slugs[cursor]) {
+					send_to_server("LIVRO:renomear|" + slugs[cursor] + "|" + novo + "|" + idiomas[cursor], 0, true);
+				}
+			}
+			break;
+		}
+
+		if(key_pressed(KEY_DELETE) || key_pressed(KEY_DECIMAL)) {
+			if(simple_yes_no(pu.get_value("LIVRO_CONFIRMA_EXCLUSAO"))) {
+				send_to_server("LIVRO:deletar|" + slugs[cursor] + "|" + idiomas[cursor], 0, true);
+			}
+			break;
+		}
+	}
+
+	emchat = false;
+	reset_all_forced_keys();
+}
+
+// ---------------------------------------------------------------------
+// Editor de paginas
+// ---------------------------------------------------------------------
+
+// Chega ANTES de "livro_dados" (o servidor manda as paginas primeiro), entao
+// aqui so enchemos o buffer.
+void livros_receber_pagina(string payload) {
+	string[] campos = payload.split("|");
+	if(campos.length() < 2) return;
+
+	string slug = campos[0].trim_whitespace();
+	int numero = string_to_number(campos[1].trim_whitespace());
+	string conteudo = "";
+	if(campos.length() > 2) {
+		conteudo = campos[2];
+		for(uint i = 3; i < campos.length(); i++) {
+			conteudo += "|" + campos[i];
+		}
+	}
+
+	if(slug == "" || numero < 1) return;
+
+	if(livro_edit_slug != slug) {
+		livro_edit_slug = slug;
+		livro_edit_paginas.resize(0);
+	}
+
+	if(int(livro_edit_paginas.length()) < numero) {
+		livro_edit_paginas.resize(uint(numero));
+	}
+	livro_edit_paginas[numero - 1] = conteudo;
+}
+
+void livros_editar(string payload) {
+	string[] campos = payload.split("|");
+	if(campos.length() < 2) return;
+
+	livro_edit_slug = campos[0].trim_whitespace();
+	livro_edit_idioma = campos[1].trim_whitespace();
+	livro_edit_titulo = campos.length() > 2 ? campos[2].trim_whitespace() : "";
+	livro_edit_descricao = campos.length() > 3 ? campos[3].trim_whitespace() : "";
+	livro_edit_musica = campos.length() > 4 ? campos[4].trim_whitespace() : "";
+	int total = campos.length() > 5 ? string_to_number(campos[5].trim_whitespace()) : 0;
+
+	if(livro_edit_idioma == "") livro_edit_idioma = "pt";
+	if(total < 0) total = 0;
+	livro_edit_paginas.resize(uint(total));
+
+	if(livro_edit_slug == "") return;
+	if(ausente) return;
+
+	livros_editor_loop();
+}
+
+void livros_editor_loop() {
+	while(true) {
+		menu em;
+		livro_config_menu(@em);
+
+		for(uint i = 0; i < livro_edit_paginas.length(); i++) {
+			em.add_item(pu.get_value("LIVRO_PAGINA") + " " + (i + 1) + ": " + livro_resumo(livro_edit_paginas[i]), "p" + int(i));
+		}
+		em.add_item(pu.get_value("LIVRO_ADICIONAR_PAGINA"), "nova");
+		em.add_item(pu.get_value("LIVRO_EDITAR_DADOS"), "dados");
+		em.add_item(pu.get_value("LIVRO_VOLTAR"), "voltar");
+
+		em.intro_text = pu.get_value("LIVRO_EDITOR_INTRO") + " " + livro_edit_slug;
+
+		emchat = true;
+		int mres = em.run();
+		emchat = false;
+		if(mres < 0) return;
+
+		string selecionado = em.get_item_id(mres);
+		if(selecionado == "voltar" || selecionado == "") return;
+
+		if(selecionado == "dados") {
+			livros_editar_dados_form(livro_edit_slug, livro_edit_idioma, livro_edit_titulo, livro_edit_descricao, livro_edit_musica);
+			continue;
+		}
+
+		if(selecionado == "nova") {
+			int numero = int(livro_edit_paginas.length()) + 1;
+			string texto = livros_pedir_texto_pagina(numero, "");
+			if(texto == "") continue;
+			if(!livro_enviar_pagina(livro_edit_slug, livro_edit_idioma, numero, texto)) continue;
+			livro_edit_paginas.insert_last(livro_texto_para_envio(texto));
+			continue;
+		}
+
+		if(selecionado.substr(0, 1) == "p") {
+			int indice = string_to_number(selecionado.substr(1));
+			if(indice < 0 || indice >= int(livro_edit_paginas.length())) continue;
+			livros_menu_pagina(indice);
+			continue;
+		}
+	}
+}
+
+void livros_menu_pagina(int indice) {
+	menu pm;
+	livro_config_menu(@pm);
+	pm.add_item(pu.get_value("LIVRO_EDITAR_TEXTO"), "editar");
+	pm.add_item(pu.get_value("LIVRO_LER_PAGINA"), "ler");
+	pm.add_item(pu.get_value("LIVRO_EXCLUIR_PAGINA"), "excluir");
+	pm.add_item(pu.get_value("LIVRO_VOLTAR"), "voltar");
+	pm.intro_text = pu.get_value("LIVRO_PAGINA") + " " + (indice + 1);
+
+	emchat = true;
+	int mres = pm.run();
+	emchat = false;
+	if(mres < 0) return;
+
+	string selecionado = pm.get_item_id(mres);
+
+	if(selecionado == "editar") {
+		string texto = livros_pedir_texto_pagina(indice + 1, livro_texto_para_edicao(livro_edit_paginas[indice]));
+		if(texto == "") return;
+		if(!livro_enviar_pagina(livro_edit_slug, livro_edit_idioma, indice + 1, texto)) return;
+		livro_edit_paginas[indice] = livro_texto_para_envio(texto);
+	}
+	else if(selecionado == "ler") {
+		string conteudo = livro_edit_paginas[indice].trim_whitespace();
+		speak(conteudo != "" ? conteudo : pu.get_value("LIVRO_PAGINA_VAZIA"), true);
+	}
+	else if(selecionado == "excluir") {
+		if(!simple_yes_no(pu.get_value("LIVRO_CONFIRMA_EXCLUSAO_PAGINA"))) return;
+		send_to_server("LIVRO:delpagina|" + livro_edit_slug + "|" + livro_edit_idioma + "|" + (indice + 1), 0, true);
+		livro_edit_paginas.remove_at(uint(indice));
+	}
+}
+
+string livros_pedir_texto_pagina(int numero, string valor_atual) {
+	input_form form(pu.get_value("LIVRO_PAGINA") + " " + numero);
+	form.description = pu.get_value("LIVRO_TEXTO_AJUDA");
+	form.add_text_field("texto", pu.get_value("LIVRO_CAMPO_TEXTO"), valor_atual, true);
+
+	dictionary@ result = form.run();
+	if(form.user_canceled) return "";
+
+	string texto = "";
+	result.get("texto", texto);
+	texto = texto.trim_whitespace();
+	if(texto == "") {
+		speak(pu.get_value("LIVRO_DADOS_INVALIDOS"), true);
+		return "";
+	}
+	return texto;
+}
+
+void livros_editar_dados_form(string slug, string idioma, string titulo, string descricao, string musica) {
+	input_form form(pu.get_value("LIVRO_EDITAR_DADOS"));
+	form.add_text_field("titulo", pu.get_value("LIVRO_CAMPO_TITULO"), titulo, true);
+	form.add_text_field("descricao", pu.get_value("LIVRO_CAMPO_DESCRICAO"), descricao, false);
+	form.add_text_field("musica", pu.get_value("LIVRO_CAMPO_MUSICA"), musica, false);
+
+	dictionary@ result = form.run();
+	if(form.user_canceled) return;
+
+	string novo_titulo = "", nova_descricao = "", nova_musica = "";
+	result.get("titulo", novo_titulo);
+	result.get("descricao", nova_descricao);
+	result.get("musica", nova_musica);
+
+	novo_titulo = novo_titulo.trim_whitespace();
+	nova_descricao = nova_descricao.trim_whitespace();
+	nova_musica = nova_musica.trim_whitespace();
+
+	if(novo_titulo == "") {
+		speak(pu.get_value("LIVRO_DADOS_INVALIDOS"), true);
+		return;
+	}
+
+	if(idioma == "") idioma = "pt";
+	send_to_server("LIVRO:meta|" + slug + "|" + idioma + "|" + novo_titulo + "|" + nova_descricao + "|" + nova_musica, 0, true);
+
+	if(slug == livro_edit_slug) {
+		livro_edit_titulo = novo_titulo;
+		livro_edit_descricao = nova_descricao;
+		livro_edit_musica = nova_musica;
+	}
+}

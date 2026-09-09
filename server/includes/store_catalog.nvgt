@@ -1,0 +1,1404 @@
+// =====================================================================
+// store_catalog.nvgt - Catalogo persistente das lojas de NPC
+// ---------------------------------------------------------------------
+// Porte do sistema de lojas do BGT (items_for_sale.db + tiendas/*.txt)
+// para SQLite. Substitui load_items_for_sale()/save_items_for_sale()/
+// add_to_sale()/init_sell_prices(), que nunca eram chamados.
+//
+// Regras de negocio preservadas do BGT:
+//   - codigo interno do item entre 1000 e 9999 (add_item_for_sale);
+//   - o mesmo item pode ter preco/moeda diferentes em cada loja
+//     (no BGT isso era feito com varios ids; aqui e' um override em
+//     loja_estoque);
+//   - loja sem vinculo nenhum mostra o catalogo inteiro;
+//   - moeda desconhecida = item do inventario usado como moeda;
+//   - carro / motocicleta / lancha sao unicos por jogador.
+// =====================================================================
+
+const double LOJA_TAXA_VENDA_PADRAO = 0.5;
+const double LOJA_MODIFICADOR_VIP = 0.9;
+const int LOJA_CODIGO_MINIMO = 1000;
+const int LOJA_CODIGO_MAXIMO = 9999;
+const int LOJA_ESTOQUE_INFINITO = -1;
+
+// Modificador global de evento (1.0 = sem promocao). O sistema de eventos
+// pode alterar este valor para criar liquidacoes temporarias.
+double loja_modificador_evento = 1.0;
+
+class loja_item {
+	string item;
+	string moeda;
+	double preco;
+	string descricao;
+	int codigo;
+	int estoque;
+	int nivel_minimo;
+	bool vendavel;
+	double taxa_venda;
+
+	loja_item() {
+		this.item = "";
+		this.moeda = "reais";
+		this.preco = 0;
+		this.descricao = "";
+		this.codigo = 0;
+		this.estoque = LOJA_ESTOQUE_INFINITO;
+		this.nivel_minimo = 0;
+		this.vendavel = true;
+		this.taxa_venda = LOJA_TAXA_VENDA_PADRAO;
+	}
+}
+
+loja_item@[] loja_catalogo;
+
+// ---------------------------------------------------------------------
+// Utilitarios
+// ---------------------------------------------------------------------
+
+string loja_normalizar_nome(string valor) {
+	return valor.trim_whitespace().lower();
+}
+
+// Remove os separadores usados no protocolo para nao quebrar o payload.
+string loja_sanitizar_texto(string valor) {
+	string limpo = valor.replace("=", "-");
+	limpo = limpo.replace("|", "-");
+	limpo = limpo.replace("\r", " ");
+	limpo = limpo.replace("\n", " ");
+	return limpo.trim_whitespace();
+}
+
+// Formata com no maximo duas casas decimais e SEM notacao cientifica
+// (a conversao direta de double para string usa %g e viraria "1e+07").
+string loja_formatar_valor(double valor) {
+	bool negativo = valor < 0;
+	if(negativo) valor = -valor;
+
+	double arredondado = round(valor * 100) / 100.0;
+	int64 inteiro = int64(arredondado);
+	int centavos = int(round((arredondado - double(inteiro)) * 100));
+	if(centavos >= 100) {
+		inteiro += 1;
+		centavos = 0;
+	}
+
+	string texto = "" + inteiro;
+	if(centavos > 0) {
+		texto += ".";
+		if(centavos < 10) texto += "0";
+		texto += centavos;
+	}
+
+	if(negativo) texto = "-" + texto;
+	return texto;
+}
+
+loja_item@ loja_buscar_item(string item) {
+	string alvo = loja_normalizar_nome(item);
+	for(uint i = 0; i < loja_catalogo.length(); i++) {
+		if(loja_catalogo[i] is null) continue;
+		if(loja_normalizar_nome(loja_catalogo[i].item) == alvo) return loja_catalogo[i];
+	}
+	return null;
+}
+
+loja_item@ loja_buscar_codigo(int codigo) {
+	if(codigo <= 0) return null;
+	for(uint i = 0; i < loja_catalogo.length(); i++) {
+		if(loja_catalogo[i] is null) continue;
+		if(loja_catalogo[i].codigo == codigo) return loja_catalogo[i];
+	}
+	return null;
+}
+
+// Aceita tanto o codigo numerico quanto o nome do item.
+loja_item@ loja_resolver_item(string identificador) {
+	string chave = identificador.trim_whitespace();
+	if(chave == "") return null;
+
+	// Se a string e' exatamente um numero, tenta primeiro pelo codigo.
+	int64 numero = parse_int(chave);
+	if(numero > 0 && ("" + numero) == chave) {
+		loja_item@ achado = loja_buscar_codigo(int(numero));
+		if(achado !is null) return achado;
+	}
+
+	return loja_buscar_item(chave);
+}
+
+// ---------------------------------------------------------------------
+// Criacao das tabelas
+// ---------------------------------------------------------------------
+
+void criar_tabelas_loja() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_loja - Banco nao inicializado");
+		return;
+	}
+
+	debug_log("Criando tabelas da loja...");
+
+	string tabela_itens = """
+		CREATE TABLE IF NOT EXISTS loja_itens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item TEXT NOT NULL UNIQUE,
+			moeda TEXT NOT NULL DEFAULT 'reais',
+			preco REAL NOT NULL DEFAULT 0,
+			descricao TEXT DEFAULT '',
+			codigo INTEGER DEFAULT 0,
+			estoque INTEGER DEFAULT -1,
+			nivel_minimo INTEGER DEFAULT 0,
+			vendavel INTEGER DEFAULT 1,
+			taxa_venda REAL DEFAULT 0.5,
+			criado_por TEXT DEFAULT 'system',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_itens) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela loja_itens: " + bancoJogo.get_last_error_text());
+	}
+
+	string tabela_estoque = """
+		CREATE TABLE IF NOT EXISTS loja_estoque (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			loja TEXT NOT NULL,
+			item TEXT NOT NULL,
+			ordem INTEGER DEFAULT 0,
+			preco REAL DEFAULT -1,
+			moeda TEXT DEFAULT '',
+			UNIQUE(loja, item)
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_estoque) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela loja_estoque: " + bancoJogo.get_last_error_text());
+	}
+
+	string tabela_precos_venda = """
+		CREATE TABLE IF NOT EXISTS loja_precos_venda (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			item TEXT NOT NULL UNIQUE,
+			preco REAL NOT NULL,
+			moeda TEXT NOT NULL DEFAULT 'gold'
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_precos_venda) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela loja_precos_venda: " + bancoJogo.get_last_error_text());
+	}
+
+	string tabela_transacoes = """
+		CREATE TABLE IF NOT EXISTS loja_transacoes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			jogador TEXT NOT NULL,
+			loja TEXT DEFAULT 'global',
+			tipo TEXT NOT NULL,
+			item TEXT NOT NULL,
+			quantidade INTEGER NOT NULL,
+			moeda TEXT NOT NULL,
+			total REAL NOT NULL,
+			data DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_transacoes) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela loja_transacoes: " + bancoJogo.get_last_error_text());
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_loja_itens_item ON loja_itens(item);");
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_loja_itens_codigo ON loja_itens(codigo);");
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_loja_estoque_loja ON loja_estoque(loja);");
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_loja_transacoes_jogador ON loja_transacoes(jogador);");
+
+	debug_log("OK - Tabelas da loja criadas/verificadas");
+}
+
+// ---------------------------------------------------------------------
+// Semeadura idempotente do catalogo
+// ---------------------------------------------------------------------
+
+int loja_contar_itens() {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM loja_itens;");
+	if(@stmt == null) return 0;
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+int loja_contar_precos_venda() {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM loja_precos_venda;");
+	if(@stmt == null) return 0;
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+bool loja_inserir_padrao(string item, string moeda, double preco, string descricao, int codigo) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = """
+		INSERT OR IGNORE INTO loja_itens (item, moeda, preco, descricao, codigo, criado_por)
+		VALUES (?, ?, ?, ?, ?, 'system');
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, loja_normalizar_nome(item));
+	stmt.bind_text(2, loja_normalizar_nome(moeda));
+	stmt.bind_double(3, preco);
+	stmt.bind_text(4, descricao);
+	stmt.bind_int(5, codigo);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool loja_inserir_preco_venda(string item, double preco, string moeda) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = """
+		INSERT OR IGNORE INTO loja_precos_venda (item, preco, moeda)
+		VALUES (?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, loja_normalizar_nome(item));
+	stmt.bind_double(2, preco);
+	stmt.bind_text(3, loja_normalizar_nome(moeda));
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+void semear_catalogo_padrao() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	if(loja_contar_precos_venda() == 0) {
+		// Migrado de init_sell_prices() (store.nvgt).
+		loja_inserir_preco_venda("diamante", 500, "gold");
+		loja_inserir_preco_venda("rubi", 300, "gold");
+		loja_inserir_preco_venda("esmeralda", 250, "gold");
+		loja_inserir_preco_venda("ouro_em_barra", 1000, "gold");
+		loja_inserir_preco_venda("prata_em_barra", 200, "gold");
+		loja_inserir_preco_venda("item_raro", 100, "stryx");
+		loja_inserir_preco_venda("item_lendario", 500, "stryx");
+		debug_log("LOJA: precos de venda padrao semeados");
+	}
+
+	if(loja_contar_itens() > 0) {
+		debug_log("LOJA: catalogo ja possui itens, semeadura ignorada");
+		return;
+	}
+
+	debug_log("LOJA: catalogo vazio, semeando valores padrao...");
+
+	// --- Migrado de cmd_buy_special() (commands.nvgt), moeda "euro" ---
+	loja_inserir_padrao("mina", "euro", 20, "Uma mina terrestre. Explode quando alguem pisa nela.", 2001);
+	loja_inserir_padrao("bomba_relogio", "euro", 100, "Bomba com temporizador.", 2002);
+	loja_inserir_padrao("bomba_remota", "euro", 200, "Bomba detonada a distancia.", 2003);
+	loja_inserir_padrao("missil_teleguiado", "euro", 200, "Missil que persegue o alvo.", 2004);
+	loja_inserir_padrao("max_bomba", "euro", 250, "Bomba de grande alcance.", 2005);
+	loja_inserir_padrao("bomba_de_fogo", "euro", 250, "Bomba incendiaria.", 2006);
+	loja_inserir_padrao("bomba_atomica", "euro", 300, "Bomba atomica. Use com muito cuidado.", 2007);
+	loja_inserir_padrao("mega_laser", "euro", 5000, "Arma de energia de alto calibre.", 2008);
+	loja_inserir_padrao("sub_laser", "euro", 100000, "Submetralhadora laser.", 2009);
+	loja_inserir_padrao("cuernitoarmani", "euro", 1000000, "Fuzil de colecionador.", 2010);
+	loja_inserir_padrao("galil", "euro", 100000, "Fuzil de assalto Galil.", 2011);
+	loja_inserir_padrao("missil", "euro", 15, "Municao para bazuca.", 2012);
+	loja_inserir_padrao("laser", "euro", 5, "Carga de energia para armas laser.", 2013);
+	loja_inserir_padrao("7.62mm", "euro", 3, "Municao 7.62mm.", 2014);
+	loja_inserir_padrao("5.56mm", "euro", 2, "Municao 5.56mm.", 2015);
+	loja_inserir_padrao("9mm", "euro", 2, "Municao 9mm.", 2016);
+
+	// --- Migrado de barlanchonete() (cliente), moeda "reais" ---
+	loja_inserir_padrao("refrigerante", "reais", 4, "Um refrigerante gelado.", 2101);
+	loja_inserir_padrao("cerveja", "reais", 6, "Uma cerveja bem gelada.", 2102);
+	loja_inserir_padrao("energetico", "reais", 5, "Bebida energetica.", 2103);
+
+	// --- Veiculos: precos e codigos originais do items_for_sale.db do BGT.
+	// A moeda original era "elementales", inexistente neste projeto; foi
+	// convertida para "reais" mantendo o valor de balanceamento original.
+	loja_inserir_padrao("motocicleta", "reais", 10000000, "Se algum dia voce desejou pilotar uma motocicleta, agora pode, com este belo veiculo preto.", 1025);
+	loja_inserir_padrao("carro", "reais", 10000000, "Com este belo automovel voce podera percorrer as ruas das maiores cidades sem temer nada.", 1026);
+	loja_inserir_padrao("lancha", "reais", 10000000, "Uma lancha branca, que serve para navegar pelas aguas de rios, lagos e mares mais profundos.", 1027);
+	loja_inserir_padrao("galao_de_gasolina", "reais", 100000, "Um galao de gasolina vermelho, com um x amarelo na lateral.", 1028);
+	loja_inserir_padrao("galao_de_gasolina_para_moto", "reais", 100000, "Um galao de gasolina com o desenho de uma motocicleta pintado nele.", 1029);
+
+	// --- Vinculos minimos, para as lojas especiais continuarem funcionando ---
+	string[] armas = {"mina", "bomba_relogio", "bomba_remota", "missil_teleguiado",
+		"max_bomba", "bomba_de_fogo", "bomba_atomica", "mega_laser", "sub_laser",
+		"cuernitoarmani", "galil", "missil", "laser", "7.62mm", "5.56mm", "9mm"};
+	string[] lojas_de_arma = {"armas", "explosivos"};
+	for(uint l = 0; l < lojas_de_arma.length(); l++) {
+		for(uint i = 0; i < armas.length(); i++) {
+			loja_vincular_item(lojas_de_arma[l], armas[i], "system");
+		}
+	}
+
+	string[] bebidas = {"refrigerante", "cerveja", "energetico"};
+	string[] lojas_de_comida = {"lanchonete", "bar", "comidas"};
+	for(uint l = 0; l < lojas_de_comida.length(); l++) {
+		for(uint i = 0; i < bebidas.length(); i++) {
+			loja_vincular_item(lojas_de_comida[l], bebidas[i], "system");
+		}
+	}
+
+	string[] veiculos = {"carro", "motocicleta", "lancha", "galao_de_gasolina", "galao_de_gasolina_para_moto"};
+	for(uint i = 0; i < veiculos.length(); i++) {
+		loja_vincular_item("autos", veiculos[i], "system");
+	}
+
+	debug_log("LOJA: catalogo padrao semeado com " + loja_contar_itens() + " itens");
+}
+
+// ---------------------------------------------------------------------
+// Migracao do arquivo texto legado items_for_sale.db
+// Formato do BGT: item=moeda=preco=descricao=id
+// ---------------------------------------------------------------------
+
+// Importa o arquivo legado (se existir) e, em seguida, garante que o
+// catalogo tenha ao menos os valores padrao. As duas etapas sao
+// idempotentes: rodar a cada boot nao duplica nem sobrescreve nada.
+void migrar_items_for_sale_legado() {
+	if(!database_initialized || bancoJogo is null) return;
+	loja_importar_arquivo_legado();
+	semear_catalogo_padrao();
+}
+
+void loja_importar_arquivo_legado() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(!file_exists("items_for_sale.db")) {
+		debug_log("LOJA: items_for_sale.db nao encontrado (OK se ja migrado)");
+		return;
+	}
+
+	file f;
+	if(!f.open("items_for_sale.db", "r")) return;
+	string conteudo = f.read();
+	f.close();
+
+	if(conteudo.trim_whitespace() == "") {
+		file_copy("items_for_sale.db", "items_for_sale.db.migrado", true);
+		file_delete("items_for_sale.db");
+		return;
+	}
+
+	string[] linhas = conteudo.split("\r\n");
+	int migrados = 0;
+	int ignorados = 0;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+
+		string[] dados = linha.split("=");
+		if(dados.length() < 5) {
+			ignorados++;
+			continue;
+		}
+
+		string item = loja_normalizar_nome(dados[0]);
+		string moeda = loja_normalizar_nome(dados[1]);
+		double preco = parse_float(dados[2]);
+		string descricao = dados[3];
+		int codigo = int(parse_int(dados[4]));
+
+		if(item == "") {
+			ignorados++;
+			continue;
+		}
+
+		if(loja_inserir_padrao(item, moeda, preco, descricao, codigo)) migrados++;
+		else ignorados++;
+	}
+
+	debug_log("LOJA MIGRACAO: " + migrados + " itens importados de items_for_sale.db (" + ignorados + " ignorados)");
+
+	file_copy("items_for_sale.db", "items_for_sale.db.migrado", true);
+	file_delete("items_for_sale.db");
+}
+
+// ---------------------------------------------------------------------
+// Carregamento do catalogo em memoria
+// ---------------------------------------------------------------------
+
+void carregar_catalogo_loja(bool reset = true) {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: carregar_catalogo_loja - Banco nao inicializado");
+		return;
+	}
+
+	if(reset) {
+		loja_catalogo.resize(0);
+		items_sale.resize(0);
+	}
+
+	string query = """
+		SELECT item, moeda, preco, descricao, codigo, estoque, nivel_minimo, vendavel, taxa_venda
+		FROM loja_itens
+		ORDER BY item;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar carregar_catalogo_loja: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	int total = 0;
+	while(stmt.step() == SQLITE_ROW) {
+		loja_item@ registro = loja_item();
+		registro.item = stmt.column_text(0);
+		registro.moeda = stmt.column_text(1);
+		registro.preco = stmt.column_double(2);
+		registro.descricao = stmt.column_text(3);
+		registro.codigo = stmt.column_int(4);
+		registro.estoque = stmt.column_int(5);
+		registro.nivel_minimo = stmt.column_int(6);
+		registro.vendavel = stmt.column_int(7) != 0;
+		registro.taxa_venda = stmt.column_double(8);
+
+		loja_catalogo.insert_last(registro);
+
+		// Mantem items_sale[] (store.nvgt) coerente para item_exists_for_sale()
+		// e cmd_buy_internal(), que ainda leem esse array global.
+		add_to_sale(registro.item, registro.moeda, registro.preco, registro.descricao, registro.codigo);
+		total++;
+	}
+
+	debug_log("LOJA: catalogo carregado com " + total + " itens");
+}
+
+// ---------------------------------------------------------------------
+// CRUD do catalogo
+// ---------------------------------------------------------------------
+
+bool loja_adicionar_item(string item, string moeda, double preco, string descricao, int codigo, string admin) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	item = loja_normalizar_nome(item);
+	moeda = loja_normalizar_nome(moeda);
+
+	if(item == "" || moeda == "") return false;
+	if(preco < 0) return false;
+
+	// Regra do BGT: identificador interno entre 1000 e 9999.
+	if(codigo < LOJA_CODIGO_MINIMO || codigo > LOJA_CODIGO_MAXIMO) {
+		debug_log("LOJA: codigo " + codigo + " fora do intervalo " + LOJA_CODIGO_MINIMO + "-" + LOJA_CODIGO_MAXIMO);
+		return false;
+	}
+
+	if(loja_buscar_item(item) !is null) return false;
+	if(loja_buscar_codigo(codigo) !is null) return false;
+
+	string query = """
+		INSERT INTO loja_itens (item, moeda, preco, descricao, codigo, criado_por)
+		VALUES (?, ?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar loja_adicionar_item: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, item);
+	stmt.bind_text(2, moeda);
+	stmt.bind_double(3, preco);
+	stmt.bind_text(4, loja_sanitizar_texto(descricao));
+	stmt.bind_int(5, codigo);
+	stmt.bind_text(6, admin);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao inserir item na loja: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	carregar_catalogo_loja(true);
+	eadm(admin + " adicionou o item " + item + " ao catalogo da loja por " + loja_formatar_valor(preco) + " " + moeda + ".");
+	debug_log("LOJA: " + admin + " adicionou " + item + " (" + loja_formatar_valor(preco) + " " + moeda + ", codigo " + codigo + ")");
+	return true;
+}
+
+bool loja_remover_item(string item) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	item = loja_normalizar_nome(item);
+	if(item == "") return false;
+	if(loja_buscar_item(item) is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM loja_itens WHERE LOWER(item) = ?;");
+	if(@stmt == null) return false;
+	stmt.bind_text(1, item);
+	if(stmt.step() != SQLITE_DONE) return false;
+
+	sqlite3statement@ stmt2 = bancoJogo.prepare("DELETE FROM loja_estoque WHERE LOWER(item) = ?;");
+	if(@stmt2 != null) {
+		stmt2.bind_text(1, item);
+		stmt2.step();
+	}
+
+	carregar_catalogo_loja(true);
+	debug_log("LOJA: item " + item + " removido do catalogo");
+	return true;
+}
+
+bool loja_editar_item(string item, string campo, string valor) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	item = loja_normalizar_nome(item);
+	campo = loja_normalizar_nome(campo);
+	if(item == "" || campo == "") return false;
+	if(loja_buscar_item(item) is null) return false;
+
+	string coluna = "";
+	int tipo = 0; // 0 = texto, 1 = inteiro, 2 = real
+
+	if(campo == "moeda") { coluna = "moeda"; tipo = 0; }
+	else if(campo == "preco") { coluna = "preco"; tipo = 2; }
+	else if(campo == "descricao") { coluna = "descricao"; tipo = 0; }
+	else if(campo == "codigo") { coluna = "codigo"; tipo = 1; }
+	else if(campo == "estoque") { coluna = "estoque"; tipo = 1; }
+	else if(campo == "nivel_minimo") { coluna = "nivel_minimo"; tipo = 1; }
+	else if(campo == "vendavel") { coluna = "vendavel"; tipo = 1; }
+	else if(campo == "taxa_venda") { coluna = "taxa_venda"; tipo = 2; }
+	else return false;
+
+	if(campo == "codigo") {
+		int novo_codigo = int(parse_int(valor));
+		if(novo_codigo < LOJA_CODIGO_MINIMO || novo_codigo > LOJA_CODIGO_MAXIMO) return false;
+		loja_item@ conflito = loja_buscar_codigo(novo_codigo);
+		if(conflito !is null && loja_normalizar_nome(conflito.item) != item) return false;
+	}
+
+	// A coluna vem de uma lista fechada acima; o valor sempre vai por bind.
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE loja_itens SET " + coluna + " = ? WHERE LOWER(item) = ?;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar loja_editar_item: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	if(tipo == 1) {
+		int numero = 0;
+		if(campo == "vendavel") {
+			string v = loja_normalizar_nome(valor);
+			numero = (v == "1" || v == "sim" || v == "true") ? 1 : 0;
+		}
+		else {
+			numero = int(parse_int(valor));
+		}
+		stmt.bind_int(1, numero);
+	}
+	else if(tipo == 2) {
+		stmt.bind_double(1, parse_float(valor));
+	}
+	else {
+		stmt.bind_text(1, loja_sanitizar_texto(valor));
+	}
+	stmt.bind_text(2, item);
+
+	if(stmt.step() != SQLITE_DONE) return false;
+
+	carregar_catalogo_loja(true);
+	debug_log("LOJA: item " + item + " teve o campo " + campo + " alterado para " + valor);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// Vinculo item <-> loja (o "objetos colocados en tiendas" do BGT)
+// ---------------------------------------------------------------------
+
+bool loja_vincular_item(string loja, string item, string admin) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	loja = loja_normalizar_nome(loja);
+	item = loja_normalizar_nome(item);
+	if(loja == "" || item == "") return false;
+
+	string query = """
+		INSERT OR IGNORE INTO loja_estoque (loja, item, ordem, preco, moeda)
+		VALUES (?, ?, 0, -1, '');
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, loja);
+	stmt.bind_text(2, item);
+
+	if(stmt.step() != SQLITE_DONE) return false;
+
+	if(admin != "system") {
+		debug_log("LOJA: " + admin + " vinculou " + item + " a loja " + loja);
+	}
+	return true;
+}
+
+bool loja_desvincular_item(string loja, string item) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	loja = loja_normalizar_nome(loja);
+	item = loja_normalizar_nome(item);
+	if(loja == "" || item == "") return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM loja_estoque WHERE LOWER(loja) = ? AND LOWER(item) = ?;");
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, loja);
+	stmt.bind_text(2, item);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool loja_limpar_loja(string loja) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	loja = loja_normalizar_nome(loja);
+	if(loja == "") return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM loja_estoque WHERE LOWER(loja) = ?;");
+	if(@stmt == null) return false;
+	stmt.bind_text(1, loja);
+	return stmt.step() == SQLITE_DONE;
+}
+
+// Define preco/moeda especificos de uma loja para um item ja vinculado.
+// Preserva a regra do BGT de o mesmo item ter precos diferentes por loja.
+bool loja_definir_preco_na_loja(string loja, string item, double preco, string moeda) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	loja = loja_normalizar_nome(loja);
+	item = loja_normalizar_nome(item);
+	if(loja == "" || item == "") return false;
+
+	loja_vincular_item(loja, item, "system");
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE loja_estoque SET preco = ?, moeda = ? WHERE LOWER(loja) = ? AND LOWER(item) = ?;");
+	if(@stmt == null) return false;
+
+	stmt.bind_double(1, preco);
+	stmt.bind_text(2, loja_normalizar_nome(moeda));
+	stmt.bind_text(3, loja);
+	stmt.bind_text(4, item);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+int loja_contar_vinculos(string loja) {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM loja_estoque WHERE LOWER(loja) = ?;");
+	if(@stmt == null) return 0;
+	stmt.bind_text(1, loja_normalizar_nome(loja));
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+// Devolve linhas "item|preco|moeda" (preco -1 e moeda vazia = usa o catalogo).
+string[] loja_vinculos_da_loja(string loja) {
+	string[] resultado;
+	if(!database_initialized || bancoJogo is null) return resultado;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT item, preco, moeda FROM loja_estoque WHERE LOWER(loja) = ? ORDER BY ordem, item;");
+	if(@stmt == null) return resultado;
+
+	stmt.bind_text(1, loja_normalizar_nome(loja));
+
+	while(stmt.step() == SQLITE_ROW) {
+		resultado.insert_last(stmt.column_text(0) + "|" + loja_formatar_valor(stmt.column_double(1)) + "|" + stmt.column_text(2));
+	}
+
+	return resultado;
+}
+
+// Se a loja nao tem vinculo nenhum devolve o catalogo inteiro
+// (compatibilidade com o comportamento atual de cmd_store).
+string[] loja_itens_da_loja(string loja) {
+	string[] resultado;
+
+	string[] vinculos = loja_vinculos_da_loja(loja);
+	if(vinculos.length() > 0) {
+		for(uint i = 0; i < vinculos.length(); i++) {
+			string[] partes = vinculos[i].split("|");
+			if(partes.length() > 0) resultado.insert_last(partes[0]);
+		}
+		return resultado;
+	}
+
+	for(uint i = 0; i < loja_catalogo.length(); i++) {
+		if(loja_catalogo[i] is null) continue;
+		resultado.insert_last(loja_catalogo[i].item);
+	}
+
+	return resultado;
+}
+
+// ---------------------------------------------------------------------
+// Listagem de lojas do servidor
+// ---------------------------------------------------------------------
+
+// Formato de cada linha: nome|mapa|minx,maxx,miny,maxy|qtd_itens
+string[] loja_listar_lojas() {
+	string[] resultado;
+	string[] vistos;
+
+	for(uint m = 0; m < server_maps.length(); m++) {
+		map@ mapa = server_maps[m];
+		if(mapa is null) continue;
+
+		for(uint i = 0; i < mapa.mapdata.length(); i++) {
+			string linha = mapa.mapdata[i].trim_whitespace();
+			if(linha == "" || linha.find("store:") != 0) continue;
+
+			string[] partes = linha.split(":");
+			if(partes.length() < 6) continue;
+
+			int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			if(!map_try_parse_int_token(partes[1], x1) || !map_try_parse_int_token(partes[2], x2)) continue;
+			if(!map_try_parse_int_token(partes[3], y1) || !map_try_parse_int_token(partes[4], y2)) continue;
+
+			int minx = x1 <= x2 ? x1 : x2;
+			int maxx = x1 <= x2 ? x2 : x1;
+			int miny = y1 <= y2 ? y1 : y2;
+			int maxy = y1 <= y2 ? y2 : y1;
+
+			string nome = loja_normalizar_nome(partes[5]);
+			if(nome == "") nome = "mista";
+
+			if(vistos.find(nome) >= 0) continue;
+			vistos.insert_last(nome);
+
+			resultado.insert_last(nome + "|" + mapa.name + "|" +
+				minx + "," + maxx + "," + miny + "," + maxy + "|" +
+				loja_contar_vinculos(nome));
+		}
+	}
+
+	// Lojas que so existem no banco (sem zona em nenhum mapa carregado).
+	if(database_initialized && bancoJogo !is null) {
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT DISTINCT loja FROM loja_estoque ORDER BY loja;");
+		if(@stmt != null) {
+			while(stmt.step() == SQLITE_ROW) {
+				string nome = loja_normalizar_nome(stmt.column_text(0));
+				if(nome == "") continue;
+				if(vistos.find(nome) >= 0) continue;
+				vistos.insert_last(nome);
+				resultado.insert_last(nome + "|(sem zona)|0,0,0,0|" + loja_contar_vinculos(nome));
+			}
+		}
+	}
+
+	return resultado;
+}
+
+// ---------------------------------------------------------------------
+// Preco final e cobranca
+// ---------------------------------------------------------------------
+
+// Ponto unico de desconto: base x modificador VIP x modificador de evento.
+double loja_preco_final(int player_index, string item, string loja = "") {
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro is null) return 0;
+
+	double base = registro.preco;
+
+	if(loja != "") {
+		string[] vinculos = loja_vinculos_da_loja(loja);
+		string alvo = loja_normalizar_nome(item);
+		for(uint i = 0; i < vinculos.length(); i++) {
+			string[] partes = vinculos[i].split("|");
+			if(partes.length() < 3) continue;
+			if(loja_normalizar_nome(partes[0]) != alvo) continue;
+			double override_preco = parse_float(partes[1]);
+			if(override_preco >= 0) base = override_preco;
+			break;
+		}
+	}
+
+	if(player_index >= 0 && player_index < int(players.length())) {
+		if(has_role(players[player_index].charname, "vip")) {
+			base = base * LOJA_MODIFICADOR_VIP;
+		}
+	}
+
+	base = base * loja_modificador_evento;
+	if(base < 0) base = 0;
+
+	return base;
+}
+
+string loja_moeda_final(string item, string loja = "") {
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro is null) return "reais";
+
+	string moeda = registro.moeda;
+
+	if(loja != "") {
+		string[] vinculos = loja_vinculos_da_loja(loja);
+		string alvo = loja_normalizar_nome(item);
+		for(uint i = 0; i < vinculos.length(); i++) {
+			string[] partes = vinculos[i].split("|");
+			if(partes.length() < 3) continue;
+			if(loja_normalizar_nome(partes[0]) != alvo) continue;
+			string override_moeda = loja_normalizar_nome(partes[2]);
+			if(override_moeda != "") moeda = override_moeda;
+			break;
+		}
+	}
+
+	return moeda;
+}
+
+string loja_nome_amigavel_moeda(string moeda) {
+	moeda = loja_normalizar_nome(moeda);
+	if(moeda == "stryx") return "Stryx";
+	if(moeda == "creditos") return "creditos";
+	if(moeda == "saldo" || moeda == "dinheiro" || moeda == "reais") return "reais";
+	if(moeda == "gold" || moeda == "ouro" || moeda == "coins") return "ouro";
+	return moeda;
+}
+
+bool loja_tem_saldo(int player_index, string moeda, double valor) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	moeda = loja_normalizar_nome(moeda);
+	player@ p = @players[player_index];
+
+	if(moeda == "stryx") return p.has_stryx(valor);
+	if(moeda == "creditos") return p.has_credits(valor);
+	if(moeda == "saldo" || moeda == "dinheiro" || moeda == "reais") return p.has_money(valor);
+	if(moeda == "gold" || moeda == "ouro" || moeda == "coins") return double(p.gold) >= valor;
+
+	return double(p.inv_item_number(moeda)) >= valor;
+}
+
+// Unifica stryx / creditos / saldo|dinheiro|reais / gold / item-como-moeda.
+bool loja_cobrar(int player_index, string moeda, double valor) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+	if(valor <= 0) return true;
+
+	moeda = loja_normalizar_nome(moeda);
+	if(!loja_tem_saldo(player_index, moeda, valor)) return false;
+
+	player@ p = @players[player_index];
+
+	if(moeda == "stryx") {
+		p.remove_stryx(valor);
+	}
+	else if(moeda == "creditos") {
+		p.remove_credits(valor);
+	}
+	else if(moeda == "saldo" || moeda == "dinheiro" || moeda == "reais") {
+		p.remove_money(valor, "compra na loja");
+	}
+	else if(moeda == "gold" || moeda == "ouro" || moeda == "coins") {
+		p.gold -= int(round(valor));
+		if(p.gold < 0) p.gold = 0;
+	}
+	else {
+		p.inv_add_item(moeda, -int(round(valor)), true);
+	}
+
+	return true;
+}
+
+void loja_creditar(int player_index, string moeda, double valor) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	if(valor <= 0) return;
+
+	moeda = loja_normalizar_nome(moeda);
+	player@ p = @players[player_index];
+
+	if(moeda == "stryx") {
+		p.add_stryx(valor);
+	}
+	else if(moeda == "creditos") {
+		p.add_credits(valor);
+	}
+	else if(moeda == "saldo" || moeda == "dinheiro" || moeda == "reais") {
+		p.add_money(valor, "venda na loja");
+	}
+	else if(moeda == "gold" || moeda == "ouro" || moeda == "coins") {
+		p.gold += int(round(valor));
+	}
+	else {
+		p.inv_add_item(moeda, int(round(valor)), true);
+	}
+}
+
+// ---------------------------------------------------------------------
+// Registro de transacoes (substitui save_transfer/eadm em espanhol)
+// ---------------------------------------------------------------------
+
+void loja_registrar_transacao(string jogador, string loja, string tipo, string item, int qtd, string moeda, double total) {
+	if(database_initialized && bancoJogo !is null) {
+		string query = """
+			INSERT INTO loja_transacoes (jogador, loja, tipo, item, quantidade, moeda, total)
+			VALUES (?, ?, ?, ?, ?, ?, ?);
+		""";
+
+		sqlite3statement@ stmt = bancoJogo.prepare(query);
+		if(@stmt != null) {
+			stmt.bind_text(1, jogador);
+			stmt.bind_text(2, loja == "" ? "global" : loja);
+			stmt.bind_text(3, tipo);
+			stmt.bind_text(4, item);
+			stmt.bind_int(5, qtd);
+			stmt.bind_text(6, moeda);
+			stmt.bind_double(7, total);
+			stmt.step();
+		}
+	}
+
+	log_to_database("INFO", "ECONOMY",
+		tipo + ": " + qtd + "x " + item + " por " + total + " " + moeda + " (loja: " + (loja == "" ? "global" : loja) + ")",
+		-1, jogador);
+
+	debug_log("LOJA " + tipo + ": " + jogador + " " + qtd + "x " + item + " = " + total + " " + moeda);
+}
+
+// ---------------------------------------------------------------------
+// Precos de venda (substitui custom_sell_prices/init_sell_prices)
+// ---------------------------------------------------------------------
+
+// Devolve "preco|moeda" quando existe preco de venda customizado, ou "".
+string loja_preco_venda_customizado(string item) {
+	if(!database_initialized || bancoJogo is null) return "";
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT preco, moeda FROM loja_precos_venda WHERE LOWER(item) = ?;");
+	if(@stmt == null) return "";
+
+	stmt.bind_text(1, loja_normalizar_nome(item));
+
+	if(stmt.step() == SQLITE_ROW) {
+		return loja_formatar_valor(stmt.column_double(0)) + "|" + stmt.column_text(1);
+	}
+
+	return "";
+}
+
+double loja_preco_venda(string item) {
+	string custom = loja_preco_venda_customizado(item);
+	if(custom != "") {
+		string[] partes = custom.split("|");
+		if(partes.length() >= 1) return parse_float(partes[0]);
+	}
+
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro !is null) {
+		double taxa = registro.taxa_venda;
+		if(taxa <= 0) taxa = LOJA_TAXA_VENDA_PADRAO;
+		return registro.preco * taxa;
+	}
+
+	return 1.0;
+}
+
+string loja_moeda_venda(string item) {
+	string custom = loja_preco_venda_customizado(item);
+	if(custom != "") {
+		string[] partes = custom.split("|");
+		if(partes.length() >= 2) return partes[1];
+	}
+
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro !is null) return registro.moeda;
+
+	return "gold";
+}
+
+bool loja_definir_preco_venda(string item, double preco, string moeda) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	item = loja_normalizar_nome(item);
+	if(item == "") return false;
+
+	string query = """
+		INSERT OR REPLACE INTO loja_precos_venda (item, preco, moeda)
+		VALUES (?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return false;
+
+	stmt.bind_text(1, item);
+	stmt.bind_double(2, preco);
+	stmt.bind_text(3, loja_normalizar_nome(moeda));
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+// ---------------------------------------------------------------------
+// Montagem do payload enviado ao cliente
+// ---------------------------------------------------------------------
+
+// Primeira linha: "#loja=<nome>"
+// Demais linhas: item=codigo=preco=moeda=descricao=estoque
+string loja_montar_payload(string loja, int player_index) {
+	loja = loja_normalizar_nome(loja);
+	if(loja == "") loja = "mista";
+
+	string[] nomes = loja_itens_da_loja(loja);
+	string payload = "#loja=" + loja;
+
+	int nivel = 1;
+	if(player_index >= 0 && player_index < int(players.length())) {
+		nivel = players[player_index].player_level;
+	}
+
+	int enviados = 0;
+	for(uint i = 0; i < nomes.length(); i++) {
+		loja_item@ registro = loja_buscar_item(nomes[i]);
+		if(registro is null) continue;
+		if(registro.estoque == 0) continue;
+		if(registro.nivel_minimo > nivel) continue;
+
+		double preco = loja_preco_final(player_index, registro.item, loja);
+		string moeda = loja_moeda_final(registro.item, loja);
+
+		payload += "\r\n" + registro.item +
+			"=" + registro.codigo +
+			"=" + loja_formatar_valor(preco) +
+			"=" + moeda +
+			"=" + loja_sanitizar_texto(registro.descricao) +
+			"=" + registro.estoque;
+		enviados++;
+	}
+
+	if(enviados == 0) return "";
+	return payload;
+}
+
+void loja_abrir_para(int player_index, string loja) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	string payload = loja_montar_payload(loja, player_index);
+
+	if(payload == "") {
+		send_reliable_text(p.peer_id, "msg2 Esta loja nao tem itens disponiveis no momento.", 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "store " + payload, 0);
+	debug_log("LOJA: " + p.charname + " abriu a loja '" + loja + "'");
+}
+
+// ---------------------------------------------------------------------
+// Veiculos: delega a persistencia para o formato de vehicles.nvgt
+// (players/<owner>/<tipo>.vehicle), em vez dos .md orfaos do BGT.
+// ---------------------------------------------------------------------
+
+bool loja_item_e_veiculo(string item) {
+	string nome = loja_normalizar_nome(item);
+	return nome == "carro" || nome == "motocicleta" || nome == "moto" || nome == "lancha";
+}
+
+string loja_tipo_veiculo(string item) {
+	string nome = loja_normalizar_nome(item);
+	if(nome == "carro") return "carro";
+	if(nome == "motocicleta" || nome == "moto") return "moto";
+	if(nome == "lancha") return "lancha";
+	return "";
+}
+
+bool loja_jogador_tem_veiculo(string charname, string tipo) {
+	return file_exists("players/" + charname + "/" + tipo + ".vehicle");
+}
+
+// Entrega o veiculo: cria o arquivo de combustivel e a chave no inventario.
+bool loja_entregar_veiculo(int player_index, string item) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	string tipo = loja_tipo_veiculo(item);
+	if(tipo == "") return false;
+
+	player@ p = @players[player_index];
+
+	if(loja_jogador_tem_veiculo(p.charname, tipo)) {
+		send_reliable_text(p.peer_id, "msg2 Voce ja possui este veiculo.", 0);
+		return false;
+	}
+
+	if(!directory_exists("players/" + p.charname)) {
+		directory_create("players/" + p.charname);
+	}
+
+	// Tanque cheio na entrega, como no BGT (100 no carro/lancha, 1000 na moto,
+	// aqui normalizado para a escala 0-100 usada por vehicles.nvgt).
+	vehicle_save_fuel(p.charname, tipo, 100.0);
+
+	string chave = "";
+	if(tipo == "carro") chave = "chave_do_carro_de_" + p.charname;
+	else if(tipo == "moto") chave = "chave_da_moto_de_" + p.charname;
+	else chave = "chave_da_lancha_de_" + p.charname;
+
+	p.inv_add_item(chave, 1, true);
+
+	if(tipo == "carro") {
+		send_reliable_text(p.peer_id, "msg2 Voce comprou seu automovel! Aqui esta a sua chave.", 0);
+	}
+	else if(tipo == "moto") {
+		send_reliable_text(p.peer_id, "msg2 Voce comprou sua motocicleta! Aqui esta a sua chave.", 0);
+	}
+	else {
+		send_reliable_text(p.peer_id, "msg2 Voce comprou sua lancha! Ela so pode ser usada em mar profundo, onde nao da para nadar.", 0);
+	}
+
+	debug_log("LOJA: " + p.charname + " recebeu o veiculo " + tipo);
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// Compra
+// ---------------------------------------------------------------------
+
+void loja_baixar_estoque(string item, int quantidade) {
+	if(!database_initialized || bancoJogo is null) return;
+
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro is null) return;
+	if(registro.estoque == LOJA_ESTOQUE_INFINITO) return;
+
+	int novo = registro.estoque - quantidade;
+	if(novo < 0) novo = 0;
+	registro.estoque = novo;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE loja_itens SET estoque = ? WHERE LOWER(item) = ?;");
+	if(@stmt == null) return;
+	stmt.bind_int(1, novo);
+	stmt.bind_text(2, loja_normalizar_nome(item));
+	stmt.step();
+}
+
+bool loja_processar_compra(int player_index, string loja, string identificador, int quantidade) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = @players[player_index];
+
+	if(quantidade <= 0) {
+		send_reliable_text(p.peer_id, "msg2 Quantidade invalida. Use um valor maior que zero.", 0);
+		return false;
+	}
+
+	loja_item@ registro = loja_resolver_item(identificador);
+	if(registro is null) {
+		send_reliable_text(p.peer_id, "msg2 Item nao encontrado na loja.", 0);
+		return false;
+	}
+
+	loja = loja_normalizar_nome(loja);
+
+	// Se a loja tem vinculos, o item precisa estar entre eles.
+	if(loja != "" && loja_contar_vinculos(loja) > 0) {
+		string[] nomes = loja_itens_da_loja(loja);
+		bool encontrado = false;
+		string alvo = loja_normalizar_nome(registro.item);
+		for(uint i = 0; i < nomes.length(); i++) {
+			if(loja_normalizar_nome(nomes[i]) == alvo) {
+				encontrado = true;
+				break;
+			}
+		}
+		if(!encontrado) {
+			send_reliable_text(p.peer_id, "msg2 Esta loja nao vende " + registro.item + ".", 0);
+			return false;
+		}
+	}
+
+	if(registro.nivel_minimo > p.player_level) {
+		send_reliable_text(p.peer_id, "msg2 Voce precisa ser nivel " + registro.nivel_minimo + " para comprar " + registro.item + ".", 0);
+		return false;
+	}
+
+	if(registro.estoque != LOJA_ESTOQUE_INFINITO && registro.estoque < quantidade) {
+		send_reliable_text(p.peer_id, "msg2 Estoque insuficiente. Restam " + registro.estoque + " unidades de " + registro.item + ".", 0);
+		return false;
+	}
+
+	// Veiculo: unico por jogador e sempre uma unidade.
+	bool e_veiculo = loja_item_e_veiculo(registro.item);
+	if(e_veiculo) {
+		quantidade = 1;
+		string tipo = loja_tipo_veiculo(registro.item);
+		if(loja_jogador_tem_veiculo(p.charname, tipo)) {
+			send_reliable_text(p.peer_id, "msg2 Voce ja possui este veiculo.", 0);
+			return false;
+		}
+	}
+
+	double preco_unitario = loja_preco_final(player_index, registro.item, loja);
+	string moeda = loja_moeda_final(registro.item, loja);
+	double total = preco_unitario * quantidade;
+
+	if(!loja_tem_saldo(player_index, moeda, total)) {
+		send_reliable_text(p.peer_id, "msg2 " + loja_nome_amigavel_moeda(moeda) + " insuficiente. Custo: " +
+			loja_formatar_valor(total) + " " + loja_nome_amigavel_moeda(moeda) + ".", 0);
+		return false;
+	}
+
+	// Checagem de slots (o caminho antigo da classe store nao fazia isso).
+	if(!e_veiculo) {
+		int itens_atuais = int(p.inv.get_keys().length());
+		if(!p.inv_item_exists(registro.item) && itens_atuais >= p.max_inventory_slots) {
+			send_reliable_text(p.peer_id, "msg2 Inventario cheio! Slots: " + itens_atuais + "/" + p.max_inventory_slots, 0);
+			return false;
+		}
+	}
+
+	if(!loja_cobrar(player_index, moeda, total)) {
+		send_reliable_text(p.peer_id, "msg2 Nao foi possivel concluir o pagamento.", 0);
+		return false;
+	}
+
+	if(e_veiculo) {
+		if(!loja_entregar_veiculo(player_index, registro.item)) {
+			// Estorna caso a entrega falhe.
+			loja_creditar(player_index, moeda, total);
+			return false;
+		}
+	}
+	else {
+		p.inv_add_item(registro.item, quantidade, true);
+	}
+
+	loja_baixar_estoque(registro.item, quantidade);
+
+	send_reliable_text(p.peer_id, "msg2 Compra realizada! " + quantidade + "x " + registro.item +
+		" por " + loja_formatar_valor(total) + " " + loja_nome_amigavel_moeda(moeda) + ".", 0);
+
+	int map_idx = get_map_index_from(p.map);
+	if(map_idx >= 0 && map_idx < int(server_maps.length()) && server_maps[map_idx] !is null) {
+		server_maps[map_idx].send_packet(0, "play buy.ogg", p.x, p.y, 20);
+	}
+
+	loja_registrar_transacao(p.charname, loja, "compra", registro.item, quantidade, moeda, total);
+	save_player_to_database(p);
+
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// Venda
+// ---------------------------------------------------------------------
+
+bool loja_item_bloqueado_para_venda(string item) {
+	if(item.find("chave_") == 0) return true;
+	if(item.find("quest_") == 0) return true;
+	if(item == "relógio" || item == "relogio") return true;
+	if(item == "bússola" || item == "bussola") return true;
+
+	loja_item@ registro = loja_buscar_item(item);
+	if(registro !is null && !registro.vendavel) return true;
+
+	return false;
+}
+
+bool loja_processar_venda(int player_index, string loja, string item, int quantidade) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = @players[player_index];
+
+	if(quantidade <= 0) {
+		send_reliable_text(p.peer_id, "msg2 Quantidade invalida.", 0);
+		return false;
+	}
+
+	int possui = p.inv_item_number(item);
+	if(possui < quantidade) {
+		send_reliable_text(p.peer_id, "msg2 Voce nao tem " + quantidade + "x " + item + ". Voce possui " + possui + ".", 0);
+		return false;
+	}
+
+	if(loja_item_bloqueado_para_venda(item)) {
+		send_reliable_text(p.peer_id, "msg2 Este item nao pode ser vendido.", 0);
+		return false;
+	}
+
+	double preco_unitario = loja_preco_venda(item);
+	string moeda = loja_moeda_venda(item);
+	double total = preco_unitario * quantidade;
+
+	p.inv_add_item(item, -quantidade, true);
+	loja_creditar(player_index, moeda, total);
+
+	send_reliable_text(p.peer_id, "msg2 Venda realizada! " + quantidade + "x " + item +
+		" por " + loja_formatar_valor(total) + " " + loja_nome_amigavel_moeda(moeda) + ".", 0);
+
+	loja_registrar_transacao(p.charname, loja, "venda", item, quantidade, moeda, total);
+	save_player_to_database(p);
+
+	return true;
+}
+
+// ---------------------------------------------------------------------
+// Payloads dos menus administrativos
+// ---------------------------------------------------------------------
+
+const string LOJA_MARCADOR_LOJAS = "#lojas#";
+
+// item=moeda=preco=descricao=codigo=estoque=nivel_minimo=vendavel=taxa_venda
+string loja_payload_catalogo() {
+	string payload = "";
+	for(uint i = 0; i < loja_catalogo.length(); i++) {
+		loja_item@ registro = loja_catalogo[i];
+		if(registro is null) continue;
+		if(payload != "") payload += "\r\n";
+		payload += registro.item +
+			"=" + registro.moeda +
+			"=" + loja_formatar_valor(registro.preco) +
+			"=" + loja_sanitizar_texto(registro.descricao) +
+			"=" + registro.codigo +
+			"=" + registro.estoque +
+			"=" + registro.nivel_minimo +
+			"=" + (registro.vendavel ? "1" : "0") +
+			"=" + loja_formatar_valor(registro.taxa_venda);
+	}
+	return payload;
+}
+
+string loja_payload_lojas() {
+	string payload = "";
+	string[] lojas = loja_listar_lojas();
+	for(uint i = 0; i < lojas.length(); i++) {
+		if(payload != "") payload += "\r\n";
+		payload += lojas[i];
+	}
+	return payload;
+}
+
+string loja_payload_gerenciador() {
+	return loja_payload_catalogo() + "\r\n" + LOJA_MARCADOR_LOJAS + "\r\n" + loja_payload_lojas();
+}
+
+// Itens vinculados a uma loja, um por linha, no formato item=preco=moeda
+string loja_payload_estoque(string loja) {
+	string payload = "";
+	string[] vinculos = loja_vinculos_da_loja(loja);
+
+	for(uint i = 0; i < vinculos.length(); i++) {
+		string[] partes = vinculos[i].split("|");
+		if(partes.length() < 3) continue;
+
+		string nome = partes[0];
+		double preco = parse_float(partes[1]);
+		string moeda = partes[2];
+
+		if(preco < 0 || moeda == "") {
+			loja_item@ registro = loja_buscar_item(nome);
+			if(registro !is null) {
+				if(preco < 0) preco = registro.preco;
+				if(moeda == "") moeda = registro.moeda;
+			}
+		}
+
+		if(payload != "") payload += "\r\n";
+		payload += nome + "=" + loja_formatar_valor(preco) + "=" + moeda;
+	}
+
+	return payload;
+}

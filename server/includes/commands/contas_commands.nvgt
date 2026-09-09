@@ -1,0 +1,273 @@
+// ============================================================================
+// Comandos administrativos do sistema de contas (server/includes/contas.nvgt).
+// Migra as ferramentas de conta do BGT:
+//   - /hm (includes/voids.bgt:1342) -> /contasdodispositivo
+//   - accounts_delete() (re_server_test.bgt:1324) -> /purgarcontas
+//   - o arquivamento em players2 -> /arquivarconta e /restaurarconta
+// ============================================================================
+
+void cmd_infoconta(int index, string alvo) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    if(alvo == "") {
+        conta_msg(index, "Uso: /infoconta <jogador>");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    string[] resumo = get_resumo_conta(real);
+    if(resumo.length() == 0) {
+        conta_msg(index, "Nao foi possivel ler os dados da conta " + real + ".");
+        return;
+    }
+
+    conta_msg(index, "--- Conta de " + real + " ---");
+    for(uint i = 0; i < resumo.length(); i++) {
+        conta_msg(index, resumo[i]);
+    }
+
+    string[] eventos = get_eventos_conta(real, 5);
+    if(eventos.length() > 0) {
+        conta_msg(index, "Ultimos eventos:");
+        for(uint i = 0; i < eventos.length(); i++) {
+            conta_msg(index, "  " + eventos[i]);
+        }
+    } else {
+        conta_msg(index, "Sem eventos registrados para esta conta.");
+    }
+
+    debug_log("CONTAS: " + autor + " consultou a conta " + real);
+}
+
+void cmd_arquivarconta(int index, string alvo) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    if(alvo == "") {
+        conta_msg(index, "Uso: /arquivarconta <jogador>");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    if(string_to_lower_case(real) == string_to_lower_case(autor)) {
+        conta_msg(index, "Você não pode arquivar a propria conta.");
+        return;
+    }
+
+    if(get_player_role_level(real) >= get_player_role_level(autor)) {
+        conta_msg(index, "Você não pode arquivar a conta de alguem com cargo igual ou superior ao seu.");
+        return;
+    }
+
+    if(get_status_conta(real) == CONTA_STATUS_ARQUIVADA) {
+        conta_msg(index, "A conta " + real + " ja esta arquivada.");
+        return;
+    }
+
+    if(!arquivar_conta(real, autor, "arquivamento manual")) {
+        conta_msg(index, "Erro ao arquivar a conta " + real + ". Verifique se a migracao do banco foi aplicada.");
+        return;
+    }
+
+    int alvo_index = get_player_index_from(real);
+    if(alvo_index >= 0) {
+        send_reliable_text(players[alvo_index].peer_id, "msgnormal Sua conta foi arquivada por um administrador.", 0);
+        send_reliable_text(players[alvo_index].peer_id, "terminate conta_arquivada", 0);
+        force_disconnect_and_cleanup(players[alvo_index].peer_id, true);
+    }
+
+    conta_msg(index, "Conta " + real + " arquivada. Ela sera restaurada automaticamente no proximo login valido.");
+    eadm(autor + " arquivou a conta " + real + ".");
+}
+
+void cmd_restaurarconta(int index, string alvo) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    if(alvo == "") {
+        conta_msg(index, "Uso: /restaurarconta <jogador>");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    if(get_status_conta(real) != CONTA_STATUS_ARQUIVADA) {
+        conta_msg(index, "A conta " + real + " nao esta arquivada.");
+        return;
+    }
+
+    if(!restaurar_conta(real, autor)) {
+        conta_msg(index, "Erro ao restaurar a conta " + real + ".");
+        return;
+    }
+
+    conta_msg(index, "Conta " + real + " restaurada.");
+    eadm(autor + " restaurou a conta " + real + ".");
+}
+
+// Exclusao definitiva: apenas dev, e exige a palavra CONFIRMAR como segundo argumento.
+void cmd_excluirconta(int index, string alvo, string confirmacao) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_dev(autor)) {
+        conta_msg(index, "Apenas desenvolvedores podem excluir contas definitivamente.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    confirmacao = confirmacao.trim_whitespace();
+
+    if(alvo == "") {
+        conta_msg(index, "Uso: /excluirconta <jogador> CONFIRMAR");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    if(string_to_lower_case(confirmacao) != "confirmar") {
+        conta_msg(index, "Esta acao e IRREVERSIVEL. Para confirmar digite: /excluirconta " + real + " CONFIRMAR");
+        return;
+    }
+
+    if(string_to_lower_case(real) == string_to_lower_case(autor)) {
+        conta_msg(index, "Você não pode excluir a propria conta.");
+        return;
+    }
+
+    string motivo = "";
+    if(!conta_pode_ser_excluida(real, motivo)) {
+        conta_msg(index, "A conta " + real + " nao pode ser excluida: " + motivo + ".");
+        return;
+    }
+
+    if(!excluir_conta_definitivo(real, autor)) {
+        conta_msg(index, "Erro ao excluir a conta " + real + ".");
+        return;
+    }
+
+    conta_msg(index, "Conta " + real + " excluida definitivamente.");
+    eadm(autor + " excluiu definitivamente a conta " + real + ".");
+}
+
+// Migra o comando /hm do BGT (includes/voids.bgt:1342): lista as contas que
+// compartilham o mesmo compid.usr, agora players.computer_id.
+void cmd_contasdodispositivo(int index, string alvo) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    alvo = alvo.trim_whitespace();
+    if(alvo == "") {
+        conta_msg(index, "Uso: /contasdodispositivo <jogador>");
+        return;
+    }
+
+    string real = get_username_real(alvo);
+    if(real == "") {
+        conta_msg(index, "Conta nao encontrada: " + alvo);
+        return;
+    }
+
+    string cid = get_computer_id_conta(real);
+    if(cid == "") {
+        conta_msg(index, "A conta " + real + " nao tem dispositivo registrado. O jogador precisa entrar uma vez com um cliente atualizado.");
+        return;
+    }
+
+    string[] outras = contas_do_dispositivo(cid, real);
+    if(outras.length() == 0) {
+        conta_msg(index, real + " e a unica conta registrada neste dispositivo.");
+        return;
+    }
+
+    conta_msg(index, "Contas que usam o mesmo dispositivo de " + real + " (" + outras.length() + "):");
+    for(uint i = 0; i < outras.length(); i++) {
+        string status = get_status_conta(outras[i]);
+        if(status == "") status = CONTA_STATUS_ATIVA;
+        string online = "offline";
+        if(get_player_index_from(outras[i]) >= 0) online = "online";
+        conta_msg(index, "  " + outras[i] + " - nivel " + get_player_role_level(outras[i]) + " de cargo, status " + status + ", " + online);
+    }
+
+    debug_log("CONTAS: " + autor + " listou as contas do dispositivo de " + real);
+}
+
+// /purgarcontas [simular] - executa a varredura de inatividade a mao.
+// A execucao efetiva exige cargo dev porque a segunda etapa apaga contas.
+void cmd_purgarcontas(int index, bool simular) {
+    if(index < 0 || index >= int(players.length())) return;
+
+    string autor = players[index].charname;
+
+    if(!check_is_admin(autor)) {
+        conta_msg(index, "Você não tem permissao para usar este comando.");
+        return;
+    }
+
+    if(!simular && !check_is_dev(autor)) {
+        conta_msg(index, "Apenas desenvolvedores podem rodar a varredura real. Use: /purgarcontas simular");
+        return;
+    }
+
+    if(simular) {
+        conta_msg(index, "Simulando a varredura de contas inativas (nada sera alterado)...");
+    } else {
+        conta_msg(index, "Rodando a varredura de contas inativas. Esta acao ARQUIVA e EXCLUI contas.");
+    }
+
+    varrer_contas_inativas(simular, autor, index);
+
+    if(!simular) {
+        tempo_varredura_contas.restart();
+        eadm(autor + " executou a varredura de contas inativas manualmente.");
+    }
+
+    conta_msg(index, "Varredura concluida.");
+}

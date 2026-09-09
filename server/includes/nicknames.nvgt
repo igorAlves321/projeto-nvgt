@@ -1,0 +1,1122 @@
+// ===================================================================
+// SISTEMA DE APELIDOS / TROCA DE NOME DE PERSONAGEM
+// Porte de "nicknames.bgt" (validate_nick / validate_or_reject / /cntv / /validate).
+//
+// Fluxo: pedido -> custo -> fila de moderacao -> aprovacao -> aplicacao.
+//
+// A mecanica pura de renomear ja existe em legacy_compat.nvgt (changename()).
+// Este arquivo cobre o que faltava:
+//   - persistencia do pedido em sqlite (tabela nickname_requests);
+//   - comandos /apelido, /apelidostatus, /cntv e /validate;
+//   - custo em gcoins (analogo aos "celestiums" do BGT);
+//   - filtro de nome (disponibilidade case-insensitive + palavras bloqueadas);
+//   - efeitos colaterais de rename que changename() ainda nao cobria
+//     (quests, conquistas, pasta do jogador, mapas isla_privada_de_ /
+//      jaula_del_cachorro_de_, referencias de mundo, historico).
+// ===================================================================
+
+const int NICKNAME_CHANGE_COST = 10000;
+const int NICKNAME_MIN_LEN = 3;
+const int NICKNAME_MAX_LEN = 20;
+const string NICKNAME_CURRENCY = "gcoins";
+
+// Tempo minimo entre duas tentativas de pedido do mesmo jogador (ms).
+const uint64 NICKNAME_REQUEST_COOLDOWN_MS = 10000;
+
+const string NICK_ST_PENDENTE = "pendente";
+const string NICK_ST_APROVADO = "aprovado";
+const string NICK_ST_REJEITADO = "rejeitado";
+const string NICK_ST_APLICADO = "aplicado";
+
+// Termos que so podem bater com o nome INTEIRO (evita bloquear "Sigma" por "gm").
+string[] NICKNAME_STAFF_EXACT = {
+	"adm", "gm", "mod", "dev", "op", "staff", "sistema", "system", "servidor", "server", "arcangel", "arcanjo"
+};
+
+// Termos bloqueados como sub-cadeia em qualquer posicao do nome.
+string[] NICKNAME_STAFF_CONTAINS = {
+	"admin", "administrador", "administrator", "moderador", "moderator", "gamemaster", "game_master"
+};
+
+// Prefixos usados para derivar dono de mapa (player.nvgt: isla_privada_de_<nome>).
+string[] NICKNAME_RESERVED_PREFIXES = {
+	"isla_privada_de_", "jaula_del_cachorro_de_", "llave_de_la_reja_de_entrada_a_la_isla_de_"
+};
+
+// -------------------------------------------------------------------
+// Estado em memoria
+// -------------------------------------------------------------------
+
+class nickname_cooldown {
+	timer t;
+	nickname_cooldown() {
+		t.restart();
+	}
+}
+
+dictionary nickname_cooldowns;
+
+// Trava para nao consultar o banco a cada tick do playerloop().
+dictionary nickname_login_checked;
+
+class nickname_request {
+	int id = 0;
+	string username = "";
+	string requested_name = "";
+	string applied_name = "";
+	string status = "";
+	string requested_at = "";
+	string reviewed_by = "";
+	string reason = "";
+	int cost_paid = 0;
+}
+
+// -------------------------------------------------------------------
+// Banco de dados
+// -------------------------------------------------------------------
+
+void create_nickname_requests_table() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: create_nickname_requests_table - Banco não inicializado");
+		return;
+	}
+
+	debug_log("Criando tabela nickname_requests...");
+
+	string create_table = """
+		CREATE TABLE IF NOT EXISTS nickname_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			requested_name TEXT NOT NULL,
+			applied_name TEXT DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pendente',
+			requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			reviewed_by TEXT DEFAULT '',
+			reviewed_at DATETIME DEFAULT NULL,
+			reason TEXT DEFAULT '',
+			cost_paid INTEGER DEFAULT 0
+		);
+	""";
+
+	if(bancoJogo.execute(create_table) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela nickname_requests: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	// Um unico pedido aberto por jogador.
+	string idx_pendente = "CREATE UNIQUE INDEX IF NOT EXISTS idx_nickname_req_pendente ON nickname_requests(LOWER(username)) WHERE status='pendente';";
+	if(bancoJogo.execute(idx_pendente) != SQLITE_OK) {
+		debug_log("AVISO nickname_requests idx_pendente: " + bancoJogo.get_last_error_text());
+	}
+
+	// Reserva o nome enquanto o pedido esta vivo.
+	string idx_reserva = "CREATE UNIQUE INDEX IF NOT EXISTS idx_nickname_req_reserva ON nickname_requests(LOWER(requested_name)) WHERE status IN ('pendente','aprovado');";
+	if(bancoJogo.execute(idx_reserva) != SQLITE_OK) {
+		debug_log("AVISO nickname_requests idx_reserva: " + bancoJogo.get_last_error_text());
+	}
+
+	string idx_status = "CREATE INDEX IF NOT EXISTS idx_nickname_req_status ON nickname_requests(status);";
+	if(bancoJogo.execute(idx_status) != SQLITE_OK) {
+		debug_log("AVISO nickname_requests idx_status: " + bancoJogo.get_last_error_text());
+	}
+
+	debug_log("OK - Tabela nickname_requests criada/verificada");
+}
+
+bool nickname_db_ready() {
+	return database_initialized && bancoJogo !is null;
+}
+
+string nickname_status_label(string status) {
+	if(status == NICK_ST_PENDENTE) return "aguardando revisão";
+	if(status == NICK_ST_APROVADO) return "aprovado (será aplicado no próximo login)";
+	if(status == NICK_ST_REJEITADO) return "rejeitado";
+	if(status == NICK_ST_APLICADO) return "aplicado";
+	return status;
+}
+
+nickname_request@ nickname_row_to_request(sqlite3statement@ stmt) {
+	if(stmt is null) return null;
+
+	nickname_request req;
+	req.id = stmt.column_int(0);
+	req.username = stmt.column_text(1);
+	req.requested_name = stmt.column_text(2);
+	req.applied_name = stmt.column_text(3);
+	req.status = stmt.column_text(4);
+	req.requested_at = stmt.column_text(5);
+	req.reviewed_by = stmt.column_text(6);
+	req.reason = stmt.column_text(7);
+	req.cost_paid = stmt.column_int(8);
+	return req;
+}
+
+// Retorna o pedido mais recente do jogador (opcionalmente filtrando por status).
+nickname_request@ nickname_get_request(string username, string status_filter = "") {
+	if(!nickname_db_ready()) return null;
+
+	string query = """
+		SELECT id, username, requested_name, applied_name, status,
+		       requested_at, reviewed_by, reason, cost_paid
+		FROM nickname_requests
+		WHERE LOWER(username) = ?
+	""";
+	if(status_filter != "") query += " AND status = ?";
+	query += " ORDER BY id DESC LIMIT 1;";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(stmt is null) {
+		debug_log("NICKNAMES: falha prepare nickname_get_request: " + bancoJogo.get_last_error_text());
+		return null;
+	}
+
+	stmt.bind_text(1, string_to_lower_case(username.trim_whitespace()));
+	if(status_filter != "") stmt.bind_text(2, status_filter);
+
+	if(stmt.step() != SQLITE_ROW) return null;
+	return nickname_row_to_request(stmt);
+}
+
+bool nickname_set_status(int request_id, string status, string revisor, string motivo, string applied_name, int cost_paid) {
+	if(!nickname_db_ready() || request_id <= 0) return false;
+
+	string query = """
+		UPDATE nickname_requests
+		SET status = ?, reviewed_by = ?, reviewed_at = datetime('now'),
+		    reason = ?, applied_name = ?, cost_paid = ?
+		WHERE id = ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(stmt is null) {
+		debug_log("NICKNAMES: falha prepare nickname_set_status: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, status);
+	stmt.bind_text(2, revisor);
+	stmt.bind_text(3, motivo);
+	stmt.bind_text(4, applied_name);
+	stmt.bind_int(5, cost_paid);
+	stmt.bind_int(6, request_id);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("NICKNAMES: falha step nickname_set_status: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+bool nickname_persist_gcoins(string username, int value) {
+	if(!nickname_db_ready()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE players SET gcoins = ? WHERE LOWER(username) = LOWER(?);");
+	if(stmt is null) {
+		debug_log("NICKNAMES: falha prepare persist gcoins: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_int(1, value);
+	stmt.bind_text(2, username);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("NICKNAMES: falha step persist gcoins: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+// -------------------------------------------------------------------
+// Validacao de nome
+// -------------------------------------------------------------------
+
+// Ha um pedido vivo (pendente/aprovado) reservando este nome?
+// ignore_request_id permite revalidar o proprio pedido no momento da aplicacao.
+bool nickname_name_is_reserved(string name, int ignore_request_id = 0) {
+	if(!nickname_db_ready()) return false;
+
+	string trimmed = name.trim_whitespace();
+	if(trimmed == "") return false;
+
+	string query = "SELECT 1 FROM nickname_requests WHERE LOWER(requested_name) = ? AND status IN ('pendente','aprovado') AND id <> ? LIMIT 1;";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(stmt is null) return false;
+
+	stmt.bind_text(1, string_to_lower_case(trimmed));
+	stmt.bind_int(2, ignore_request_id);
+
+	return stmt.step() == SQLITE_ROW;
+}
+
+// TODAS as comparacoes em LOWER(): players.username tem UNIQUE com collation
+// BINARY, entao "Igor" e "igor" coexistiriam e estourariam o UNIQUE dentro de
+// changename() se a checagem fosse case-sensitive.
+bool nickname_name_is_available(string name, int ignore_request_id = 0) {
+	string trimmed = name.trim_whitespace();
+	if(trimmed == "") return false;
+
+	string lower = string_to_lower_case(trimmed);
+
+	// 1) Alguem online com esse nome (comparacao case-insensitive).
+	if(get_player_index_from(trimmed) >= 0) return false;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(string_to_lower_case(players[i].charname) == lower) return false;
+		if(string_to_lower_case(players[i].name) == lower) return false;
+	}
+
+	// 2) Conta existente no banco (LOWER, nunca player_exists_in_database sozinho).
+	if(nickname_db_ready()) {
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT 1 FROM players WHERE LOWER(username) = ? LIMIT 1;");
+		if(stmt !is null) {
+			stmt.bind_text(1, lower);
+			if(stmt.step() == SQLITE_ROW) return false;
+		}
+	}
+
+	// 3) Nome reservado por outro pedido vivo.
+	if(nickname_name_is_reserved(trimmed, ignore_request_id)) return false;
+
+	// 4) Pasta legada do jogador (anti-suplantacao do BGT).
+	// So vale no momento do PEDIDO: na revalidacao (ignore_request_id > 0) a
+	// pasta pode ter sido criada por uma tentativa anterior de aplicacao ou
+	// por uma mensagem de sistema, e o banco ja e a autoridade sobre contas.
+	if(ignore_request_id == 0) {
+		if(directory_exists("players/" + trimmed)) return false;
+		if(directory_exists("players/" + lower)) return false;
+	}
+
+	return true;
+}
+
+bool nickname_name_is_appropriate(string name) {
+	string lower = string_to_lower_case(name.trim_whitespace());
+	if(lower == "") return false;
+
+	// Reutiliza a lista global de chat_advanced.nvgt.
+	for(uint i = 0; i < blocked_words.length(); i++) {
+		string w = string_to_lower_case(blocked_words[i].trim_whitespace());
+		if(w == "") continue;
+		if(lower.find(w) >= 0) return false;
+	}
+
+	for(uint i = 0; i < NICKNAME_STAFF_EXACT.length(); i++) {
+		if(lower == NICKNAME_STAFF_EXACT[i]) return false;
+	}
+
+	for(uint i = 0; i < NICKNAME_STAFF_CONTAINS.length(); i++) {
+		if(lower.find(NICKNAME_STAFF_CONTAINS[i]) >= 0) return false;
+	}
+
+	// Prefixos reservados de mapa quebrariam player.nvgt (dono derivado do nome do mapa).
+	for(uint i = 0; i < NICKNAME_RESERVED_PREFIXES.length(); i++) {
+		if(lower.find(NICKNAME_RESERVED_PREFIXES[i]) >= 0) return false;
+	}
+
+	return true;
+}
+
+// -------------------------------------------------------------------
+// Permissao e limites
+// -------------------------------------------------------------------
+
+// get_player_index_from() e case-sensitive; aqui a busca cai para LOWER().
+int nickname_find_online(string name) {
+	string trimmed = name.trim_whitespace();
+	if(trimmed == "") return -1;
+
+	int idx = get_player_index_from(trimmed);
+	if(idx >= 0) return idx;
+
+	string lower = string_to_lower_case(trimmed);
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(string_to_lower_case(players[i].charname) == lower) return int(i);
+		if(string_to_lower_case(players[i].name) == lower) return int(i);
+	}
+	return -1;
+}
+
+bool nickname_is_staff(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = players[player_index];
+	if(p is null) return false;
+
+	if(p.check_admin()) return true;
+	if(p.moderador) return true;
+	if(p.rank >= 5) return true;
+	if(check_is_admin(p.charname)) return true;
+	if(has_role(p.charname, "moderator")) return true;
+
+	return false;
+}
+
+bool nickname_rate_limited(string username) {
+	string key = string_to_lower_case(username);
+
+	if(nickname_cooldowns.exists(key)) {
+		nickname_cooldown@ c = cast<nickname_cooldown@>(nickname_cooldowns[key]);
+		if(c !is null) {
+			if(c.t.elapsed < NICKNAME_REQUEST_COOLDOWN_MS) return true;
+			c.t.restart();
+			return false;
+		}
+	}
+
+	nickname_cooldown nc;
+	nickname_cooldowns.set(key, @nc);
+	return false;
+}
+
+// -------------------------------------------------------------------
+// Notificacoes
+// -------------------------------------------------------------------
+
+void nickname_send_system_mail(string username, string subject, string body) {
+	string dir = "players/" + username;
+	if(!directory_exists(dir)) directory_create(dir);
+
+	mailbox@ mb = get_mailbox(username);
+	if(mb is null) return;
+
+	if(mb.is_full()) {
+		debug_log("NICKNAMES: caixa de correio cheia, aviso nao entregue a " + username);
+		return;
+	}
+
+	player_mail_message msg(mb.next_message_id, "Sistema", username, subject, body);
+	mb.add_message(msg);
+	mb.save();
+}
+
+// Avisa o jogador esteja ele online ou nao (offline vai para a caixa de correio).
+void nickname_notify(string username, string subject, string body) {
+	int idx = nickname_find_online(username);
+	if(idx >= 0 && players[idx] !is null) {
+		send_reliable_text(players[idx].peer_id, "msg2 " + body, 0);
+		return;
+	}
+	nickname_send_system_mail(username, subject, body);
+}
+
+// -------------------------------------------------------------------
+// Efeitos colaterais do rename (o que changename() ainda nao cobre)
+// -------------------------------------------------------------------
+
+// Reescreve o nome do dono embutido no conteudo de um .map.
+// O BGT fazia string_replace cru no arquivo inteiro, o que corrompe palavras
+// que apenas CONTENHAM o nome antigo ("Ana" dentro de "banana"). Aqui a troca
+// e feita por CAMPO (mapas sao delimitados por ":"), o que cobre os mesmos
+// casos sem o efeito colateral.
+string nickname_rewrite_map_content(string content, string old_name, string new_name) {
+	string[] old_tokens;
+	string[] new_tokens;
+	for(uint i = 0; i < NICKNAME_RESERVED_PREFIXES.length(); i++) {
+		old_tokens.insert_last(NICKNAME_RESERVED_PREFIXES[i] + old_name);
+		new_tokens.insert_last(NICKNAME_RESERVED_PREFIXES[i] + new_name);
+	}
+
+	string[] lines = content.split("\r\n");
+	for(uint l = 0; l < lines.length(); l++) {
+		string[] fields = lines[l].split(":");
+		bool line_changed = false;
+
+		for(uint f = 0; f < fields.length(); f++) {
+			string original = fields[f];
+			string patched = original;
+
+			for(uint t = 0; t < old_tokens.length(); t++) {
+				if(patched.find(old_tokens[t]) < 0) continue;
+				patched = string_replace(patched, old_tokens[t], new_tokens[t], true);
+			}
+
+			// Campo que e exatamente o nome do dono.
+			if(patched == old_name) patched = new_name;
+
+			if(patched != original) {
+				fields[f] = patched;
+				line_changed = true;
+			}
+		}
+
+		if(line_changed) lines[l] = join(fields, ":");
+	}
+
+	return join(lines, "\r\n");
+}
+
+string nickname_map_path(string map_name) {
+	string local_path = "maps/" + map_name + ".map";
+	if(file_exists(local_path)) return local_path;
+	string server_path = "server/maps/" + map_name + ".map";
+	if(file_exists(server_path)) return server_path;
+	return "";
+}
+
+// Renomeia server/maps/<prefixo><antigo>.map -> <prefixo><novo>.map,
+// reescreve o nome do dono embutido no mapdata e atualiza server_maps.
+bool nickname_rename_owned_map(string prefix, string old_name, string new_name) {
+	string old_map = prefix + old_name;
+	string new_map = prefix + new_name;
+
+	string old_path = nickname_map_path(old_map);
+	if(old_path == "") return false;
+
+	if(nickname_map_path(new_map) != "") {
+		debug_log("NICKNAMES: mapa destino ja existe, rename abortado: " + new_map);
+		return false;
+	}
+
+	string dir = "maps/";
+	if(old_path.find("server/maps/") == 0) dir = "server/maps/";
+	string new_path = dir + new_map + ".map";
+
+	file rf;
+	if(!rf.open(old_path, "r")) {
+		debug_log("NICKNAMES: nao foi possivel ler " + old_path);
+		return false;
+	}
+	string content = rf.read();
+	rf.close();
+
+	// Igual ao BGT: substitui o nome do dono embutido no mapdata.
+	content = nickname_rewrite_map_content(content, old_name, new_name);
+
+	file wf;
+	if(!wf.open(new_path, "w")) {
+		debug_log("NICKNAMES: nao foi possivel escrever " + new_path);
+		return false;
+	}
+	wf.write(content);
+	wf.close();
+	file_delete(old_path);
+
+	// Quem estiver dentro do mapa antigo precisa ser levado para o novo.
+	int[] to_move;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		if(players[i].map == old_map || players[i].map_name == old_map) to_move.insert_last(int(i));
+	}
+
+	int old_index = get_map_index_from(old_map);
+	if(old_index >= 0) {
+		server_maps.remove_at(old_index);
+		for(uint i = 0; i < server_maps.length(); i++) {
+			server_maps[i].mapindex = int(i);
+		}
+	}
+
+	map renamed_map(new_map + ".map");
+	if(renamed_map.mapdata.length() == 0) {
+		debug_log("NICKNAMES: falha ao carregar mapa renomeado " + new_map);
+	} else {
+		renamed_map.mapindex = int(server_maps.length());
+		server_maps.insert_last(renamed_map);
+	}
+
+	// Os indices de todos os mapas mudaram: ressincroniza os jogadores.
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i] is null) continue;
+		int mi = get_map_index_from(players[i].map);
+		if(mi >= 0) players[i].mapindex = mi;
+	}
+
+	for(uint i = 0; i < to_move.length(); i++) {
+		int pi = to_move[i];
+		if(pi < 0 || pi >= int(players.length())) continue;
+		if(players[pi] is null) continue;
+		changemap(new_map, pi, players[pi].x, players[pi].y);
+		players[pi].map = new_map;
+		players[pi].map_name = new_map;
+		players[pi].mapaatual = new_map;
+	}
+
+	debug_log("NICKNAMES: mapa renomeado " + old_map + " -> " + new_map);
+	return true;
+}
+
+// Atualiza referencias ao dono espalhadas pelo mundo (portoes de ilha etc).
+// Substitui apenas tokens COMPLETOS (prefixo + nome), nunca o nome solto,
+// para nao corromper linhas de mapa que contenham o nome por acaso.
+void nickname_patch_world_references(string old_name, string new_name) {
+	string[] old_tokens;
+	string[] new_tokens;
+	for(uint i = 0; i < NICKNAME_RESERVED_PREFIXES.length(); i++) {
+		old_tokens.insert_last(NICKNAME_RESERVED_PREFIXES[i] + old_name);
+		new_tokens.insert_last(NICKNAME_RESERVED_PREFIXES[i] + new_name);
+	}
+
+	for(uint m = 0; m < server_maps.length(); m++) {
+		if(server_maps[m] is null) continue;
+
+		bool changed = false;
+
+		for(uint l = 0; l < server_maps[m].mapdata.length(); l++) {
+			string line = server_maps[m].mapdata[l];
+			string patched = line;
+			for(uint t = 0; t < old_tokens.length(); t++) {
+				if(patched.find(old_tokens[t]) < 0) continue;
+				patched = string_replace(patched, old_tokens[t], new_tokens[t], true);
+			}
+			if(patched != line) {
+				server_maps[m].mapdata[l] = patched;
+				changed = true;
+			}
+		}
+
+		// Elementos ja instanciados na memoria (pm/pm2 -> pickup_point).
+		for(uint e = 0; e < server_maps[m].pickup_points.length(); e++) {
+			pickup_point@ pp = server_maps[m].pickup_points[e];
+			if(pp is null) continue;
+			for(uint t = 0; t < old_tokens.length(); t++) {
+				pp.dest_map = string_replace(pp.dest_map, old_tokens[t], new_tokens[t], true);
+				pp.message = string_replace(pp.message, old_tokens[t], new_tokens[t], true);
+				pp.sound_item = string_replace(pp.sound_item, old_tokens[t], new_tokens[t], true);
+				pp.item_type = string_replace(pp.item_type, old_tokens[t], new_tokens[t], true);
+			}
+		}
+
+		for(uint e = 0; e < server_maps[m].custom_portals.length(); e++) {
+			custom_portal@ cp = server_maps[m].custom_portals[e];
+			if(cp is null) continue;
+			for(uint t = 0; t < old_tokens.length(); t++) {
+				cp.dest_map = string_replace(cp.dest_map, old_tokens[t], new_tokens[t], true);
+				cp.message = string_replace(cp.message, old_tokens[t], new_tokens[t], true);
+			}
+		}
+
+		for(uint e = 0; e < server_maps[m].timed_portals.length(); e++) {
+			timed_portal@ tp = server_maps[m].timed_portals[e];
+			if(tp is null) continue;
+			for(uint t = 0; t < old_tokens.length(); t++) {
+				tp.dest_map = string_replace(tp.dest_map, old_tokens[t], new_tokens[t], true);
+				tp.travel_msg = string_replace(tp.travel_msg, old_tokens[t], new_tokens[t], true);
+				tp.arrival_msg = string_replace(tp.arrival_msg, old_tokens[t], new_tokens[t], true);
+			}
+		}
+
+		if(!changed) continue;
+
+		string map_path = nickname_map_path(server_maps[m].name);
+		if(map_path == "") continue;
+
+		string content = "";
+		for(uint l = 0; l < server_maps[m].mapdata.length(); l++) {
+			if(l > 0) content += "\r\n";
+			content += server_maps[m].mapdata[l];
+		}
+
+		file f;
+		if(f.open(map_path, "w")) {
+			f.write(content);
+			f.close();
+			debug_log("NICKNAMES: referencias atualizadas no mapa " + server_maps[m].name);
+		} else {
+			debug_log("NICKNAMES: falha ao salvar mapa " + server_maps[m].name);
+		}
+	}
+}
+
+// Renomeia a chave do portao da ilha no inventario (regra do BGT).
+void nickname_fix_island_key(int player_index, string old_name, string new_name) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	string old_key = "llave_de_la_reja_de_entrada_a_la_isla_de_" + old_name;
+	string new_key = "llave_de_la_reja_de_entrada_a_la_isla_de_" + new_name;
+
+	int qty = p.inv_item_number(old_key);
+	if(qty <= 0) return;
+
+	p.inv_add_item(old_key, -qty, false);
+	p.inv_add_item(new_key, qty, false);
+	save_player_inventory_to_db(p);
+	debug_log("NICKNAMES: chave de ilha migrada para " + new_key);
+}
+
+// Idempotente de proposito: pode ser chamada por nickname_review() e de novo
+// por changename(); a segunda passagem nao encontra nada para migrar.
+void nickname_rename_side_effects(string old_name, string new_name) {
+	old_name = old_name.trim_whitespace();
+	new_name = new_name.trim_whitespace();
+	if(old_name == "" || new_name == "" || old_name == new_name) return;
+
+	string old_dir = "players/" + old_name;
+	string new_dir = "players/" + new_name;
+
+	// (c) O diretorio novo precisa existir ANTES de qualquer .save():
+	// changename() ja chama mb.save()/fl.save() num caminho que pode nao existir.
+	if(!directory_exists(new_dir)) directory_create(new_dir);
+
+	// (a) Quest log: players/<nome>/quests.dat.
+	if(player_quest_logs.exists(old_name)) {
+		player_quest_log@ ql = cast<player_quest_log@>(player_quest_logs[old_name]);
+		if(ql !is null) {
+			ql.player_name = new_name;
+			@player_quest_logs[new_name] = @ql;
+			player_quest_logs.delete(old_name);
+			ql.save();
+			if(file_exists(old_dir + "/quests.dat")) file_delete(old_dir + "/quests.dat");
+		}
+	}
+
+	// (b) Conquistas: players/<nome>/achievements.dat.
+	if(player_achievements.exists(old_name)) {
+		achievement_progress@ ap = cast<achievement_progress@>(player_achievements[old_name]);
+		if(ap !is null) {
+			ap.player_name = new_name;
+			@player_achievements[new_name] = @ap;
+			player_achievements.delete(old_name);
+			ap.save();
+			if(file_exists(old_dir + "/achievements.dat")) file_delete(old_dir + "/achievements.dat");
+		}
+	}
+
+	// (d) Mapas cujo nome carrega o dono + referencias no mundo.
+	int owner_index = nickname_find_online(old_name);
+	bool renamed_island = nickname_rename_owned_map("isla_privada_de_", old_name, new_name);
+	bool renamed_cage = nickname_rename_owned_map("jaula_del_cachorro_de_", old_name, new_name);
+	if(renamed_island || renamed_cage) {
+		nickname_patch_world_references(old_name, new_name);
+	}
+	if(renamed_island && owner_index >= 0) {
+		nickname_fix_island_key(owner_index, old_name, new_name);
+	}
+
+	if(nickname_db_ready()) {
+		// (e) Historico de pedidos nao pode ficar orfao.
+		sqlite3statement@ stmt_req = bancoJogo.prepare("UPDATE nickname_requests SET username = ? WHERE LOWER(username) = LOWER(?);");
+		if(stmt_req !is null) {
+			stmt_req.bind_text(1, new_name);
+			stmt_req.bind_text(2, old_name);
+			stmt_req.step();
+		}
+
+		sqlite3statement@ stmt_rev = bancoJogo.prepare("UPDATE nickname_requests SET reviewed_by = ? WHERE LOWER(reviewed_by) = LOWER(?);");
+		if(stmt_rev !is null) {
+			stmt_rev.bind_text(1, new_name);
+			stmt_rev.bind_text(2, old_name);
+			stmt_rev.step();
+		}
+
+		// (f) Historico de acoes.
+		sqlite3statement@ stmt_hist = bancoJogo.prepare("UPDATE game_history SET player_name = ? WHERE LOWER(player_name) = LOWER(?);");
+		if(stmt_hist !is null) {
+			stmt_hist.bind_text(1, new_name);
+			stmt_hist.bind_text(2, old_name);
+			stmt_hist.step();
+		}
+	}
+
+	debug_log("NICKNAMES: efeitos colaterais de rename aplicados (" + old_name + " -> " + new_name + ")");
+}
+
+// -------------------------------------------------------------------
+// Aplicacao do pedido (jogador precisa estar ONLINE)
+// -------------------------------------------------------------------
+
+bool nickname_apply_request(int player_index, nickname_request@ req, string revisor) {
+	if(req is null) return false;
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = players[player_index];
+	if(p is null) return false;
+
+	string old_name = p.charname;
+	string new_name = req.requested_name.trim_whitespace();
+
+	if(new_name == "" || !is_valid_username(new_name)) {
+		nickname_set_status(req.id, NICK_ST_REJEITADO, revisor, "Nome solicitado inválido.", "", 0);
+		send_reliable_text(p.peer_id, "msg2 Sua troca de nome foi cancelada: o nome solicitado é inválido.", 0);
+		return false;
+	}
+
+	// Re-valida a disponibilidade AGORA: alguem pode ter registrado a conta
+	// entre o pedido e a aprovacao (auth.nvgt nao consulta nickname_requests).
+	if(!nickname_name_is_available(new_name, req.id) || !nickname_name_is_appropriate(new_name)) {
+		nickname_set_status(req.id, NICK_ST_REJEITADO, revisor, "Nome deixou de estar disponível.", "", 0);
+		send_reliable_text(p.peer_id, "msg2 Sua troca de nome para '" + new_name + "' foi cancelada: esse nome não está mais disponível.", 0);
+		eadm("A troca de nome de " + old_name + " para " + new_name + " foi cancelada: o nome deixou de estar disponivel.", "notify5.ogg");
+		return false;
+	}
+
+	if(p.gcoins < NICKNAME_CHANGE_COST) {
+		nickname_set_status(req.id, NICK_ST_REJEITADO, revisor, "Saldo insuficiente de " + NICKNAME_CURRENCY + ".", "", 0);
+		send_reliable_text(p.peer_id, "msg2 Sua troca de nome foi cancelada: você precisa de " + NICKNAME_CHANGE_COST + " " + NICKNAME_CURRENCY + " e possui apenas " + p.gcoins + ".", 0);
+		eadm("A troca de nome de " + old_name + " foi cancelada por saldo insuficiente de " + NICKNAME_CURRENCY + ".", "notify5.ogg");
+		return false;
+	}
+
+	nickname_rename_side_effects(old_name, new_name);
+	changename(player_index, new_name);
+
+	if(player_index >= int(players.length()) || players[player_index] is null ||
+	   players[player_index].charname != new_name) {
+		// changename() abortou no meio: mantem aprovado para nova tentativa.
+		nickname_set_status(req.id, NICK_ST_APROVADO, revisor, "Falha ao aplicar; será tentado novamente.", "", 0);
+		debug_log("NICKNAMES: ERRO ao aplicar rename " + old_name + " -> " + new_name);
+		eadm("Falha ao aplicar a troca de nome de " + old_name + " para " + new_name + ". Verifique os logs.", "notify5.ogg");
+		return false;
+	}
+
+	@p = players[player_index];
+	p.gcoins -= NICKNAME_CHANGE_COST;
+	nickname_persist_gcoins(p.charname, p.gcoins);
+	p.validated_name = "";
+	p.needs_to_change = false;
+
+	nickname_set_status(req.id, NICK_ST_APLICADO, revisor, req.reason, new_name, NICKNAME_CHANGE_COST);
+
+	send_reliable_text(p.peer_id, "ps notify51.ogg", 0);
+	send_reliable_text(p.peer_id, "msg2 Sua nova identidade foi confirmada: agora você é " + new_name + ". Foram cobrados " + NICKNAME_CHANGE_COST + " " + NICKNAME_CURRENCY + ".", 0);
+
+	log_action(new_name, "NICKNAME", "Troca de nome aplicada: " + old_name + " -> " + new_name + " (revisor: " + revisor + ")");
+	debug_log("NICKNAMES: aplicado " + old_name + " -> " + new_name);
+	return true;
+}
+
+// -------------------------------------------------------------------
+// /apelido  -- porte de validate_nick()
+// -------------------------------------------------------------------
+
+// Chamada tanto por /apelido quanto pelo pacote "change_name" do canal 0,
+// que NAO passa por can_use_command: todos os guards moram aqui dentro.
+void cmd_apelido(int player_index, string novo_nome) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p is null || !p.is_logged_in) return;
+
+	string charname = p.charname;
+	string novo = novo_nome.trim_whitespace();
+
+	if(!nickname_db_ready()) {
+		send_reliable_text(p.peer_id, "msg2 O sistema de troca de nome está indisponível no momento.", 0);
+		return;
+	}
+
+	if(nickname_rate_limited(charname)) {
+		send_reliable_text(p.peer_id, "msg2 Calma. Aguarde alguns segundos antes de tentar de novo.", 0);
+		return;
+	}
+
+	// (2) Trapaceiros e jogadores punidos nao podem trocar de nome.
+	if(string_to_lower_case(p.title).find("cheater") >= 0 ||
+	   file_exists("players/" + charname + "/cheater.usr") ||
+	   has_role(charname, "banned_rename")) {
+		send_reliable_text(p.peer_id, "msg2 Por alguma razão você não pode fazer isso...", 0);
+		return;
+	}
+
+	// (3) Um pedido aberto por vez.
+	nickname_request@ pendente = nickname_get_request(charname, NICK_ST_PENDENTE);
+	if(pendente !is null) {
+		send_reliable_text(p.peer_id, "msg2 Paciência. Você já tem um nome em processo de validação: " + pendente.requested_name + ".", 0);
+		return;
+	}
+	nickname_request@ aprovado = nickname_get_request(charname, NICK_ST_APROVADO);
+	if(aprovado !is null) {
+		send_reliable_text(p.peer_id, "msg2 Seu pedido para '" + aprovado.requested_name + "' já foi aprovado e será aplicado em breve.", 0);
+		return;
+	}
+
+	if(novo == "") {
+		send_reliable_text(p.peer_id, "msg2 Uso: /apelido <novo_nome>", 0);
+		return;
+	}
+
+	// (4) Mesmo nome (case-insensitive).
+	if(string_to_lower_case(novo) == string_to_lower_case(charname)) {
+		send_reliable_text(p.peer_id, "msg2 Esse já é o seu nome atual.", 0);
+		return;
+	}
+
+	// (5) Formato.
+	if(!is_valid_username(novo)) {
+		send_reliable_text(p.peer_id, "msg2 E se você tentar escrever seu novo nome outra vez? Use de " + NICKNAME_MIN_LEN + " a " + NICKNAME_MAX_LEN + " caracteres alfanuméricos, sem espaços nem acentos.", 0);
+		return;
+	}
+
+	// (6) Disponibilidade.
+	if(!nickname_name_is_available(novo)) {
+		send_reliable_text(p.peer_id, "msg2 Contam as lendas que a suplantação de identidade é um delito que se paga caro... escolha outro nome.", 0);
+		return;
+	}
+
+	// (7) Conteudo do nome.
+	if(!nickname_name_is_appropriate(novo)) {
+		send_reliable_text(p.peer_id, "msg2 Esse nome não é permitido. O que aconteceria se você tentasse usar outro nome?", 0);
+		return;
+	}
+
+	// (8) Apenas VERIFICA o saldo: a cobranca acontece na aplicacao,
+	// evitando logica de estorno quando o pedido e rejeitado.
+	if(p.gcoins < NICKNAME_CHANGE_COST) {
+		send_reliable_text(p.peer_id, "msg2 Infelizmente você precisa de " + NICKNAME_CHANGE_COST + " " + NICKNAME_CURRENCY + " para concretizar isso. Você tem " + p.gcoins + ". Boa sorte na próxima!", 0);
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT INTO nickname_requests (username, requested_name, status) VALUES (?, ?, 'pendente');");
+	if(stmt is null) {
+		debug_log("NICKNAMES: falha prepare insert pedido: " + bancoJogo.get_last_error_text());
+		send_reliable_text(p.peer_id, "msg2 Não foi possível registrar seu pedido. Tente novamente mais tarde.", 0);
+		return;
+	}
+
+	stmt.bind_text(1, charname);
+	stmt.bind_text(2, novo);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("NICKNAMES: falha step insert pedido: " + bancoJogo.get_last_error_text());
+		send_reliable_text(p.peer_id, "msg2 Não foi possível registrar seu pedido. Esse nome pode já estar reservado.", 0);
+		return;
+	}
+
+	p.validated_name = novo;
+
+	send_reliable_text(p.peer_id, "ps notify51.ogg", 0);
+	send_reliable_text(p.peer_id, "msg2 Feito! Só resta esperar que um arcanjo valide seu novo nome. Quando isso acontecer, a conexão que você tem hoje com esta dimensão se perderá para dar lugar à sua nova identidade.", 0);
+
+	eadm("Novo pedido de troca de nome de " + charname + " para " + novo + ". Use /cntv para listar e /validate a|r " + charname + ".", "notify5.ogg");
+
+	log_action(charname, "NICKNAME", "Pedido de troca de nome para " + novo);
+	debug_log("NICKNAMES: pedido registrado " + charname + " -> " + novo);
+}
+
+// -------------------------------------------------------------------
+// /apelidostatus
+// -------------------------------------------------------------------
+
+void cmd_apelidostatus(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p is null || !p.is_logged_in) return;
+
+	nickname_request@ req = nickname_get_request(p.charname);
+	if(req is null) {
+		send_reliable_text(p.peer_id, "msg2 Você não tem nenhuma solicitação de troca de nome. Use /apelido <novo_nome> (custa " + NICKNAME_CHANGE_COST + " " + NICKNAME_CURRENCY + ").", 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "msg2 === Sua solicitação de nome ===", 0);
+	send_reliable_text(p.peer_id, "msg2 Nome pedido: " + req.requested_name, 0);
+	send_reliable_text(p.peer_id, "msg2 Situação: " + nickname_status_label(req.status), 0);
+	send_reliable_text(p.peer_id, "msg2 Enviado em: " + req.requested_at, 0);
+
+	if(req.reviewed_by != "") {
+		send_reliable_text(p.peer_id, "msg2 Revisado por: " + req.reviewed_by, 0);
+	}
+	if(req.reason != "") {
+		send_reliable_text(p.peer_id, "msg2 Motivo: " + req.reason, 0);
+	}
+	if(req.status == NICK_ST_APLICADO) {
+		send_reliable_text(p.peer_id, "msg2 Custo cobrado: " + req.cost_paid + " " + NICKNAME_CURRENCY, 0);
+	}
+	if(req.status == NICK_ST_REJEITADO) {
+		send_reliable_text(p.peer_id, "msg2 Você pode enviar um novo pedido com /apelido <novo_nome>.", 0);
+	}
+}
+
+// -------------------------------------------------------------------
+// /cntv  -- porte da lista de validacoes pendentes
+// -------------------------------------------------------------------
+
+void cmd_cntv(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	if(!nickname_is_staff(player_index)) {
+		send_reliable_text(p.peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+
+	if(!nickname_db_ready()) {
+		send_reliable_text(p.peer_id, "msg2 Banco de dados indisponível.", 0);
+		return;
+	}
+
+	string query = """
+		SELECT id, username, requested_name, requested_at
+		FROM nickname_requests
+		WHERE status = 'pendente'
+		ORDER BY requested_at;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(stmt is null) {
+		send_reliable_text(p.peer_id, "msg2 Erro ao consultar a fila de nomes.", 0);
+		debug_log("NICKNAMES: falha prepare cmd_cntv: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	int count = 0;
+	string[] linhas;
+	while(stmt.step() == SQLITE_ROW) {
+		count++;
+		linhas.insert_last("#" + stmt.column_int(0) + " " + stmt.column_text(1) +
+		                   " -> " + stmt.column_text(2) + " (" + stmt.column_text(3) + ")");
+	}
+
+	if(count == 0) {
+		send_reliable_text(p.peer_id, "msg2 Não há nomes para validar no momento.", 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "msg2 === Validações pendentes (" + count + ") ===", 0);
+	for(uint i = 0; i < linhas.length(); i++) {
+		send_reliable_text(p.peer_id, "msg2 " + linhas[i], 0);
+	}
+	send_reliable_text(p.peer_id, "msg2 Use /validate a <jogador> para aprovar ou /validate r <jogador> [motivo] para rejeitar.", 0);
+}
+
+// -------------------------------------------------------------------
+// Revisao  -- porte de validate_or_reject()
+// -------------------------------------------------------------------
+
+bool nickname_review(string username, bool aprovar, string revisor, string motivo = "") {
+	username = username.trim_whitespace();
+	revisor = revisor.trim_whitespace();
+	motivo = motivo.trim_whitespace();
+
+	if(username == "") return false;
+	if(!nickname_db_ready()) return false;
+
+	nickname_request@ req = nickname_get_request(username, NICK_ST_PENDENTE);
+	if(req is null) {
+		debug_log("NICKNAMES: nenhum pedido pendente para " + username);
+		return false;
+	}
+
+	// Nome real gravado no pedido (preserva a caixa original).
+	string alvo = req.username;
+	int idx = nickname_find_online(alvo);
+
+	if(!aprovar) {
+		if(motivo == "") motivo = "Seu pedido foi rejeitado pelos arcanjos. Boa sorte na próxima.";
+
+		if(!nickname_set_status(req.id, NICK_ST_REJEITADO, revisor, motivo, "", 0)) return false;
+
+		if(idx >= 0 && players[idx] !is null) {
+			players[idx].validated_name = "";
+			players[idx].needs_to_change = false;
+			send_reliable_text(players[idx].peer_id, "ps trovao7.ogg", 0);
+			send_reliable_text(players[idx].peer_id, "msg2 Seu pedido de nome '" + req.requested_name + "' foi rejeitado. Motivo: " + motivo, 0);
+		} else {
+			nickname_send_system_mail(alvo, "Pedido de nome rejeitado",
+				"Seu pedido para o nome '" + req.requested_name + "' foi rejeitado. Motivo: " + motivo);
+		}
+
+		log_action(alvo, "NICKNAME", "Pedido rejeitado por " + revisor + ": " + motivo);
+		debug_log("NICKNAMES: pedido de " + alvo + " rejeitado por " + revisor);
+		return true;
+	}
+
+	// Aprovado + jogador ONLINE: aplica agora.
+	if(idx >= 0 && players[idx] !is null && players[idx].is_logged_in) {
+		nickname_set_status(req.id, NICK_ST_APROVADO, revisor, motivo, "", 0);
+		@req = nickname_get_request(alvo, NICK_ST_APROVADO);
+		if(req is null) return false;
+		return nickname_apply_request(idx, req, revisor);
+	}
+
+	// Aprovado + jogador OFFLINE: o login aplica (NVGT 0.90 nao tem
+	// directory_copy, logo a migracao depende dos .save() em memoria).
+	if(!nickname_set_status(req.id, NICK_ST_APROVADO, revisor, motivo, "", 0)) return false;
+
+	nickname_send_system_mail(alvo, "Pedido de nome aprovado",
+		"Seu pedido para o nome '" + req.requested_name + "' foi aprovado. A troca será aplicada no seu próximo login, com o custo de " +
+		NICKNAME_CHANGE_COST + " " + NICKNAME_CURRENCY + ".");
+
+	log_action(alvo, "NICKNAME", "Pedido aprovado por " + revisor + " (aplicação pendente de login)");
+	debug_log("NICKNAMES: pedido de " + alvo + " aprovado por " + revisor + " (offline)");
+	return true;
+}
+
+// -------------------------------------------------------------------
+// /validate a|r <jogador> [motivo]
+// -------------------------------------------------------------------
+
+void cmd_validate(int player_index, string acao, string alvo, string motivo = "") {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p is null) return;
+
+	if(!nickname_is_staff(player_index)) {
+		send_reliable_text(p.peer_id, "msg2 Comando apenas para administradores!", 0);
+		return;
+	}
+
+	string a = string_to_lower_case(acao.trim_whitespace());
+	string alvo_limpo = alvo.trim_whitespace();
+
+	if(alvo_limpo == "") {
+		send_reliable_text(p.peer_id, "msg2 Uso: /validate <a|r> <jogador> [motivo]", 0);
+		return;
+	}
+
+	bool aprovar = false;
+	if(a == "a" || a == "aprovar" || a == "aprovado" || a == "aceitar") {
+		aprovar = true;
+	} else if(a == "r" || a == "rejeitar" || a == "rejeitado" || a == "recusar") {
+		aprovar = false;
+	} else {
+		send_reliable_text(p.peer_id, "msg2 Uso: /validate <a|r> <jogador> [motivo]", 0);
+		return;
+	}
+
+	string revisor = p.charname;
+	bool ok = nickname_review(alvo_limpo, aprovar, revisor, motivo);
+
+	if(!ok) {
+		send_reliable_text(p.peer_id, "msg2 Não há solicitação pendente para '" + alvo_limpo + "' (ou a operação falhou).", 0);
+		return;
+	}
+
+	if(aprovar) {
+		send_reliable_text(p.peer_id, "msg2 Solicitação de " + alvo_limpo + " aprovada.", 0);
+		eadm(revisor + " validou a troca de nome de " + alvo_limpo + ".", "notify5.ogg");
+	} else {
+		send_reliable_text(p.peer_id, "msg2 Solicitação de " + alvo_limpo + " rejeitada.", 0);
+		eadm(revisor + " rejeitou a troca de nome de " + alvo_limpo + ".", "notify5.ogg");
+	}
+}
+
+// -------------------------------------------------------------------
+// Aplicacao no login
+// -------------------------------------------------------------------
+
+// Substitui o branch morto de player.nvgt (needs_to_change nunca ficava true:
+// so sconfigs.nvgt o persistia e sconfigs.nvgt nao esta incluido em server.nvgt).
+// E DB-backed e usa uma trava por peer para poder ser chamada tambem de dentro
+// do playerloop() sem bater no banco a cada tick.
+void nickname_apply_pending_on_login(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p is null || !p.is_logged_in) return;
+	if(!nickname_db_ready()) return;
+
+	string latch_key = "" + p.peer_id;
+	if(nickname_login_checked.exists(latch_key)) {
+		string checked_name = "";
+		nickname_login_checked.get(latch_key, checked_name);
+		if(checked_name == p.charname) return;
+	}
+
+	if(nickname_login_checked.get_keys().length() > 500) nickname_login_checked.delete_all();
+	nickname_login_checked.set(latch_key, p.charname);
+
+	nickname_request@ req = nickname_get_request(p.charname, NICK_ST_APROVADO);
+	if(req is null) return;
+
+	string revisor = req.reviewed_by != "" ? req.reviewed_by : "system";
+	if(nickname_apply_request(player_index, req, revisor)) {
+		nickname_login_checked.set(latch_key, players[player_index].charname);
+	}
+}
