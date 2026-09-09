@@ -1,11 +1,6 @@
-// npc.nvgt - Sistema Genérico de NPCs do EVM Server
-// Convertido de BGT para NVGT
-// Sistema completo de IA, movimento, ataque e respawn
 
-// Array global de NPCs ativos
 npc@[] npcs_global;
 
-// Função auxiliar para enviar pacote para mapa específico
 void send_to_map(string message, string mapname) {
 	server_broadcast(message, mapname);
 }
@@ -16,102 +11,66 @@ string npc_sound_file(string snd) {
 	return snd + ".ogg";
 }
 
-// Classe base de NPC (movida das antigas classes legadas de mapa)
 class npc {
-	// ============================================================================
-	// PROPRIEDADES BÁSICAS
-	// ============================================================================
 	int x, y;
-	int x_inicial = 0, y_inicial = 0; // Posição inicial para respawn
-	int id = 0; // ID único do NPC
-	
-	// ============================================================================
-	// ATRIBUTOS DE COMBATE
-	// ============================================================================
+	int x_inicial = 0, y_inicial = 0;
+	int id = 0;
+
 	int vida = 100;
-	int vida_inicial = 100; // Vida base para respawn
-	int xp_reward = 50; // XP que dá ao morrer
-	int gold_reward = 10; // Gold que dá ao morrer
-	int danoquerecibira = 50; // Dano que irá receber (por golpe)
-	int danoquedara = 100; // Dano que dará ao atacar
-	int danodelespejo = 0; // Dano de reflexo
-	int distanciaataques = 5; // Distância máxima de ataque
-	
-	// ============================================================================
-	// IA E MOVIMENTO
-	// ============================================================================
-	int p_index = -1; // Índice do jogador alvo atual
-	string target_player = ""; // Nome do jogador alvo
-	timer update_player; // Timer para atualizar alvo
-	int player_update_interval = 5000; // Intervalo de atualização (ms)
-	
-	// ============================================================================
-	// TIMERS DE COMPORTAMENTO
-	// ============================================================================
-	int tiempoparaatacar = 3000; // Intervalo entre ataques (ms)
-	int tiempoparacaminar = 5000; // Intervalo de movimento (ms)
-	int tiempodelossonidos = 10000; // Intervalo entre sons nervosos (ms)
-	
-	timer ttiempoparaatacar; // Timer de ataque
-	timer ttiempoparacaminar; // Timer de caminhada
-	timer ttiempodelossonidos; // Timer de sons
-	
-	// ============================================================================
-	// SONS
-	// ============================================================================
-	string[] sonidosnervioso; // Sons nervosos do NPC
-	string[] sonidosataque; // Sons de ataque do NPC
-	string[] pasos; // Prefixos de piso para passos
-	string[] impactos; // Sons de impacto por bala
-	string sonidoataque = ""; // Som de ataque
-	string sonidomuerte = ""; // Som de morte
-	string impactosbala = ""; // Som de impacto de bala
-	string pasosnpc = ""; // Som de passos
-	
-	// ============================================================================
-	// ESTADO
-	// ============================================================================
+	int vida_inicial = 100;
+	int xp_reward = 50;
+	int gold_reward = 10;
+	int danoquerecibira = 50;
+	int danoquedara = 100;
+	int danodelespejo = 0;
+	int distanciaataques = 5;
+
+	int p_index = -1;
+	string target_player = "";
+	timer update_player;
+	int player_update_interval = 5000;
+
+	int tiempoparaatacar = 3000;
+	int tiempoparacaminar = 5000;
+	int tiempodelossonidos = 10000;
+
+	timer ttiempoparaatacar;
+	timer ttiempoparacaminar;
+	timer ttiempodelossonidos;
+
+	string[] sonidosnervioso;
+	string[] sonidosataque;
+	string[] pasos;
+	string[] impactos;
+	string sonidoataque = "";
+	string sonidomuerte = "";
+	string impactosbala = "";
+	string pasosnpc = "";
+
 	bool morreu = false;
 	bool morrendo = false;
 	bool nasceu = true;
-	bool pacifista = false; // NPC passivo: não persegue nem ataca jogadores
-	string asesino = ""; // Quem matou o NPC
-	string golpeado = ""; // Quem deu último golpe
-	timer tmorreu; // Timer de morte
-	
-	// ============================================================================
-	// MAPA E IDENTIFICAÇÃO
-	// ============================================================================
-	int mapindex = -1; // Índice do mapa atual
+	bool pacifista = false;
+	string asesino = "";
+	string golpeado = "";
+	timer tmorreu;
+
+	int mapindex = -1;
 	string map = "";
-	string name = ""; // Nome único do NPC
-	string nombrenpc = ""; // Tipo do NPC (ex: "soldado", "guarda")
-	
-	// ============================================================================
-	// RESPAWN
-	// ============================================================================
-	bool enablerespawn = true; // Se pode respawnar
-	bool enablebombs = false; // Se pode usar bombas
-	int tiempoaparicion = 0; // Tempo de aparição (respawn)
-	
-	// ============================================================================
-	// ITEMS E DROPS
-	// ============================================================================
-	string itemsadar = ""; // Items que deixa ao morrer (separados por |)
-	string degradation = ""; // Degradação de items
-	string msgmuerte = ""; // Mensagem ao morrer
-	
-	// ============================================================================
-	// RANGES E LIMITES
-	// ============================================================================
-	int left_range = 0; // Limite esquerdo de patrulha
-	int right_range = 0; // Limite direito de patrulha
-	
-	// ============================================================================
-	// CONSTRUTORES
-	// ============================================================================
-	
-	// Construtor simples
+	string name = "";
+	string nombrenpc = "";
+
+	bool enablerespawn = true;
+	bool enablebombs = false;
+	int tiempoaparicion = 0;
+
+	string itemsadar = "";
+	string degradation = "";
+	string msgmuerte = "";
+
+	int left_range = 0;
+	int right_range = 0;
+
 	npc(int nx, int ny, string nmap, string ntype) {
 		x = nx;
 		y = ny;
@@ -124,8 +83,7 @@ class npc {
 		mapindex = get_map_index_from(map);
 		nasceu = true;
 	}
-	
-	// Construtor completo (26 parâmetros - usado ao carregar de arquivo de mapa)
+
 	npc(int nx, int ny, int nvida, int nxp, int ndistanciaataques,
 	    int ndanoquerecibira, int ndanoquedara, int ndanodelespejo,
 	    int ntiempoparaatacar, int ntiempoparacaminar, int ntiempodelossonidos,
@@ -134,13 +92,11 @@ class npc {
 	    int ntiempoaparicion, bool nenablerespawn, bool nenablebombs,
 	    string nmap, string npasosnpc, int nleft_range, int nright_range,
 	    string nimpactosbala, string ndegradation) {
-		// Posição
 		this.x = nx;
 		this.y = ny;
 		this.x_inicial = nx;
 		this.y_inicial = ny;
-		
-		// Atributos de combate
+
 		this.vida = nvida;
 		this.vida_inicial = nvida;
 		this.xp_reward = nxp;
@@ -148,84 +104,67 @@ class npc {
 		this.danoquedara = ndanoquedara;
 		this.danodelespejo = ndanodelespejo;
 		this.distanciaataques = ndistanciaataques;
-		
-		// Timers (em ms)
+
 		this.tiempoparaatacar = ntiempoparaatacar;
 		this.tiempoparacaminar = ntiempoparacaminar;
 		this.tiempodelossonidos = ntiempodelossonidos;
-		
-		// Items e drops
-		// Compatibilidade: aceita tanto ',' (BGT) quanto '|' (NVGT)
+
 		this.itemsadar = string_replace(nitemsadar, ",", "|", true);
-		
-		// Sons
+
 		this.sonidoataque = nsonidoataque;
 		this.sonidomuerte = nsonidomuerte;
 		this.impactosbala = nimpactosbala;
 		this.pasosnpc = npasosnpc;
-		
-		// Parsing de listas com compatibilidade ',' e '|'
+
 		string attack_sounds = string_replace(nsonidoataque, "|", ",", true);
 		if(attack_sounds != "") {
 			sonidosataque = attack_sounds.split(",");
 		}
-		
+
 		string nervous_sounds = string_replace(nsonidonervioso, "|", ",", true);
 		if(nervous_sounds != "") {
 			sonidosnervioso = nervous_sounds.split(",");
 		}
-		
+
 		string step_sounds = string_replace(npasosnpc, "|", ",", true);
 		if(step_sounds != "") {
 			pasos = step_sounds.split(",");
 		}
-		
+
 		string hit_sounds = string_replace(nimpactosbala, "|", ",", true);
 		if(hit_sounds != "") {
 			impactos = hit_sounds.split(",");
 		}
 		else {
-			// Sem sons customizados: força caminho padrão para evitar acesso inválido.
 			this.impactosbala = "default";
 		}
-		
-		// Identificação
+
 		this.nombrenpc = nnombrenpc;
 		this.name = nnombrenpc + "_" + nx + "_" + ny;
-		
-		// Mapa
+
 		this.map = nmap;
 		this.mapindex = get_map_index_from(nmap);
-		
-		// Respawn
+
 		this.enablerespawn = nenablerespawn;
 		this.enablebombs = nenablebombs;
 		this.tiempoaparicion = ntiempoaparicion;
-		
-		// Ranges
+
 		this.left_range = nleft_range;
 		this.right_range = nright_range;
-		
-		// Mensagem e degradação
+
 		this.msgmuerte = nmsgmuerte;
 		this.degradation = ndegradation;
-		
-		// Estado inicial
+
 		this.nasceu = true;
 		this.morreu = false;
 		this.morrendo = false;
 	}
-	
-	// ============================================================================
-	// MÉTODOS DE IA
-	// ============================================================================
-	
-	// Verifica se existe algum jogador no mapa
+
 	bool exists_player_in_my_map() {
 		if(pacifista) return false;
 		for(uint i = 0; i < players.length(); i++) {
-			if(players[i].map == this.map && 
-			   !players[i].afk && 
+			if(players[i].map == this.map &&
+			   !players[i].afk &&
 			   players[i].pacifico == 0 &&
 			   players[i].newbie == false) {
 				return true;
@@ -233,41 +172,34 @@ class npc {
 		}
 		return false;
 	}
-	
-	// Seleciona jogador mais próximo para atacar
+
 	int select_player_to_attack() {
 		if(pacifista) return -1;
 		int closest_player = -1;
 		double closest_distance = 999999;
-		
+
 		for(uint i = 0; i < players.length(); i++) {
-			// Filtros básicos
 			if(players[i].map != this.map) continue;
 			if(players[i].afk) continue;
 			if(players[i].pacifico == 1) continue;
 			if(players[i].newbie) continue;
 			if(players[i].health <= 0) continue;
-			
-			// Verificar se está em zona segura
+
 			if(get_safezone_at(players[i].x, players[i].y, players[i].map)) continue;
-			
-			// Calcular distância
+
 			double dist = get_distance(this.x, this.y, players[i].x, players[i].y);
-			
-			// Se está mais próximo, selecionar
+
 			if(dist < closest_distance) {
 				closest_distance = dist;
 				closest_player = i;
 			}
 		}
-		
+
 		return closest_player;
 	}
-	
-	// Muda de jogador alvo se o atual não é mais válido
+
 	int change_player(int current_index) {
 		if(pacifista) return -1;
-		// Se jogador atual ainda é válido, manter
 		if(current_index > -1 && current_index < players.length()) {
 			if(players[current_index].map == this.map &&
 			   !players[current_index].afk &&
@@ -277,35 +209,25 @@ class npc {
 				return current_index;
 			}
 		}
-		
-		// Caso contrário, selecionar novo
+
 		return select_player_to_attack();
 	}
-	
-	// ============================================================================
-	// MOVIMENTO
-	// ============================================================================
-	
+
 	void move() {
 		if(pacifista) return;
-		// Atualizar alvo periodicamente
 		if(update_player.elapsed >= player_update_interval) {
 			update_player.restart();
 			p_index = change_player(p_index);
 		}
-		
-		// Se não tem alvo, não mover
+
 		if(p_index < 0 || p_index >= players.length()) return;
-		
-		// Verificar se está no intervalo de movimento
+
 		if(ttiempoparacaminar.elapsed < tiempoparacaminar) return;
 		ttiempoparacaminar.restart();
-		
-		// Verificar ranges de patrulha
+
 		bool can_move_left = (left_range == 0 || this.x > left_range);
 		bool can_move_right = (right_range == 0 || this.x < right_range);
-		
-		// Mover em direção ao jogador
+
 		if(this.x > players[p_index].x + 2 && can_move_left) {
 			this.x--;
 			play_step_sound();
@@ -314,8 +236,7 @@ class npc {
 			this.x++;
 			play_step_sound();
 		}
-		
-		// Mover em Y se necessário
+
 		if(this.y > players[p_index].y + 1) {
 			this.y--;
 		}
@@ -323,8 +244,7 @@ class npc {
 			this.y++;
 		}
 	}
-	
-	// Tocar som de passos
+
 	void play_step_sound() {
 		string step_base = "";
 		if(pasos.length() > 0) {
@@ -340,27 +260,18 @@ class npc {
 		}
 		send_to_map("play " + step_base + "step" + random(1, 5) + ".ogg " + this.x + " " + this.y, this.map);
 	}
-	
-	// ============================================================================
-	// COMBATE
-	// ============================================================================
-	
+
 	void attack() {
 		if(pacifista) return;
-		// Verificar se tem alvo
 		if(p_index < 0 || p_index >= players.length()) return;
-		
-		// Verificar intervalo de ataque
+
 		if(ttiempoparaatacar.elapsed < tiempoparaatacar) return;
-		
-		// Calcular distância
+
 		double dist = get_distance(this.x, this.y, players[p_index].x, players[p_index].y);
-		
-		// Se está na distância de ataque
+
 		if(dist <= distanciaataques) {
 			ttiempoparaatacar.restart();
-			
-			// Tocar som de ataque
+
 			if(sonidosataque.length() > 0) {
 				string snd_attack = sonidosataque[random(0, sonidosataque.length() - 1)];
 				send_to_map("play " + npc_sound_file(snd_attack) + " " + this.x + " " + this.y, this.map);
@@ -368,8 +279,7 @@ class npc {
 			else if(sonidoataque != "") {
 				send_to_map("play " + npc_sound_file(sonidoataque) + " " + this.x + " " + this.y, this.map);
 			}
-			
-			// Verificar reflexo
+
 			int reflected_damage = refletir(p_index, nombrenpc, this.x, this.y, danoquedara);
 			if(reflected_damage > 0) {
 				this.vida -= reflected_damage;
@@ -377,47 +287,34 @@ class npc {
 				this.asesino = players[p_index].charname;
 				return;
 			}
-			
-			// Aplicar dano ao jogador
+
 			players[p_index].health -= danoquedara;
 			players[p_index].lasthit = nombrenpc;
-			
-			// Tocar som de dor
+
 			send_to_map("inithurt " + players[p_index].voice + " " + players[p_index].x + " " + players[p_index].y, players[p_index].map);
 		}
 	}
-	
-	// ============================================================================
-	// SONS NERVOSOS
-	// ============================================================================
-	
+
 	void play_nervous_sounds() {
 		if(sonidosnervioso.length() == 0) return;
 		if(ttiempodelossonidos.elapsed < tiempodelossonidos) return;
-		
+
 		ttiempodelossonidos.restart();
-		
-		// Escolher som aleatório
+
 		string snd = sonidosnervioso[random(0, sonidosnervioso.length() - 1)];
 		send_to_map("play " + npc_sound_file(snd) + " " + this.x + " " + this.y, this.map);
 	}
-	
-	// ============================================================================
-	// MORTE E RESPAWN
-	// ============================================================================
-	
+
 	void die() {
 		morreu = true;
 		morrendo = true;
-		
-		// Tocar som de morte
+
 		if(sonidomuerte != "") {
 			send_to_map("play " + npc_sound_file(sonidomuerte) + " " + this.x + " " + this.y, this.map);
 		}
-		
-		// Mensagem de morte
+
 		string golp = (asesino != "") ? asesino : golpeado;
-		
+
 		if(golp.find("magnet_") > -1) {
 			golp = golp.replace("magnet_", "");
 			send_reliable_text(0, "msg2 um; ;" + nombrenpc + "; ;morreu no; ;item_magnético; ;de; ;" + golp + ";!", 3);
@@ -425,61 +322,47 @@ class npc {
 		else if(golp != "") {
 			send_reliable_text(0, "msg2 " + golp + "; ;matou um; ;" + nombrenpc + ";!", 3);
 		}
-		
-		// Dar XP e gold ao assassino
+
 		int killer_index = get_player_index_from(golp);
 		if(killer_index > -1) {
-			// Incrementar contador de kills (como no BGT)
 			players[killer_index].kills++;
-			
-			// Dar XP e gold
+
 			ganhaxp(killer_index, xp_reward, gold_reward);
-			
-			// Dropar items
+
 			drop_items(killer_index);
-			
-			//  INTEGRAÇÃO: Atualizar progresso de quests (kill)
+
 			quest_update_kill(players[killer_index].charname, nombrenpc);
-			
-			//  INTEGRAÇÃO: Atualizar progresso de achievements (kills)
+
 			update_achievement_progress(players[killer_index].charname, "kills", 1);
-			
-			// Verificar patente/título por kills (como no BGT)
+
 			if(players[killer_index].kills == 10) {
 				settitle(killer_index);
 				send_reliable_text(players[killer_index].peer_id, "msg2 Parabéns! Você recebeu a patente de Caçador por derrotar 10 monstros!", 0);
 			}
 		}
 	}
-	
-	// Dropar items ao morrer
+
 	void drop_items(int killer_index) {
 		if(itemsadar == "") return;
-		
+
 		string normalized_items = string_replace(itemsadar, ",", "|", true);
 		string[] items = normalized_items.split("|");
 		for(uint i = 0; i < items.length(); i++) {
 			if(items[i] == "") continue;
-			
-			// Formato: "item:quantidade" (NVGT) ou "item.quantidade" (BGT)
+
 			string[] parts = items[i].split(":");
 			if(parts.length() <= 1 && items[i].find(".") > -1) {
 				parts = items[i].split(".");
 			}
 			string item_name = parts[0];
 			int quantity = (parts.length() > 1) ? parse_int(parts[1]) : 1;
-			
-			// Adicionar ao inventário do assassino
+
 			if(killer_index > -1) {
 				players[killer_index].inv_add_item(item_name, quantity);
 			}
 		}
 	}
 }
-
-// ============================================================================
-// CLASSE DE DADOS DE NPC (para respawn)
-// ============================================================================
 
 class npc_data {
 	int x, y;
@@ -490,11 +373,11 @@ class npc_data {
 	int danoquedara = 100;
 	int danodelespejo = 0;
 	int distanciaataques = 5;
-	
+
 	int tiempoparaatacar = 3000;
 	int tiempoparacaminar = 5000;
 	int tiempodelossonidos = 10000;
-	
+
 	string itemsadar = "";
 	string sonidoataque = "";
 	string sonidonervioso = "";
@@ -505,20 +388,19 @@ class npc_data {
 	string pasosnpc = "";
 	string impactosbala = "";
 	string degradation = "";
-	
+
 	int tiempoaparicion = 0;
 	bool enablerespawn = true;
 	bool enablebombs = false;
 	bool pacifista = false;
 	int left_range = 0;
 	int right_range = 0;
-	
+
 	timer trespawn;
 	timer respawn_timer;
-	
+
 	npc_data() {}
-	
-	// Construtor completo (26 parâmetros - compatível com BGT)
+
 	npc_data(int nx, int ny, int nvida, int nxp, int ndistanciaataques,
 	         int ndanoquerecibira, int ndanoquedara, int ndanodelespejo,
 	         int ntiempoparaatacar, int ntiempoparacaminar, int ntiempodelossonidos,
@@ -558,28 +440,18 @@ class npc_data {
 	}
 }
 
-// Array global de dados de respawn
 npc_data@[] npcs_data_global;
 
-// ============================================================================
-// FUNÇÕES GLOBAIS DE NPC
-// ============================================================================
-
-// Spawn de NPC simples
 void spawn_npc(int x, int y, string map, string type) {
 	npc n(x, y, map, type);
 	npcs_global.insert_last(n);
 }
 
-// Loop principal de NPCs (deve ser chamado no loop do servidor)
 void npc_global_loop() {
-	// Loop de NPCs ativos
 	for(uint i = 0; i < npcs_global.length(); i++) {
-		// Verificar morte
 		if(npcs_global[i].vida <= 0 && !npcs_global[i].morreu) {
 			npcs_global[i].die();
-			
-			// Criar data para respawn se habilitado
+
 			if(npcs_global[i].enablerespawn) {
 				npc_data nd(
 					npcs_global[i].x_inicial,
@@ -595,7 +467,7 @@ void npc_global_loop() {
 					npcs_global[i].tiempodelossonidos,
 					npcs_global[i].itemsadar,
 					npcs_global[i].sonidoataque,
-					"", // sonidonervioso (não armazenado como string)
+					"",
 					npcs_global[i].sonidomuerte,
 					npcs_global[i].nombrenpc,
 					npcs_global[i].msgmuerte,
@@ -612,25 +484,20 @@ void npc_global_loop() {
 				);
 				npcs_data_global.insert_last(nd);
 			}
-			
+
 			npcs_global.remove_at(i);
 			continue;
 		}
-		
-		// Sons nervosos
+
 		npcs_global[i].play_nervous_sounds();
-		
-		// Movimento
+
 		npcs_global[i].move();
-		
-		// Ataque
+
 		npcs_global[i].attack();
 	}
-	
-	// Loop de respawn
+
 	for(uint i = 0; i < npcs_data_global.length(); i++) {
 		if(npcs_data_global[i].trespawn.elapsed >= npcs_data_global[i].tiempoaparicion) {
-			// Respawnar NPC usando construtor completo
 			npc n(
 				npcs_data_global[i].x,
 				npcs_data_global[i].y,
@@ -662,10 +529,8 @@ void npc_global_loop() {
 			n.vida_inicial = npcs_data_global[i].vida;
 			n.pacifista = npcs_data_global[i].pacifista;
 			npcs_global.insert_last(n);
-			
-			// Remover data
+
 			npcs_data_global.remove_at(i);
 		}
 	}
 }
-

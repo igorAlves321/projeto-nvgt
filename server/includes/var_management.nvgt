@@ -1,5 +1,3 @@
-// var_management.nvgt - Sistema de gerenciamento de variaveis do jogador
-// Convertido de BGT para NVGT
 
 class var_management {
 	dictionary@ data;
@@ -13,7 +11,6 @@ class var_management {
 	var_management(string origin2, string playername) {
 		file f;
 		if (!f.open(origin2, "rb")) {
-			// Se o arquivo nao existe, cria um dicionario vazio
 			@data = dictionary();
 		} else {
 			string serialized_data = f.read();
@@ -187,7 +184,7 @@ class var_management {
 			string get;
 			data.get(key, get);
 			get += value;
-			data.set(key, get); // Bug corrigido: era 'value', agora e 'get'
+			data.set(key, get);
 			save_configs(origin, nameplayer);
 			return true;
 		}
@@ -233,57 +230,47 @@ class var_management {
 		int index_player = get_player_index_from(player_name);
 		file f;
 		if (!f.open(dir, "wb")) {
-			return; // Nao conseguiu abrir arquivo para escrita
+			return;
 		}
 		f.write(data.serialize());
 		f.close();
-        // Sem reload imediato: este objeto ja mantem o estado em memoria.
-        // Aqui garantimos persistencia em disco e evitamos recursao de escrita.
         if(index_player > -1 && players[index_player].charname == player_name) {
             debug_log("Configs de " + player_name + " salvas em " + dir);
         }
 	}
 }
 
-// ============================================================================
-// - SISTEMA DE RELOAD DE CONFIGURACOES DO SERVIDOR
-// ============================================================================
-
-// Recarregar configuracoes do servidor (config.nvgt)
 void reload_server_config() {
 	debug_log("Recarregando configuracoes do servidor...");
-	
+
 	file f;
 	if(!f.open("config.nvgt", "rb")) {
 		debug_log("ERRO: Não foi possível abrir config.nvgt");
 		return;
 	}
-	
+
 	string content = f.read();
 	f.close();
-	
+
 	if(content == "") {
 		debug_log("AVISO: config.nvgt esta vazio");
 		return;
 	}
-	
+
 	string[] lines = content.split("\n");
 	int loaded = 0;
-	
+
 	for(uint i = 0; i < lines.length(); i++) {
 		string line = trim(lines[i]);
 
-		// Ignorar comentarios e linhas vazias
 		if(line == "" || line.substr(0, 2) == "//") continue;
 
-		// Processar linha de configuracao (formato: VARIAVEL=valor)
 		int equal_pos = line.find_first("=");
 		if(equal_pos < 0) continue;
 
 		string var_name = trim(line.substr(0, equal_pos));
 		string var_value = trim(line.substr(equal_pos + 1));
-		
-		// Aplicar configuracoes conhecidas
+
 		if(var_name == "MAX_PLAYERS") {
 			MAX_PLAYERS = string_to_number(var_value);
 			loaded++;
@@ -292,93 +279,80 @@ void reload_server_config() {
 			AUTOSAVE_INTERVAL = string_to_number(var_value);
 			loaded++;
 		}
-		// Adicionar mais variaveis conforme necessario
 	}
-	
+
 	debug_log("Configuracoes recarregadas: " + loaded + " variaveis atualizadas");
 }
 
-// Recarregar receitas de crafting
 void reload_crafting_recipes() {
 	debug_log("Recarregando receitas de crafting...");
-	
+
 	file f;
 	if(!f.open("crafting_recipes.dat", "rb")) {
 		debug_log("AVISO: crafting_recipes.dat não encontrado, usando receitas padrao");
 		return;
 	}
-	
+
 	string content = f.read();
 	f.close();
-	
+
 	if(content == "") return;
-	
-	// Limpar receitas antigas
+
 	crafting_system.recipes.delete_all();
-	
-	// Carregar novas receitas
+
 	string[] lines = content.split("\n");
 	int loaded = 0;
 
 	for(uint i = 0; i < lines.length(); i++) {
 		string line = trim(lines[i]);
 		if(line == "" || line.substr(0, 2) == "//") continue;
-		
-		// Formato: result_item|ingredients|description|quantity
+
 		string[] parts = line.split("|");
 		if(parts.length() >= 3) {
 			string result = parts[0];
 			string ingredients = parts[1];
 			string description = parts[2];
 			int quantity = (parts.length() >= 4) ? string_to_number(parts[3]) : 1;
-			
+
 			crafting_system.add_recipe(result, ingredients, description, quantity);
 			loaded++;
 		}
 	}
-	
+
 	debug_log("Receitas de crafting recarregadas: " + loaded + " receitas");
 }
 
-// Recarregar dados de armas do weapons.db
 void reload_weapons() {
 	debug_log("Recarregando armas...");
-	
-	// Limpar armas antigas
+
 	weapons_list.resize(0);
-	
-	// Recarregar
+
 	load_weapons();
-	
+
 	debug_log("Armas recarregadas: " + weapons_list.length() + " armas carregadas");
 }
 
-// Recarregar zonas desabilitadas
 void reload_disabled_zones() {
 	debug_log("Recarregando zonas desabilitadas...");
 
-	// Limpar zonas antigas
 	game_disabled_zones.resize(0);
 
-	// Recarregar
 	init_disabled_zones();
 
 	debug_log("Zonas desabilitadas recarregadas: " + game_disabled_zones.length() + " zonas");
 }
 
-// Recarregar tudo (uso com cuidado - pode causar lag temporario)
 void reload_all_server_data() {
 	debug_log("=== INICIANDO RELOAD COMPLETO DO SERVIDOR ===");
-	
+
 	reload_server_config();
 	reload_crafting_recipes();
 	reload_weapons();
 	reload_disabled_zones();
-	
+
 	debug_log("=== RELOAD COMPLETO FINALIZADO ===");
 }
 
-// Atualizar variavel especifica do servidor em runtime
 bool set_server_var(string var_name, string value) {
 	if(var_name == "MAX_PLAYERS") {
 		MAX_PLAYERS = string_to_number(value);
@@ -390,12 +364,11 @@ bool set_server_var(string var_name, string value) {
 		debug_log("AUTOSAVE_INTERVAL atualizado para: " + value);
 		return true;
 	}
-	
+
 	debug_log("ERRO: Variavel desconhecida: " + var_name);
 	return false;
 }
 
-// Obter valor de variavel do servidor
 string get_server_var(string var_name) {
 	if(var_name == "MAX_PLAYERS") {
 		return MAX_PLAYERS;
@@ -403,11 +376,10 @@ string get_server_var(string var_name) {
 	else if(var_name == "AUTOSAVE_INTERVAL") {
 		return AUTOSAVE_INTERVAL;
 	}
-	
+
 	return "UNKNOWN";
 }
 
-// Listar todas as variaveis configuraveis
 string list_server_vars() {
 	string result = "=== VARIAVEIS DO SERVIDOR ===\n";
 	result += "MAX_PLAYERS = " + MAX_PLAYERS + "\n";
@@ -416,5 +388,3 @@ string list_server_vars() {
 	result += "SERVER_UPTIME = " + (server_uptime.elapsed / 1000) + "s\n";
 	return result;
 }
-
-

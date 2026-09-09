@@ -1,8 +1,4 @@
-// daily_rewards.nvgt - Sistema de Recompensas Diarias
-// Conversao: Novo sistema para NVGT
-// Fase 5: Conteudo Avancado
 
-// Tracker de recompensas diarias do jogador
 class daily_reward_tracker {
 	string player_name;
 	int current_streak;
@@ -12,7 +8,7 @@ class daily_reward_tracker {
 	bool spin_available;
 	bool box_available;
 	timer last_reset;
-	
+
 	daily_reward_tracker(string pname) {
 		this.player_name = pname;
 		this.current_streak = 0;
@@ -23,36 +19,34 @@ class daily_reward_tracker {
 		last_claim.restart();
 		last_reset.restart();
 	}
-	
+
 	bool can_claim() {
-		// Verificar se ja passou 24 horas
-		if(last_claim.elapsed >= 86400000) {  // 24 horas em ms
+		if(last_claim.elapsed >= 86400000) {
 			return true;
 		}
 		return !claimed_today;
 	}
-	
+
 	void claim_reward() {
 		claimed_today = true;
 		current_streak++;
 		total_days++;
 		last_claim.restart();
 	}
-	
+
 	void reset_streak() {
 		current_streak = 0;
 	}
-	
+
 	void reset_daily() {
 		claimed_today = false;
 		spin_available = true;
-		// box_available so e liberada por streak/roleta.
 		last_reset.restart();
 	}
-	
+
 	dictionary get_reward_for_streak() {
 		dictionary reward;
-		
+
 		if(current_streak == 1) {
 			reward.set("gold", "100");
 			reward.set("xp", "50");
@@ -74,77 +68,71 @@ class daily_reward_tracker {
 			reward.set("xp", "5000");
 			reward.set("item lendario", "1");
 		} else {
-			// Recompensa padrao
 			int gold_base = 100 + (current_streak * 10);
 			int xp_base = 50 + (current_streak * 5);
 			reward.set("gold", "" + gold_base);
 			reward.set("xp", "" + xp_base);
 		}
-		
+
 		return reward;
 	}
-	
+
 	void save() {
 		string path = "players/" + player_name + "/daily.dat";
-		
+
 		file f;
 		if(!f.open(path, "wb")) {
 			debug_log("DAILY: Erro ao salvar daily tracker de " + player_name);
 			return;
 		}
-		
+
 		f.write("" + current_streak + "\n");
 		f.write("" + total_days + "\n");
 		f.write("" + (claimed_today ? "1" : "0") + "\n");
 		f.write("" + (spin_available ? "1" : "0") + "\n");
 		f.write("" + (box_available ? "1" : "0") + "\n");
 		f.write("" + time_stamp() + "\n");
-		
+
 		f.close();
 		debug_log("DAILY: Tracker de " + player_name + " salvo");
 	}
-	
+
 	void load() {
 		string path = "players/" + player_name + "/daily.dat";
-		
+
 		file f;
 		if(!f.open(path, "rb")) {
-			return;  // Arquivo nao existe
+			return;
 		}
-		
+
 		string content = f.read();
 		f.close();
-		
+
 		string[] lines = content.split("\n");
 		if(lines.length() < 6) return;
-		
+
 		current_streak = parse_int(lines[0]);
 		total_days = parse_int(lines[1]);
 		claimed_today = (parse_int(lines[2]) == 1);
 		spin_available = (parse_int(lines[3]) == 1);
 		box_available = (parse_int(lines[4]) == 1);
-		
-		// Verificar se precisa resetar (passou 1 dia)
+
 		uint64 last_time = parse_uint(lines[5]);
 		uint64 now = time_stamp();
-		
-		// Se passou mais de 24h desde o ultimo claim e nao foi reclamado hoje
+
 		if((now - last_time) >= 86400 && !claimed_today) {
-			// Verificar se passou mais de 48h (quebrou o streak)
 			if((now - last_time) >= 172800) {
 				reset_streak();
 			}
 			reset_daily();
 		}
-		
+
 		debug_log("DAILY: Tracker de " + player_name + " carregado (streak: " + current_streak + ")");
 	}
 }
 
-// Dictionary de trackers diarios
 dictionary player_daily_trackers;
 
-// Obter tracker do jogador
 daily_reward_tracker@ get_daily_tracker(string player_name) {
 	if(!player_daily_trackers.exists(player_name)) {
 		daily_reward_tracker dt(player_name);
@@ -152,19 +140,18 @@ daily_reward_tracker@ get_daily_tracker(string player_name) {
 		player_daily_trackers.set(player_name, @dt);
 		return dt;
 	}
-	
+
 	return cast<daily_reward_tracker@>(player_daily_trackers[player_name]);
 }
 
-// Comando: Coletar recompensa diaria
 void cmd_dailyreward(int player_index) {
 	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
-	
+
 	if(!dt.can_claim()) {
 		send_reliable_text(players[player_index].peer_id, "say [Sistema] Você ja coletou sua recompensa de hoje!", 0);
 		return;
 	}
-	
+
 	dt.claim_reward();
 	int gold_reward = 150 * dt.current_streak;
 	if(gold_reward > 1500) gold_reward = 1500;
@@ -186,22 +173,20 @@ void cmd_dailyreward(int player_index) {
 	debug_log("DAILY: " + players[player_index].charname + " coletou recompensa diaria (streak: " + dt.current_streak + ")");
 }
 
-// Comando: Ver streak atual
 void cmd_dailystreak(int player_index) {
 	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
-	
+
 	send_reliable(players[player_index].peer_id, "msg2 === Streak de Login Diario ===", 0);
 	send_reliable(players[player_index].peer_id, "msg2 Dias consecutivos: " + dt.current_streak, 0);
 	send_reliable(players[player_index].peer_id, "msg2 Total de dias jogados: " + dt.total_days, 0);
-	
+
 	if(dt.claimed_today) {
 		send_reliable(players[player_index].peer_id, "msg2 Status: [OK] Coletado hoje", 0);
 	} else {
 		send_reliable(players[player_index].peer_id, "msg2 Status: Disponivel!", 0);
 		send_reliable(players[player_index].peer_id, "msg2 Use /dailyreward para coletar", 0);
 	}
-	
-	// Proximos milestones
+
 	send_reliable(players[player_index].peer_id, "msg2 --- Proximos Bonus ---", 0);
 	if(dt.current_streak < 3) {
 		send_reliable(players[player_index].peer_id, "msg2 Dia 3: 300 gold + pocao", 0);
@@ -217,18 +202,17 @@ void cmd_dailystreak(int player_index) {
 	}
 }
 
-// Comando: Roda da sorte
 void cmd_luckywheel(int player_index) {
 	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
-	
+
 	if(!dt.spin_available) {
 		send_reliable_text(players[player_index].peer_id, "say [Roleta] Você não tem giros disponiveis no momento.", 0);
 		return;
 	}
-	
+
 	dt.spin_available = false;
 	send_reliable_text(players[player_index].peer_id, "ps roleta.ogg", 0);
-	
+
 	int prize = random(1, 100);
 	if(prize <= 50) {
 		players[player_index].gold += 300;
@@ -247,24 +231,23 @@ void cmd_luckywheel(int player_index) {
 		dt.box_available = true;
 		send_reliable_text(players[player_index].peer_id, "say [Roleta] JACKPOT! Caixa Misteriosa liberada. Digite /box.", 0);
 	}
-	
+
 	dt.save();
 	save_player_inventory_to_db(players[player_index]);
 	debug_log("DAILY: " + players[player_index].charname + " girou a roda da sorte");
 }
 
-// Comando: Caixa misteriosa
 void cmd_mysterybox(int player_index) {
 	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
-	
+
 	if(!dt.box_available) {
 		send_reliable_text(players[player_index].peer_id, "say [Caixa] Você não possui nenhuma Caixa Misteriosa.", 0);
 		return;
 	}
-	
+
 	dt.box_available = false;
 	send_reliable_text(players[player_index].peer_id, "ps open_box.ogg", 0);
-	
+
 	int prize = random(1, 3);
 	if(prize == 1) {
 		players[player_index].gold += 5000;
@@ -279,22 +262,18 @@ void cmd_mysterybox(int player_index) {
 		add_item_with_sync(players[player_index], "diamante", 5);
 		send_reliable_text(players[player_index].peer_id, "say [Caixa Misteriosa] BRILHANTE! Você encontrou 5 diamantes!", 0);
 	}
-	
+
 	dt.save();
 	save_player_inventory_to_db(players[player_index]);
 	debug_log("DAILY: " + players[player_index].charname + " abriu caixa misteriosa");
 }
 
-// Loop de reset diario
 void daily_rewards_loop() {
-	// Verificar reset diario (00:00)
-	// Esta funcao pode ser chamada periodicamente para garantir resets
-	
+
 	string[] player_keys = player_daily_trackers.get_keys();
 	for(uint i = 0; i < player_keys.length(); i++) {
 		daily_reward_tracker@ dt = cast<daily_reward_tracker@>(player_daily_trackers[player_keys[i]]);
-		
-		// Se passou 24h desde o ultimo reset, resetar
+
 		if(dt.last_reset.elapsed >= 86400000) {
 			dt.reset_daily();
 			dt.save();
@@ -302,40 +281,26 @@ void daily_rewards_loop() {
 	}
 }
 
-// ============================================================================
-// ALIASES DE COMANDOS (para compatibilidade com server.nvgt)
-// ============================================================================
-
-// Alias: /daily - Status das recompensas diarias
 void cmd_daily_status(int player_index) {
 	cmd_dailystreak(player_index);
 }
 
-// Alias: /claimdaily - Coletar recompensa diaria
 void cmd_claim_daily(int player_index) {
 	cmd_dailyreward(player_index);
 }
 
-// Alias: /spin - Girar roda da sorte
 void cmd_spin_wheel(int player_index) {
 	cmd_luckywheel(player_index);
 }
 
-// Alias: /box - Abrir caixa misteriosa
 void cmd_mystery_box(int player_index) {
 	cmd_mysterybox(player_index);
 }
 
-// ============================================================================
-// INTEGRACAO: Verificar daily no login do jogador
-// ============================================================================
-
 void check_daily_on_login(int player_index) {
 	daily_reward_tracker@ dt = get_daily_tracker(players[player_index].charname);
-	
-	// Verificar se precisa resetar
+
 	if(dt.last_reset.elapsed >= 86400000) {
-		// Verificar se quebrou o streak (passou mais de 48h)
 		if(dt.last_claim.elapsed >= 172800000) {
 			dt.reset_streak();
 			send_reliable(players[player_index].peer_id, "msg2 Seu streak de login foi reiniciado por inatividade!", 0);
@@ -343,13 +308,10 @@ void check_daily_on_login(int player_index) {
 		dt.reset_daily();
 		dt.save();
 	}
-	
-	// Notificar sobre recompensa disponivel
+
 	if(dt.can_claim()) {
 		send_reliable(players[player_index].peer_id, "msg2 Sua recompensa diaria esta disponivel!", 0);
 		send_reliable(players[player_index].peer_id, "msg2 Use /claimdaily ou /coletardiario para coletar.", 0);
 		send_reliable(players[player_index].peer_id, "msg2 Streak atual: " + dt.current_streak + " dia(s) consecutivo(s)", 0);
 	}
 }
-
-

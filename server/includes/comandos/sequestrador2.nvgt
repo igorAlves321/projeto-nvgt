@@ -1,5 +1,3 @@
-// sequestrador2.nvgt - Sistema de Sequestrador Avançado do EVM Server (convertido de BGT)
-// Conversão: BGT → NVGT
 
 sequestrador2@[] sequestrador2s;
 
@@ -8,7 +6,7 @@ class sequestrador2 {
 	string mapa, golpeado, njogador;
 	timer tandar, tmorreu, tsom, tatirar;
 	string[] tipoarma = {"", "bazuca", "mp7", "ak48"};
-	
+
 	sequestrador2(int zx, int zy, string m, int tn) {
 		x = zx;
 		y = zy;
@@ -16,7 +14,6 @@ class sequestrador2 {
 		tmorreu.force(0);
 		tmorreu.pause();
 		narma = tn;
-		// Configuração especial para AK48
 		if (tn == 3) {
 			ndist = 350;
 			natirar = 500;
@@ -33,12 +30,10 @@ void colocar_sequestrador2(int x, int y, string m, int nn = random(1, 2)) {
 void sequestrador2loop() {
 	for (uint i = 0; i < sequestrador2s.length(); i++) {
 		int saiu = 0;
-		
-		// Sistema de morte final (após 4.45 segundos)
+
 		if (sequestrador2s[i].vida <= 0 && sequestrador2s[i].morreu == 1 && sequestrador2s[i].tmorreu.elapsed >= 4450) {
 			net.send_packet(0, "play " + get_tile_at(sequestrador2s[i].x, sequestrador2s[i].y, sequestrador2s[i].mapa) + "harland.ogg " + sequestrador2s[i].x + " " + sequestrador2s[i].y, sequestrador2s[i].mapa);
 			string golp = sequestrador2s[i].golpeado;
-			// net.send_reliable(0, "msg2 " + golp + "; ;matou um; ;sequestrador;!", 3);
 			int xx = get_player_index_from(golp);
 			if (xx > -1) {
 				players[xx].inv_add_item("corpo_de_sequestrador", 20, false);
@@ -48,41 +43,36 @@ void sequestrador2loop() {
 			saiu = 1;
 			return;
 		}
-		
+
 		if (saiu == 1) break;
-		
-		// Sistema de morte inicial
+
 		else if (sequestrador2s[i].morreu == 0 && sequestrador2s[i].vida <= 0) {
 			net.send_packet(0, "play v1morte1.ogg " + sequestrador2s[i].x + " " + sequestrador2s[i].y, sequestrador2s[i].mapa);
 			sequestrador2s[i].tmorreu.restart();
 			sequestrador2s[i].morreu = 1;
 		}
-		
+
 		if (saiu == 1) break;
-		
+
 		int andar = 1;
-		
-		// Sistema de ataque inteligente
+
 		if (sequestrador2s[i].tatirar.elapsed >= sequestrador2s[i].natirar && sequestrador2s[i].morreu == 0) {
 			sequestrador2s[i].tatirar.restart();
 			int i2 = get_player_index_from(sequestrador2s[i].njogador);
-			
-			// Verificar validade do alvo
+
 			if (i2 > -1) {
 				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || players[i2].afk || players[i2].map != sequestrador2s[i].mapa) i2 = -1;
 			}
-			
-			// Selecionar novo alvo se necessário
+
 			if (i2 < 0) sequestrador2s[i].njogador = selecionar_jogador(sequestrador2s[i].mapa);
 			i2 = get_player_index_from(sequestrador2s[i].njogador);
-			
+
 			if (i2 > -1) {
 				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || players[i2].afk || players[i2].map != sequestrador2s[i].mapa) i2 = -1;
 			}
-			
+
 			if (i2 < 0) break;
-			
-			// Ataque com arma específica
+
 			if (g_sequestrador2(sequestrador2s[i], players[i2]) > -1 && g_sequestrador2(sequestrador2s[i], players[i2]) <= sequestrador2s[i].ndist && players[i2].afk == false && players[i2].pacifico == 0 && get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == false) {
 				andar = 0;
 				net.send_packet(0, "play " + sequestrador2s[i].tipoarma[sequestrador2s[i].narma] + ".ogg " + sequestrador2s[i].x + " " + sequestrador2s[i].y, sequestrador2s[i].mapa);
@@ -92,26 +82,24 @@ void sequestrador2loop() {
 				break;
 			}
 		}
-		
-		// Sistema de movimento (apenas para armas não-AK48)
+
 		if (sequestrador2s[i].tandar.elapsed >= 210 && sequestrador2s[i].morrendo == 0 && sequestrador2s[i].morreu == 0 && andar == 1 && sequestrador2s[i].narma < 3) {
 			sequestrador2s[i].tandar.restart();
 			int i2 = get_player_index_from(sequestrador2s[i].njogador);
-			
+
 			if (i2 > -1) {
 				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || players[i2].afk || players[i2].map != sequestrador2s[i].mapa) i2 = -1;
 			}
-			
+
 			if (i2 < 0) sequestrador2s[i].njogador = selecionar_jogador(sequestrador2s[i].mapa);
 			i2 = get_player_index_from(sequestrador2s[i].njogador);
-			
+
 			if (i2 > -1) {
 				if (players[i2].pacifico == 1 || get_safezone_at(players[i2].x, players[i2].y, players[i2].map) == true || players[i2].afk || players[i2].map != sequestrador2s[i].mapa) i2 = -1;
 			}
-			
+
 			if (i2 < 0) break;
-			
-			// Movimento inteligente com detecção de paredes
+
 			if (sequestrador2s[i].x > players[i2].x - 1 && !players[i2].afk && get_tile_at(sequestrador2s[i].x - 1, sequestrador2s[i].y, sequestrador2s[i].mapa).find("wall") < 0 && andar == 1) {
 				sequestrador2s[i].x--;
 				net.send_packet(0, "play " + get_tile_at(sequestrador2s[i].x, sequestrador2s[i].y, sequestrador2s[i].mapa) + "step" + random(1, 5) + ".ogg " + sequestrador2s[i].x + " " + sequestrador2s[i].y, sequestrador2s[i].mapa);
@@ -125,8 +113,7 @@ void sequestrador2loop() {
 				break;
 			}
 		}
-		
-		// Sistema de aquisição de alvo
+
 		for (uint i2 = 0; i2 < players.length(); i2++) {
 			if (players[i2].map == sequestrador2s[i].mapa && players[i2].afk == false && players[i2].pacifico == 0 && g_sequestrador2(sequestrador2s[i], players[i2]) > -1 && g_sequestrador2(sequestrador2s[i], players[i2]) <= sequestrador2s[i].ndist) {
 				sequestrador2s[i].njogador = players[i2].charname;

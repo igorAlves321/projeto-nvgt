@@ -1,27 +1,20 @@
-	// ============================================================================
-	// INICIALIZAÇÃO DO MAPA
-	// ============================================================================
 	void init_map(string mapname) {
-		// Abrir e ler arquivo do mapa
 		file map_file;
 		string map_path = resolve_map_path(mapname);
 		if (!map_file.open(map_path, "r")) {
 			alert("Erro", "Não foi possível abrir o arquivo de mapa: " + map_path);
 			return;
 		}
-		
+
 		string content = map_file.read();
 		map_file.close();
-		
-		// Separar em linhas
+
 		string[] lines = content.split("\r\n");
-		
-		// Processar cada linha do mapa
+
 		for (uint x = 0; x < lines.length(); x++) {
 			mapdata.insert_last(lines[x]);
 			string[] parsed = lines[x].split(":");
-			
-			// Limites do mapa
+
 			if (parsed[0] == "maxx") {
 				max_x = parse_int(parsed[1]);
 				continue;
@@ -30,85 +23,73 @@
 				max_y = parse_int(parsed[1]);
 				continue;
 			}
-			
-			// Itens desativados
+
 			if (parsed[0] == "dv") {
 				desactivados.set(parsed[1], parsed[1]);
 				continue;
 			}
-			
-			// Plataformas (p = platform) - suporta alias "platform"
+
 			if ((parsed[0] == "p" || parsed[0] == "platform") && parsed.length() >= 5) {
-				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]), 
+				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]),
 				           parse_int(parsed[3]), parse_int(parsed[3]), parsed[4]);
 				platforms.insert_last(p1);
 				continue;
 			}
-			
-			// Escadas (sc = staircase) - suporta alias "staircase"
+
 			if ((parsed[0] == "sc" || parsed[0] == "staircase") && parsed.length() >= 6) {
-				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]), 
+				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[2]),
 				           parse_int(parsed[3]), parse_int(parsed[4]), parsed[5]);
 				platforms.insert_last(p1);
 				continue;
 			}
-			
-			// Paredes (w = wall) - suporta aliases "wall" e "pwall"
+
 			if ((parsed[0] == "w" || parsed[0] == "wall" || parsed[0] == "pwall") && parsed.length() >= 5) {
-				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[1]), 
+				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[1]),
 				           parse_int(parsed[2]), parse_int(parsed[3]), parsed[4]);
 				platforms.insert_last(p1);
 				continue;
 			}
-			
-			// Zonas (z = zone) - suporta alias "zone"
+
 			if ((parsed[0] == "z" || parsed[0] == "zone") && parsed.length() >= 6) {
-				zone z1(parse_int(parsed[1]), parse_int(parsed[2]), 
+				zone z1(parse_int(parsed[1]), parse_int(parsed[2]),
 				       parse_int(parsed[3]), parse_int(parsed[4]), parsed[5]);
 				zones.insert_last(z1);
 				continue;
 			}
-			
-			// Zonas seguras (sz = safezone)
+
 			if (parsed[0] == "sz") {
-				safezone sz1(parse_int(parsed[1]), parse_int(parsed[2]), 
+				safezone sz1(parse_int(parsed[1]), parse_int(parsed[2]),
 				            parse_int(parsed[3]), parse_int(parsed[4]));
 				safezones.insert_last(sz1);
 				continue;
 			}
-			
-			// Zonas de extração (ex = extract)
+
 			if (parsed[0] == "ex" && parsed.length() == 11) {
-				extract e(parse_int(parsed[1]), parse_int(parsed[2]), 
-				         parse_int(parsed[3]), parse_int(parsed[4]), 
-				         parse_int(parsed[5]), parse_int(parsed[6]), 
+				extract e(parse_int(parsed[1]), parse_int(parsed[2]),
+				         parse_int(parsed[3]), parse_int(parsed[4]),
+				         parse_int(parsed[5]), parse_int(parsed[6]),
 				         parse_int(parsed[7]), parsed[8], parsed[9], parsed[10]);
 				extracts.insert_last(e);
 				continue;
 			}
-			
-			// NPCs
+
 			if (parsed[0] == "npc" && parsed.length() > 25) {
-				npc b(parse_int(parsed[1]), parse_int(parsed[2]), 
-				     parse_int(parsed[3]), parse_int(parsed[4]), 
-				     parse_int(parsed[5]), parse_int(parsed[6]), 
-				     parse_int(parsed[7]), parse_int(parsed[8]), 
-				     parse_int(parsed[9]), parse_int(parsed[10]), 
-				     parse_int(parsed[11]), parsed[12], parsed[13], 
-				     parsed[14], parsed[15], parsed[16], parsed[17], 
-				     parse_int(parsed[18]), (parse_int(parsed[19]) != 0), 
-				     (parse_int(parsed[20]) != 0), this.name, parsed[21], 
-				     parse_int(parsed[22]), parse_int(parsed[23]), 
+				npc b(parse_int(parsed[1]), parse_int(parsed[2]),
+				     parse_int(parsed[3]), parse_int(parsed[4]),
+				     parse_int(parsed[5]), parse_int(parsed[6]),
+				     parse_int(parsed[7]), parse_int(parsed[8]),
+				     parse_int(parsed[9]), parse_int(parsed[10]),
+				     parse_int(parsed[11]), parsed[12], parsed[13],
+				     parsed[14], parsed[15], parsed[16], parsed[17],
+				     parse_int(parsed[18]), (parse_int(parsed[19]) != 0),
+				     (parse_int(parsed[20]) != 0), this.name, parsed[21],
+				     parse_int(parsed[22]), parse_int(parsed[23]),
 				     parsed[24], parse_int(parsed[25]));
 				npcs.insert_last(b);
-				// Sistema global (npc.nvgt): instancia ativa para IA/combate.
 				npcs_global.insert_last(b);
 				continue;
 			}
-			
-			// Monstros (compat BGT e formato novo)
-			// BGT: monstruo:x:y
-			// NVGT: monstruo:x:y:tipo
+
 			if (parsed[0] == "monstruo" && parsed.length() >= 3) {
 				int mx = parse_int(parsed[1]);
 				int my = parse_int(parsed[2]);
@@ -119,61 +100,54 @@
 				spawn_monstruo(mx, my, this.name, mtipo);
 				continue;
 			}
-			
-			// Banheiros (rt = restroom/toilet)
+
 			if (parsed[0] == "rt" && parsed.length() > 2) {
 				banheiro b(parse_int(parsed[1]), parse_int(parsed[2]));
 				banheiros.insert_last(b);
 				continue;
 			}
-			
-			// Pias (lv = lavabo)
+
 			if (parsed[0] == "lv" && parsed.length() > 2) {
 				pia b(parse_int(parsed[1]), parse_int(parsed[2]), this.name);
 				pias.insert_last(b);
 				continue;
 			}
-			
-			// Árvores
+
 			if (parsed[0] == "arbol" && parsed.length() > 8) {
-				arbol a(parse_int(parsed[1]), parse_int(parsed[2]), 
-				       parse_int(parsed[3]), parse_int(parsed[4]), 
-				       parse_int(parsed[5]), parse_int(parsed[6]), 
+				arbol a(parse_int(parsed[1]), parse_int(parsed[2]),
+				       parse_int(parsed[3]), parse_int(parsed[4]),
+				       parse_int(parsed[5]), parse_int(parsed[6]),
 				       parsed[7], parsed[8], this.name);
 				arbols.insert_last(a);
 				continue;
 			}
-			
-			// Paredes destrutíveis
+
 			if (parsed[0] == "wall" && parsed.length() > 9) {
-				wall w(parse_int(parsed[1]), parse_int(parsed[2]), 
-				      parse_int(parsed[3]), parse_int(parsed[4]), 
-				      parse_int(parsed[5]), parse_int(parsed[6]), 
+				wall w(parse_int(parsed[1]), parse_int(parsed[2]),
+				      parse_int(parsed[3]), parse_int(parsed[4]),
+				      parse_int(parsed[5]), parse_int(parsed[6]),
 				      parsed[7], parsed[8], parsed[9], parsed[10], this.name);
 				walls.insert_last(w);
 				continue;
 			}
-			
-			// Zonas de morte
+
 			if (parsed[0] == "death" && parsed.length() > 10) {
-				death d(parse_int(parsed[1]), parse_int(parsed[2]), 
-				       parse_int(parsed[3]), parse_int(parsed[4]), 
-				       parse_int(parsed[5]), parse_int(parsed[6]), 
-				       parse_int(parsed[7]), parsed[8], parsed[9], 
+				death d(parse_int(parsed[1]), parse_int(parsed[2]),
+				       parse_int(parsed[3]), parse_int(parsed[4]),
+				       parse_int(parsed[5]), parse_int(parsed[6]),
+				       parse_int(parsed[7]), parsed[8], parsed[9],
 				       parse_int(parsed[10]), parse_int(parsed[11]));
 				deaths.insert_last(d);
 				continue;
 			}
-			
-			// Zonas de jogo desativado
+
 			if (parsed[0] == "disable_game" && parsed.length() > 4) {
-				game_disabled g(parse_int(parsed[1]), parse_int(parsed[2]), 
+				game_disabled g(parse_int(parsed[1]), parse_int(parsed[2]),
 				               parse_int(parsed[3]), parse_int(parsed[4]));
 				disableds.insert_last(g);
 				continue;
 			}
-			
-			// Items/Objetos coletáveis
+
 			if (parsed[0] == "item" && parsed.length() > 8) {
 				spawn_obj(parsed[1], parse_int(parsed[2]),
 				         parse_int(parsed[3]), parse_int(parsed[4]),
@@ -182,41 +156,31 @@
 				continue;
 			}
 
-			// ========================================================================
-			//  TASK 1.3.1: PARSING COMPLETO DOS 27+ TIPOS FALTANTES
-			// ========================================================================
-
-			// MAP NAME - Nome de exibição do mapa
 			if (parsed[0] == "map" && parsed.length() > 1) {
-				map_name_display = lines[x].substr(4); // Pega tudo após "map:"
+				map_name_display = lines[x].substr(4);
 				continue;
 			}
 
-			// URL - Música de fundo via URL
 			if (parsed[0] == "url" && parsed.length() > 1) {
-				background_music_url = lines[x].substr(4); // Pega tudo após "url:"
+				background_music_url = lines[x].substr(4);
 				continue;
 			}
 
-			// TETO - Som de teto/chuva
 			if (parsed[0] == "teto" && parsed.length() > 1) {
 				ceiling_sound = parsed[1];
 				continue;
 			}
 
-			// X - Coordenada X de spawn do jogador
 			if (parsed[0] == "x" && parsed.length() > 1) {
 				player_spawn_x = parse_int(parsed[1]);
 				continue;
 			}
 
-			// Y - Coordenada Y de spawn do jogador
 			if (parsed[0] == "y" && parsed.length() > 1) {
 				player_spawn_y = parse_int(parsed[1]);
 				continue;
 			}
 
-			// DOOR / PORTA / DR - Portas (10 parâmetros)
 			if ((parsed[0] == "door" || parsed[0] == "porta" || parsed[0] == "dr") && parsed.length() >= 10) {
 				door d(parse_int(parsed[1]), parse_int(parsed[2]),
 				      parse_int(parsed[3]), parse_int(parsed[4]),
@@ -226,22 +190,18 @@
 				continue;
 			}
 
-			// SOUND_SOURCE / SOM / SS - Fontes sonoras (6 parâmetros)
 			if ((parsed[0] == "sound_source" || parsed[0] == "som" || parsed[0] == "ss") && parsed.length() >= 6) {
-				// Validação de parâmetros
 				int lx = parse_int(parsed[1]);
 				int rx = parse_int(parsed[2]);
 				int miny = parse_int(parsed[3]);
 				int maxy = parse_int(parsed[4]);
 				string sound_file = parsed[5].replace(".wav", ".ogg");
 
-				// Validação de limites
 				if (lx < 0 || rx > max_x || miny < 0 || maxy > max_y) {
 					debug_log("[PARSE_ERROR] sound_source fora dos limites do mapa: " + lines[x]);
 					continue;
 				}
 
-				// Validação de arquivo
 				if (sound_file.is_empty() || !sound_file.ends_with(".ogg")) {
 					debug_log("[PARSE_ERROR] sound_source com arquivo inválido: " + sound_file);
 					continue;
@@ -253,7 +213,6 @@
 				continue;
 			}
 
-			// SS2 - Sound Streams (zonas com música de fundo)
 			if (parsed[0] == "ss2" && parsed.length() >= 6) {
 				int minx = parse_int(parsed[1]);
 				int maxx = parse_int(parsed[2]);
@@ -268,13 +227,11 @@
 				continue;
 			}
 
-			// TEXTO / TXT - Objetos de texto (4 parâmetros)
 			if ((parsed[0] == "texto" || parsed[0] == "txt") && parsed.length() >= 4) {
 				int x = parse_int(parsed[1]);
 				int y = parse_int(parsed[2]);
 				string text = parsed[3];
 
-				// Validação de coordenadas
 				if (x < 0 || x > max_x || y < 0 || y > max_y) {
 					debug_log("[PARSE_ERROR] texto fora dos limites: " + lines[x]);
 					continue;
@@ -286,14 +243,12 @@
 				continue;
 			}
 
-			// DLG - Diálogos (4 parâmetros)
 			if (parsed[0] == "dlg" && parsed.length() >= 4) {
 				int x = parse_int(parsed[1]);
 				int y = parse_int(parsed[2]);
 				string message = parsed[3];
 				string snd = (parsed.length() >= 5) ? parsed[4] : "";
 
-				// Validação de coordenadas
 				if (x < 0 || x > max_x || y < 0 || y > max_y) {
 					debug_log("[PARSE_ERROR] dlg fora dos limites: " + lines[x]);
 					continue;
@@ -305,7 +260,6 @@
 				continue;
 			}
 
-			// AREIA_MOVEDISSA / AM - Areia movediça (quicksand)
 			if ((parsed[0] == "areia_movedissa" || parsed[0] == "am") && parsed.length() >= 3) {
 				int x = parse_int(parsed[1]);
 				int y = parse_int(parsed[2]);
@@ -315,7 +269,6 @@
 				continue;
 			}
 
-			// TP / TRAVELPOINT - Pontos de viagem (8 parâmetros)
 			if ((parsed[0] == "tp" || parsed[0] == "travelpoint") && parsed.length() >= 8) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -332,7 +285,6 @@
 				continue;
 			}
 
-			// PTM - Portal customizado com som (9 parâmetros)
 			if (parsed[0] == "ptm" && parsed.length() >= 9) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -350,7 +302,6 @@
 				continue;
 			}
 
-			// PM - Ponto de pickup com item (10 parâmetros)
 			if (parsed[0] == "pm" && parsed.length() >= 10) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -369,7 +320,6 @@
 				continue;
 			}
 
-			// CPM - Portal customizado com tempo (13 parâmetros)
 			if (parsed[0] == "cpm" && parsed.length() >= 13) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -391,7 +341,6 @@
 				continue;
 			}
 
-			// CONGELAR - Zona de congelamento (4 parâmetros)
 			if (parsed[0] == "congelar" && parsed.length() >= 5) {
 				int x1 = parse_int(parsed[1]);
 				int x2 = parse_int(parsed[2]);
@@ -404,14 +353,12 @@
 				continue;
 			}
 
-			// DARMAS - Desabilitar arma específica
 			if (parsed[0] == "darmas" && parsed.length() >= 2) {
 				string weapon = parsed[1];
 				disabled_weapons.insert_last(weapon);
 				continue;
 			}
 
-			// DESC - Descrição de área (formato completo com 6 parâmetros)
 			if (parsed[0] == "desc" && parsed.length() >= 6) {
 				int x = parse_int(parsed[1]);
 				int y = parse_int(parsed[2]);
@@ -425,20 +372,17 @@
 				continue;
 			}
 
-			// DESATIVAR - Desabilitar funcionalidades do jogo
 			if (parsed[0] == "desativar" && parsed.length() >= 2) {
 				string feature = parsed[1];
 				desactivados.set(feature, feature);
 				continue;
 			}
 
-			// SAFEMAP - Marcar mapa inteiro como safezone
 			if (parsed[0] == "safemap") {
 				is_safe_map = true;
 				continue;
 			}
 
-			// SAFEZONE / SAFEZ - Aliases para sz (safezone)
 			if ((parsed[0] == "safezone" || parsed[0] == "safez") && parsed.length() >= 5) {
 				safezone sz(parse_int(parsed[1]), parse_int(parsed[2]),
 				           parse_int(parsed[3]), parse_int(parsed[4]));
@@ -446,7 +390,6 @@
 				continue;
 			}
 
-			// REVERB - Zona de reverberação (4+ parâmetros)
 			if (parsed[0] == "reverb" && parsed.length() >= 5) {
 				int x1 = parse_int(parsed[1]);
 				int x2 = parse_int(parsed[2]);
@@ -460,7 +403,6 @@
 				continue;
 			}
 
-			// PORTAMAPA - Alias para travelpoint
 			if (parsed[0] == "portamapa" && parsed.length() >= 8) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -477,7 +419,6 @@
 				continue;
 			}
 
-			// PM2 - Variante de PM (mesmo parsing que PM)
 			if (parsed[0] == "pm2" && parsed.length() >= 10) {
 				int zone_x1 = parse_int(parsed[1]);
 				int zone_y1 = parse_int(parsed[2]);
@@ -496,7 +437,6 @@
 				continue;
 			}
 
-			// W2 - Variante de parede (mesmo parsing que W)
 			if (parsed[0] == "w2" && parsed.length() >= 5) {
 				platform p1(parsed[0], parse_int(parsed[1]), parse_int(parsed[1]),
 				           parse_int(parsed[2]), parse_int(parsed[3]), parsed[4]);
@@ -504,7 +444,6 @@
 				continue;
 			}
 
-			// PNPC - NPC passivo (mesmo parsing que NPC, sem agressão)
 			if (parsed[0] == "pnpc" && parsed.length() > 25) {
 				npc b(parse_int(parsed[1]), parse_int(parsed[2]),
 				     parse_int(parsed[3]), parse_int(parsed[4]),
@@ -522,16 +461,9 @@
 				continue;
 			}
 
-			// WHERE - Localização atual (parsing simples)
 			if (parsed[0] == "where" && parsed.length() >= 2) {
-				// WHERE já existe mais abaixo no código (linha 1868+)
-				// Então vamos apenas registrar aqui para consistência
 				continue;
 			}
 
-			// ========================================================================
-			// FIM DO PARSING DOS NOVOS TIPOS (Task 1.3.1)
-			// ========================================================================
 		}
 	}
-

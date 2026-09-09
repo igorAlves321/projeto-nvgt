@@ -1,53 +1,42 @@
-// weapon.nvgt - Sistema de Armas do Cliente EVM
-// Conversão de weapon.bgt para NVGT
 
 #include "settings.nvgt"
 
-// ============================================================================
-// CONSTANTES E CONFIGURAÇÕES DE FAVORITOS
-// ============================================================================
-const int FAVORITES_COUNT = 10;  // Teclas F0-F9
+const int FAVORITES_COUNT = 10;
 
-// Array global de armas do jogador
 weapon[] player_weapons;
 
-// Arma atual selecionada
 string current_weapon = "";
 
-// Dicionário de armas favoritas (teclas 0-9)
 dictionary favorite_weapons;
 
-// Sistema de persistência de favoritos
 settings favorites_config;
 bool favorites_initialized = false;
 
-// Classe para representar uma arma no inventário do jogador
 class weapon {
-	double speed;                    // Velocidade de tiro (modo semi-automático)
-	double speed_burst;              // Velocidade de tiro (modo automático/burst)
-	double speed_loading;            // Tempo de recarga
-	double ammo_cantity;             // Capacidade do pente
-	double ammo_cantity_descount;    // Munição gasta por tiro
-	
-	string sound_draw;               // Som ao sacar a arma
-	string sound_reload;             // Som de recarregar
-	string sound_unload;             // Som de arma descarregada
-	string sound_mode1;              // Som ao mudar para modo 1
-	string sound_mode2;              // Som ao mudar para modo 2
-	string sound_shoot;              // Som do tiro
-	string ammo;                     // Tipo de munição
-	string name;                     // Nome da arma
-	
-	int require_ammo;                // Requer munição? (1 = sim, 0 = não)
-	int enable_burst;                // Permite modo burst/auto? (1 = sim, 0 = não)
-	int mode;                        // Modo atual (0 = semi, 1 = auto)
-	int ammo_load;                   // Munição no pente
-	int loading;                     // Está recarregando? (1 = sim, 0 = não)
-	
-	timer tshoot;                    // Timer para controlar cadência de tiro
-	timer tspeed_reloading;          // Timer de recarga
-	
-	// Construtor padrão
+	double speed;
+	double speed_burst;
+	double speed_loading;
+	double ammo_cantity;
+	double ammo_cantity_descount;
+
+	string sound_draw;
+	string sound_reload;
+	string sound_unload;
+	string sound_mode1;
+	string sound_mode2;
+	string sound_shoot;
+	string ammo;
+	string name;
+
+	int require_ammo;
+	int enable_burst;
+	int mode;
+	int ammo_load;
+	int loading;
+
+	timer tshoot;
+	timer tspeed_reloading;
+
 	weapon() {
 		this.speed = 0.0;
 		this.speed_burst = 0.0;
@@ -60,11 +49,11 @@ class weapon {
 		this.ammo_load = 0;
 		this.loading = 0;
 	}
-	
-	weapon(double speed2, double speed_burst2, double speedreload2, double ammo_cantity2, 
-	       double ammo_load2, int require_ammo2, int enable_burst2, string sound_draw2, 
-	       string sound_reload2, string ammo2, string name2, string sound_unload2, 
-	       string sound2_mode1, string sound2_mode2, double ammo_cantity_descount2, 
+
+	weapon(double speed2, double speed_burst2, double speedreload2, double ammo_cantity2,
+	       double ammo_load2, int require_ammo2, int enable_burst2, string sound_draw2,
+	       string sound_reload2, string ammo2, string name2, string sound_unload2,
+	       string sound2_mode1, string sound2_mode2, double ammo_cantity_descount2,
 	       string sound_shoot2) {
 		this.speed = speed2;
 		this.speed_burst = speed_burst2;
@@ -85,58 +74,43 @@ class weapon {
 		this.mode = 0;
 		this.loading = 0;
 	}
-	
-	/**
-	 * Dispara a arma
-	 */
+
 	void shoot() {
-		// Modo automático/burst
 		if(this.tshoot.elapsed >= this.speed_burst && this.mode == 1) {
 			this.tshoot.restart();
-			
-			// Verificar munição
+
 			if(this.require_ammo == 1 && this.ammo_load < this.ammo_cantity_descount) {
 				p.play_stationary(this.sound_unload + ".ogg", false);
 				send_reliable(peer_id, "draw " + this.sound_unload + ".ogg", 0);
 				return;
 			}
-			
-			// Tocar som do tiro
+
 			p.play_stationary(this.sound_shoot + ".ogg", false);
 			send_reliable(peer_id, "COMBAT:shoot|" + this.name + "|" + selected + "|" + facing, 4);
-			
-			// Gastar munição
+
 			if(this.require_ammo == 1) this.ammo_load -= int(this.ammo_cantity_descount);
 		}
-		// Modo semi-automático
 		else if(this.tshoot.elapsed >= this.speed && this.mode == 0) {
 			this.tshoot.restart();
-			
-			// Verificar munição
+
 			if(this.require_ammo == 1 && this.ammo_load < this.ammo_cantity_descount) {
 				p.play_stationary(this.sound_unload + ".ogg", false);
 				send_reliable(peer_id, "draw " + this.sound_unload + ".ogg", 0);
 				return;
 			}
-			
-			// Tocar som do tiro
+
 			p.play_stationary(this.sound_shoot + ".ogg", false);
 			send_reliable(peer_id, "COMBAT:shoot|" + this.name + "|" + selected + "|" + facing, 4);
-			
-			// Gastar munição
+
 			if(this.require_ammo == 1) this.ammo_load -= int(this.ammo_cantity_descount);
 		}
 	}
-	
-	/**
-	 * Recarrega a arma
-	 */
+
 	void reload() {
 		if(this.require_ammo == 0) return;
 		if(this.loading == 1) return;
 		if(this.ammo_load >= int(this.ammo_cantity)) return;
 
-		// Consome 1 unidade do item de munição por recarga no servidor.
 		if(inv_item_number(this.ammo) <= 0) {
 			p.play_stationary(this.sound_unload + ".ogg", false);
 			speak(pu.get_value("Sem municao: ") + pu.get_value(this.ammo));
@@ -149,10 +123,7 @@ class weapon {
 		p.play_stationary(this.sound_reload + ".ogg", false);
 		send_reliable(peer_id, "COMBAT:reload|" + this.name, 4);
 	}
-	
-	/**
-	 * Alterna entre modo semi-automático e automático/burst
-	 */
+
 	bool change_mode() {
 		switch(this.mode) {
 			case 0:
@@ -168,112 +139,78 @@ class weapon {
 		}
 		return false;
 	}
-	
-	/**
-	 * Retorna informação de munição da arma
-	 */
+
 	string get_ammo() {
-		return this.ammo_load + " " + pu.get_value("de") + " " + int(this.ammo_cantity) + " " + 
+		return this.ammo_load + " " + pu.get_value("de") + " " + int(this.ammo_cantity) + " " +
 		       pu.get_value(this.ammo) + " " + pu.get_value("en tu cargador.");
 	}
 }
 
-// ============================================================================
-// FUNÇÕES AUXILIARES
-// ============================================================================
-
-// ============================================================================
-// SISTEMA DE FAVORITOS DE ARMAS - PERSISTÊNCIA
-// ============================================================================
-
-/**
- * Inicializa o sistema de favoritos e carrega configurações salvas
- * Deve ser chamado na inicialização do cliente
- */
 bool init_weapon_favorites() {
 	if(favorites_initialized) return true;
-	
-	// Configura o sistema de settings
-	// Usa "EVM" como company e "WeaponFavorites" como product, formato INI
+
 	if(!favorites_config.setup("EVM", "WeaponFavorites", false, "ini")) {
-		// Falha silenciosa - favoritos não serão persistidos mas o jogo continua
 		favorites_initialized = false;
 		return false;
 	}
-	
-	// Carrega favoritos salvos
+
 	load_weapon_favorites();
 	favorites_initialized = true;
 	return true;
 }
 
-/**
- * Carrega favoritos do arquivo de configuração
- */
 void load_weapon_favorites() {
 	if(!favorites_config.active) return;
-	
+
 	for(uint i = 0; i < FAVORITES_COUNT; i++) {
 		string key = "F" + i;
 		string stored_id = favorites_config.read_string(key, "");
-		
+
 		if(stored_id != "") {
 			favorite_weapons.set("f" + i, stored_id);
 		}
 	}
 }
 
-/**
- * Salva todos os favoritos no arquivo de configuração
- */
 bool save_weapon_favorites() {
 	if(!favorites_config.active) return false;
-	
+
 	bool success = true;
-	
+
 	for(uint i = 0; i < FAVORITES_COUNT; i++) {
 		string key = "F" + i;
 		string fav_key = "f" + i;
 		string weapon_name = "";
-		
+
 		if(favorite_weapons.exists(fav_key)) {
 			favorite_weapons.get(fav_key, weapon_name);
 		}
-		
+
 		if(!favorites_config.write_string(key, weapon_name)) {
 			success = false;
 		}
 	}
-	
+
 	return success;
 }
 
-/**
- * Configura uma arma como favorita (Shift+número)
- * @param slot O slot de favorito (0-9)
- */
 void set_favorite_weapon(int slot) {
 	if(slot < 0 || slot >= FAVORITES_COUNT) return;
 	if(selected < 0 || selected >= int(player_weapons.length())) return;
-	
+
 	string weapon_name = player_weapons[selected].name;
 	string fav_key = "f" + slot;
-	
+
 	favorite_weapons.set(fav_key, weapon_name);
-	
-	// Salva imediatamente
+
 	if(favorites_config.active) {
 		string key = "F" + slot;
 		favorites_config.write_string(key, weapon_name);
 	}
-	
-	// Mensagem simples que funciona em qualquer idioma
+
 	speak(weapon_name + ", slot " + slot);
 }
 
-/**
- * Obtém o índice de uma arma pelo nome
- */
 int get_weapon_index(string name) {
 	for(int x = 0; x < int(player_weapons.length()); x++) {
 		if(player_weapons[x].name == name) {
@@ -283,9 +220,6 @@ int get_weapon_index(string name) {
 	return -1;
 }
 
-/**
- * Seleciona uma arma favorita (teclas 0-9)
- */
 void select_favorite_weapon(string favorite) {
 	if(favorite_weapons.exists(favorite)) {
 		favorite_weapons.get(favorite, current_weapon);
@@ -294,15 +228,14 @@ void select_favorite_weapon(string favorite) {
 		speak(pu.get_value("Nenhuma arma favoritada nesse número."));
 		return;
 	}
-	
+
 	if(inv_item_exists(current_weapon) && get_weapon_index(current_weapon) > -1) {
 		int weapon_index = get_weapon_index(current_weapon);
-		
-		// Verificar se a arma já está selecionada
+
 		if(selected == weapon_index) {
 			return;
 		}
-		
+
 		selected = weapon_index;
 		speak(player_weapons[selected].name);
 		p.play_stationary(player_weapons[selected].sound_draw + ".ogg", false);
@@ -314,26 +247,18 @@ void select_favorite_weapon(string favorite) {
 	}
 }
 
-/**
- * Cria uma nova arma e adiciona ao array de armas
- */
-void create_weapon(double speed, double speed_burst, double speed_reload, double ammo_cantity, 
-                   double ammo_load, int require_ammo, int enable_burst, string sound_draw, 
-                   string sound_reload, string ammo, string name, string sound_unload, 
-                   string sound_mode1, string sound_mode2, double ammo_cantity_descount, 
+void create_weapon(double speed, double speed_burst, double speed_reload, double ammo_cantity,
+                   double ammo_load, int require_ammo, int enable_burst, string sound_draw,
+                   string sound_reload, string ammo, string name, string sound_unload,
+                   string sound_mode1, string sound_mode2, double ammo_cantity_descount,
                    string sound_shoot) {
-	weapon w(speed, speed_burst, speed_reload, ammo_cantity, ammo_load, require_ammo, 
-	         enable_burst, sound_draw, sound_reload, ammo, name, sound_unload, 
+	weapon w(speed, speed_burst, speed_reload, ammo_cantity, ammo_load, require_ammo,
+	         enable_burst, sound_draw, sound_reload, ammo, name, sound_unload,
 	         sound_mode1, sound_mode2, ammo_cantity_descount, sound_shoot);
 	player_weapons.insert_last(w);
 }
 
-/**
- * Loop principal do sistema de armas (chamado a cada frame)
- */
 void weaponloop() {
-	// Verificar se ainda possui a arma selecionada no inventário
-	// Removido inv.get_size() - não existe em dictionary
 	if(selected > 0 && selected < int(player_weapons.length())) {
 		if(!inv_item_exists(player_weapons[selected].name)) {
 			selected = 0;
@@ -343,29 +268,26 @@ void weaponloop() {
 			send_reliable(peer_id, "draw " + player_weapons[selected].sound_draw + ".ogg", 0);
 		}
 	}
-	
-	// Processar arma selecionada
+
 	if(selected > -1 && selected < int(player_weapons.length())) {
-		// Verificar se terminou de recarregar
 		if(player_weapons[selected].tspeed_reloading.elapsed >= player_weapons[selected].speed_loading) {
 			player_weapons[selected].loading = 0;
 			player_weapons[selected].tspeed_reloading.force(0);
 			player_weapons[selected].tspeed_reloading.pause();
 		}
-		
-		// Processar disparo
-		if(amisafe == false && inansz == false && star == false && moveable == true && 
-		   player_weapons[selected].loading == 0 && novato == 0 && fail.exists(player_weapons[selected].name) == false && 
+
+		if(amisafe == false && inansz == false && star == false && moveable == true &&
+		   player_weapons[selected].loading == 0 && novato == 0 && fail.exists(player_weapons[selected].name) == false &&
 		   crouched == 0) {
 			switch(player_weapons[selected].mode) {
-				case 0: // Modo semi-automático
-					if(key_pressed(KEY_LCONTROL) || mouse_pressed(0) || 
+				case 0:
+					if(key_pressed(KEY_LCONTROL) || mouse_pressed(0) ||
 					   (key_pressed(KEY_RCONTROL) && rcontrol == 1)) {
 						player_weapons[selected].shoot();
 					}
 					break;
-				case 1: // Modo automático/burst
-					if(key_down(KEY_LCONTROL) || mouse_down(0) || 
+				case 1:
+					if(key_down(KEY_LCONTROL) || mouse_down(0) ||
 					   (key_down(KEY_RCONTROL) && rcontrol == 1)) {
 						player_weapons[selected].shoot();
 					}
@@ -373,10 +295,8 @@ void weaponloop() {
 			}
 		}
 	}
-	
-	// Teclas de seleção de armas (apenas se não estiver atirando/recarregando)
+
 	if(darmas == 0 && moveable && !shift_pressionado() && player_weapons[selected].loading == 0 && novato == 0) {
-		// Tecla ` (grave) - Selecionar arma padrão (punhos)
 		if(key_pressed(KEY_GRAVE)) {
 			selected = 0;
 			current_weapon = player_weapons[selected].name;
@@ -384,8 +304,7 @@ void weaponloop() {
 			p.play_stationary(player_weapons[selected].sound_draw + ".ogg", false);
 			send_reliable(peer_id, "draw " + player_weapons[selected].sound_draw + ".ogg", 0);
 		}
-		
-		// Teclas numéricas 0-9 - Armas favoritas
+
 		if(key_pressed(KEY_0)) select_favorite_weapon("f0");
 		if(key_pressed(KEY_1)) select_favorite_weapon("f1");
 		if(key_pressed(KEY_2)) select_favorite_weapon("f2");
@@ -397,8 +316,7 @@ void weaponloop() {
 		if(key_pressed(KEY_8)) select_favorite_weapon("f8");
 		if(key_pressed(KEY_9)) select_favorite_weapon("f9");
 	}
-	
-	// Shift + Teclas numéricas 0-9 - Configurar arma favorita
+
 	if(moveable && shift_pressionado() && player_weapons[selected].loading == 0 && selected > -1) {
 		if(key_pressed(KEY_0)) set_favorite_weapon(0);
 		if(key_pressed(KEY_1)) set_favorite_weapon(1);
@@ -411,13 +329,11 @@ void weaponloop() {
 		if(key_pressed(KEY_8)) set_favorite_weapon(8);
 		if(key_pressed(KEY_9)) set_favorite_weapon(9);
 	}
-	
-	// Tecla T - Alternar modo de tiro (semi/auto)
+
 	if(key_down(KEY_LCONTROL) == false && key_pressed(KEY_T) && moveable && selected > -1 && novato == 0) {
 		if(player_weapons[selected].enable_burst == 1) player_weapons[selected].change_mode();
 	}
-	
-	// Tecla R ou botão direito do mouse - Recarregar
+
 	if((key_pressed(KEY_R) && moveable && !ausente) || (mouse_pressed(1) && moveable && !ausente)) {
 		if(player_weapons[selected].loading == 0 && player_weapons[selected].require_ammo == 1 && novato == 0) {
 			if(selected > -1) player_weapons[selected].reload();
@@ -425,18 +341,14 @@ void weaponloop() {
 	}
 }
 
-/**
- * Calcula distância entre dois pontos (Manhattan distance)
- */
 double get_distance(int x1, int x2, int y1, int y2) {
 	int dx, dy;
-	
+
 	if(x1 <= x2) dx = x2 - x1;
 	else dx = x1 - x2;
-	
+
 	if(y1 <= y2) dy = y2 - y1;
 	else dy = y1 - y2;
-	
+
 	return dx + dy;
 }
-

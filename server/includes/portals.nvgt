@@ -1,5 +1,3 @@
-// portals.nvgt - Sistema de Portais (convertido de portals.bgt)
-// Conversão: BGT → NVGT
 
 class portal {
 	string owner;
@@ -25,7 +23,7 @@ class portal {
 	dictionary portalplayers;
 	string[] sounds_impact = {"rico2metal1.ogg", "rico2metal2.ogg", "rico2metal3.ogg", "rico2metal4.ogg", "rico2metal5.ogg", "rico2metal6.ogg"};
 	timer portaltimer;
-	
+
 	portal(int x, int y, string owner, string map, string destination, int destination_x, int destination_y) {
 		this.x = x;
 		this.y = y;
@@ -51,7 +49,7 @@ class portal {
 
 	bool add_player(string playername, int portalhealth) {
 		if (!portalplayers.exists(playername)) {
-			portalplayers.set(playername, "" + portalhealth); // Converter int para string
+			portalplayers.set(playername, "" + portalhealth);
 			health += portalhealth;
 			return true;
 		}
@@ -130,72 +128,56 @@ void spawn_portal(int index, int x, int y, string map, string destination, int d
 			send_reliable_text(players[index].peer_id, "msg2 Ya existe un portal en este sitio, ¡uno más sería la destrucción total!", 0);
 		}
 	}
-} // end spawn portal
+}
 
-// Loop principal para processar portais em todos os mapas
 void portals_loop() {
 	for (uint m = 0; m < server_maps.length(); m++) {
 		for (uint p = 0; p < server_maps[m].portals.length(); p++) {
 			portal@ pt = server_maps[m].portals[p];
-			
-			// Verificar se o portal foi destruído
+
 			if (pt.health <= 0) {
-				// Reproduzir som de explosão
 				server_maps[m].send_packet(0, "play " + pt.sound_explosion, pt.x, pt.y);
-				
-				// Notificar jogadores próximos
+
 				server_maps[m].send_packet(0, "msg2 ;¡El portal ha sido destruido!", pt.x, pt.y, 50);
-				
-				// Remover portal
+
 				server_maps[m].portals.remove_at(p);
 				p--;
 				continue;
 			}
-			
-			// Processar jogadores próximos ao portal
+
 			for (uint i = 0; i < players.length(); i++) {
 				if (players[i].charname == "" || players[i].map != server_maps[m].name) continue;
-				
+
 				int distance = int(get_distance(players[i].x, players[i].y, pt.x, pt.y));
-				
-				// Jogador está em range do portal
+
 				if (distance <= 5) {
-					// Verificar se o jogador já iniciou o processo de teletransporte
 					if (!pt.portalplayers.exists(players[i].charname)) {
-						// Iniciar teletransporte
 						pt.portaltimer.restart();
 						pt.portalplayers.set(players[i].charname, "0");
 						send_reliable_text(players[i].peer_id, "msg2 ;Entrando no portal...", 0);
 						send_reliable_text(players[i].peer_id, "play " + pt.sound_appears, 0);
 					}
 					else {
-						// Verificar tempo de espera
 						if (pt.portaltimer.elapsed >= pt.time_wait * 1000) {
-							// Teletransportar jogador
 							int dest_map_index = get_map_index_from(pt.destination);
 							if (dest_map_index >= 0) {
-								// Reproduzir som de transporte
 								send_reliable_text(players[i].peer_id, "play " + pt.sound_transport, 0);
-								
-								// Mover jogador
+
                                 if(house_is_locked_for_player(players[i].charname, pt.destination)) {
                                     send_reliable_text(players[i].peer_id, "msg2 ;Esta propriedade esta trancada.;", 0);
                                     pt.portalplayers.delete(players[i].charname);
                                     continue;
                                 }
 								move_player_to_map(i, pt.destination, pt.destination_x, pt.destination_y);
-								
-								// Notificar
+
 								send_reliable_text(players[i].peer_id, "msg2 ;¡Has sido teletransportado!", 0);
-								
-								// Remover jogador da lista do portal
+
 								pt.portalplayers.delete(players[i].charname);
 							}
 						}
 					}
 				}
 				else {
-					// Jogador saiu do range, cancelar teletransporte
 					if (pt.portalplayers.exists(players[i].charname)) {
 						pt.portalplayers.delete(players[i].charname);
 						send_reliable_text(players[i].peer_id, "msg2 ;Teletransporte cancelado.", 0);
@@ -205,4 +187,3 @@ void portals_loop() {
 		}
 	}
 }
-

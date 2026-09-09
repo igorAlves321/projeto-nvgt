@@ -1,27 +1,15 @@
-// monstruo.nvgt - Sistema de Monstros do EVM Server
-// Convertido de BGT para NVGT
-// Sistema completo baseado em zumbi.bgt e outros monstros
 
-// Array global de monstros ativos
 monstruo@[] monstruos_global;
 
-// Função auxiliar para enviar pacote para mapa específico
 void send_to_map_m(string message, string mapname) {
 	server_broadcast(message, mapname);
 }
 
-// Classe base de monstro
 class monstruo {
-	// ============================================================================
-	// PROPRIEDADES BÁSICAS
-	// ============================================================================
 	int x, y;
 	int x_inicial = 0, y_inicial = 0;
 	int id = 0;
-	
-	// ============================================================================
-	// ATRIBUTOS DE COMBATE
-	// ============================================================================
+
 	int vida = 100;
 	int vida_max = 100;
 	int xp_reward = 50;
@@ -30,83 +18,54 @@ class monstruo {
 	int dano_min = 100;
 	int dano_max = 200;
 	int distanciaataques = 5;
-	
-	// ============================================================================
-	// IA E ALVO
-	// ============================================================================
+
 	int p_index = -1;
 	string target_player = "";
 	timer update_player;
 	int player_update_interval = 3000;
-	
-	// ============================================================================
-	// TIMERS DE COMPORTAMENTO
-	// ============================================================================
-	int tiempoparaatacar = 2000; // Intervalo entre ataques
-	int tiempoparacaminar = 300; // Intervalo de movimento (mais rápido que NPC)
-	int tiempodelossonidos = 8000; // Sons nervosos
-	
+
+	int tiempoparaatacar = 2000;
+	int tiempoparacaminar = 300;
+	int tiempodelossonidos = 8000;
+
 	timer ttiempoparaatacar;
 	timer ttiempoparacaminar;
 	timer ttiempodelossonidos;
-	
-	// ============================================================================
-	// SONS
-	// ============================================================================
+
 	string[] sonidosnervioso;
 	string sonidoataque = "";
 	string sonidomuerte = "";
 	string impactosbala = "";
 	string impactos = "";
 	string pasosmonstruo = "";
-	
-	// ============================================================================
-	// ESTADO
-	// ============================================================================
+
 	bool morreu = false;
 	bool morrendo = false;
 	bool nasceu = true;
 	string asesino = "";
 	string golpeado = "";
 	timer tmorreu;
-	
-	// ============================================================================
-	// MAPA E IDENTIFICAÇÃO
-	// ============================================================================
+
 	int mapindex = -1;
 	string map = "";
 	string name = "";
-	string tipo = ""; // Tipo do monstro (zumbi, lobo, cachorro, etc)
-	
-	// ============================================================================
-	// RESPAWN E COMPORTAMENTO ESPECIAL
-	// ============================================================================
+	string tipo = "";
+
 	bool enablerespawn = true;
-	int tiempoaparicion = 60000; // 1 minuto para respawn
-	int spawn_chance = 0; // Chance de spawnar mais monstros ao morrer (%)
+	int tiempoaparicion = 60000;
+	int spawn_chance = 0;
 	int spawn_count_min = 1;
 	int spawn_count_max = 3;
-	
-	// ============================================================================
-	// ITEMS E DROPS
-	// ============================================================================
+
 	string itemsadar = "";
 	string degradation = "";
 	string msgmuerte = "";
-	
-	// ============================================================================
-	// RANGES E COMPORTAMENTO
-	// ============================================================================
+
 	int left_range = 0;
 	int right_range = 0;
-	int ladoandar = 2; // Quantos tiles move por vez
-	bool agressivo = true; // Se ataca jogadores automaticamente
-	
-	// ============================================================================
-	// CONSTRUTORES
-	// ============================================================================
-	
-	// Construtor simples
+	int ladoandar = 2;
+	bool agressivo = true;
+
 	monstruo(int nx, int ny, string nmap, string ntipo) {
 		x = nx;
 		y = ny;
@@ -117,14 +76,11 @@ class monstruo {
 		name = ntipo + "_" + nx + "_" + ny;
 		mapindex = get_map_index_from(map);
 		nasceu = true;
-		
-		// Valores padrão baseados no tipo
+
 		setup_by_type(ntipo);
 	}
-	
-	// Configurar atributos baseado no tipo
+
 	void setup_by_type(string type) {
-		// Valores padrão (cachorro)
 		if(type == "cachorro") {
 			vida = random(2000, 2300);
 			vida_max = vida;
@@ -139,7 +95,6 @@ class monstruo {
 			sonidomuerte = "m_cachorro.ogg";
 			itemsadar = "corpo_de_cachorro:1";
 		}
-		// Lobo
 		else if(type == "lobo") {
 			vida = random(3000, 3300);
 			vida_max = vida;
@@ -154,7 +109,6 @@ class monstruo {
 			sonidomuerte = "m_lobo.ogg";
 			itemsadar = "corpo_de_lobo:1";
 		}
-		// Zumbi
 		else if(type == "zumbi") {
 			vida = random(3000, 6000);
 			vida_max = vida;
@@ -167,11 +121,10 @@ class monstruo {
 			tiempoparaatacar = 800;
 			tiempoparacaminar = 400;
 			sonidomuerte = "m_zumbi.ogg";
-			spawn_chance = 15; // 15% de chance de spawnar mais zumbis
+			spawn_chance = 15;
 			spawn_count_min = 1;
 			spawn_count_max = 2;
 		}
-		// Urso
 		else if(type == "urso") {
 			vida = random(5000, 8000);
 			vida_max = vida;
@@ -187,15 +140,11 @@ class monstruo {
 			itemsadar = "corpo_de_urso:1|pele_de_urso:1";
 		}
 	}
-	
-	// ============================================================================
-	// IA E SELEÇÃO DE ALVO
-	// ============================================================================
-	
+
 	bool exists_player_in_my_map() {
 		for(uint i = 0; i < players.length(); i++) {
-			if(players[i].map == this.map && 
-			   !players[i].afk && 
+			if(players[i].map == this.map &&
+			   !players[i].afk &&
 			   players[i].pacifico == 0 &&
 			   players[i].newbie == false &&
 			   players[i].health > 0) {
@@ -204,50 +153,42 @@ class monstruo {
 		}
 		return false;
 	}
-	
-	// Selecionar jogador (baseado em zumbi.bgt - selecionar_jogador)
+
 	int selecionar_jogador() {
 		int closest_player = -1;
 		double closest_distance = 999999;
-		
+
 		for(uint i = 0; i < players.length(); i++) {
-			// Filtros básicos
 			if(players[i].map != this.map) continue;
 			if(players[i].afk) continue;
 			if(players[i].pacifico == 1) continue;
 			if(players[i].newbie) continue;
 			if(players[i].health <= 0) continue;
-			
-			// Verificar zona segura
+
 			if(get_safezone_at(players[i].x, players[i].y, players[i].map)) continue;
-			
-			// Calcular distância
+
 			double dist = get_distance(this.x, this.y, players[i].x, players[i].y);
-			
-			// Priorizar jogadores com menos vida (comportamento agressivo)
+
 			if(agressivo) {
-				// Peso baseado em distância e vida
 				double weight = dist / (players[i].health + 1);
-				
+
 				if(weight < closest_distance) {
 					closest_distance = weight;
 					closest_player = i;
 				}
 			}
 			else {
-				// Apenas mais próximo
 				if(dist < closest_distance) {
 					closest_distance = dist;
 					closest_player = i;
 				}
 			}
 		}
-		
+
 		return closest_player;
 	}
-	
+
 	int change_player(int current_index) {
-		// Verificar se jogador atual ainda é válido
 		if(current_index > -1 && current_index < players.length()) {
 			if(players[current_index].map == this.map &&
 			   !players[current_index].afk &&
@@ -257,37 +198,27 @@ class monstruo {
 				return current_index;
 			}
 		}
-		
-		// Selecionar novo alvo
+
 		return selecionar_jogador();
 	}
-	
-	// ============================================================================
-	// MOVIMENTO (mais agressivo que NPC)
-	// ============================================================================
-	
+
 	void move() {
-		// Atualizar alvo periodicamente
 		if(update_player.elapsed >= player_update_interval) {
 			update_player.restart();
 			p_index = change_player(p_index);
 		}
-		
-		// Se não tem alvo, não mover
+
 		if(p_index < 0 || p_index >= players.length()) return;
-		
-		// Verificar intervalo de movimento
+
 		if(ttiempoparacaminar.elapsed < tiempoparacaminar) return;
 		ttiempoparacaminar.restart();
-		
-		// Verificar ranges
+
 		bool can_move_left = (left_range == 0 || this.x > left_range);
 		bool can_move_right = (right_range == 0 || this.x < right_range);
-		
-		// Mover em direção ao alvo (mais agressivo - usa ladoandar)
+
 		if(this.x > players[p_index].x && can_move_left) {
 			this.x -= ladoandar;
-			if(this.x < players[p_index].x) this.x = players[p_index].x; // Não ultrapassar
+			if(this.x < players[p_index].x) this.x = players[p_index].x;
 			play_step_sound();
 		}
 		else if(this.x < players[p_index].x && can_move_right) {
@@ -295,8 +226,7 @@ class monstruo {
 			if(this.x > players[p_index].x) this.x = players[p_index].x;
 			play_step_sound();
 		}
-		
-		// Mover em Y
+
 		if(this.y > players[p_index].y) {
 			this.y -= ladoandar;
 			if(this.y < players[p_index].y) this.y = players[p_index].y;
@@ -306,7 +236,7 @@ class monstruo {
 			if(this.y > players[p_index].y) this.y = players[p_index].y;
 		}
 	}
-	
+
 	void play_step_sound() {
 		if(pasosmonstruo != "") {
 			send_to_map_m("play " + pasosmonstruo + " " + this.x + " " + this.y, this.map);
@@ -316,26 +246,20 @@ class monstruo {
 			send_to_map_m("play " + tile + "step" + random(1, 5) + ".ogg " + this.x + " " + this.y, this.map);
 		}
 	}
-	
-	// ============================================================================
-	// COMBATE
-	// ============================================================================
-	
+
 	void attack() {
 		if(p_index < 0 || p_index >= players.length()) return;
 		if(ttiempoparaatacar.elapsed < tiempoparaatacar) return;
-		
+
 		double dist = get_distance(this.x, this.y, players[p_index].x, players[p_index].y);
-		
+
 		if(dist <= distanciaataques) {
 			ttiempoparaatacar.restart();
-			
-			// Som de ataque
+
 			if(sonidoataque != "") {
 				send_to_map_m("play " + sonidoataque + " " + this.x + " " + this.y, this.map);
 			}
-			
-			// Verificar reflexo
+
 			int reflected_damage = refletir(p_index, tipo, this.x, this.y, random(dano_min, dano_max));
 			if(reflected_damage > 0) {
 				this.vida -= reflected_damage;
@@ -343,108 +267,82 @@ class monstruo {
 				this.asesino = players[p_index].charname;
 				return;
 			}
-			
-			// Aplicar dano
+
 			int damage = random(dano_min, dano_max);
 			players[p_index].health -= damage;
 			players[p_index].lasthit = tipo;
-			
-			// Som de dor
+
 			send_to_map_m("inithurt " + players[p_index].voice + " " + players[p_index].x + " " + players[p_index].y, players[p_index].map);
 		}
 	}
-	
-	// ============================================================================
-	// SONS NERVOSOS
-	// ============================================================================
-	
+
 	void play_nervous_sounds() {
 		if(sonidosnervioso.length() == 0) return;
 		if(ttiempodelossonidos.elapsed < tiempodelossonidos) return;
-		
+
 		ttiempodelossonidos.restart();
-		
+
 		string snd = sonidosnervioso[random(0, sonidosnervioso.length() - 1)];
 		send_to_map_m("play " + snd + " " + this.x + " " + this.y, this.map);
 	}
-	
-	// ============================================================================
-	// MORTE E RESPAWN
-	// ============================================================================
-	
+
 	void die() {
 		morreu = true;
 		morrendo = true;
-		
-		// Som de morte
+
 		if(sonidomuerte != "") {
 			send_to_map_m("play " + sonidomuerte + " " + this.x + " " + this.y, this.map);
 		}
-		
-		// Mensagem
+
 		string golp = (asesino != "") ? asesino : golpeado;
-		
+
 		if(golp != "") {
 			send_reliable_text(0, "msg2 " + golp + "; ;matou um; ;" + tipo + ";!", 3);
 		}
-		
-		// Dar recompensas
+
 		int killer_index = get_player_index_from(golp);
 		if(killer_index > -1) {
-			// XP e gold
 			int gold = random(gold_reward_min, gold_reward_max);
 			ganhaxp(killer_index, xp_reward, gold);
-			
-			// Items
+
 			drop_items(killer_index);
-			
-			// Estatísticas (se existir)
-			// server_stats.register_monster_kill(players[killer_index].charname);
-			
-			// Chance de spawnar mais monstros
+
 			if(spawn_chance > 0 && random(1, 100) <= spawn_chance) {
 				spawn_more_monsters();
 			}
 		}
 	}
-	
+
 	void drop_items(int killer_index) {
 		if(itemsadar == "") return;
-		
+
 		string[] items = itemsadar.split("|");
 		for(uint i = 0; i < items.length(); i++) {
 			if(items[i] == "") continue;
-			
+
 			string[] parts = items[i].split(":");
 			string item_name = parts[0];
 			int quantity = (parts.length() > 1) ? parse_int(parts[1]) : 1;
-			
+
 			if(killer_index > -1) {
 				players[killer_index].inv_add_item(item_name, quantity);
 			}
 		}
 	}
-	
-	// Spawnar mais monstros ao morrer (comportamento de zumbi)
+
 	void spawn_more_monsters() {
 		int count = random(spawn_count_min, spawn_count_max);
-		
+
 		for(int i = 0; i < count; i++) {
-			// Posição aleatória próxima
 			int spawn_x = this.x + random(-5, 5);
 			int spawn_y = this.y + random(-5, 5);
-			
-			// Criar novo monstro do mesmo tipo
+
 			spawn_monstruo(spawn_x, spawn_y, this.map, this.tipo);
 		}
-		
+
 		send_reliable_text(0, "msg2 Mais; ;" + tipo + "s; ;apareceram!", 3);
 	}
 }
-
-// ============================================================================
-// CLASSE DE DADOS DE MONSTRO (para respawn)
-// ============================================================================
 
 class monstruo_data {
 	int x, y;
@@ -457,7 +355,7 @@ class monstruo_data {
 	int tiempoaparicion;
 	timer trespawn;
 	bool enablerespawn;
-	
+
 	monstruo_data(int nx, int ny, int nvida, int nxp, int ngold_min, int ngold_max,
 	             int ndano_min, int ndano_max, string ntipo, string nmap,
 	             int ntiempoaparicion, bool nenablerespawn) {
@@ -477,28 +375,18 @@ class monstruo_data {
 	}
 }
 
-// Array de dados para respawn
 monstruo_data@[] monstruos_data;
 
-// ============================================================================
-// FUNÇÕES GLOBAIS
-// ============================================================================
-
-// Spawn de monstro
 void spawn_monstruo(int x, int y, string map, string tipo) {
 	monstruo m(x, y, map, tipo);
 	monstruos_global.insert_last(m);
 }
 
-// Loop principal de monstros
 void monstruo_global_loop() {
-	// Loop de monstros ativos
 	for(uint i = 0; i < monstruos_global.length(); i++) {
-		// Verificar morte
 		if(monstruos_global[i].vida <= 0 && !monstruos_global[i].morreu) {
 			monstruos_global[i].die();
-			
-			// Criar data para respawn se habilitado
+
 			if(monstruos_global[i].enablerespawn) {
 				monstruo_data md(
 					monstruos_global[i].x_inicial,
@@ -516,35 +404,28 @@ void monstruo_global_loop() {
 				);
 				monstruos_data.insert_last(md);
 			}
-			
+
 			monstruos_global.remove_at(i);
 			continue;
 		}
-		
-		// Sons nervosos
+
 		monstruos_global[i].play_nervous_sounds();
-		
-		// Movimento
+
 		monstruos_global[i].move();
-		
-		// Ataque
+
 		monstruos_global[i].attack();
 	}
-	
-	// Loop de respawn
+
 	for(uint i = 0; i < monstruos_data.length(); i++) {
 		if(monstruos_data[i].trespawn.elapsed >= monstruos_data[i].tiempoaparicion) {
-			// Respawnar monstro
 			spawn_monstruo(
 				monstruos_data[i].x,
 				monstruos_data[i].y,
 				monstruos_data[i].map,
 				monstruos_data[i].tipo
 			);
-			
-			// Remover data
+
 			monstruos_data.remove_at(i);
 		}
 	}
 }
-

@@ -1,20 +1,4 @@
-// roles.nvgt - Sistema de Cargos/Permissoes
-// Implementa sistema flexivel de cargos usando tabela separada no banco de dados
-//
-// Cargos disponiveis:
-// - dev: Desenvolvedor (dono do jogo, acesso total)
-// - admin: Administrador (gerencia servidor e jogadores)
-// - moderator: Moderador (gerencia chat, silencia jogadores)
-// - builder: Construtor (cria e edita mapas)
-// - translator: Tradutor (traduz o jogo)
-// - event_manager: Gerenciador de eventos
-// - vip: Jogador VIP (beneficios especiais)
 
-// ============================================================
-// CONSTANTES DE CARGOS
-// ============================================================
-
-// Niveis de hierarquia (maior = mais poder)
 const int ROLE_LEVEL_PLAYER = 0;
 const int ROLE_LEVEL_VIP = 1;
 const int ROLE_LEVEL_TRANSLATOR = 2;
@@ -24,14 +8,8 @@ const int ROLE_LEVEL_MODERATOR = 5;
 const int ROLE_LEVEL_ADMIN = 8;
 const int ROLE_LEVEL_DEV = 10;
 
-// Array com todos os cargos validos
 string[] VALID_ROLES = {"dev", "admin", "moderator", "builder", "translator", "event_manager", "vip"};
 
-// ============================================================
-// INICIALIZACAO DA TABELA
-// ============================================================
-
-// Criar tabela de cargos no banco de dados
 void create_roles_table() {
     if(!database_initialized || bancoJogo is null) {
         debug_log("ERRO: create_roles_table - Banco não inicializado");
@@ -59,21 +37,17 @@ void create_roles_table() {
         debug_log("OK - Tabela player_roles criada/verificada");
     }
 
-    // Criar indice para buscas rapidas
     string create_index = "CREATE INDEX IF NOT EXISTS idx_player_roles_username ON player_roles(username);";
     bancoJogo.execute(create_index);
-    
-    // Garantir que o desenvolvedor principal tenha cargo de dev
+
     ensure_default_dev();
 }
 
-// Garantir que desenvolvedores padrao tenham seus cargos
 void ensure_default_dev() {
-    // Lista de desenvolvedores principais do jogo
     string[] default_devs = {"caos", "elkiller"};
-    
+
     debug_log("Verificando cargos de desenvolvedores padrao...");
-    
+
     for(uint i = 0; i < default_devs.length(); i++) {
         debug_log("Verificando cargo de: " + default_devs[i]);
         if(!has_role(default_devs[i], "dev")) {
@@ -86,11 +60,6 @@ void ensure_default_dev() {
     }
 }
 
-// ============================================================
-// FUNCOES DE VERIFICACAO
-// ============================================================
-
-// Verifica se um cargo e valido
 bool is_valid_role(string role) {
     role = string_to_lower_case(role);
     for(uint i = 0; i < VALID_ROLES.length(); i++) {
@@ -99,67 +68,63 @@ bool is_valid_role(string role) {
     return false;
 }
 
-// Verifica se um jogador tem um cargo especifico
 bool has_role(string username, string role) {
     if(!database_initialized || bancoJogo is null) return false;
-    
+
     role = string_to_lower_case(role);
-    username = string_to_lower_case(username);  // Normalizar username também
-    
+    username = string_to_lower_case(username);
+
     string query = """
-        SELECT 1 FROM player_roles 
+        SELECT 1 FROM player_roles
         WHERE LOWER(username) = ? AND role = ?
         AND (expires_at IS NULL OR expires_at > datetime('now'));
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) return false;
-    
+
     stmt.bind_text(1, username);
     stmt.bind_text(2, role);
-    
+
     bool has = (stmt.step() == SQLITE_ROW);
-    
+
     debug_log("has_role: " + username + " / " + role + " = " + has);
-    
+
     return has;
 }
 
-// Verifica se um jogador tem um cargo por indice
 bool has_role_by_index(int player_index, string role) {
     if(player_index < 0 || player_index >= int(players.length())) return false;
     return has_role(players[player_index].charname, role);
 }
 
-// Obtem todos os cargos de um jogador
 string[] get_player_roles(string username) {
     string[] roles;
-    
+
     if(!database_initialized || bancoJogo is null) return roles;
-    
+
     string query = """
-        SELECT role FROM player_roles 
+        SELECT role FROM player_roles
         WHERE username = ?
         AND (expires_at IS NULL OR expires_at > datetime('now'))
         ORDER BY role;
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) return roles;
-    
+
     stmt.bind_text(1, username);
-    
+
     while(stmt.step() == SQLITE_ROW) {
         roles.insert_last(stmt.column_text(0));
     }
-    
+
     return roles;
 }
 
-// Obtem o nivel de hierarquia mais alto de um jogador
 int get_player_role_level(string username) {
     int highest = ROLE_LEVEL_PLAYER;
-    
+
     if(has_role(username, "dev")) return ROLE_LEVEL_DEV;
     if(has_role(username, "admin")) highest = ROLE_LEVEL_ADMIN;
     else if(has_role(username, "moderator") && highest < ROLE_LEVEL_MODERATOR) highest = ROLE_LEVEL_MODERATOR;
@@ -167,15 +132,10 @@ int get_player_role_level(string username) {
     else if(has_role(username, "event_manager") && highest < ROLE_LEVEL_EVENT_MANAGER) highest = ROLE_LEVEL_EVENT_MANAGER;
     else if(has_role(username, "translator") && highest < ROLE_LEVEL_TRANSLATOR) highest = ROLE_LEVEL_TRANSLATOR;
     else if(has_role(username, "vip") && highest < ROLE_LEVEL_VIP) highest = ROLE_LEVEL_VIP;
-    
+
     return highest;
 }
 
-// ============================================================
-// FUNCOES DE COMPATIBILIDADE COM BGT
-// ============================================================
-
-// Compativel com is_admin() do BGT - verifica dev ou admin
 bool check_is_admin(string username) {
     return has_role(username, "dev") || has_role(username, "admin");
 }
@@ -185,7 +145,6 @@ bool check_is_admin_index(int player_index) {
     return check_is_admin(players[player_index].charname);
 }
 
-// Compativel com is_dev() do BGT
 bool check_is_dev(string username) {
     return has_role(username, "dev");
 }
@@ -195,7 +154,6 @@ bool check_is_dev_index(int player_index) {
     return check_is_dev(players[player_index].charname);
 }
 
-// Compativel com is_mod() do BGT
 bool check_is_mod(string username) {
     return has_role(username, "moderator") || has_role(username, "admin") || has_role(username, "dev");
 }
@@ -205,7 +163,6 @@ bool check_is_mod_index(int player_index) {
     return check_is_mod(players[player_index].charname);
 }
 
-// Compativel com is_builder() do BGT
 bool check_is_builder(string username) {
     return has_role(username, "builder") || has_role(username, "admin") || has_role(username, "dev");
 }
@@ -215,7 +172,6 @@ bool check_is_builder_index(int player_index) {
     return check_is_builder(players[player_index].charname);
 }
 
-// Compativel com is_translator() do BGT
 bool check_is_translator(string username) {
     return has_role(username, "translator") || has_role(username, "admin") || has_role(username, "dev");
 }
@@ -225,15 +181,7 @@ bool check_is_translator_index(int player_index) {
     return check_is_translator(players[player_index].charname);
 }
 
-// ============================================================
-// FUNCAO DE PATENTE DINAMICA
-// ============================================================
-// Retorna a patente/titulo do jogador considerando roles admin
-// Prioridade: dev > admin > moderator > builder > translator > title do player
-// Usada por: comando lc (V), getplayers (F5), j2 (F2), etc.
 string get_player_rank(string username, string fallback_title = "Iniciante") {
-    // Verificar roles administrativas primeiro (maior prioridade)
-    // Usar nomes curtos para exibição no chat
     if(has_role(username, "dev")) {
         return "dev";
     } else if(has_role(username, "admin")) {
@@ -249,9 +197,7 @@ string get_player_rank(string username, string fallback_title = "Iniciante") {
     } else if(has_role(username, "vip")) {
         return "VIP";
     }
-    
-    // Se não tem role admin, usar o título passado (baseado em kills/level)
-    // Limpar \n e espaços que podem vir do settitle.nvgt
+
     if(fallback_title != "" && fallback_title.length() > 0) {
         string clean_title = fallback_title.replace("\n", "").replace("\r", "");
         clean_title = clean_title.trim_whitespace();
@@ -259,65 +205,57 @@ string get_player_rank(string username, string fallback_title = "Iniciante") {
             return clean_title;
         }
     }
-    
+
     return "Iniciante";
 }
 
-// Versão por índice do player
 string get_player_rank_by_index(int player_index) {
     if(player_index < 0 || player_index >= int(players.length())) return "Iniciante";
     return get_player_rank(players[player_index].charname, players[player_index].title);
 }
 
-// ============================================================
-// FUNCOES DE GERENCIAMENTO
-// ============================================================
-
-// Adicionar cargo a um jogador
 bool add_role(string username, string role, string granted_by = "system", string notes = "") {
     if(!database_initialized || bancoJogo is null) {
         debug_log("ERRO: add_role - Banco não inicializado");
         return false;
     }
-    
+
     role = string_to_lower_case(role);
-    username = string_to_lower_case(username);  // Normalizar username
-    
+    username = string_to_lower_case(username);
+
     if(!is_valid_role(role)) {
         debug_log("ERRO: add_role - Cargo inválido: " + role);
         return false;
     }
-    
-    // Verificar se ja tem o cargo
+
     if(has_role(username, role)) {
         debug_log("INFO: " + username + " ja possui o cargo " + role);
         return true;
     }
-    
+
     string query = """
         INSERT INTO player_roles (username, role, granted_by, notes)
         VALUES (?, ?, ?, ?);
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) {
         debug_log("ERRO ao preparar query add_role: " + bancoJogo.get_last_error_text());
         return false;
     }
-    
+
     stmt.bind_text(1, username);
     stmt.bind_text(2, role);
     stmt.bind_text(3, granted_by);
     stmt.bind_text(4, notes);
-    
+
     int result = stmt.step();
-    
+
     if(result == SQLITE_DONE) {
         debug_log("OK - Cargo '" + role + "' adicionado a " + username + " por " + granted_by);
-        
-        // Atualizar flags do jogador em memoria se estiver online
+
         update_player_flags_from_roles(username);
-        
+
         return true;
     } else {
         debug_log("ERRO ao adicionar cargo: " + bancoJogo.get_last_error_text());
@@ -325,34 +263,32 @@ bool add_role(string username, string role, string granted_by = "system", string
     }
 }
 
-// Remover cargo de um jogador
 bool remove_role(string username, string role, string removed_by = "system") {
     if(!database_initialized || bancoJogo is null) {
         debug_log("ERRO: remove_role - Banco não inicializado");
         return false;
     }
-    
+
     role = string_to_lower_case(role);
-    
+
     string query = "DELETE FROM player_roles WHERE username = ? AND role = ?;";
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) {
         debug_log("ERRO ao preparar query remove_role: " + bancoJogo.get_last_error_text());
         return false;
     }
-    
+
     stmt.bind_text(1, username);
     stmt.bind_text(2, role);
-    
+
     int result = stmt.step();
-    
+
     if(result == SQLITE_DONE) {
         debug_log("OK - Cargo '" + role + "' removido de " + username + " por " + removed_by);
-        
-        // Atualizar flags do jogador em memoria se estiver online
+
         update_player_flags_from_roles(username);
-        
+
         return true;
     } else {
         debug_log("ERRO ao remover cargo: " + bancoJogo.get_last_error_text());
@@ -360,66 +296,57 @@ bool remove_role(string username, string role, string removed_by = "system") {
     }
 }
 
-// Adicionar cargo temporario
 bool add_temporary_role(string username, string role, int duration_minutes, string granted_by = "system") {
     if(!database_initialized || bancoJogo is null) return false;
-    
+
     role = string_to_lower_case(role);
-    
+
     if(!is_valid_role(role)) return false;
-    
-    // Remover cargo existente primeiro
+
     remove_role(username, role, granted_by);
-    
+
     string query = """
         INSERT INTO player_roles (username, role, granted_by, expires_at)
         VALUES (?, ?, ?, datetime('now', '+' || ? || ' minutes'));
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) return false;
-    
+
     stmt.bind_text(1, username);
     stmt.bind_text(2, role);
     stmt.bind_text(3, granted_by);
     stmt.bind_int(4, duration_minutes);
-    
+
     int result = stmt.step();
-    
+
     if(result == SQLITE_DONE) {
         debug_log("OK - Cargo temporario '" + role + "' adicionado a " + username + " por " + duration_minutes + " minutos");
         update_player_flags_from_roles(username);
         return true;
     }
-    
+
     return false;
 }
 
-// ============================================================
-// SINCRONIZACAO COM MEMORIA
-// ============================================================
-
-// Atualizar flags do jogador em memoria baseado nos cargos do banco
 void update_player_flags_from_roles(string username) {
     int player_index = get_player_index_from(username);
-    if(player_index < 0) return;  // Jogador nao esta online
-    
+    if(player_index < 0) return;
+
     player@ p = players[player_index];
     if(p is null) return;
-    
-    // Resetar todas as flags
+
     p.dev = false;
     p.admin = false;
     p.moderador = false;
     p.constructor = false;
-    
-    // Carregar cargos do banco
+
     string[] roles = get_player_roles(username);
-    
+
     for(uint i = 0; i < roles.length(); i++) {
         if(roles[i] == "dev") {
             p.dev = true;
-            p.admin = true;  // Dev tambem e admin
+            p.admin = true;
         }
         else if(roles[i] == "admin") {
             p.admin = true;
@@ -431,63 +358,51 @@ void update_player_flags_from_roles(string username) {
             p.constructor = true;
         }
     }
-    
-    // Atualizar campos de compatibilidade
+
     p.is_admin = p.dev || p.admin;
     p.admin_status = p.is_admin;
     p.rank = get_player_role_level(username);
-    
+
     debug_log("Flags atualizadas para " + username + ": dev=" + p.dev + ", admin=" + p.admin + ", mod=" + p.moderador + ", builder=" + p.constructor);
 }
 
-// Carregar cargos no login do jogador
 void load_player_roles(string username) {
     update_player_flags_from_roles(username);
 }
 
-// ============================================================
-// COMANDOS DE ADMIN
-// ============================================================
-
-// Processar comando /addcargo
 void cmd_addcargo(int index, string[] parsed) {
-    // /addcargo <jogador> <cargo>
     if(parsed.length() < 3) {
         send_reliable_text(players[index].peer_id, "msgnormal Uso: /addcargo <jogador> <cargo>", 0);
         send_reliable_text(players[index].peer_id, "msgnormal Cargos disponiveis: dev, admin, moderator, builder, translator, event_manager, vip", 0);
         return;
     }
-    
+
     string target = parsed[1];
     string role = string_to_lower_case(parsed[2]);
-    
-    // Verificar se quem executa tem permissao
+
     if(!check_is_admin(players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Você não tem permissao para usar este comando.", 0);
         return;
     }
-    
-    // Dev so pode ser dado por dev
+
     if(role == "dev" && !check_is_dev(players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Apenas desenvolvedores podem conceder o cargo de dev.", 0);
         return;
     }
-    
-    // Admin so pode ser dado por dev
+
     if(role == "admin" && !check_is_dev(players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Apenas desenvolvedores podem conceder o cargo de admin.", 0);
         return;
     }
-    
+
     if(!is_valid_role(role)) {
         send_reliable_text(players[index].peer_id, "msgnormal Cargo inválido. Cargos disponiveis: dev, admin, moderator, builder, translator, event_manager, vip", 0);
         return;
     }
-    
+
     if(add_role(target, role, players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Cargo '" + role + "' adicionado a " + target + " com sucesso!", 0);
-        
-        // Notificar o jogador se estiver online
+
         int target_index = get_player_index_from(target);
         if(target_index >= 0) {
             send_reliable_text(players[target_index].peer_id, "msgnormal Você recebeu o cargo de " + role + "!", 0);
@@ -497,35 +412,30 @@ void cmd_addcargo(int index, string[] parsed) {
     }
 }
 
-// Processar comando /removecargo
 void cmd_removecargo(int index, string[] parsed) {
-    // /removecargo <jogador> <cargo>
     if(parsed.length() < 3) {
         send_reliable_text(players[index].peer_id, "msgnormal Uso: /removecargo <jogador> <cargo>", 0);
         return;
     }
-    
+
     string target = parsed[1];
     string role = string_to_lower_case(parsed[2]);
-    
-    // Verificar se quem executa tem permissao
+
     if(!check_is_admin(players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Você não tem permissao para usar este comando.", 0);
         return;
     }
-    
-    // Nao pode remover cargo de quem tem hierarquia maior
+
     if(get_player_role_level(target) >= get_player_role_level(players[index].charname)) {
-        if(players[index].charname != target) {  // Pode remover proprio cargo
+        if(players[index].charname != target) {
             send_reliable_text(players[index].peer_id, "msgnormal Você não pode remover cargos de alguem com hierarquia igual ou superior.", 0);
             return;
         }
     }
-    
+
     if(remove_role(target, role, players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Cargo '" + role + "' removido de " + target + " com sucesso!", 0);
-        
-        // Notificar o jogador se estiver online
+
         int target_index = get_player_index_from(target);
         if(target_index >= 0) {
             send_reliable_text(players[target_index].peer_id, "msgnormal Seu cargo de " + role + " foi removido.", 0);
@@ -535,20 +445,17 @@ void cmd_removecargo(int index, string[] parsed) {
     }
 }
 
-// Processar comando /cargos
 void cmd_cargos(int index, string[] parsed) {
-    // /cargos [jogador]
     string target = players[index].charname;
-    
+
     if(parsed.length() >= 2) {
-        // Ver cargos de outro jogador (so admin pode)
         if(check_is_admin(players[index].charname)) {
             target = parsed[1];
         }
     }
-    
+
     string[] roles = get_player_roles(target);
-    
+
     if(roles.length() == 0) {
         send_reliable_text(players[index].peer_id, "msgnormal " + target + " não possui nenhum cargo.", 0);
     } else {
@@ -561,37 +468,36 @@ void cmd_cargos(int index, string[] parsed) {
     }
 }
 
-// Processar comando /listadmins
 void cmd_listadmins(int index, string[] parsed) {
     if(!check_is_mod(players[index].charname)) {
         send_reliable_text(players[index].peer_id, "msgnormal Você não tem permissao para usar este comando.", 0);
         return;
     }
-    
+
     string query = """
-        SELECT DISTINCT username, role FROM player_roles 
+        SELECT DISTINCT username, role FROM player_roles
         WHERE role IN ('dev', 'admin', 'moderator', 'builder')
         AND (expires_at IS NULL OR expires_at > datetime('now'))
-        ORDER BY 
-            CASE role 
-                WHEN 'dev' THEN 1 
-                WHEN 'admin' THEN 2 
-                WHEN 'moderator' THEN 3 
-                WHEN 'builder' THEN 4 
+        ORDER BY
+            CASE role
+                WHEN 'dev' THEN 1
+                WHEN 'admin' THEN 2
+                WHEN 'moderator' THEN 3
+                WHEN 'builder' THEN 4
             END,
             username;
     """;
-    
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(@stmt == null) return;
-    
+
     send_reliable_text(players[index].peer_id, "msgnormal === EQUIPE DO SERVIDOR ===", 0);
-    
+
     string current_role = "";
     while(stmt.step() == SQLITE_ROW) {
         string username = stmt.column_text(0);
         string role = stmt.column_text(1);
-        
+
         if(role != current_role) {
             current_role = role;
             string role_name = role;
@@ -601,12 +507,10 @@ void cmd_listadmins(int index, string[] parsed) {
             else if(role == "builder") role_name = "CONSTRUTORES";
             send_reliable_text(players[index].peer_id, "msgnormal --- " + role_name + " ---", 0);
         }
-        
-        // Verificar se esta online
+
         int online_index = get_player_index_from(username);
         string status = (online_index >= 0) ? " [ONLINE]" : "";
-        
+
         send_reliable_text(players[index].peer_id, "msgnormal " + username + status, 0);
     }
 }
-

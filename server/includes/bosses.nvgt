@@ -1,49 +1,36 @@
-// ========================================
-// SISTEMA DE BOSSES - FASE 5
-// ========================================
-// Sistema completo de bosses com mecânicas especiais,
-// spawn/respawn, aggro, fases e loot melhorado
 
 #include "globals.nvgt"
 
-// ========================================
-// ENUMS
-// ========================================
-
 enum boss_state {
-    BOSS_SLEEPING,    // Boss não spawnou ainda
-    BOSS_ALIVE,       // Boss ativo no mundo
-    BOSS_FIGHTING,    // Boss em combate
-    BOSS_ENRAGED,     // Boss enraivecido (HP < 20%)
-    BOSS_DEAD         // Boss morto (aguardando respawn)
+    BOSS_SLEEPING,
+    BOSS_ALIVE,
+    BOSS_FIGHTING,
+    BOSS_ENRAGED,
+    BOSS_DEAD
 }
 
 enum boss_ability_type {
-    ABILITY_AOE_DAMAGE,      // Dano em área
-    ABILITY_SUMMON,          // Invocar adds
-    ABILITY_HEAL,            // Curar-se
-    ABILITY_STUN,            // Atordoar jogadores
-    ABILITY_DOT,             // Dano ao longo do tempo
-    ABILITY_BUFF_SELF,       // Buffar-se
-    ABILITY_DEBUFF_PLAYERS   // Debuffar jogadores
+    ABILITY_AOE_DAMAGE,
+    ABILITY_SUMMON,
+    ABILITY_HEAL,
+    ABILITY_STUN,
+    ABILITY_DOT,
+    ABILITY_BUFF_SELF,
+    ABILITY_DEBUFF_PLAYERS
 }
-
-// ========================================
-// CLASSES
-// ========================================
 
 class boss_ability {
     boss_ability_type type;
     string name;
     string description;
-    int cooldown;           // Em segundos
+    int cooldown;
     timer last_use;
-    int damage;             // Para habilidades de dano
-    int radius;             // Para habilidades de área
-    int duration;           // Para buffs/debuffs
-    string summon_type;     // Para summon
-    int summon_count;       // Quantidade de adds
-    
+    int damage;
+    int radius;
+    int duration;
+    string summon_type;
+    int summon_count;
+
     boss_ability() {
         cooldown = 30;
         damage = 0;
@@ -56,9 +43,9 @@ class boss_ability {
 class boss_loot_entry {
     string item_name;
     int quantity;
-    float drop_chance;  // 0.0 a 1.0
-    bool guaranteed;    // Se true, sempre dropa
-    
+    float drop_chance;
+    bool guaranteed;
+
     boss_loot_entry() {
         quantity = 1;
         drop_chance = 0.1;
@@ -71,7 +58,7 @@ class boss_participant {
     int damage_dealt;
     int healing_done;
     timer joined_time;
-    
+
     boss_participant(string name) {
         player_name = name;
         damage_dealt = 0;
@@ -91,33 +78,28 @@ class boss {
     float x, y, z;
     string map;
     boss_state state;
-    
-    // Sistema de aggro/ameaça
-    dictionary threat_table;  // player_name -> threat_value
+
+    dictionary threat_table;
     string current_target;
-    
-    // Mecânicas especiais
+
     boss_ability@[] abilities;
-    int enrage_timer_minutes;  // Tempo até enrage
+    int enrage_timer_minutes;
     timer fight_start_time;
     timer respawn_timer;
     int respawn_delay_minutes;
-    
-    // Tracking de participantes
+
     boss_participant@[] participants;
     int required_level;
     int max_participants;
-    
-    // Loot
+
     boss_loot_entry@[] loot_table;
     int guaranteed_gold_min;
     int guaranteed_gold_max;
     int guaranteed_xp;
-    
-    // Fases do boss (HP thresholds)
-    int[] phase_thresholds;  // Ex: [75, 50, 25] - ativa habilidades em cada fase
+
+    int[] phase_thresholds;
     int current_phase;
-    
+
     boss() {
         id = 0;
         level = 1;
@@ -135,14 +117,12 @@ class boss {
         guaranteed_xp = 5000;
         current_phase = 0;
     }
-    
-    // Calcula HP %
+
     int get_hp_percent() {
         if (max_hp == 0) return 0;
         return (current_hp * 100) / max_hp;
     }
-    
-    // Verifica mudança de fase
+
     bool check_phase_transition() {
         int hp_pct = get_hp_percent();
         for (uint i = current_phase; i < phase_thresholds.length(); i++) {
@@ -153,8 +133,7 @@ class boss {
         }
         return false;
     }
-    
-    // Adiciona ameaça de um jogador
+
     void add_threat(string player_name, int amount) {
         int current_threat = 0;
         if (threat_table.exists(player_name)) {
@@ -162,17 +141,15 @@ class boss {
         }
         current_threat += amount;
         threat_table.set(player_name, current_threat);
-        
-        // Atualiza alvo se necessário
+
         update_target();
     }
-    
-    // Atualiza alvo baseado em maior ameaça
+
     void update_target() {
         string[] keys = threat_table.get_keys();
         int max_threat = 0;
         string new_target = "";
-        
+
         for (uint i = 0; i < keys.length(); i++) {
             int threat;
             threat_table.get(keys[i], threat);
@@ -181,28 +158,24 @@ class boss {
                 new_target = keys[i];
             }
         }
-        
+
         if (new_target != current_target && new_target != "") {
             current_target = new_target;
             broadcast_to_participants("O boss mudou de alvo para " + new_target + "!");
         }
     }
-    
-    // Adiciona participante
+
     void add_participant(string player_name) {
-        // Verifica se já existe
         for (uint i = 0; i < participants.length(); i++) {
             if (participants[i].player_name == player_name) {
                 return;
             }
         }
-        
-        // Adiciona novo
+
         boss_participant@ bp = boss_participant(player_name);
         participants.insert_last(bp);
     }
-    
-    // Registra dano de participante
+
     void record_damage(string player_name, int damage) {
         for (uint i = 0; i < participants.length(); i++) {
             if (participants[i].player_name == player_name) {
@@ -211,16 +184,12 @@ class boss {
             }
         }
     }
-    
-    // Envia mensagem para todos participantes
+
     void broadcast_to_participants(string message) {
         for (uint i = 0; i < participants.length(); i++) {
-            // Assume função global send_message(player_name, message)
-            // send_message(participants[i].player_name, message);
         }
     }
-    
-    // Spawna o boss
+
     void spawn() {
         current_hp = max_hp;
         state = BOSS_ALIVE;
@@ -228,62 +197,49 @@ class boss {
         threat_table.delete_all();
         participants.resize(0);
         current_target = "";
-        
-        // Broadcast global
-        // global_broadcast("Boss " + name + " (Nível " + level + ") spawnou em " + map + "!");
+
     }
-    
-    // Boss morre
+
     void die() {
         state = BOSS_DEAD;
         respawn_timer.restart();
-        
-        // Distribui loot
+
         distribute_loot();
-        
-        // Broadcast
+
         broadcast_to_participants("Você derrotou " + name + "!");
-        // global_broadcast("O boss " + name + " foi derrotado!");
-        
-        // Limpa
+
         threat_table.delete_all();
         current_target = "";
     }
-    
-    // Distribui loot para participantes
+
     void distribute_loot() {
         if (participants.length() == 0) return;
-        
-        // Calcula total de dano
+
         int total_damage = 0;
         for (uint i = 0; i < participants.length(); i++) {
             total_damage += participants[i].damage_dealt;
         }
-        
+
         if (total_damage == 0) return;
-        
-        // Distribui para cada participante baseado em contribuição
+
         for (uint i = 0; i < participants.length(); i++) {
             float contribution = float(participants[i].damage_dealt) / float(total_damage);
-            
-            // Gold baseado em contribuição
+
             int gold_reward = int((guaranteed_gold_min + guaranteed_gold_max) / 2 * contribution);
-            
-            // XP baseado em contribuição
+
             int xp_reward = int(guaranteed_xp * contribution);
-            
+
             string msg = "Recompensas por derrotar " + name + ":\n";
             msg += "Gold: " + gold_reward + "\n";
             msg += "XP: " + xp_reward + "\n";
-            
-            // Tenta dropar itens (chance individual)
+
             for (uint j = 0; j < loot_table.length(); j++) {
                 bool should_drop = loot_table[j].guaranteed;
                 if (!should_drop) {
                     float roll = random(0, 100) / 100.0;
                     should_drop = (roll <= loot_table[j].drop_chance);
                 }
-                
+
                 if (should_drop) {
                     msg += "Item: " + loot_table[j].item_name;
                     if (loot_table[j].quantity > 1) {
@@ -292,27 +248,21 @@ class boss {
                     msg += "\n";
                 }
             }
-            
-            // Envia para o jogador
-            // send_message(participants[i].player_name, msg);
+
         }
     }
-    
-    // Usa habilidade
+
     void use_ability(int ability_index) {
         if (ability_index < 0 || ability_index >= int(abilities.length())) return;
-        
+
         boss_ability@ ability = abilities[ability_index];
-        
-        // Verifica cooldown (elapsed é propriedade, não função)
+
         if (ability.last_use.elapsed < ability.cooldown * 1000) return;
-        
+
         ability.last_use.restart();
-        
-        // Broadcast
+
         broadcast_to_participants(" " + name + " usa " + ability.name + "!");
-        
-        // Executa efeito baseado no tipo
+
         switch (ability.type) {
             case ABILITY_AOE_DAMAGE:
                 broadcast_to_participants("💥 Dano em área! " + ability.damage + " de dano!");
@@ -340,29 +290,19 @@ class boss {
     }
 }
 
-// ========================================
-// SISTEMA GLOBAL DE BOSSES
-// ========================================
-
 boss@[] world_bosses;
 dictionary boss_by_id;
 
-// Inicializa sistema de bosses
 void init_bosses_system() {
-    // Limpa
     world_bosses.resize(0);
     boss_by_id.delete_all();
-    
-    // Cria bosses pré-definidos
+
     create_default_bosses();
-    
-    // Carrega dados salvos (se existir)
+
     load_bosses_data();
 }
 
-// Cria bosses padrão do jogo
 void create_default_bosses() {
-    // Boss 1: Rei Rato Gigante
     {
         boss@ b = boss();
         b.id = 1;
@@ -381,8 +321,7 @@ void create_default_bosses() {
         b.guaranteed_gold_min = 800;
         b.guaranteed_gold_max = 1500;
         b.guaranteed_xp = 3000;
-        
-        // Habilidades
+
         boss_ability@ ab1 = boss_ability();
         ab1.type = ABILITY_SUMMON;
         ab1.name = "Invocar Ratos";
@@ -390,7 +329,7 @@ void create_default_bosses() {
         ab1.summon_count = 5;
         ab1.cooldown = 45;
         b.abilities.insert_last(ab1);
-        
+
         boss_ability@ ab2 = boss_ability();
         ab2.type = ABILITY_AOE_DAMAGE;
         ab2.name = "Grito Ensurdecedor";
@@ -398,25 +337,23 @@ void create_default_bosses() {
         ab2.radius = 10;
         ab2.cooldown = 30;
         b.abilities.insert_last(ab2);
-        
-        // Loot
+
         boss_loot_entry@ loot1 = boss_loot_entry();
         loot1.item_name = "Pele de Rato Gigante";
         loot1.quantity = 1;
         loot1.drop_chance = 1.0;
         loot1.guaranteed = true;
         b.loot_table.insert_last(loot1);
-        
+
         boss_loot_entry@ loot2 = boss_loot_entry();
         loot2.item_name = "Coroa do Rei Rato";
         loot2.quantity = 1;
         loot2.drop_chance = 0.2;
         b.loot_table.insert_last(loot2);
-        
+
         add_boss(b);
     }
-    
-    // Boss 2: Lobo Alpha
+
     {
         boss@ b = boss();
         b.id = 2;
@@ -436,8 +373,7 @@ void create_default_bosses() {
         b.guaranteed_gold_max = 3000;
         b.guaranteed_xp = 5000;
         b.phase_thresholds = {75, 50, 25};
-        
-        // Habilidades
+
         boss_ability@ ab1 = boss_ability();
         ab1.type = ABILITY_SUMMON;
         ab1.name = "Chamar Alcateia";
@@ -445,14 +381,14 @@ void create_default_bosses() {
         ab1.summon_count = 3;
         ab1.cooldown = 60;
         b.abilities.insert_last(ab1);
-        
+
         boss_ability@ ab2 = boss_ability();
         ab2.type = ABILITY_BUFF_SELF;
         ab2.name = "Fúria Selvagem";
         ab2.duration = 15;
         ab2.cooldown = 45;
         b.abilities.insert_last(ab2);
-        
+
         boss_ability@ ab3 = boss_ability();
         ab3.type = ABILITY_DOT;
         ab3.name = "Mordida Venenosa";
@@ -460,25 +396,23 @@ void create_default_bosses() {
         ab3.duration = 10;
         ab3.cooldown = 30;
         b.abilities.insert_last(ab3);
-        
-        // Loot
+
         boss_loot_entry@ loot1 = boss_loot_entry();
         loot1.item_name = "Pele de Lobo Alpha";
         loot1.quantity = 2;
         loot1.drop_chance = 1.0;
         loot1.guaranteed = true;
         b.loot_table.insert_last(loot1);
-        
+
         boss_loot_entry@ loot2 = boss_loot_entry();
         loot2.item_name = "Espada de Presa";
         loot2.quantity = 1;
         loot2.drop_chance = 0.15;
         b.loot_table.insert_last(loot2);
-        
+
         add_boss(b);
     }
-    
-    // Boss 3: Golem de Pedra Antigo
+
     {
         boss@ b = boss();
         b.id = 3;
@@ -498,8 +432,7 @@ void create_default_bosses() {
         b.guaranteed_gold_max = 6000;
         b.guaranteed_xp = 10000;
         b.phase_thresholds = {75, 50, 25};
-        
-        // Habilidades
+
         boss_ability@ ab1 = boss_ability();
         ab1.type = ABILITY_AOE_DAMAGE;
         ab1.name = "Terremoto";
@@ -507,21 +440,21 @@ void create_default_bosses() {
         ab1.radius = 15;
         ab1.cooldown = 40;
         b.abilities.insert_last(ab1);
-        
+
         boss_ability@ ab2 = boss_ability();
         ab2.type = ABILITY_STUN;
         ab2.name = "Pisada Esmagadora";
         ab2.duration = 5;
         ab2.cooldown = 50;
         b.abilities.insert_last(ab2);
-        
+
         boss_ability@ ab3 = boss_ability();
         ab3.type = ABILITY_HEAL;
         ab3.name = "Regeneração de Pedra";
         ab3.damage = 5000;
         ab3.cooldown = 60;
         b.abilities.insert_last(ab3);
-        
+
         boss_ability@ ab4 = boss_ability();
         ab4.type = ABILITY_SUMMON;
         ab4.name = "Invocar Fragmentos";
@@ -529,38 +462,35 @@ void create_default_bosses() {
         ab4.summon_count = 4;
         ab4.cooldown = 70;
         b.abilities.insert_last(ab4);
-        
-        // Loot
+
         boss_loot_entry@ loot1 = boss_loot_entry();
         loot1.item_name = "Núcleo de Golem";
         loot1.quantity = 1;
         loot1.drop_chance = 1.0;
         loot1.guaranteed = true;
         b.loot_table.insert_last(loot1);
-        
+
         boss_loot_entry@ loot2 = boss_loot_entry();
         loot2.item_name = "Armadura de Pedra";
         loot2.quantity = 1;
         loot2.drop_chance = 0.25;
         b.loot_table.insert_last(loot2);
-        
+
         boss_loot_entry@ loot3 = boss_loot_entry();
         loot3.item_name = "Martelo Ancestral";
         loot3.quantity = 1;
         loot3.drop_chance = 0.1;
         b.loot_table.insert_last(loot3);
-        
+
         add_boss(b);
     }
 }
 
-// Adiciona boss ao sistema
 void add_boss(boss@ b) {
     world_bosses.insert_last(b);
     boss_by_id.set("" + b.id, @b);
 }
 
-// Busca boss por ID
 boss@ get_boss(int id) {
     boss@ b;
     if (boss_by_id.get("" + id, @b)) {
@@ -569,25 +499,19 @@ boss@ get_boss(int id) {
     return null;
 }
 
-// ========================================
-// COMANDOS
-// ========================================
-
-// /bosses - Lista todos os bosses e status
 void cmd_bosses(int client_index, string[] args) {
     if (world_bosses.length() == 0) {
-        // send_message(client_index, "Nenhum boss disponível no momento.");
         return;
     }
-    
+
     string msg = "=== BOSSES DO MUNDO ===\n\n";
-    
+
     for (uint i = 0; i < world_bosses.length(); i++) {
         boss@ b = world_bosses[i];
-        
+
         msg += "[" + b.id + "] " + b.name + " (Nível " + b.level + ")\n";
         msg += "Localização: " + b.map + "\n";
-        
+
         switch (b.state) {
             case BOSS_SLEEPING:
                 msg += "Status: 💤 Aguardando spawn\n";
@@ -603,37 +527,32 @@ void cmd_bosses(int client_index, string[] args) {
                 msg += "Status: 😡 ENRAIVECIDO (" + b.get_hp_percent() + "% HP)\n";
                 break;
             case BOSS_DEAD: {
-                // Declaração de variável em bloco separado para evitar erro de switch
                 int remaining = (b.respawn_delay_minutes * 60) - (b.respawn_timer.elapsed / 1000);
                 msg += "Status: ☠️ Morto (respawn em " + (remaining / 60) + "m)\n";
                 break;
             }
         }
-        
+
         msg += "Nível requerido: " + b.required_level + "\n";
         msg += "---\n";
     }
-    
+
     msg += "\nUse /bossinfo <id> para mais detalhes.";
-    
-    // send_message(client_index, msg);
+
 }
 
-// /bossinfo <id> - Informações detalhadas do boss
 void cmd_bossinfo(int client_index, string[] args) {
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /bossinfo <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     boss@ b = get_boss(id);
-    
+
     if (b is null) {
-        // send_message(client_index, "Boss não encontrado.");
         return;
     }
-    
+
     string msg = "=== " + b.name + " ===\n\n";
     msg += b.description + "\n\n";
     msg += "Nível: " + b.level + "\n";
@@ -644,8 +563,7 @@ void cmd_bossinfo(int client_index, string[] args) {
     msg += "Nível mínimo: " + b.required_level + "\n";
     msg += "Tempo de enrage: " + b.enrage_timer_minutes + " minutos\n";
     msg += "Tempo de respawn: " + b.respawn_delay_minutes + " minutos\n\n";
-    
-    // Habilidades
+
     if (b.abilities.length() > 0) {
         msg += "🎯 HABILIDADES:\n";
         for (uint i = 0; i < b.abilities.length(); i++) {
@@ -654,8 +572,7 @@ void cmd_bossinfo(int client_index, string[] args) {
         }
         msg += "\n";
     }
-    
-    // Loot
+
     if (b.loot_table.length() > 0) {
         msg += "💎 POSSÍVEL LOOT:\n";
         msg += "- Gold: " + b.guaranteed_gold_min + " - " + b.guaranteed_gold_max + "\n";
@@ -673,87 +590,59 @@ void cmd_bossinfo(int client_index, string[] args) {
             msg += "\n";
         }
     }
-    
-    // send_message(client_index, msg);
+
 }
 
-// /spawnboss <id> - Força spawn de um boss (admin)
 void cmd_spawnboss(int client_index, string[] args) {
-    // Verifica se é admin
-    // if (!is_admin(client_index)) {
-    //     send_message(client_index, "Você não tem permissão para usar este comando.");
-    //     return;
-    // }
-    
+
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /spawnboss <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     boss@ b = get_boss(id);
-    
+
     if (b is null) {
-        // send_message(client_index, "Boss não encontrado.");
         return;
     }
-    
+
     if (b.state != BOSS_SLEEPING && b.state != BOSS_DEAD) {
-        // send_message(client_index, "Este boss já está ativo.");
         return;
     }
-    
+
     b.spawn();
-    // send_message(client_index, "Boss " + b.name + " foi spawnado!");
-    // global_broadcast("⚔️ Boss " + b.name + " spawnou em " + b.map + "!");
 }
 
-// /killboss <id> - Força morte de um boss (admin/debug)
 void cmd_killboss(int client_index, string[] args) {
-    // Verifica se é admin
-    // if (!is_admin(client_index)) {
-    //     send_message(client_index, "Você não tem permissão para usar este comando.");
-    //     return;
-    // }
-    
+
     if (args.length() < 1) {
-        // send_message(client_index, "Use: /killboss <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     boss@ b = get_boss(id);
-    
-    if (b is null) {
-        // send_message(client_index, "Boss não encontrado.");
-        return;
-    }
-    
-    if (b.state == BOSS_DEAD) {
-        // send_message(client_index, "Este boss já está morto.");
-        return;
-    }
-    
-    b.die();
-    // send_message(client_index, "Boss " + b.name + " foi morto!");
-}
 
-// ========================================
-// LOOP PRINCIPAL
-// ========================================
+    if (b is null) {
+        return;
+    }
+
+    if (b.state == BOSS_DEAD) {
+        return;
+    }
+
+    b.die();
+}
 
 void bosses_loop() {
     for (uint i = 0; i < world_bosses.length(); i++) {
         boss@ b = world_bosses[i];
-        
-        // Respawn automático
+
         if (b.state == BOSS_DEAD) {
             if (b.respawn_timer.elapsed >= b.respawn_delay_minutes * 60 * 1000) {
                 b.spawn();
             }
         }
-        
-        // Enrage timer
+
         if (b.state == BOSS_FIGHTING) {
             if (b.fight_start_time.elapsed >= b.enrage_timer_minutes * 60 * 1000) {
                 if (b.state != BOSS_ENRAGED) {
@@ -763,16 +652,13 @@ void bosses_loop() {
                 }
             }
         }
-        
-        // Usa habilidades aleatoriamente durante combate
+
         if (b.state == BOSS_FIGHTING || b.state == BOSS_ENRAGED) {
-            // Chance de usar habilidade a cada ciclo
-            if (b.abilities.length() > 0 && random(0, 100) < 10) {  // 10% de chance
+            if (b.abilities.length() > 0 && random(0, 100) < 10) {
                 int ability_index = random(0, b.abilities.length() - 1);
                 b.use_ability(ability_index);
             }
-            
-            // Verifica transição de fase
+
             if (b.check_phase_transition()) {
                 b.broadcast_to_participants("⚡ " + b.name + " entrou na Fase " + b.current_phase + "!");
             }
@@ -780,16 +666,8 @@ void bosses_loop() {
     }
 }
 
-// ========================================
-// PERSISTÊNCIA
-// ========================================
-
 void save_bosses_data() {
-    // Salva estado dos bosses em arquivo
-    // Implementação básica - pode ser expandida
 }
 
 void load_bosses_data() {
-    // Carrega estado dos bosses de arquivo
-    // Implementação básica - pode ser expandida
 }

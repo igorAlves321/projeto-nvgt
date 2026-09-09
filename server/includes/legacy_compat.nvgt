@@ -1,16 +1,10 @@
-// legacy_compat.nvgt - Wrappers de compatibilidade legada para módulos portados do BGT
-// Mantém assinaturas antigas apontando para implementações NVGT reais.
 
-// ==================== FUNÇÕES DE UPTIME (Únicas aqui) ====================
-// Funções de sistema temporal (uptime do servidor)
-// Baseado no timer global server_uptime (server.nvgt:99)
-int ups() { return int(server_uptime.elapsed / 1000); }  // Segundos
-int upm() { return ups() / 60; }                         // Minutos
-int uph() { return upm() / 60; }                         // Horas
-int upd() { return uph() / 24; }                         // Dias
-int upw() { return upd() / 7; }                          // Semanas
+int ups() { return int(server_uptime.elapsed / 1000); }
+int upm() { return ups() / 60; }
+int uph() { return upm() / 60; }
+int upd() { return uph() / 24; }
+int upw() { return upd() / 7; }
 
-// Mensagem atual em processamento, usada por wrappers legados portados do BGT.
 string current_event_message = "";
 
 void set_event_message(const string&in message) {
@@ -21,10 +15,8 @@ string get_event_message() {
     return current_event_message;
 }
 
-// Timer para objetos
 timer tmina2;
 
-// Funções de update para objetos magnéticos
 void update() {
     omloop();
 }
@@ -41,14 +33,10 @@ void update2(string map) {
     omloop();
 }
 
-// ==================== FUNÇÕES DE REDE (Únicas aqui) ====================
-// Função de loop de rede para objetos
 void netloop() {
-    // Wrapper legado: mantém compatibilidade com módulos antigos.
     network_loop();
 }
 
-// send_unreliable wrapper (NVGT pode usar apenas reliable)
 void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
     packet = normalize_network_packet_text(packet);
     string encrypted = encrypt_packet(packet);
@@ -63,11 +51,8 @@ void send_unreliable(uint64 peer_id, string packet, int channel = 0) {
     server_net.send(peer_id, encrypted, channel, false);
 }
 
-// ==================== FUNÇÕES ADMINISTRATIVAS (Únicas aqui) ====================
-// Array para mensagens administrativas
 string[] msgadm_array;
 
-// Função de mensagem administrativa
 void msgadm(string message) {
     msgadm_array.push_back(message);
     for(uint i = 0; i < players.length(); i++) {
@@ -77,19 +62,14 @@ void msgadm(string message) {
     }
 }
 
-// Função de administração
 void eadm(string admin_name, string message, int level) {
     debug_log("EADM: [" + admin_name + "] " + message);
 }
 
-// Função de log geral (sobrecarga)
 void log(string category, string message) {
     debug_log(category + ": " + message);
 }
 
-// ==================== FUNÇÕES DE XP (Wrappers para string -> int) ====================
-// NOTA: A implementação principal está em systems_advanced.nvgt (ganhaxp com int)
-// Estas são apenas wrappers para chamadas com nome de jogador (string)
 void ganhaxp(string player_name, int exp_amount, int gold_amount) {
     int index = get_player_index_from(player_name);
     if(index >= 0) ganhaxp(index, exp_amount, gold_amount);
@@ -99,7 +79,6 @@ void ganhaxp(string player_name, int exp_amount) {
     ganhaxp(player_name, exp_amount, 0);
 }
 
-// XP dobrado
 void apply_doublexp(string player_name, int amount) {
     int index = get_player_index_from(player_name);
     if(index < 0) return;
@@ -111,8 +90,6 @@ void apply_doublexp(string player_name, int amount) {
     debug_log("DOUBLEXP: " + player_name + " ganhou " + (amount * 2) + " XP");
 }
 
-// ==================== FUNÇÕES DE CRÉDITOS/MOEDAS (Únicas aqui) ====================
-// ge() - "give emeralds/credits" - dar créditos ao jogador
 void ge(string playername, double amount) {
     int index = get_player_index_from(playername);
     if (index > -1) {
@@ -122,7 +99,6 @@ void ge(string playername, double amount) {
     }
 }
 
-// gc() - "give coins/gold" - dar moedas/gold ao jogador
 void gc(string playername, double amount) {
     int index = get_player_index_from(playername);
     if (index > -1) {
@@ -152,7 +128,6 @@ void save_transfer(string origin, string destination, string itemname, double am
     save_transfer(origin, destination, itemname, "", amount);
 }
 
-// save_transfer() - salvar transferência de itens/moeda
 void save_transfer(string origin, string destination, string itemname, string info, double amount) {
     if(origin == "" || destination == "") return;
 
@@ -169,7 +144,6 @@ void save_transfer(string origin, string destination, string itemname, string in
     log_action(origin, "transfer", send_info, "", 0, 0, 0, info, destination, itemname);
 }
 
-// ==================== FUNÇÕES DE NPC (Únicas aqui) ====================
 npc@ get_npc_by_flat_index(int npc_index) {
     if(npc_index < 0) return null;
 
@@ -213,8 +187,6 @@ void move(int npc_index, int direction) {
     int nx = n.x;
     int ny = n.y;
 
-    // Convencao de direcao herdada:
-    // 0=Forward, 1=Back, 2=Left, 3=Right.
     if(direction == 0) ny--;
     else if(direction == 1) ny++;
     else if(direction == 2) nx--;
@@ -261,13 +233,10 @@ bool exists_player_in_my_map(string map_name) {
     return false;
 }
 
-// ==================== FUNÇÕES MATEMÁTICAS (Únicas aqui) ====================
-// Função de arredondamento
 double round(double value) {
     return double(int(value + 0.5));
 }
 
-// Função de split customizada
 string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
     string[] result;
 
@@ -296,8 +265,6 @@ string[] nvgt_split_fixed(string str, string delimiter, int max_parts) {
     return result;
 }
 
-// ==================== FUNÇÕES DE STRING (Únicas aqui) ====================
-// Função trim - remover espaços em branco do início e fim
 string trim(string str) {
     if(str.length() == 0) return "";
 
@@ -316,8 +283,6 @@ string trim(string str) {
     return str.substr(start, (end - start) + 1);
 }
 
-// ==================== FUNÇÕES DE BOMBA (Únicas aqui) ====================
-// Calcular distância de uma bomba até um jogador
 int get_bomba_distance(maxbomba@ bomb, player@ p) {
     if(bomb.map != p.map) return -1;
     int dx = abs(bomb.x - p.x);
@@ -325,8 +290,6 @@ int get_bomba_distance(maxbomba@ bomb, player@ p) {
     return int(sqrt(double(dx*dx + dy*dy)));
 }
 
-// ==================== FUNÇÕES DE INVENTÁRIO (Únicas aqui) ====================
-// Remover item do inventário do jogador
 bool item_take(int player_index, string item_name, int quantity) {
     if(player_index < 0 || player_index >= int(players.length())) return false;
 
@@ -341,7 +304,6 @@ bool item_take(int player_index, string item_name, int quantity) {
     return true;
 }
 
-// Dar item ao jogador
 bool item_give(int player_index, string item_name, int quantity) {
     if(player_index < 0 || player_index >= int(players.length())) return false;
 
@@ -350,7 +312,6 @@ bool item_give(int player_index, string item_name, int quantity) {
     return true;
 }
 
-// ==================== FUNÇÕES DE DESCRIÇÕES (Únicas aqui) ====================
 dictionary location_descriptions;
 dictionary item_descriptions;
 
@@ -395,7 +356,6 @@ string getdesc(string item_name) {
     return "Item: " + item_name;
 }
 
-// ==================== FUNÇÕES DE MODERADOR (Únicas aqui) ====================
 bool is_mod(int player_index) {
     if(player_index < 0 || player_index >= int(players.length())) {
         return false;
@@ -403,8 +363,6 @@ bool is_mod(int player_index) {
     return players[player_index].moderador;
 }
 
-// ==================== CLASSES AUXILIARES (Únicas aqui) ====================
-// Classe para zonas de jogo desabilitado
 class game_disabled {
     int min_x;
     int max_x;
@@ -419,12 +377,10 @@ class game_disabled {
     }
 }
 
-// ==================== VARIÁVEIS GLOBAIS (Únicas aqui) ====================
 timer savetimer;
 int enable_double_emeralds = 0;
 int MAX_PLAYERS = 100;
 
-// Função de mudança de nome
 void changename(int player_index, string new_name) {
     if(player_index < 0 || player_index >= int(players.length())) return;
 
@@ -434,7 +390,6 @@ void changename(int player_index, string new_name) {
     string old_name = p.charname;
     string target_name = new_name.trim_whitespace();
 
-    // Limpar flags para evitar loop infinito no playerloop
     p.needs_to_change = false;
     p.validated_name = "";
 
@@ -464,7 +419,6 @@ void changename(int player_index, string new_name) {
         return;
     }
 
-    // Atualizar nome principal na tabela players
     {
         string q = "UPDATE players SET username = ? WHERE username = ?;";
         sqlite3statement@ stmt = bancoJogo.prepare(q);
@@ -482,7 +436,6 @@ void changename(int player_index, string new_name) {
         }
     }
 
-    // Atualizacoes auxiliares em tabelas relacionadas
     {
         sqlite3statement@ stmt_roles = bancoJogo.prepare("UPDATE player_roles SET username = ? WHERE username = ?;");
         if(stmt_roles !is null) {
@@ -513,12 +466,10 @@ void changename(int player_index, string new_name) {
         }
     }
 
-    // Atualizar objeto do jogador em memoria
     p.charname = target_name;
     p.name = target_name;
     set_peer_name(p.peer_id, target_name);
 
-    // Atualizar referencias em outros jogadores online (respostas, observacao, equipe, bounty)
     for(uint oi = 0; oi < players.length(); oi++) {
         if(players[oi] is null) continue;
 
@@ -544,7 +495,6 @@ void changename(int player_index, string new_name) {
         }
     }
 
-    // Atualizar guilds ativas + indice player_guilds
     for(uint gi = 0; gi < active_guilds.length(); gi++) {
         if(active_guilds[gi] is null) continue;
 
@@ -577,7 +527,6 @@ void changename(int player_index, string new_name) {
     }
     save_guilds();
 
-    // Atualizar parties ativas
     for(uint pi = 0; pi < active_parties.length(); pi++) {
         if(active_parties[pi] is null) continue;
 
@@ -597,7 +546,6 @@ void changename(int player_index, string new_name) {
         }
     }
 
-    // Atualizar listas de amigos carregadas em memoria
     if(player_friends.exists(old_name)) {
         friend_list@ own_fl = cast<friend_list@>(player_friends[old_name]);
         if(own_fl !is null) {
@@ -624,7 +572,6 @@ void changename(int player_index, string new_name) {
         if(own_fl2 !is null) own_fl2.save();
     }
 
-    // Atualizar mailboxes carregadas em memoria
     if(player_mailboxes.exists(old_name)) {
         mailbox@ own_mb = cast<mailbox@>(player_mailboxes[old_name]);
         if(own_mb !is null) {
@@ -655,21 +602,18 @@ void changename(int player_index, string new_name) {
         if(own_mb2 !is null) own_mb2.save();
     }
 
-    // Migrar pasta de dados legados do jogador
     string old_dir = "players/" + old_name;
     string new_dir = "players/" + target_name;
     if(directory_exists(old_dir) && !directory_exists(new_dir)) {
         debug_log("CHANGENAME: migracao automatica de pasta legada não suportada por este runtime (" + old_dir + " -> " + new_dir + ").");
     }
 
-    // Persistir estado atual completo do jogador com o novo username
     save_player_to_database(p);
 
     send_reliable_text(p.peer_id, "msg2 Nome alterado com sucesso para " + target_name + ".", 0);
     debug_log("CHANGENAME: " + old_name + " -> " + target_name);
 }
 
-// Função de informações do servidor
 bool cmd_server_info(player@ player, string[] args) {
     string info = "=== SERVIDOR EVM ===\\r\\n";
     info += "Versão: NVGT Alpha\\r\\n";
@@ -679,7 +623,6 @@ bool cmd_server_info(player@ player, string[] args) {
     return true;
 }
 
-// Função de spawn de fogo do jogador (versão alternativa)
 void spawn_playerfire(int x, int y, string map_name, string owner = "") {
     if(map_name == "") return;
 
@@ -698,9 +641,6 @@ void spawn_playerfire(int x, int y, string map_name, string owner = "") {
     }
 }
 
-// ==================== FUNÇÕES DE EQUIPE E SELEÇÃO ====================
-// Estas funções são usadas por NPCs e sistemas de combate
-
 string selecionar_jogador(string mapa) {
     string[] nomes;
     for(uint i = 0; i < players.length(); i++) {
@@ -716,17 +656,16 @@ bool emequipe(string nome, string alvo) {
     int n = get_player_index_from(nome);
     int nb = get_player_index_from(alvo);
     if(n < 0 || nb < 0) return true;
-    
-    if(players[n].nomesequipe.find(alvo) > -1 || 
-       players[nb].afk == true || 
-       players[nb].pacifico == 1 || 
+
+    if(players[n].nomesequipe.find(alvo) > -1 ||
+       players[nb].afk == true ||
+       players[nb].pacifico == 1 ||
        get_safezone_at(players[nb].x, players[nb].y, players[nb].map) == true) {
         return true;
     }
     return false;
 }
 
-// ==================== SISTEMA DE ARENA (Compatibilidade) ====================
 class arena_compat {
     int counter_deaths = 0;
 
@@ -783,7 +722,6 @@ class arena_compat {
 }
 arena_compat arena_global;
 
-// ==================== SISTEMA DE ROUPAS (Compatibilidade) ====================
 class clothes_data {
     string name = "";
     double protection = 0;
@@ -817,8 +755,3 @@ int find_legacy_clothing_index(const string&in clothing_name) {
     }
     return -1;
 }
-
-// ==================== FIM DO ARQUIVO ====================
-
-
-

@@ -1,6 +1,3 @@
-// party.nvgt - Sistema de Grupos/Party
-// Conversao: Novo sistema para NVGT
-// Fase 4: Sistemas Sociais
 
 class party {
 	string leader;
@@ -8,9 +5,9 @@ class party {
 	int max_members;
 	bool share_xp;
 	bool share_gold;
-	dictionary pending_invites;  // player -> timestamp
+	dictionary pending_invites;
 	timer creation_time;
-	
+
 	party(string leader_name) {
 		this.leader = leader_name;
 		this.members.insert_last(leader_name);
@@ -19,28 +16,28 @@ class party {
 		this.share_gold = false;
 		creation_time.restart();
 	}
-	
+
 	bool is_member(string player_name) {
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) return true;
 		}
 		return false;
 	}
-	
+
 	bool is_full() {
 		return members.length() >= uint(max_members);
 	}
-	
+
 	bool is_leader(string player_name) {
 		return leader == player_name;
 	}
-	
+
 	void add_member(string player_name) {
 		if(!is_member(player_name) && !is_full()) {
 			members.insert_last(player_name);
 		}
 	}
-	
+
 	void remove_member(string player_name) {
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) {
@@ -49,11 +46,11 @@ class party {
 			}
 		}
 	}
-	
+
 	int member_count() {
 		return members.length();
 	}
-	
+
 	void broadcast_message(string message) {
 		for(uint i = 0; i < members.length(); i++) {
 			int idx = get_player_index_from(members[i]);
@@ -62,21 +59,20 @@ class party {
 			}
 		}
 	}
-	
+
 	void add_invite(string player_name) {
 		pending_invites.set(player_name, "" + time_stamp());
 	}
-	
+
 	bool has_invite(string player_name) {
 		return pending_invites.exists(player_name);
 	}
-	
+
 	void remove_invite(string player_name) {
 		pending_invites.delete(player_name);
 	}
 }
 
-// Array global de parties ativas
 party@[] active_parties;
 
 void party_save_social_state_if_online(string player_name) {
@@ -84,7 +80,6 @@ void party_save_social_state_if_online(string player_name) {
 	if(idx >= 0) save_player_to_database(players[idx]);
 }
 
-// Obter Andice da party de um jogador
 int get_party_index(string player_name) {
 	for(uint i = 0; i < active_parties.length(); i++) {
 		if(active_parties[i].is_member(player_name)) {
@@ -94,12 +89,10 @@ int get_party_index(string player_name) {
 	return -1;
 }
 
-// Verificar se jogador está em party
 bool is_in_party(string player_name) {
 	return get_party_index(player_name) >= 0;
 }
 
-// Obter party de um jogador
 party@ get_player_party(string player_name) {
 	int idx = get_party_index(player_name);
 	if(idx >= 0) {
@@ -108,73 +101,68 @@ party@ get_player_party(string player_name) {
 	return null;
 }
 
-// Comando: Criar party
 void cmd_createparty(int player_index) {
 	if(is_in_party(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você ja está em um grupo!", 0);
 		return;
 	}
-	
+
 	party p(players[player_index].charname);
 	active_parties.insert_last(p);
 	party_save_social_state_if_online(players[player_index].charname);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Grupo criado! Você e o líder.", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Use /invite <jogador> para convidar membros", 0);
-	
+
 	debug_log("PARTY: " + players[player_index].charname + " criou grupo");
 }
 
-// Comando: Convidar para party
 void cmd_invite(int player_index, string target_name) {
 	if(!is_in_party(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		send_reliable_text(players[player_index].peer_id, "msg2 Use /createparty para criar um", 0);
 		return;
 	}
-	
+
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) return;
-	
+
 	if(!p.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode convidar!", 0);
 		return;
 	}
-	
+
 	if(p.is_full()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Grupo cheio! Maximo: " + p.max_members + " membros", 0);
 		return;
 	}
-	
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
 		return;
 	}
-	
+
 	if(is_in_party(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " ja está em um grupo!", 0);
 		return;
 	}
-	
-	// Adicionar convite
+
 	p.add_invite(target_name);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Convite enviado para " + target_name, 0);
 	send_reliable_text(players[target].peer_id, "msg2 " + players[player_index].charname + " te convidou para o grupo!", 0);
 	send_reliable_text(players[target].peer_id, "msg2 Use /joinparty para aceitar", 0);
-	
+
 	debug_log("PARTY: " + players[player_index].charname + " convidou " + target_name);
 }
 
-// Comando: Entrar em party
 void cmd_joinparty(int player_index) {
 	if(is_in_party(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você ja está em um grupo!", 0);
 		return;
 	}
-	
-	// Procurar convite pendente
+
 	party@ found_party = null;
 	for(uint i = 0; i < active_parties.length(); i++) {
 		if(active_parties[i].has_invite(players[player_index].charname)) {
@@ -182,137 +170,127 @@ void cmd_joinparty(int player_index) {
 			break;
 		}
 	}
-	
+
 	if(found_party is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não tem convites pendentes!", 0);
 		return;
 	}
-	
+
 	if(found_party.is_full()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Grupo cheio!", 0);
 		found_party.remove_invite(players[player_index].charname);
 		return;
 	}
-	
-	// Adicionar ao grupo
+
 	found_party.add_member(players[player_index].charname);
 	found_party.remove_invite(players[player_index].charname);
 	party_save_social_state_if_online(players[player_index].charname);
-	
-	// Notificar
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Você entrou no grupo de " + found_party.leader + "!", 0);
 	found_party.broadcast_message(players[player_index].charname + " entrou no grupo!");
-	
+
 	debug_log("PARTY: " + players[player_index].charname + " entrou no grupo de " + found_party.leader);
 }
 
-// Comando: Sair de party
 void cmd_leaveparty(int player_index) {
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		return;
 	}
-	
+
 	string pname = players[player_index].charname;
-	
-	// Se e o líder, dissolver grupo
+
 	if(p.is_leader(pname)) {
 		p.broadcast_message("O líder saiu. Grupo dissolvido!");
 		for(uint i = 0; i < p.members.length(); i++) {
 			party_save_social_state_if_online(p.members[i]);
 		}
-		
+
 		int party_idx = get_party_index(pname);
 		if(party_idx >= 0) {
 			active_parties.remove_at(party_idx);
 		}
 		party_save_social_state_if_online(pname);
-		
+
 		debug_log("PARTY: Grupo de " + pname + " dissolvido");
 	} else {
-		// Remover membro
 		p.remove_member(pname);
 		p.broadcast_message(pname + " saiu do grupo");
 		send_reliable_text(players[player_index].peer_id, "msg2 Você saiu do grupo", 0);
 		party_save_social_state_if_online(pname);
-		
+
 		debug_log("PARTY: " + pname + " saiu do grupo de " + p.leader);
 	}
 }
 
-// Comando: Expulsar membro (líder)
 void cmd_kickparty(int player_index, string target_name) {
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		return;
 	}
-	
+
 	if(!p.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode expulsar!", 0);
 		return;
 	}
-	
+
 	if(!p.is_member(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está no grupo!", 0);
 		return;
 	}
-	
+
 	if(target_name == players[player_index].charname) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Use /disbandparty para dissolver o grupo", 0);
 		return;
 	}
-	
-	// Expulsar
+
 	int target = get_player_index_from(target_name);
 	if(target >= 0) {
 		send_reliable_text(players[target].peer_id, "msg2 Você foi expulso do grupo!", 0);
 	}
-	
+
 	p.remove_member(target_name);
 	p.broadcast_message(target_name + " foi expulso do grupo");
 	party_save_social_state_if_online(target_name);
-	
+
 	debug_log("PARTY: " + players[player_index].charname + " expulsou " + target_name);
 }
 
-// Comando: Dissolver party (líder)
 void cmd_disbandparty(int player_index) {
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		return;
 	}
-	
+
 	if(!p.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode dissolver o grupo!", 0);
 		return;
 	}
-	
+
 	p.broadcast_message("Grupo dissolvido pelo líder");
 	for(uint i = 0; i < p.members.length(); i++) {
 		party_save_social_state_if_online(p.members[i]);
 	}
-	
+
 	int party_idx = get_party_index(players[player_index].charname);
 	if(party_idx >= 0) {
 		active_parties.remove_at(party_idx);
 	}
 	party_save_social_state_if_online(players[player_index].charname);
-	
+
 	debug_log("PARTY: Grupo de " + players[player_index].charname + " dissolvido");
 }
 
-// Comando: Chat do party
 void cmd_partychat(int player_index, string message) {
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		return;
 	}
-	
-	// Enviar para todos os membros
+
 	for(uint i = 0; i < p.members.length(); i++) {
 		int idx = get_player_index_from(p.members[i]);
 		if(idx >= 0) {
@@ -321,64 +299,58 @@ void cmd_partychat(int player_index, string message) {
 	}
 }
 
-// Comando: Ver info do party
 void cmd_partyinfo(int player_index) {
 	party@ p = get_player_party(players[player_index].charname);
 	if(p is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em um grupo!", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Info do Grupo ===", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Lider: " + p.leader, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Membros: " + p.member_count() + "/" + p.max_members, 0);
-	
+
 	for(uint i = 0; i < p.members.length(); i++) {
 		string status = is_online(p.members[i]) ? "Online" : "Offline";
 		send_reliable_text(players[player_index].peer_id, "msg2 - " + p.members[i] + " (" + status + ")", 0);
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 XP Compartilhado: " + (p.share_xp ? "Sim" : "Não"), 0);
 }
 
-// Verificar se jogador está online
 bool is_online(string player_name) {
 	return get_player_index_from(player_name) >= 0;
 }
 
-// Distribuir XP para party
 void party_distribute_xp(string killer_name, int total_xp) {
 	party@ p = get_player_party(killer_name);
 	if(p is null || !p.share_xp) {
-		// Sem party ou XP não compartilhado
 		int killer_idx = get_player_index_from(killer_name);
 		if(killer_idx >= 0) {
 			players[killer_idx].xp += total_xp;
 		}
 		return;
 	}
-	
-	// Contar membros online no mesmo mapa
+
 	int killer_idx = get_player_index_from(killer_name);
 	if(killer_idx < 0) return;
-	
+
 	string killer_map = players[killer_idx].map;
 	int online_count = 0;
-	
+
 	for(uint i = 0; i < p.members.length(); i++) {
 		int idx = get_player_index_from(p.members[i]);
 		if(idx >= 0 && players[idx].map == killer_map) {
 			online_count++;
 		}
 	}
-	
+
 	if(online_count == 0) online_count = 1;
-	
-	// Distribuir 70% do XP entre membros, 30% para quem matou
+
 	int shared_xp = int(total_xp * 0.7);
 	int per_member = shared_xp / online_count;
 	int bonus_xp = int(total_xp * 0.3);
-	
+
 	for(uint i = 0; i < p.members.length(); i++) {
 		int idx = get_player_index_from(p.members[i]);
 		if(idx >= 0 && players[idx].map == killer_map) {
@@ -386,14 +358,9 @@ void party_distribute_xp(string killer_name, int total_xp) {
 			if(p.members[i] == killer_name) {
 				xp_gain += bonus_xp;
 			}
-			
+
 			players[idx].xp += xp_gain;
 			send_reliable_text(players[idx].peer_id, "msg2 [Party] +XP: " + xp_gain, 0);
 		}
 	}
 }
-
-
-
-
-

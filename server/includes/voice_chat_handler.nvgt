@@ -1,29 +1,7 @@
-// ============================================================
-// 🎤 VOICE CHAT HANDLER - Servidor
-// ============================================================
-// Implementa roteamento de mensagens de voz com filtragem por proximidade
-//
-// Funcionalidades:
-// - Recebe mensagens de voz dos clientes
-// - Valida remetente e posição
-// - Roteia apenas para jogadores próximos (mesmo mapa, raio de 50m)
-// - Usa canal unreliable (VOICE_CHANNEL = 5) para baixa latência
-//
-// Protocolo:
-// - Cliente → Servidor: VOICE_MSG|sender_id|x|y|z|audio_data
-// - Servidor → Clientes: VOICE_PLAY|sender_id|x|y|z|audio_data
-//
-// Status:  Implementado com APIs NVGT
 
-// Constantes
-const int VOICE_CHANNEL = 7;              // Canal de rede dedicado (canal 7 = áudio)
-const float VOICE_RANGE = 50.0;           // Alcance em metros
-const int VOICE_MAX_SIZE = 1048576;       // Tamanho máximo (1MB)
-
-// ============================================================
-// HANDLER: handle_voice_message
-// ============================================================
-// Processa mensagem de voz e roteia para jogadores próximos
+const int VOICE_CHANNEL = 7;
+const float VOICE_RANGE = 50.0;
+const int VOICE_MAX_SIZE = 1048576;
 
 void handle_voice_message(player@ sender, string message) {
 	if(@sender == null) {
@@ -31,7 +9,6 @@ void handle_voice_message(player@ sender, string message) {
 		return;
 	}
 
-	// Parse: VOICE_MSG|sender_id|x|y|z|audio_data
 	string[] parts = message.split("|");
 
 	if(parts.length() < 6) {
@@ -48,13 +25,11 @@ void handle_voice_message(player@ sender, string message) {
 		audio_data += "|" + parts[i];
 	}
 
-	// Validação: Verificar se sender_id corresponde ao jogador
 	if(sender_id != sender.name) {
 		debug_log(" Voice spoofing detectado: " + sender.name + " enviou como " + sender_id);
 		return;
 	}
 
-	// Validação: Verificar tamanho do áudio
 	if(audio_data.trim_whitespace() == "") {
 		debug_log(" Voice message vazia de " + sender_id);
 		return;
@@ -64,75 +39,53 @@ void handle_voice_message(player@ sender, string message) {
 		return;
 	}
 
-	// Validação: Verificar se posição é próxima da posição real do jogador (anti-cheat)
 	int dx = abs(pos_x - sender.x);
 	int dy = abs(pos_y - sender.y);
 	if(dx > 10 || dy > 10) {
 		debug_log(" Voice position mismatch de " + sender_id + ": enviado (" + pos_x + "," + pos_y + ") real (" + sender.x + "," + sender.y + ")");
-		// Usar posição real do servidor
 		pos_x = sender.x;
 		pos_y = sender.y;
 	}
 
 	debug_log("📨 Voice de " + sender_id + " em " + sender.map + " (" + pos_x + "," + pos_y + "," + pos_z + ")");
 
-	// Rotear para jogadores próximos
 	route_voice_to_nearby_players(sender, pos_x, pos_y, pos_z, audio_data);
 }
-
-// ============================================================
-// FUNÇÃO: route_voice_to_nearby_players
-// ============================================================
-// Envia mensagem de voz apenas para jogadores no mesmo mapa e dentro do alcance
 
 void route_voice_to_nearby_players(player@ sender, int sender_x, int sender_y, int sender_z, string audio_data) {
 	if(@sender == null) return;
 
-	// Contador de destinatários
 	int recipients = 0;
 
-	// Montar pacote roteado: VOICE_PLAY|sender_id|x|y|z|audio_data
 	string routed_packet = "VOICE_PLAY|" + sender.name + "|" +
 	                       sender_x + "|" + sender_y + "|" + sender_z + "|" +
 	                       audio_data;
 
-	// Iterar sobre todos os jogadores
 	for(uint i = 0; i < players.length(); i++) {
 		player@ receiver = players[i];
 
-		// Validações básicas
 		if(@receiver == null) continue;
 		if(!receiver.is_logged_in) continue;
 		if(receiver.peer_id == 0) continue;
 
-		// Não enviar para si mesmo
 		if(receiver.name == sender.name) continue;
 
-		// Verificar se está no mesmo mapa
 		if(receiver.map != sender.map) continue;
 
-		// Calcular distância
 		float distance = calculate_distance(
 			sender_x, sender_y, sender_z,
-			receiver.x, receiver.y, 0 // Z será implementado
+			receiver.x, receiver.y, 0
 		);
 
-		// Verificar se está dentro do alcance
 		if(distance > VOICE_RANGE) continue;
 
-		// Enviar mensagem de voz via unreliable (baixa latência)
-		send_unreliable(receiver.peer_id, routed_packet, VOICE_CHANNEL); // unreliable para baixa latência
+		send_unreliable(receiver.peer_id, routed_packet, VOICE_CHANNEL);
 
 		recipients++;
 	}
 
 	debug_log("📤 Voice de " + sender.name + " roteada para " + recipients + " jogador(es)");
 }
-
-// ============================================================
-// FUNÇÃO: calculate_distance
-// ============================================================
-// Calcula distância euclidiana 3D entre duas posições
 
 float calculate_distance(int x1, int y1, int z1, int x2, int y2, int z2) {
 	int dx = x2 - x1;
@@ -142,15 +95,9 @@ float calculate_distance(int x1, int y1, int z1, int x2, int y2, int z2) {
 	return sqrt(float(dx * dx + dy * dy + dz * dz));
 }
 
-// ============================================================
-// HANDLER WRAPPER: req_voice_message
-// ============================================================
-// Wrapper para integração com dispatcher de network_handlers.nvgt
-
 void req_voice_message(network_event@ event) {
 	if(@event == null) return;
 
-	// Encontrar jogador pelo peer_id
 	player@ p = find_player_by_peer(event.peer_id);
 
 	if(@p == null) {
@@ -158,17 +105,10 @@ void req_voice_message(network_event@ event) {
 		return;
 	}
 
-	// Descriptografar mensagem
 	string decrypted = string_aes_decrypt(event.message, PACKET_ENCRYPTION_KEY);
 
-	// Processar mensagem
 	handle_voice_message(p, decrypted);
 }
-
-// ============================================================
-// FUNÇÃO AUXILIAR: find_player_by_peer
-// ============================================================
-// Encontra jogador pelo peer_id
 
 player@ find_player_by_peer(uint64 peer_id) {
 	for(uint i = 0; i < players.length(); i++) {
@@ -178,10 +118,6 @@ player@ find_player_by_peer(uint64 peer_id) {
 	}
 	return null;
 }
-
-// ============================================================
-// ESTATÍSTICAS DE VOICE CHAT (Opcional)
-// ============================================================
 
 class voice_chat_stats {
 	uint64 messages_received = 0;

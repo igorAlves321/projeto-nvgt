@@ -1,6 +1,3 @@
-// ==========================================
-// FUNCOES AUXILIARES DE PROCESSAMENTO
-// ==========================================
 
 void process_msg(string full_msg, string[] parsed) {
 	string m;
@@ -10,15 +7,14 @@ void process_msg(string full_msg, string[] parsed) {
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	
-	// Mapear nomes de canal antigos (BGT) para novos
+
 	string channel = parsed[1];
 	if(channel == "canal_principal") channel = "global";
 	else if(channel == "canal_local") channel = "local";
 	else if(channel == "mensajes_del_equipo") channel = "equipe";
 	else if(channel == "conversaciones_privadas") channel = "privado";
 	else if(channel == "visiones_angelicales") channel = "admin";
-	
+
 	add_add_item(channel, m);
 }
 
@@ -27,9 +23,7 @@ void process_msg2(string full_msg, string[] parsed) {
 	string a = full_msg;
 	a = a.replace(parsed[0] + " ", "");
 	string[] b = a.split(";");
-	
-	// Ajuste de escrita para mensagens de ganho de item:
-	// "1 ;Peixe de olhos brancos;." -> "1 peixe de olhos brancos."
+
 	if(b.length() == 3) {
 		string qtd = b[0].trim_whitespace();
 		string item_raw = b[1].trim_whitespace();
@@ -38,7 +32,6 @@ void process_msg2(string full_msg, string[] parsed) {
 			string first_char = qtd.substr(0, 1);
 			int first_code = character_to_ascii(first_char);
 			if(first_code >= 48 && first_code <= 57) {
-				// Garantir que quantidade e totalmente numerica
 				bool only_digits = true;
 				for(uint qi = 0; qi < qtd.length(); qi++) {
 					int code = character_to_ascii(qtd.substr(qi, 1));
@@ -54,7 +47,7 @@ void process_msg2(string full_msg, string[] parsed) {
 					add_add_item("tudo", m);
 					return;
 				}
-				
+
 				int qty_int = parse_int(qtd);
 				string item_text = pu.get_value(item_raw);
 				if(item_text.length() > 1) {
@@ -62,8 +55,7 @@ void process_msg2(string full_msg, string[] parsed) {
 				} else if(item_text.length() == 1) {
 					item_text = item_text.lower();
 				}
-				
-				// Pluralizacao basica para mensagens de quantidade
+
 				if(qty_int > 1) {
 					string lower_item = item_text.lower();
 					if(lower_item.length() >= 2 && lower_item.substr(lower_item.length() - 2, 2) == "ao") {
@@ -80,18 +72,18 @@ void process_msg2(string full_msg, string[] parsed) {
 						item_text += "s";
 					}
 				}
-				
+
 				m = qtd + " " + item_text + ".";
 				add_add_item("tudo", m);
 				return;
 			}
 		}
 	}
-	
+
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item("tudo", m);  // Avisos vao pro canal "tudo"
+	add_add_item("tudo", m);
 }
 
 void process_msg3(string full_msg, string[] parsed) {
@@ -102,36 +94,32 @@ void process_msg3(string full_msg, string[] parsed) {
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	add_add_item("equipe", m);  // Chat de equipe
+	add_add_item("equipe", m);
 }
 
 void process_msg4(string full_msg, string[] parsed) {
 	string m;
 	string a = full_msg;
 	a = a.replace(parsed[0] + " ", "");
-	
-	// Task 2.6.2: Detectar e processar [LOGO_CHATTER] no chat administrativo
-	// Se a mensagem contem [LOGO_CHATTER], tocar som especial e adicionar prefixo "Chatter:"
+
 	bool is_chatter = false;
 	if(a.find("[LOGO_CHATTER]") != -1) {
 		is_chatter = true;
-		a = a.replace("[LOGO_CHATTER] ", ""); // Remove o marcador
-		a = a.replace("[LOGO_CHATTER]", "");  // Remove caso nao tenha espaco
-		// Tocar som especial do Chatter
+		a = a.replace("[LOGO_CHATTER] ", "");
+		a = a.replace("[LOGO_CHATTER]", "");
 		p.play_stationary("chatter_logo.ogg", false);
 	}
-	
+
 	string[] b = a.split(";");
 	for(uint i = 0; i < b.length(); i++) {
 		m += pu.get_value(b[i]);
 	}
-	
-	// Adicionar prefixo "Chatter:" se for uma mensagem de chatter
+
 	if(is_chatter) {
 		m = "Chatter: " + m;
 	}
-	
-	add_add_item("admin", m);  // Chat de administracao
+
+	add_add_item("admin", m);
 }
 
 void process_msg_translated(string full_msg, string[] parsed, string channel) {
@@ -171,42 +159,28 @@ string translate_character_types(string text) {
 	return text;
 }
 
-// ============================================================================
-//  SISTEMA DE CHAT COMPLETO - HANDLERS ADICIONAIS
-// ============================================================================
-
-// process_fm - Fala Mapa (Chat Local)
-// Formato BGT: fm |titulo| nome |acao| mensagem
-// Exemplo: fm |Guerreiro| Joao |diz:| Ola pessoal!
 void process_fm(string full_msg, string[] parsed) {
 	string m;
 	string a = full_msg;
-	a = a.replace(parsed[0] + " ", ""); // Remove "fm "
-	
-	// Separar por | e traduzir cada parte
+	a = a.replace(parsed[0] + " ", "");
+
 	string[] parts = a.split("|");
 	for(uint i = 0; i < parts.length(); i++) {
-		// Traduzir partes conhecidas
 		string part = trim_string(parts[i]);
 		if(part != "") {
 			m += pu.get_value(part);
 			if(i < parts.length() - 1) m += " ";
 		}
 	}
-	
-	// Adicionar ao canal de chat local
+
 	add_add_item("local", m);
 }
 
-// process_pm - Mensagem Privada
-// Formato BGT: pm de/para nome: mensagem
-// Exemplo: pm de Joao: Ola! ou pm para Maria: Oi!
 void process_pm(string full_msg, string[] parsed) {
 	string m;
 	string a = full_msg;
-	a = a.replace(parsed[0] + " ", ""); // Remove "pm "
-	
-	// Traduzir "de" e "para" se necessario
+	a = a.replace(parsed[0] + " ", "");
+
 	if(a.length() > 3) {
 		if(a.substr(0, 3) == "de ") {
 			a = pu.get_value("de") + " " + a.substr(3);
@@ -214,63 +188,44 @@ void process_pm(string full_msg, string[] parsed) {
 			a = pu.get_value("para") + " " + a.substr(5);
 		}
 	}
-	
+
 	m = a;
-	
-	// Adicionar ao canal de mensagens privadas
+
 	add_add_item("privado", m);
-	
-	// Tocar som de notificacao
+
 	p.play_stationary("notify_pm.ogg", false);
 }
 
-// process_msgconexoes - Notificacao de Conexao/Desconexao
-// Formato BGT: msgconexoes mensagem
 void process_msgconexoes(string full_msg, string[] parsed) {
 	string m;
 	string a = full_msg;
-	a = a.replace(parsed[0] + " ", ""); // Remove "msgconexoes "
-	
-	// Traduzir partes separadas por ;
+	a = a.replace(parsed[0] + " ", "");
+
 	string[] parts = a.split(";");
 	for(uint i = 0; i < parts.length(); i++) {
 		m += pu.get_value(parts[i]);
 	}
-	
-	// Adicionar ao canal "tudo" (notificacoes de conexao)
+
 	add_add_item("tudo", m);
 }
 
-// ============================================================================
-// PINFO - Menu Navegavel de Informacoes do Jogador
-// Formato: pinfo_data:nome|status|banido|razao|expira|nivel|xp|hp|mapa|pos|admin|gold
-// ============================================================================
 void process_pinfo_data(string full_msg) {
-	// Remove o prefixo "pinfo_data:"
-	string raw = full_msg.substr(11);  // "pinfo_data:" tem 11 caracteres
+	string raw = full_msg.substr(11);
 	string[] info = raw.split("|");
-	
+
 	if(info.length() < 12) {
 		speak(pu.get_value("Erro ao processar informacoes do jogador."));
 		debug_log("a PINFO: dados incompletos - " + raw);
 		return;
 	}
-	
-	// Campos:
-	// 0: Nome, 1: Status, 2: Banido?, 3: Razao ban, 4: Expira ban
-	// 5: Nivel, 6: XP, 7: HP, 8: Mapa, 9: Posicao, 10: Admin?, 11: Ouro
-	
-	// Criar menu navegavel
+
 	setupmenu();
-	
-	// Cabecalho
+
 	string title = info[0] + " (" + info[1] + ")";
-	
-	// Itens do menu (cada um pode ser navegado individualmente)
+
 	game_menu.add_item(pu.get_value("Nome: ") + info[0], "nome");
 	game_menu.add_item(pu.get_value("Status: ") + info[1], "status");
-	
-	// Status de ban com destaque
+
 	if(info[2] == "Sim") {
 		game_menu.add_item(pu.get_value("as BANIDO: Sim"), "banido");
 		game_menu.add_item(pu.get_value("Razão do ban: ") + info[3], "razao");
@@ -278,8 +233,7 @@ void process_pinfo_data(string full_msg) {
 	} else {
 		game_menu.add_item(pu.get_value("Banido: Não"), "banido");
 	}
-	
-	// Estatisticas (se disponiveis)
+
 	if(info[5] != "?") {
 		game_menu.add_item(pu.get_value("Nivel: ") + info[5], "nivel");
 	}
@@ -295,20 +249,17 @@ void process_pinfo_data(string full_msg) {
 	if(info[9] != "?") {
 		game_menu.add_item(pu.get_value("Posicao: ") + info[9], "pos");
 	}
-	
-	// Admin e Ouro
+
 	game_menu.add_item(pu.get_value("Administrador: ") + info[10], "admin");
 	if(info[11] != "?") {
 		game_menu.add_item(pu.get_value("Ouro: ") + info[11], "gold");
 	}
-	
+
 	game_menu.add_item(pu.get_value("Fechar"), "fechar");
-	
+
 	game_menu.intro_text = pu.get_value("Informacoes de ") + title;
-	
-	// Executar menu (o jogador pode navegar pelos itens)
+
 	int result = game_menu.run();
-	
-	// Nao precisa fazer nada com a selecao - e apenas informativo
+
 	debug_log("PINFO: Menu de " + info[0] + " exibido");
 }

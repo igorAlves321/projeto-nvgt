@@ -1,43 +1,29 @@
-// auction.nvgt - Sistema de Leilões Thread-Safe (Task 1.4.2)
-// Sistema completo de leilões com proteção por mutex e operações atômicas
 
-// ============================================================================
-// CONSTANTES DO SISTEMA DE LEILÕES
-// ============================================================================
-const int MIN_BID_INCREASE = 10;        // Incremento mínimo de lance
-const int MIN_AUCTION_DURATION = 60;    // Duração mínima (segundos)
-const int MAX_AUCTION_DURATION = 86400; // Duração máxima (24 horas)
-const int AUCTION_CLEANUP_INTERVAL = 30000; // Intervalo de limpeza (30s)
+const int MIN_BID_INCREASE = 10;
+const int MIN_AUCTION_DURATION = 60;
+const int MAX_AUCTION_DURATION = 86400;
+const int AUCTION_CLEANUP_INTERVAL = 30000;
 
-// ============================================================================
-// CLASSE AUCTION - Representa um leilão ativo
-// ============================================================================
 class Auction {
-	// Identificação
-	int id;                      // ID único do leilão
-	string owner_id;             // ID do jogador que criou o leilão
-	string owner_name;           // Nome do jogador (para exibição)
+	int id;
+	string owner_id;
+	string owner_name;
 
-	// Item sendo leiloado
-	string item_name;            // Nome do item
-	int item_quantity;           // Quantidade do item
+	string item_name;
+	int item_quantity;
 
-	// Informações de lance
-	int starting_bid;            // Lance inicial
-	int current_bid;             // Lance atual
-	string current_bidder_id;    // ID do jogador com maior lance
-	string current_bidder_name;  // Nome do jogador com maior lance
+	int starting_bid;
+	int current_bid;
+	string current_bidder_id;
+	string current_bidder_name;
 
-	// Temporização
-	uint64 start_time;           // Timestamp de início (ticks)
-	uint64 end_time;             // Timestamp de fim (ticks)
-	int duration_seconds;        // Duração em segundos
+	uint64 start_time;
+	uint64 end_time;
+	int duration_seconds;
 
-	// Estado
-	bool is_active;              // Se o leilão está ativo
-	bool is_finalized;           // Se o leilão foi finalizado
+	bool is_active;
+	bool is_finalized;
 
-	// Construtor
 	Auction(int auction_id, string owner, string owner_nm, string item, int qty, int start_bid, int duration) {
 		this.id = auction_id;
 		this.owner_id = owner;
@@ -55,19 +41,16 @@ class Auction {
 		this.is_finalized = false;
 	}
 
-	// Verifica se o leilão expirou
 	bool is_expired() {
 		return ticks() >= end_time;
 	}
 
-	// Retorna o tempo restante em segundos
 	int get_time_remaining() {
 		uint64 current = ticks();
 		if (current >= end_time) return 0;
 		return int((end_time - current) / 1000);
 	}
 
-	// Retorna informações formatadas do leilão
 	string get_info() {
 		string info = "Leilão #" + id + ": " + item_name;
 		info += " (x" + item_quantity + ")";
@@ -80,19 +63,11 @@ class Auction {
 	}
 }
 
-// ============================================================================
-// SISTEMA GLOBAL DE LEILÕES
-// ============================================================================
-mutex auction_mutex;                // Mutex para proteger operações de leilão
-Auction@[] active_auctions;         // Array de leilões ativos
-int next_auction_id = 1;            // Próximo ID de leilão
-timer last_auction_cleanup;         // Timer para limpeza de leilões expirados
+mutex auction_mutex;
+Auction@[] active_auctions;
+int next_auction_id = 1;
+timer last_auction_cleanup;
 
-// ============================================================================
-// FUNÇÕES DE GERENCIAMENTO DE LEILÕES
-// ============================================================================
-
-// Busca um leilão pelo ID
 Auction@ get_auction_by_id(int auction_id) {
 	for (uint i = 0; i < active_auctions.length(); i++) {
 		if (active_auctions[i].id == auction_id) {
@@ -101,8 +76,6 @@ Auction@ get_auction_by_id(int auction_id) {
 	}
 	return null;
 }
-
-// Nota: get_player_by_id() já está definido em player.nvgt
 
 player@ get_auction_player_by_name(const string&in username) {
     return get_player_by_name(username);
@@ -132,9 +105,6 @@ bool auction_credit_offline_gold(const string&in username, int amount) {
     return stmt.step() == SQLITE_DONE;
 }
 
-// ============================================================================
-// CRIAR NOVO LEILÃO
-// ============================================================================
 void cmd_create_auction(int player_index, string item_name, int quantity, int starting_bid, int duration_seconds) {
     if (player_index < 0 || player_index >= int(players.length())) return;
     player@ p = @players[player_index];
@@ -174,9 +144,6 @@ void cmd_create_auction(int player_index, string item_name, int quantity, int st
     debug_log("[AUCTION] Leilao #" + auction_id + " criado por " + p.charname + ": " + item_name + " x" + quantity);
 }
 
-// ============================================================================
-// HANDLER: FAZER LANCE (req_place_bid) - THREAD-SAFE
-// ============================================================================
 void req_place_bid(int player_index, int auction_id, int amount) {
     if (player_index < 0 || player_index >= int(players.length())) return;
     player@ p = @players[player_index];
@@ -254,9 +221,6 @@ void req_place_bid(int player_index, int auction_id, int amount) {
     debug_log("[AUCTION] " + p.charname + " deu lance de " + amount + " no leilao #" + auction_id);
 }
 
-// ============================================================================
-// CANCELAR LEILÃO (apenas o dono pode cancelar)
-// ============================================================================
 void cmd_cancel_auction(int player_index, int auction_id) {
     if (player_index < 0 || player_index >= int(players.length())) return;
     player@ p = @players[player_index];
@@ -303,9 +267,6 @@ void cmd_cancel_auction(int player_index, int auction_id) {
     debug_log("[AUCTION] Leilao #" + auction_id + " cancelado por " + p.charname);
 }
 
-// ============================================================================
-// FINALIZAR LEILÃO (executado automaticamente quando expira)
-// ============================================================================
 void finalize_auction(Auction@ auction) {
     if (@auction == null || auction.is_finalized) return;
     auction.is_finalized = true;
@@ -348,26 +309,19 @@ void finalize_auction(Auction@ auction) {
     }
 }
 
-// ============================================================================
-// LOOP DE LIMPEZA - Remove leilões expirados
-// ============================================================================
 void auction_cleanup_loop() {
 	if (last_auction_cleanup.elapsed < AUCTION_CLEANUP_INTERVAL) return;
 	last_auction_cleanup.restart();
 
-	//  SEÇÃO CRÍTICA
 	auction_mutex.lock();
 
-	// Iteração reversa para remoção segura
 	for (int i = int(active_auctions.length()) - 1; i >= 0; i--) {
 		Auction@ auction = @active_auctions[i];
 
-		// Se expirou e ainda não foi finalizado
 		if (auction.is_expired() && !auction.is_finalized) {
 			finalize_auction(auction);
 		}
 
-		// Remover leilões finalizados com mais de 5 minutos
 		if (auction.is_finalized && (ticks() - auction.end_time) > 300000) {
 			active_auctions.remove_at(i);
 			debug_log("[AUCTION] Leilão #" + auction.id + " removido da memória.");
@@ -375,17 +329,12 @@ void auction_cleanup_loop() {
 	}
 
 	auction_mutex.unlock();
-	//  FIM DA SEÇÃO CRÍTICA
 }
 
-// ============================================================================
-// LISTAR LEILÕES ATIVOS
-// ============================================================================
 void cmd_list_auctions(int player_index) {
 	if (player_index < 0 || player_index >= int(players.length())) return;
 	player@ p = @players[player_index];
 
-	//  SEÇÃO CRÍTICA
 	auction_mutex.lock();
 
 	if (active_auctions.length() == 0) {
@@ -405,7 +354,6 @@ void cmd_list_auctions(int player_index) {
 	}
 
 	auction_mutex.unlock();
-	//  FIM DA SEÇÃO CRÍTICA
 
 	if (count == 0) {
 		send_reliable_text(p.peer_id, "msg2 Não há leilões ativos no momento.", 0);
@@ -413,7 +361,3 @@ void cmd_list_auctions(int player_index) {
 		send_reliable_text(p.peer_id, "msg2 " + list, 0);
 	}
 }
-
-
-
-

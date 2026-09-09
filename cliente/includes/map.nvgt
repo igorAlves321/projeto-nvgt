@@ -1,18 +1,14 @@
-// Sistema de mapas convertido para NVGT - COMPLETO baseado em map.bgt
 #include "platforms.nvgt"
 #include "zones.nvgt"
 #include "safezones.nvgt"
 #include "extract.nvgt"
 
-// Variáveis globais de mapa
 dictionary fail;
 dictionary desactivados;
 string[] map2;
 string[] map;
 bool amisafe = false;
-// comurl e somchuva já declarados em globals.nvgt
 
-// Sistema de áudio para streams (música de fundo/ambiente)
 sound audio_stream;
 sound audio_stream2;
 bool stream_loaded = false;
@@ -37,31 +33,24 @@ class disabled_game_zone {
 }
 disabled_game_zone@[] disabled_game_zones;
 
-// Variáveis de coordenadas e configurações
 class coordinate_limits {
 	int x, y;
 }
 coordinate_limits max;
 
-// Função para tocar som de passo
 void playstep() {
-	if(!jumping) {  // jumping é bool em globals.nvgt
+	if(!jumping) {
 		string step = get_tile_at(me.x, me.y) + "step" + random(1, 5) + ".ogg";
 		p.play_stationary(step, false);
-		game_net.send(net_peer_id, "move " + step + " " + me.x + " " + me.y, 0, false); // unreliable
+		game_net.send(net_peer_id, "move " + step + " " + me.x + " " + me.y, 0, false);
 	}
 }
 
-// Get material type
 string gmt() {
 	return get_tile_at(me.x, me.y);
 }
 
-// gct() agora está em camera.nvgt como get_camera_tile()
-// Esta é uma função wrapper para compatibilidade
 string gct() {
-	// Usa a posição global da câmera de exploração
-	// camera é declarada em camera.nvgt
 	return get_tile_at(camera.x, camera.y);
 }
 
@@ -74,12 +63,10 @@ string linear(string[] a, string char_separator = "\r\n") {
 }
 
 string[] delinear(string a, string char_separator = "\r\n") {
-	// @deprecated Use string.split() diretamente. Wrapper mantido para compatibilidade.
 	return a.split(char_separator);
 }
 
 void mapreset(bool complete = true) {
-	// Parar streams de áudio
 	if(comurl && complete) {
 		if(stream_loaded) {
 			audio_stream.stop();
@@ -98,22 +85,20 @@ void mapreset(bool complete = true) {
 	active_ss2_zone_index = -1;
 	map_stream_zones.resize(0);
 	disabled_game_zones.resize(0);
-	
+
 	fail.delete_all();
-	
-	// Destruir todos os elementos do mapa
+
 	destroy_all_doors();
 	destroy_all_elevadors();
 	destroy_all_txts();
 	destroy_all_dialogs();
 	destroy_stores();
-	destroy_all_npcs(); //  Destruir todos os NPCs visuais
-	
+	destroy_all_npcs();
+
 	if(complete) p.destroy_all();
-	
-	// Limpar disableds
+
 	disableds.resize(0);
-	
+
 	if(complete) {
 		currentloc = -1;
 		destroy_all_ambientes();
@@ -128,14 +113,13 @@ void mapreset(bool complete = true) {
 		npcs.destroy_all();
 		pl.destroy_all();
 	}
-	
+
 	destroy_all_staircases();
 	map2.resize(0);
 	zones.resize(0);
 	safezones.resize(0);
 	platforms.resize(0);
-	
-	// Resetar flags
+
 	outras = true;
 	bazuca = true;
 	dcamera = 0;
@@ -152,20 +136,18 @@ void mapreset(bool complete = true) {
 	bicicletaativa = 1;
 	camionativo = 1;
 	somchuva = "rain4.ogg";
-	
+
 	destruir_areias_movedissas();
 }
 
 void init_data(string data_line, bool complete = true) {
-	// Ignorar linhas vazias ou somente espaços
 	string trimmed = data_line.trim_whitespace();
 	if(trimmed == "" || trimmed.length() == 0) return;
-	
-	// Função para processar uma linha de dados do mapa
+
 	string[] parsed = data_line.split(":");
-	
+
 	if(parsed[0] == "map") {
-		mapname = data_line.substr(4); // string_trim_left equivalente
+		mapname = data_line.substr(4);
 		debug_log("🗺️ Nome do mapa: " + mapname);
 		if(mapname == "túnel") {
 			centado = false;
@@ -175,10 +157,9 @@ void init_data(string data_line, bool complete = true) {
 	else if(parsed[0] == "url" && parsed.length() > 1 && complete) {
 		comurl = true;
 		string url = data_line.substr(4);
-		// NVGT: usar classe sound para streaming
 		if(stream_loaded) audio_stream.stop();
 		if(audio_stream.load(url)) {
-			audio_stream.play_looped(); // Música de fundo em loop
+			audio_stream.play_looped();
 			stream_loaded = true;
 			debug_log("🎵 Stream URL carregado e tocando: " + url);
 		} else {
@@ -188,41 +169,31 @@ void init_data(string data_line, bool complete = true) {
 	else if(parsed[0] == "teto") {
 		somchuva = parsed[1];
 	}
-	// PLATAFORMA: suporta "platform" e abreviação "p"
-	// Formato BGT: p:min_x:max_x:min_y:tiles (max_y = min_y)
 	else if((parsed[0] == "platform" || parsed[0] == "p") && parsed.length() >= 5) {
 		int min_x = string_to_number(parsed[1]);
 		int max_x = string_to_number(parsed[2]);
 		int min_y = string_to_number(parsed[3]);
-		int max_y = min_y;  // No BGT, max_y = min_y para plataformas 2D
+		int max_y = min_y;
 		string tiles = parsed[4];
-		
-		// CRÍTICO: Adicionar ao array platforms (objetos), não ao array map (strings)!
+
 		platforms.insert_at(platforms.length(), platform("p", min_x, max_x, min_y, max_y, tiles));
 		debug_log("🏗️ Plataforma criada: x(" + min_x + "-" + max_x + ") y=" + min_y + " tiles=" + tiles);
 	}
-	// PAREDE: suporta "wall", "pwall" e abreviação "w"
-	// Formato BGT: w:x:miny:maxy:tile (paredes são verticais, min_x = max_x)
 	else if((parsed[0] == "wall" || parsed[0] == "pwall" || parsed[0] == "w") && parsed.length() >= 5) {
 		int x = string_to_number(parsed[1]);
 		int min_y = string_to_number(parsed[2]);
 		int max_y = string_to_number(parsed[3]);
 		string tiles = parsed[4];
-		
-		// CRÍTICO: Adicionar ao array platforms com tipo "wall" para colisão
-		// Paredes: min_x = max_x = x (vertical), tiles contém "wall"
+
 		platforms.insert_at(platforms.length(), platform("w", x, x, min_y, max_y, "wall" + tiles));
 		debug_log("🧱 Parede criada: x=" + x + " y(" + min_y + "-" + max_y + ") tipo=" + tiles);
 	}
-	// ZONA: suporta "zone" e abreviação "z"
 	else if((parsed[0] == "zone" || parsed[0] == "z") && parsed.length() >= 6) {
-		// Criar objeto zone e adicionar ao array
-		zone z(string_to_number(parsed[1]), string_to_number(parsed[2]), 
-		       string_to_number(parsed[3]), string_to_number(parsed[4]), 
+		zone z(string_to_number(parsed[1]), string_to_number(parsed[2]),
+		       string_to_number(parsed[3]), string_to_number(parsed[4]),
 		       parsed[5]);
 		zones.push_back(z);
 	}
-	// PORTA: suporta "door", "porta" e abreviação "dr"
 	else if((parsed[0] == "door" || parsed[0] == "porta" || parsed[0] == "dr") && parsed.length() >= 10) {
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
@@ -235,21 +206,15 @@ void init_data(string data_line, bool complete = true) {
 		string snd4 = parsed[9];
 		spawn_door(x, y, fx, fy, speed, snd1, snd2, snd3, snd4);
 	}
-	// DESCRIÇÃO: suporta "desc" e abreviação "dv"
 	else if((parsed[0] == "desc" || parsed[0] == "dv") && parsed.length() >= 2) {
-		// Formato abreviado: dv:nome_da_desc (coordenadas, camera, baculo, etc)
-		// Formato completo: desc:x:y:fx:fy:texto
 		if(parsed.length() == 2) {
-			// Formato abreviado "dv:XXX" - desabilitar funcionalidade específica
 			if(parsed[1] == "coordenadas") dcoordenadas = 1;
 			else if(parsed[1] == "camera") dcamera = 1;
 			else if(parsed[1] == "varinha") dvarinha = 1;
-			else if(parsed[1] == "baculo") dvarinha = 1; // baculo = varinha
-			// Outros dv: são ignorados silenciosamente
+			else if(parsed[1] == "baculo") dvarinha = 1;
 		}
 		else if(parsed.length() >= 6) {
-			// Formato completo
-			colocar_desc(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+			colocar_desc(string_to_number(parsed[1]), string_to_number(parsed[2]),
 						 string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5]);
 		}
 	}
@@ -275,7 +240,6 @@ void init_data(string data_line, bool complete = true) {
 		spawn_source(lx, rx, miny, maxy, sound_file, id);
 	}
 	else if((parsed[0] == "staircase" || parsed[0] == "sc") && parsed.length() >= 6) {
-		// Escadas/Staircases: formato sc:lx:rx:miny:maxy:tile
 		int lx = string_to_number(parsed[1]);
 		int rx = string_to_number(parsed[2]);
 		int miny = string_to_number(parsed[3]);
@@ -284,20 +248,17 @@ void init_data(string data_line, bool complete = true) {
 		string id = "1234";
 		spawn_staircase(lx, rx, miny, maxy, tile, id);
 	}
-	// ARBOL: Árvores (similar a staircase)
 	else if(parsed[0] == "arbol" && parsed.length() >= 6) {
-		// Formato: arbol:x:y:miny:maxy:z:drops:description
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
 		int miny = string_to_number(parsed[3]);
 		int maxy = string_to_number(parsed[4]);
 		string drops = (parsed.length() > 6) ? parsed[6] : "nada";
 		string description = (parsed.length() > 7) ? parsed[7] : "uma árvore";
-		
-		// Usar mesma função que staircase (árvores comportam-se como plataformas)
+
 		string id = "arbol_" + x;
 		spawn_staircase(x, x, miny, maxy, "arbol", id);
-		
+
 		debug_log("🌳 Árvore criada em (" + x + "," + y + "): " + description);
 	}
 	else if((parsed[0] == "texto" || parsed[0] == "txt") && parsed.length() >= 4) {
@@ -309,17 +270,13 @@ void init_data(string data_line, bool complete = true) {
 	else if(parsed[0] == "areia_movedissa" || parsed[0] == "am") {
 		colocar_areia_movedissa(string_to_number(parsed[1]), string_to_number(parsed[2]), mapname);
 	}
-	// Handler para Diálogos (dlg)
 	else if(parsed[0] == "dlg" && parsed.length() >= 4) {
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
 		string message = parsed[3];
-		// Opcional: reproduzir som se fornecido (parsed[4])
 		spawn_dialog(message, x, y);
 	}
-	// Handler para Sound Streams (ss2) - música de fundo
 	else if(parsed[0] == "ss2" && parsed.length() >= 6) {
-		// Formato: ss2:min_x:max_x:min_y:max_y:arquivo.ogg:volume
 		if(parsed.length() >= 6) {
 			map_stream_zone@ sz = map_stream_zone();
 			sz.min_x = string_to_number(parsed[1]);
@@ -331,7 +288,6 @@ void init_data(string data_line, bool complete = true) {
 			map_stream_zones.insert_last(sz);
 		}
 	}
-	// TRAVEL POINT (tp): Teleportes entre mapas
 	else if((parsed[0] == "tp" || parsed[0] == "travelpoint") && parsed.length() >= 8) {
 		int zone_x1 = string_to_number(parsed[1]);
 		int zone_y1 = string_to_number(parsed[2]);
@@ -341,8 +297,7 @@ void init_data(string data_line, bool complete = true) {
 		int dest_y = string_to_number(parsed[6]);
 		string dest_map = parsed[7];
 		string message = (parsed.length() > 8) ? parsed[8] : "Você foi teleportado.";
-		
-		// Criar e armazenar travel point
+
 		travel_point_class tp;
 		tp.zone_x1 = zone_x1;
 		tp.zone_y1 = zone_y1;
@@ -354,10 +309,9 @@ void init_data(string data_line, bool complete = true) {
 		tp.message = message;
 		tp.activated = false;
 		travel_points.insert_last(tp);
-		
+
 		debug_log("📍 Travel Point criado: " + dest_map + " (" + dest_x + "," + dest_y + ")");
 	}
-	// PTM: Portal customizado com som (igual tp mas com som extra)
 	else if(parsed[0] == "ptm" && parsed.length() >= 9) {
 		int zone_x1 = string_to_number(parsed[1]);
 		int zone_y1 = string_to_number(parsed[2]);
@@ -367,9 +321,8 @@ void init_data(string data_line, bool complete = true) {
 		int dest_y = string_to_number(parsed[6]);
 		string dest_map = parsed[7];
 		string message = (parsed.length() > 8) ? parsed[8] : "Portal activado.";
-		string som_portal = (parsed.length() > 9) ? parsed[9] : "door17open"; // Som customizado
-		
-		// Criar e armazenar travel point customizado
+		string som_portal = (parsed.length() > 9) ? parsed[9] : "door17open";
+
 		travel_point_class tp;
 		tp.zone_x1 = zone_x1;
 		tp.zone_y1 = zone_y1;
@@ -381,10 +334,9 @@ void init_data(string data_line, bool complete = true) {
 		tp.message = message;
 		tp.activated = false;
 		travel_points.insert_last(tp);
-		
+
 		debug_log("🌀 Portal PTM criado em " + dest_map + " com som: " + som_portal);
 	}
-	// DEATH: Zona de morte com teleporte
 	else if(parsed[0] == "death" && parsed.length() >= 8) {
 		int zone_x1 = string_to_number(parsed[1]);
 		int zone_y1 = string_to_number(parsed[2]);
@@ -392,10 +344,8 @@ void init_data(string data_line, bool complete = true) {
 		int zone_y2 = string_to_number(parsed[4]);
 		int dest_x = string_to_number(parsed[5]);
 		int dest_y = string_to_number(parsed[6]);
-		// dest_z não é usado em NVGT (2D)
 		string message = (parsed.length() > 8) ? parsed[8] : "Você morreu!";
-		
-		// Armazenar como travel point especial (zona de morte)
+
 		travel_point_class tp;
 		tp.zone_x1 = zone_x1;
 		tp.zone_y1 = zone_y1;
@@ -403,14 +353,13 @@ void init_data(string data_line, bool complete = true) {
 		tp.zone_y2 = zone_y2;
 		tp.dest_x = dest_x;
 		tp.dest_y = dest_y;
-		tp.dest_map = mapname; // Mesmo mapa (respawn local)
+		tp.dest_map = mapname;
 		tp.message = message;
 		tp.activated = false;
 		travel_points.insert_last(tp);
-		
+
 		debug_log("💀 Zona de morte criada em (" + zone_x1 + "," + zone_y1 + ")");
 	}
-	// PM: Ponto de entrada/pickup com item
 	else if(parsed[0] == "pm" && parsed.length() >= 10) {
 		int zone_x1 = string_to_number(parsed[1]);
 		int zone_y1 = string_to_number(parsed[2]);
@@ -422,8 +371,7 @@ void init_data(string data_line, bool complete = true) {
 		string message = (parsed.length() > 8) ? parsed[8] : "Item coletado.";
 		string som_item = (parsed.length() > 9) ? parsed[9] : "door17open";
 		string item_type = (parsed.length() > 10) ? parsed[10] : "item";
-		
-		// Criar travel point com item
+
 		travel_point_class tp;
 		tp.zone_x1 = zone_x1;
 		tp.zone_y1 = zone_y1;
@@ -435,27 +383,23 @@ void init_data(string data_line, bool complete = true) {
 		tp.message = message;
 		tp.activated = false;
 		travel_points.insert_last(tp);
-		
+
 		debug_log("🎁 Ponto PM criado com item: " + item_type);
 	}
-	// WHERE: Descrição de localização
 	else if(parsed[0] == "where" && parsed.length() >= 2) {
-		string location = data_line.substr(6); // Pega tudo após "where:"
-		current_location = location; // Armazenar localização global
+		string location = data_line.substr(6);
+		current_location = location;
 		debug_log("📍 Localização: " + location);
 	}
-	// ITEM: Itens coleccionáveis no mapa
 	else if(parsed[0] == "item" && parsed.length() >= 9) {
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
 		int quantity = string_to_number(parsed[5]);
 		string item_type = parsed[6];
-		
-		// Chamar spawn_obj() do sistema de items
+
 		spawn_obj(x, y, item_type, quantity);
 		debug_log("📍 Item criado: " + item_type + " em (" + x + "," + y + ") qtd: " + quantity);
 	}
-	// CPM: Portal customizado com tempo de viagem
 	else if(parsed[0] == "cpm" && parsed.length() >= 13) {
 		int zone_x1 = string_to_number(parsed[1]);
 		int zone_y1 = string_to_number(parsed[2]);
@@ -469,8 +413,7 @@ void init_data(string data_line, bool complete = true) {
 		int travel_time = (parsed.length() > 10) ? string_to_number(parsed[10]) : 5000;
 		string arrival_msg = (parsed.length() > 11) ? parsed[11] : "Chegou ao destino";
 		string effect = (parsed.length() > 12) ? parsed[12] : "appear";
-		
-		// Criar travel point customizado com tempo
+
 		travel_point_class tp;
 		tp.zone_x1 = zone_x1;
 		tp.zone_y1 = zone_y1;
@@ -482,10 +425,9 @@ void init_data(string data_line, bool complete = true) {
 		tp.message = travel_msg;
 		tp.activated = false;
 		travel_points.insert_last(tp);
-		
+
 		debug_log("⏱️ Portal CPM criado com tempo: " + travel_time + "ms");
 	}
-	// DISABLE_GAME: Desabilitar funcionalidades do jogo
 	else if(parsed[0] == "disable_game" && parsed.length() >= 5) {
 		disabled_game_zone@ dz = disabled_game_zone();
 		dz.min_x = string_to_number(parsed[1]);
@@ -495,20 +437,17 @@ void init_data(string data_line, bool complete = true) {
 		disabled_game_zones.insert_last(dz);
 		debug_log(" Disable_game zone criada: (" + dz.min_x + "," + dz.max_x + ") x (" + dz.min_y + "," + dz.max_y + ")");
 	}
-	// CONGELAR: Zona onde movimento é congelado
 	else if(parsed[0] == "congelar" && parsed.length() >= 4) {
 		int x1 = string_to_number(parsed[1]);
 		int x2 = string_to_number(parsed[2]);
 		int y1 = string_to_number(parsed[3]);
 		int y2 = string_to_number(parsed[4]);
-		
-		// Criar zona de congelamento (usar mesmo tipo de safezone)
+
 		safezone freeze_zone(x1, x2, y1, y2);
 		safezones.push_back(freeze_zone);
-		
+
 		debug_log("❄️ Zona de congelamento criada");
 	}
-	// DARMAS: Desabilitar armas específicas
 	else if(parsed[0] == "darmas" && parsed.length() >= 2) {
 		string weapon = parsed[1];
 		if(weapon == "armas") {
@@ -519,9 +458,7 @@ void init_data(string data_line, bool complete = true) {
 		}
 		debug_log(" Arma bloqueada: " + weapon);
 	}
-	// NPC: Inimigos/NPCs
 	else if(parsed[0] == "npc" && parsed.length() >= 18) {
-		// Parsear todos os parâmetros de NPC
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
 		double vida = string_to_number(parsed[3]);
@@ -542,9 +479,7 @@ void init_data(string data_line, bool complete = true) {
 		int tiempo_apariencia = (parsed.length() > 18) ? string_to_number(parsed[18]) : 0;
 		int respawn = (parsed.length() > 19) ? string_to_number(parsed[19]) : 0;
 		int bomba = (parsed.length() > 20) ? string_to_number(parsed[20]) : 0;
-		// Parâmetros 21-25 opcionais (pasos, left_range, right_range, etc)
-		
-		// Criar NPC client
+
 		npc_client_class novo_npc;
 		novo_npc.x = x;
 		novo_npc.y = y;
@@ -556,38 +491,33 @@ void init_data(string data_line, bool complete = true) {
 		novo_npc.id = random(1000, 9999);
 		novo_npc.map = mapname;
 		novo_npc.last_seen.restart();
-		
-		// Ranges de movimento (se fornecidos)
+
 		if(parsed.length() > 22) {
 			novo_npc.left_range = string_to_number(parsed[21]);
 			novo_npc.right_range = string_to_number(parsed[22]);
 		}
-		
+
 		npc_objects.insert_last(novo_npc);
-		
+
 		debug_log("👹 NPC criado: " + nombre + " em (" + x + "," + y + ") HP:" + vida + " XP:" + xp);
 	}
-	// ZONE: Áreas de trigger/diálogo
 	else if(parsed[0] == "z" && parsed.length() >= 6) {
 		int min_x = string_to_number(parsed[1]);
 		int max_x = string_to_number(parsed[2]);
 		int min_y = string_to_number(parsed[3]);
 		int max_y = string_to_number(parsed[4]);
 		string text = parsed[5];
-		
-		// Se houver mais parâmetros, concatenar como texto
+
 		if(parsed.length() > 6) {
 			for(int i = 6; i < parsed.length(); i++) {
 				text += ":" + parsed[i];
 			}
 		}
-		
+
 		zones.insert_at(zones.length(), zone(min_x, max_x, min_y, max_y, text));
-		
+
 		debug_log("📍 Zone criada: (" + min_x + "," + max_x + ") x (" + min_y + "," + max_y + ")");
 	}
-	// NOTA: Handler de plataforma "p" movido para o início da função init_data()
-	// EXTRACT: Zonas de extração (minerar, cortar, etc)
 	else if(parsed[0] == "ex" && parsed.length() >= 11) {
 		int min_x = string_to_number(parsed[1]);
 		int max_x = string_to_number(parsed[2]);
@@ -599,27 +529,22 @@ void init_data(string data_line, bool complete = true) {
 		string item = parsed[8];
 		string snd_ext = parsed[9];
 		string snd_extracted = parsed[10];
-		
-		extracts.insert_at(extracts.length(), extract(min_x, max_x, min_y, max_y, 
-		                                               items, attempts, time, 
+
+		extracts.insert_at(extracts.length(), extract(min_x, max_x, min_y, max_y,
+		                                               items, attempts, time,
 		                                               item, snd_ext, snd_extracted));
-		
+
 		debug_log("⛏️ Extract zone criada: (" + min_x + "," + max_x + ") - Item: " + item);
 	}
-	// DESACTIVADO (dv): Marcar elemento como desativado
 	else if(parsed[0] == "dv" && parsed.length() >= 2) {
 		string id = parsed[1];
 		disableds.insert_at(disableds.length(), id);
 		debug_log("❌ Elemento desativado: " + id);
 	}
-	// SOUND SPAWN (ss): Ponto de spawn de som ambiente
 	else if(parsed[0] == "ss" && parsed.length() >= 6) {
 		int x = string_to_number(parsed[1]);
 		int y = string_to_number(parsed[2]);
-		// parsed[3], parsed[4] são parâmetros desconhecidos (possivelmente volume, loop, etc)
 		string arquivo = parsed[5];
-		// Armazenar para possível uso futuro em HUD ou efeitos sonoros
-		// Por enquanto apenas logar
 		debug_log("🔊 Sound spawn em (" + x + "," + y + "): " + arquivo);
 	}
 	else if(parsed[0] == "pnpc" && parsed.length() >= 4) {
@@ -632,20 +557,16 @@ void init_data(string data_line, bool complete = true) {
 	}
 	else if(parsed[0] == "travelpoint" || parsed[0] == "portamapa" || parsed[0] == "reverb"
 	        || parsed[0] == "pm2" || parsed[0] == "w2") {
-		// Ignorar elementos legados não utilizados no cliente NVGT atual.
 	}
-	// STORE: Lojas no mapa (processamento no servidor, cliente só armazena posição)
 	else if(parsed[0] == "store" && parsed.length() >= 6) {
-		// Formato: store:min_x:max_x:min_y:max_y:nome_loja
 		int min_x = string_to_number(parsed[1]);
 		int max_x = string_to_number(parsed[2]);
 		int min_y = string_to_number(parsed[3]);
 		int max_y = string_to_number(parsed[4]);
 		string store_name = parsed[5];
-		
-		// Armazenar como zona para trigger de interação
+
 		zones.insert_at(zones.length(), zone(min_x, max_x, min_y, max_y, "Loja: " + store_name));
-		
+
 		debug_log("🏪 Loja criada: " + store_name + " em (" + min_x + "," + max_x + ")");
 	}
 	else if(parsed[0] == "desativar") {
@@ -658,28 +579,22 @@ void init_data(string data_line, bool complete = true) {
 	else if(parsed[0] == "safemap") {
 		if(amisafe == false) {
 			amisafe = true;
-			game_net.send(net_peer_id, "iamsafe", 0, true); // reliable
+			game_net.send(net_peer_id, "iamsafe", 0, true);
 		}
 	}
 	else if((parsed[0] == "safezone" || parsed[0] == "safez") && parsed.length() == 5) {
-		// Criar safezone e adicionar ao array
-		safezone sz(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+		safezone sz(string_to_number(parsed[1]), string_to_number(parsed[2]),
 		            string_to_number(parsed[3]), string_to_number(parsed[4]));
 		safezones.push_back(sz);
 	}
 	else if((parsed[0].length() > 1 && parsed[0][0] == "/" && parsed[0][1] == "/") || parsed[0] == "comment") {
-		// Comentário - ignorar
 	}
 	else {
-		// Erro de sintaxe no mapa
 		add_add_item("misc", "map error. An error has occured. Line: " + data_line + ". Error: Invalid syntax.");
 	}
 }
 
-// ====== FUNÇÕES DE GERENCIAMENTO DE NPCs ======
-
 void spawn_npc(int x, int y, int hp, string nome, int id) {
-	// Verificar se NPC já existe e atualizar
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		if(npc_objects[i].id == id) {
 			npc_objects[i].x = x;
@@ -690,8 +605,7 @@ void spawn_npc(int x, int y, int hp, string nome, int id) {
 			return;
 		}
 	}
-	
-	// Criar novo NPC
+
 	npc_client_class novo;
 	novo.x = x;
 	novo.y = y;
@@ -701,7 +615,7 @@ void spawn_npc(int x, int y, int hp, string nome, int id) {
 	novo.id = id;
 	novo.map = mapname;
 	novo.last_seen.restart();
-	
+
 	npc_objects.insert_last(novo);
 	debug_log("👹 Novo NPC spawn: " + nome);
 }
@@ -722,40 +636,30 @@ void clear_npcs() {
 }
 
 void npc_loop() {
-	// Detecta NPCs próximos ao jogador e atualiza estado
-	// Este é um loop de manutenção básico do cliente
-	
-	// Debug: mostrar quantos NPCs existem no mapa
+
 	if(npc_objects.length() > 0) {
-		// debug_log("👹 NPCs no mapa: " + npc_objects.length());
 	}
-	
-	// Loop através de todos os NPCs
+
 	for(uint i = 0; i < npc_objects.length(); i++) {
-		// Verificar se NPC ainda está ativo (timeout de 60 segundos)
 		if(npc_objects[i].last_seen.elapsed >= 60000) {
-			// NPC desapareceu por muito tempo
 			debug_log("💀 NPC " + npc_objects[i].name + " desapareceu (timeout)");
 			npc_objects.remove_at(i);
 			i--;
 			continue;
 		}
 	}
-	
-	// Atualizar HUD com informações de NPCs próximos
+
 	display_npcs_hud();
 }
 
 void load_map(string mdata, bool complete = true) {
 	debug_log("📍 Iniciando carregamento de mapa...");
-	debug_log("📍 Dados recebidos: " + mdata.substr(0, 100) + "..."); // Primeiros 100 chars
+	debug_log("📍 Dados recebidos: " + mdata.substr(0, 100) + "...");
 	mapreset(complete);
 	bool isitsafe = false;
-	// Normalizar quebras de linha para evitar mapa vindo em uma linha só
 	mdata = mdata.replace("\r\n", "\n");
 	mdata = mdata.replace("\r", "\n");
 	string[] ldata = mdata.split("\n");
-	// Remover linhas vazias nas extremidades
 	while(ldata.length() > 0 && ldata[0].trim_whitespace() == "") ldata.remove_at(0);
 	while(ldata.length() > 0 && ldata[ldata.length() - 1].trim_whitespace() == "") ldata.remove_at(ldata.length() - 1);
 	if(ldata.length() == 0) {
@@ -763,39 +667,32 @@ void load_map(string mdata, bool complete = true) {
 		return;
 	}
 	debug_log("📍 Mapa tem " + ldata.length() + " linhas de dados");
-	
+
 	if(ldata.length() > 0) {
 		debug_log("📍 Primeira linha: " + ldata[0]);
 	}
-	
+
 	string[] parsed = ldata[0].split(" ");
 	debug_log("📍 Linha parseada: " + parsed.length() + " partes");
 	string filename;
-	
-	// Verificar se é um mapa local encriptado
+
 	if(parsed.length() == 5 && parsed[1] == "local") {
 		pack map_pack;
 		filename = parsed[2] + ".map";
 		ldata.resize(0);
-		
+
 		if(map_pack.open(MAPS_STORAGE, PACK_OPEN_MODE_READ)) {
-			// NVGT: API de leitura de pack - read_file(filename, offset, size)
 			if(map_pack.file_exists(filename)) {
-				// 1. Obter o tamanho do arquivo
 				uint file_size = map_pack.get_file_size(filename);
-				
-				// 2. Ler todo o conteúdo (offset 0, tamanho completo)
+
 				string map_content = map_pack.read_file(filename, 0, file_size);
-				
-				// 3. Dividir o conteúdo em linhas
+
 				ldata = map_content.split("\n");
-				
-				// 4. Limpar possíveis caracteres \r (Windows)
+
 				for(uint i = 0; i < ldata.length(); i++) {
 					ldata[i] = ldata[i].replace("\r", "");
 				}
 			} else {
-				// Arquivo não existe no pack, criar mapa vazio
 				ldata.push_back("x:" + parsed[3]);
 				ldata.push_back("y:" + parsed[4]);
 			}
@@ -804,24 +701,21 @@ void load_map(string mdata, bool complete = true) {
 		}
 	}
 	else {
-		// Mapa normal (não local)
 		ldata[0] = ldata[0].replace("changemap ", "");
 		ldata[0] = ldata[0].replace("changemap2 ", "");
 		map2 = ldata;
 	}
-	
-	// Processar todas as linhas do mapa
+
 	for(uint i = 0; i < ldata.length(); i++) {
 		if(ldata[i] == "safemap") isitsafe = true;
 		init_data(ldata[i], complete);
 	}
-	
-	// Verificar mudança de status de safezone
+
 	if(isitsafe == false && amisafe == true) {
 		amisafe = false;
 		game_net.send(net_peer_id, "iamnotsafe", 0, true);
 	}
-	
+
 	chuva();
 	debug_log(" Mapa carregado com sucesso!");
 	debug_log("📊 Estatísticas do mapa:");
@@ -844,15 +738,10 @@ void spawn_zone(int leftx, int rightx, int miny, int maxy, string zonetype) {
 	zones.push_back(z);
 }
 
-// load_map2() permanece como adaptador legado em legacy_compat.nvgt e chama load_map().
-
 bool inansz = false;
 
-// Função safezone() REMOVIDA - conflita com class safezone em safezones.nvgt
-// Use get_safezone_at() de safezones.nvgt ao invés
-
 void safeloop() {
-	bool v = get_safezone_at();  // Usar função da classe safezone
+	bool v = get_safezone_at();
 	if(v == false && inansz == true && nolhar == "") {
 		inansz = false;
 		game_net.send(net_peer_id, "sn", 0, true);
@@ -863,31 +752,24 @@ void safeloop() {
 	}
 }
 
-// Loop de detecção de travel points
 void travel_point_loop() {
 	for(uint i = 0; i < travel_points.length(); i++) {
-		// Verificar se o player está dentro da zona de ativação
 		if(me.x >= travel_points[i].zone_x1 && me.x <= travel_points[i].zone_x2 &&
 		   me.y >= travel_points[i].zone_y1 && me.y <= travel_points[i].zone_y2) {
-			
-			// Se não foi ativado ainda, ativar teleporte
+
 			if(!travel_points[i].activated) {
 				travel_points[i].activated = true;
 				travel_points[i].activation_timer.restart();
-				
-				// Exibir mensagem
+
 				if(travel_points[i].message != "") {
 					speak(travel_points[i].message);
 				}
-				
-				// Enviar comando de teleporte para o servidor
-				// Formato: tp:dest_map:dest_x:dest_y
+
 				game_net.send(net_peer_id, "tp:" + travel_points[i].dest_map + ":" + travel_points[i].dest_x + ":" + travel_points[i].dest_y, 0, true);
-				
+
 				debug_log("🌀 Teleportando para: " + travel_points[i].dest_map);
 			}
 		} else {
-			// Se saiu da zona, resetar a ativação após 5 segundos
 			if(travel_points[i].activated && travel_points[i].activation_timer.elapsed > 5000) {
 				travel_points[i].activated = false;
 			}
@@ -895,64 +777,48 @@ void travel_point_loop() {
 	}
 }
 
-// Função para limpar plataformas/tiles para debugging
 void clear_all_platforms() {
 	platforms.resize(0);
 	map.resize(0);
 }
 
-// ====== HUD DISPLAY: Mostrar NPCs no HUD ======
-
 void display_npcs_hud() {
-	// Exibir NPCs próximos ao jogador na tela
 	if(npc_objects.length() == 0) return;
-	
-	// Calcular distância máxima de visibilidade (por exemplo, 10 tiles)
+
 	const int VISIBILITY_RANGE = 10;
-	
-	// Contar NPCs próximos
+
 	int nearby_npcs = 0;
 	string npc_list = "👹 NPCs Próximos:\r\n";
-	
+
 	for(uint i = 0; i < npc_objects.length(); i++) {
-		// Calcular distância do jogador ao NPC
 		int dx = me.x - npc_objects[i].x;
 		int dy = me.y - npc_objects[i].y;
 		int distance = sqrt(dx * dx + dy * dy);
-		
-		// Se NPC está próximo o suficiente
+
 		if(distance <= VISIBILITY_RANGE) {
 			nearby_npcs++;
-			
-			// Calcular direção do NPC relativo ao jogador
+
 			string direction = "";
 			if(dx < -2) direction += "→ ";
 			else if(dx > 2) direction += "← ";
-			
+
 			if(dy < -2) direction += "↑ ";
 			else if(dy > 2) direction += "↓ ";
-			
-			// Adicionar informação do NPC
+
 			npc_list += direction + npc_objects[i].name + " (HP: " + npc_objects[i].hp + "/" + npc_objects[i].max_hp + ")\r\n";
 		}
 	}
-	
-	// Mostrar no HUD se houver NPCs próximos
+
 	if(nearby_npcs > 0) {
 		add_add_item("hud_npcs", npc_list);
 	}
 }
 
 void update_hud_npcs() {
-	// Versão simplificada que apenas atualiza periodicamente
-	// Chamar desta função a cada 1-2 segundos do game loop
 	display_npcs_hud();
 }
 
-// ====== NPC MANAGEMENT: Gerenciar array de NPCs ======
-
 void destroy_all_npcs() {
-	// Destruir todos os NPCs visuais do cliente
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		@npc_objects[i] = null;
 	}
@@ -961,7 +827,6 @@ void destroy_all_npcs() {
 }
 
 void remove_npc_by_id(int npc_id) {
-	// Remover NPC específico pelo ID
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		if(npc_objects[i].id == npc_id) {
 			@npc_objects[i] = null;
@@ -973,7 +838,6 @@ void remove_npc_by_id(int npc_id) {
 }
 
 npc_client_class@ get_npc_by_id(int npc_id) {
-	// Buscar NPC pelo ID (retorna referência ou null)
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		if(npc_objects[i].id == npc_id) {
 			return @npc_objects[i];
@@ -983,21 +847,20 @@ npc_client_class@ get_npc_by_id(int npc_id) {
 }
 
 npc_client_class@ get_nearest_npc(int max_distance = 10) {
-	// Retorna o NPC mais próximo dentro de max_distance
 	npc_client_class@ nearest = null;
 	int min_distance = max_distance;
-	
+
 	for(uint i = 0; i < npc_objects.length(); i++) {
 		int dx = me.x - npc_objects[i].x;
 		int dy = me.y - npc_objects[i].y;
 		int distance = sqrt(dx * dx + dy * dy);
-		
+
 		if(distance < min_distance) {
 			min_distance = distance;
 			@nearest = @npc_objects[i];
 		}
 	}
-	
+
 	return @nearest;
 }
 

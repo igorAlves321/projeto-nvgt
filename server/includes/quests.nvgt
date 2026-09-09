@@ -1,8 +1,4 @@
-// quests.nvgt - Sistema de Quests/Missões
-// Conversão: Novo sistema para NVGT
-// Fase 5: Conteúdo Avançado
 
-// Tipos de quest
 enum quest_type {
 	QUEST_KILL,
 	QUEST_COLLECT,
@@ -11,7 +7,6 @@ enum quest_type {
 	QUEST_TALK
 }
 
-// Status da quest
 enum quest_status {
 	QUEST_STATUS_AVAILABLE,
 	QUEST_STATUS_ACTIVE,
@@ -19,20 +14,19 @@ enum quest_status {
 	QUEST_STATUS_FAILED
 }
 
-// Definição de quest
 class quest_definition {
 	int id;
 	string name;
 	string description;
 	quest_type type;
 	int required_level;
-	string[] required_quests;  // IDs de quests anteriores
-	dictionary objectives;     // objetivo -> quantidade necessária
-	dictionary rewards;        // tipo_recompensa -> quantidade
+	string[] required_quests;
+	dictionary objectives;
+	dictionary rewards;
 	bool is_daily;
 	bool is_repeatable;
-	string quest_giver;        // Nome do NPC
-	
+	string quest_giver;
+
 	quest_definition(int quest_id, string quest_name, string desc, quest_type qtype) {
 		this.id = quest_id;
 		this.name = quest_name;
@@ -43,22 +37,20 @@ class quest_definition {
 		this.is_repeatable = false;
 		this.quest_giver = "NPC";
 	}
-	
+
 	void add_objective(string obj_name, int quantity) {
 		objectives.set(obj_name, "" + quantity);
 	}
-	
+
 	void add_reward(string reward_type, int amount) {
 		rewards.set(reward_type, "" + amount);
 	}
-	
+
 	bool can_accept(int player_level, string[] completed_quests) {
-		// Verificar nível
 		if(player_level < required_level) {
 			return false;
 		}
-		
-		// Verificar quests anteriores
+
 		for(uint i = 0; i < required_quests.length(); i++) {
 			bool found = false;
 			for(uint j = 0; j < completed_quests.length(); j++) {
@@ -69,24 +61,23 @@ class quest_definition {
 			}
 			if(!found) return false;
 		}
-		
+
 		return true;
 	}
 }
 
-// Progresso de quest do jogador
 class quest_progress {
 	int quest_id;
 	quest_status status;
-	dictionary progress;  // objetivo -> quantidade atual
+	dictionary progress;
 	timer accepted_time;
-	
+
 	quest_progress(int qid) {
 		this.quest_id = qid;
 		this.status = QUEST_STATUS_ACTIVE;
 		accepted_time.restart();
 	}
-	
+
 	void update_progress(string objective, int amount) {
 		if(progress.exists(objective)) {
 			int current = int(progress[objective]);
@@ -95,12 +86,12 @@ class quest_progress {
 			progress.set(objective, "" + amount);
 		}
 	}
-	
+
 	bool is_objective_complete(string objective, int required) {
 		if(!progress.exists(objective)) return false;
 		return int(progress[objective]) >= required;
 	}
-	
+
 	bool is_complete(quest_definition@ qdef) {
 		string[] obj_keys = qdef.objectives.get_keys();
 		for(uint i = 0; i < obj_keys.length(); i++) {
@@ -113,20 +104,19 @@ class quest_progress {
 	}
 }
 
-// Sistema de quests do jogador
 class player_quest_log {
 	string player_name;
 	quest_progress@[] active_quests;
-	string[] completed_quests;  // IDs de quests completadas
+	string[] completed_quests;
 	int max_active_quests;
 	timer last_daily_reset;
-	
+
 	player_quest_log(string pname) {
 		this.player_name = pname;
 		this.max_active_quests = 10;
 		last_daily_reset.restart();
 	}
-	
+
 	bool has_active_quest(int quest_id) {
 		for(uint i = 0; i < active_quests.length(); i++) {
 			if(active_quests[i].quest_id == quest_id) {
@@ -135,7 +125,7 @@ class player_quest_log {
 		}
 		return false;
 	}
-	
+
 	bool has_completed_quest(int quest_id) {
 		for(uint i = 0; i < completed_quests.length(); i++) {
 			if(completed_quests[i] == "" + quest_id) {
@@ -144,7 +134,7 @@ class player_quest_log {
 		}
 		return false;
 	}
-	
+
 	quest_progress@ get_quest_progress(int quest_id) {
 		for(uint i = 0; i < active_quests.length(); i++) {
 			if(active_quests[i].quest_id == quest_id) {
@@ -153,20 +143,19 @@ class player_quest_log {
 		}
 		return null;
 	}
-	
+
 	bool can_accept_quest() {
 		return active_quests.length() < uint(max_active_quests);
 	}
-	
+
 	void accept_quest(int quest_id) {
 		quest_progress qp(quest_id);
 		active_quests.insert_last(qp);
 	}
-	
+
 	void complete_quest(int quest_id) {
 		completed_quests.insert_last("" + quest_id);
-		
-		// Remover das ativas
+
 		for(uint i = 0; i < active_quests.length(); i++) {
 			if(active_quests[i].quest_id == quest_id) {
 				active_quests.remove_at(i);
@@ -174,7 +163,7 @@ class player_quest_log {
 			}
 		}
 	}
-	
+
 	void abandon_quest(int quest_id) {
 		for(uint i = 0; i < active_quests.length(); i++) {
 			if(active_quests[i].quest_id == quest_id) {
@@ -183,22 +172,20 @@ class player_quest_log {
 			}
 		}
 	}
-	
+
 	void save() {
 		string path = "players/" + player_name + "/quests.dat";
-		
+
 		file f;
 		if(!f.open(path, "wb")) {
 			debug_log("QUESTS: Erro ao salvar quest log de " + player_name);
 			return;
 		}
-		
-		// Salvar quests ativas
+
 		f.write("" + active_quests.length() + "\n");
 		for(uint i = 0; i < active_quests.length(); i++) {
 			f.write("" + active_quests[i].quest_id + "\n");
-			
-			// Salvar progresso
+
 			string[] prog_keys = active_quests[i].progress.get_keys();
 			f.write("" + prog_keys.length() + "\n");
 			for(uint j = 0; j < prog_keys.length(); j++) {
@@ -206,40 +193,37 @@ class player_quest_log {
 				f.write("" + int(active_quests[i].progress[prog_keys[j]]) + "\n");
 			}
 		}
-		
-		// Salvar quests completadas
+
 		f.write("" + completed_quests.length() + "\n");
 		for(uint i = 0; i < completed_quests.length(); i++) {
 			f.write(completed_quests[i] + "\n");
 		}
-		
+
 		f.close();
 		debug_log("QUESTS: Quest log de " + player_name + " salvo");
 	}
-	
+
 	void load() {
 		string path = "players/" + player_name + "/quests.dat";
-		
+
 		file f;
 		if(!f.open(path, "rb")) {
-			return;  // Arquivo não existe ainda
+			return;
 		}
-		
+
 		string content = f.read();
 		f.close();
-		
+
 		string[] lines = content.split("\n");
 		if(lines.length() < 1) return;
-		
+
 		int line_idx = 0;
-		
-		// Carregar quests ativas
+
 		int active_count = parse_int(lines[line_idx++]);
 		for(int i = 0; i < active_count && line_idx < int(lines.length()); i++) {
 			int qid = parse_int(lines[line_idx++]);
 			quest_progress qp(qid);
-			
-			// Carregar progresso
+
 			if(line_idx < int(lines.length())) {
 				int prog_count = parse_int(lines[line_idx++]);
 				for(int j = 0; j < prog_count && line_idx + 1 < int(lines.length()); j++) {
@@ -248,41 +232,35 @@ class player_quest_log {
 					qp.progress.set(obj, "" + amount);
 				}
 			}
-			
+
 			active_quests.insert_last(qp);
 		}
-		
-		// Carregar quests completadas
+
 		if(line_idx < int(lines.length())) {
 			int completed_count = parse_int(lines[line_idx++]);
 			for(int i = 0; i < completed_count && line_idx < int(lines.length()); i++) {
 				completed_quests.insert_last(lines[line_idx++]);
 			}
 		}
-		
+
 		debug_log("QUESTS: Quest log de " + player_name + " carregado (" + active_quests.length() + " ativas, " + completed_quests.length() + " completas)");
 	}
 }
 
-// Banco de dados de quests
 quest_definition@[] quest_database;
 
-// Dictionary de quest logs dos jogadores
 dictionary player_quest_logs;
 
-// Inicializar sistema de quests
 void init_quests_system() {
 	quest_database.resize(0);
-	
-	// Quest 1: Tutorial - Matar Ratos
+
 	quest_definition q1(1, "Exterminador de Ratos", "O armazém está infestado de ratos! Mate 10 ratos.", QUEST_KILL);
 	q1.required_level = 1;
 	q1.add_objective("rato", 10);
 	q1.add_reward("xp", 100);
 	q1.add_reward("gold", 50);
 	quest_database.insert_last(q1);
-	
-	// Quest 2: Coletor de Ervas
+
 	quest_definition q2(2, "Coletor de Ervas", "Colete 5 ervas medicinais para o curandeiro.", QUEST_COLLECT);
 	q2.required_level = 3;
 	q2.add_objective("erva medicinal", 5);
@@ -290,24 +268,21 @@ void init_quests_system() {
 	q2.add_reward("gold", 100);
 	q2.add_reward("poção de vida", 3);
 	quest_database.insert_last(q2);
-	
-	// Quest 3: Entrega Especial
+
 	quest_definition q3(3, "Entrega Especial", "Entregue o pacote para o mercador na cidade.", QUEST_DELIVER);
 	q3.required_level = 5;
 	q3.add_objective("entregar_pacote", 1);
 	q3.add_reward("xp", 300);
 	q3.add_reward("gold", 150);
 	quest_database.insert_last(q3);
-	
-	// Quest 4: Explorador Iniciante
+
 	quest_definition q4(4, "Explorador Iniciante", "Explore a floresta escura.", QUEST_EXPLORE);
 	q4.required_level = 7;
 	q4.add_objective("floresta_escura", 1);
 	q4.add_reward("xp", 500);
 	q4.add_reward("gold", 200);
 	quest_database.insert_last(q4);
-	
-	// Quest 5: Caçador de Lobos
+
 	quest_definition q5(5, "Caçador de Lobos", "Lobos estão atacando viajantes. Elimine 15 lobos.", QUEST_KILL);
 	q5.required_level = 10;
 	q5.add_objective("lobo", 15);
@@ -315,18 +290,16 @@ void init_quests_system() {
 	q5.add_reward("gold", 300);
 	q5.add_reward("pele de lobo", 5);
 	quest_database.insert_last(q5);
-	
-	// Quest 6: O Guardião Corrompido (Boss)
+
 	quest_definition q6(6, "O Guardião Corrompido", "Derrote o Guardião Corrompido no templo.", QUEST_KILL);
 	q6.required_level = 15;
-	q6.required_quests.insert_last("5");  // Requer quest 5
+	q6.required_quests.insert_last("5");
 	q6.add_objective("guardião corrompido", 1);
 	q6.add_reward("xp", 2000);
 	q6.add_reward("gold", 1000);
 	q6.add_reward("espada de prata", 1);
 	quest_database.insert_last(q6);
-	
-	// Quest Diária 1: Caça Diária
+
 	quest_definition qd1(100, "[Diária] Caça do Dia", "Mate 20 monstros de qualquer tipo.", QUEST_KILL);
 	qd1.required_level = 5;
 	qd1.is_daily = true;
@@ -335,11 +308,10 @@ void init_quests_system() {
 	qd1.add_reward("xp", 500);
 	qd1.add_reward("gold", 200);
 	quest_database.insert_last(qd1);
-	
+
 	debug_log("QUESTS: Sistema inicializado com " + quest_database.length() + " quests");
 }
 
-// Obter quest log do jogador
 player_quest_log@ get_player_quest_log(string player_name) {
 	if(!player_quest_logs.exists(player_name)) {
 		player_quest_log qlog(player_name);
@@ -347,11 +319,10 @@ player_quest_log@ get_player_quest_log(string player_name) {
 		player_quest_logs.set(player_name, @qlog);
 		return qlog;
 	}
-	
+
 	return cast<player_quest_log@>(player_quest_logs[player_name]);
 }
 
-// Obter definição de quest por ID
 quest_definition@ get_quest_by_id(int quest_id) {
 	for(uint i = 0; i < quest_database.length(); i++) {
 		if(quest_database[i].id == quest_id) {
@@ -361,70 +332,65 @@ quest_definition@ get_quest_by_id(int quest_id) {
 	return null;
 }
 
-// Comando: Listar quests ativas
 void cmd_quests(int player_index) {
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
-	
+
 	if(qlog.active_quests.length() == 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem quests ativas", 0);
 		send_reliable_text(players[player_index].peer_id, "msg2 Use /acceptquest <id> para aceitar uma quest", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Quests Ativas (" + qlog.active_quests.length() + "/" + qlog.max_active_quests + ") ===", 0);
-	
+
 	for(uint i = 0; i < qlog.active_quests.length(); i++) {
 		quest_definition@ qdef = get_quest_by_id(qlog.active_quests[i].quest_id);
 		if(qdef is null) continue;
-		
+
 		string status_line = "#" + qdef.id + " - " + qdef.name;
-		
-		// Verificar se está completa
+
 		if(qlog.active_quests[i].is_complete(qdef)) {
 			status_line += " [COMPLETA!]";
 		}
-		
+
 		send_reliable_text(players[player_index].peer_id, "msg2 " + status_line, 0);
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Use /questinfo <id> para ver detalhes", 0);
 }
 
-// Comando: Ver informações de quest
 void cmd_questinfo(int player_index, int quest_id) {
 	quest_definition@ qdef = get_quest_by_id(quest_id);
 	if(qdef is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Quest não encontrada!", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Quest #" + qdef.id + ": " + qdef.name + " ===", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + qdef.description, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Nível Requerido: " + qdef.required_level, 0);
-	
+
 	if(qdef.is_daily) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [QUEST DIÁRIA]", 0);
 	}
-	
-	// Objetivos
+
 	send_reliable_text(players[player_index].peer_id, "msg2 --- Objetivos ---", 0);
 	string[] obj_keys = qdef.objectives.get_keys();
-	
+
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
 	quest_progress@ qprog = qlog.get_quest_progress(quest_id);
-	
+
 	for(uint i = 0; i < obj_keys.length(); i++) {
 		int required = int(qdef.objectives[obj_keys[i]]);
 		int current = 0;
-		
+
 		if(qprog !is null && qprog.progress.exists(obj_keys[i])) {
 			current = int(qprog.progress[obj_keys[i]]);
 		}
-		
+
 		send_reliable_text(players[player_index].peer_id, "msg2 " + obj_keys[i] + ": " + current + "/" + required, 0);
 	}
-	
-	// Recompensas
+
 	send_reliable_text(players[player_index].peer_id, "msg2 --- Recompensas ---", 0);
 	string[] reward_keys = qdef.rewards.get_keys();
 	for(uint i = 0; i < reward_keys.length(); i++) {
@@ -433,91 +399,81 @@ void cmd_questinfo(int player_index, int quest_id) {
 	}
 }
 
-// Comando: Aceitar quest
 void cmd_acceptquest(int player_index, int quest_id) {
 	if(player_index < 0 || player_index >= int(players.length()) || players[player_index] is null) return;
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
-	
-	// Verificar se ja está ativa
+
 	if(qlog.has_active_quest(quest_id)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você ja está fazendo essa quest!", 0);
 		return;
 	}
-	
-	// Verificar limite de quests
+
 	if(!qlog.can_accept_quest()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você atingiu o limite de quests ativas! (" + qlog.max_active_quests + ")", 0);
 		return;
 	}
-	
-	// Obter definicao
+
 	quest_definition@ qdef = get_quest_by_id(quest_id);
 	if(qdef is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Quest não encontrada!", 0);
 		return;
 	}
-	
-	// Verificar requisitos
+
 	if(!qdef.can_accept(players[player_index].level, qlog.completed_quests)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não atende aos requisitos desta quest!", 0);
 		send_reliable_text(players[player_index].peer_id, "msg2 Nivel necessario: " + qdef.required_level, 0);
 		return;
 	}
-	
-	// Verificar se ja completou (para não repetiveis)
+
 	if(!qdef.is_repeatable && qlog.has_completed_quest(quest_id)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você ja completou essa quest!", 0);
 		return;
 	}
-	
-	// Aceitar quest
+
 	qlog.accept_quest(quest_id);
 	qlog.save();
-	
+
 	send_reliable_text(players[player_index].peer_id, "ps quest_accept.ogg", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Quest aceita: " + qdef.name, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + qdef.description, 0);
-	
+
 	debug_log("QUESTS: " + players[player_index].charname + " aceitou quest #" + quest_id);
 }
-// Comando: Abandonar quest
 void cmd_abandonquest(int player_index, int quest_id) {
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
-	
+
 	if(!qlog.has_active_quest(quest_id)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não está fazendo essa quest!", 0);
 		return;
 	}
-	
+
 	quest_definition@ qdef = get_quest_by_id(quest_id);
 	string quest_name = (qdef !is null) ? qdef.name : "Quest #" + quest_id;
-	
+
 	qlog.abandon_quest(quest_id);
 	qlog.save();
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Quest abandonada: " + quest_name, 0);
-	
+
 	debug_log("QUESTS: " + players[player_index].charname + " abandonou quest #" + quest_id);
 }
 
-// Comando: Completar quest
 void cmd_completequest(int player_index, int quest_id) {
 	if(player_index < 0 || player_index >= int(players.length()) || players[player_index] is null) return;
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
-	
+
 	quest_progress@ qprog = qlog.get_quest_progress(quest_id);
 	if(qprog is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não está fazendo essa quest!", 0);
 		return;
 	}
-	
+
 	quest_definition@ qdef = get_quest_by_id(quest_id);
 	if(qdef is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Quest não encontrada!", 0);
 		return;
 	}
-	
-	// Validacao forte: todos objetivos concluidos
+
 	string[] objective_keys = qdef.objectives.get_keys();
 	for(uint j = 0; j < objective_keys.length(); j++) {
 		int required = int(qdef.objectives[objective_keys[j]]);
@@ -529,8 +485,7 @@ void cmd_completequest(int player_index, int quest_id) {
 			return;
 		}
 	}
-	
-	// Recompensas de item primeiro (sync seguro)
+
 	string[] granted_items;
 	int[] granted_quantities;
 	string[] reward_keys = qdef.rewards.get_keys();
@@ -548,12 +503,11 @@ void cmd_completequest(int player_index, int quest_id) {
 		granted_items.insert_last(reward_keys[i]);
 		granted_quantities.insert_last(amount);
 	}
-	
-	// Recompensas de XP e ouro
+
 	for(uint i = 0; i < reward_keys.length(); i++) {
 		int amount = int(qdef.rewards[reward_keys[i]]);
 		if(amount <= 0) continue;
-		
+
 		if(reward_keys[i] == "xp") {
 			ganhaxp(player_index, amount, 0);
 			send_reliable_text(players[player_index].peer_id, "msg2 + " + amount + " XP", 0);
@@ -565,38 +519,35 @@ void cmd_completequest(int player_index, int quest_id) {
 			send_reliable_text(players[player_index].peer_id, "msg2 + " + reward_keys[i] + " x" + amount, 0);
 		}
 	}
-	
+
 	save_player_inventory_to_db(players[player_index]);
-	
-	// Completar quest
+
 	qlog.complete_quest(quest_id);
 	qlog.save();
-	
+
 	send_reliable_text(players[player_index].peer_id, "ps quest_complete.ogg", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Quest Completa: " + qdef.name + "!", 0);
-	
+
 	debug_log("QUESTS: " + players[player_index].charname + " completou quest #" + quest_id);
 }
-// Atualizar progresso de quest ao matar monstro
 void quest_update_kill(string player_name, string monster_name) {
 	player_quest_log@ qlog = get_player_quest_log(player_name);
-	
+
 	for(uint i = 0; i < qlog.active_quests.length(); i++) {
 		if(qlog.active_quests[i].status != QUEST_STATUS_ACTIVE) continue;
 		quest_definition@ qdef = get_quest_by_id(qlog.active_quests[i].quest_id);
 		if(qdef is null || qdef.type != QUEST_KILL) continue;
-		
-		// Verificar se o monstro está nos objetivos
+
 		if(qdef.objectives.exists(monster_name) || qdef.objectives.exists("qualquer_monstro")) {
 			string obj_key = qdef.objectives.exists(monster_name) ? monster_name : "qualquer_monstro";
 			int required = int(qdef.objectives[obj_key]);
 			int current_before = 0;
 			if(qlog.active_quests[i].progress.exists(obj_key)) current_before = int(qlog.active_quests[i].progress[obj_key]);
 			if(current_before >= required) continue;
-			
+
 			qlog.active_quests[i].update_progress(obj_key, 1);
 			int current = int(qlog.active_quests[i].progress[obj_key]);
-			
+
 			int player_idx = get_player_index_from(player_name);
 			if(player_idx >= 0) {
 				send_reliable_text(players[player_idx].peer_id, "msg2 [Quest] " + qdef.name + ": " + current + "/" + required, 0);
@@ -607,44 +558,42 @@ void quest_update_kill(string player_name, string monster_name) {
 			}
 		}
 	}
-	
+
 	qlog.save();
 }
-// Atualizar progresso de quest ao coletar item
 void quest_update_collect(string player_name, string item_name, int quantity) {
 	player_quest_log@ qlog = get_player_quest_log(player_name);
-	
+
 	for(uint i = 0; i < qlog.active_quests.length(); i++) {
 		quest_definition@ qdef = get_quest_by_id(qlog.active_quests[i].quest_id);
 		if(qdef is null || qdef.type != QUEST_COLLECT) continue;
-		
+
 		if(qdef.objectives.exists(item_name)) {
 			qlog.active_quests[i].update_progress(item_name, quantity);
-			
+
 			int current = int(qlog.active_quests[i].progress[item_name]);
 			int required = int(qdef.objectives[item_name]);
-			
+
 			int player_idx = get_player_index_from(player_name);
 			if(player_idx >= 0) {
 				send_reliable_text(players[player_idx].peer_id, "msg2 [Quest] " + qdef.name + ": " + current + "/" + required, 0);
 			}
 		}
 	}
-	
+
 	qlog.save();
 }
 
-// Atualizar progresso de quest ao explorar
 void quest_update_explore(string player_name, string location_name) {
 	player_quest_log@ qlog = get_player_quest_log(player_name);
-	
+
 	for(uint i = 0; i < qlog.active_quests.length(); i++) {
 		quest_definition@ qdef = get_quest_by_id(qlog.active_quests[i].quest_id);
 		if(qdef is null || qdef.type != QUEST_EXPLORE) continue;
-		
+
 		if(qdef.objectives.exists(location_name)) {
 			qlog.active_quests[i].update_progress(location_name, 1);
-			
+
 			int player_idx = get_player_index_from(player_name);
 			if(player_idx >= 0) {
 				send_reliable_text(players[player_idx].peer_id, "msg2 [Quest] Localização descoberta: " + location_name + "!", 0);
@@ -652,47 +601,37 @@ void quest_update_explore(string player_name, string location_name) {
 			}
 		}
 	}
-	
+
 	qlog.save();
 }
 
-// Loop de processamento de quests
 void quests_loop() {
-	// Verificar reset diário de quests diárias
-	// (implementar quando necessário)
 }
-
-// ============================================================================
-// COMANDO: Ver quests disponíveis para aceitar
-// ============================================================================
 
 void cmd_availablequests(int player_index) {
 	player_quest_log@ qlog = get_player_quest_log(players[player_index].charname);
 	int player_level = int(players[player_index].level);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Quests Disponíveis ===", 0);
-	
+
 	int count = 0;
 	for(uint i = 0; i < quest_database.length(); i++) {
 		quest_definition@ qdef = quest_database[i];
-		
-		// Verificar se pode aceitar
+
 		if(!qdef.can_accept(player_level, qlog.completed_quests)) continue;
-		
-		// Verificar se já está ativa
+
 		if(qlog.has_active_quest(qdef.id)) continue;
-		
-		// Verificar se já completou (para não repetíveis)
+
 		if(!qdef.is_repeatable && qlog.has_completed_quest(qdef.id)) continue;
-		
+
 		string line = "#" + qdef.id + " - " + qdef.name;
 		if(qdef.is_daily) line += " [DIÁRIA]";
 		line += " (Nível " + qdef.required_level + "+)";
-		
+
 		send_reliable_text(players[player_index].peer_id, "msg2 " + line, 0);
 		count++;
 	}
-	
+
 	if(count == 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Nenhuma quest disponível no momento.", 0);
 		send_reliable_text(players[player_index].peer_id, "msg2 Suba de nível para desbloquear mais quests!", 0);
@@ -702,9 +641,3 @@ void cmd_availablequests(int player_index) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Use /questinfo <id> para ver detalhes", 0);
 	}
 }
-
-
-
-
-
-

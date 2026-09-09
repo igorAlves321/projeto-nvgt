@@ -1,28 +1,19 @@
-// Função utilitária de distância
 double get_distance(int x1, int y1, int x2, int y2) {
     int dx = x2 - x1;
     int dy = y2 - y1;
     return sqrt(double(dx * dx + dy * dy));
 }
 
-// Função get_damage - calcula dano com base na distância
 int get_damage(int base_damage, int distance, int max_range = 20) {
     if(distance <= 0) return base_damage;
     if(distance >= max_range) return 0;
-    
-    // Dano diminui linearmente com a distância
+
     double damage_ratio = 1.0 - (double(distance) / double(max_range));
     return int(base_damage * damage_ratio);
 }
 
-// ============================================================================
-//  MUTEX GLOBAL PARA ACESSO AOS MAPAS
-// ============================================================================
-// Protege o acesso e modificação do array server_maps e seus objetos
-// durante operações assíncronas de limpeza
 mutex map_global_mutex;
 
-// Array global de mapas do servidor
 map@[] server_maps;
 
 string get_map_filename(string map_input) {
@@ -39,26 +30,19 @@ string resolve_map_path(string map_input) {
 	if(file_exists(path_local)) return path_local;
 	string path_server = "server/maps/" + file_name;
 	if(file_exists(path_server)) return path_server;
-	return path_local; // fallback para manter mensagem de erro consistente
+	return path_local;
 }
 
-// ============================================================================
-// SISTEMA DE LIMPEZA DE ITENS EXPIRADOS (Task 1.1.2)
-// ============================================================================
-// Limpa objetos coletáveis (objs[]) que atingiram seu tempo limite
-// Executa de forma assíncrona para não bloquear o main loop
 void cleanup_expired_items_task() {
-    map_global_mutex.lock(); //  Travar o Mutex para acesso exclusivo
-    
+    map_global_mutex.lock();
+
     int total_removed = 0;
     int maps_processed = 0;
-    
-    // Iterar sobre todos os mapas carregados
+
     for(uint map_idx = 0; map_idx < server_maps.length(); map_idx++) {
         map@ current_map = server_maps[map_idx];
         if(current_map is null) continue;
-        
-        // Iteração reversa para remover elementos de arrays NVGT sem pular itens.
+
         for(int obj_idx = int(current_map.objs.length()) - 1; obj_idx >= 0; obj_idx--) {
             obj@ item = current_map.objs[obj_idx];
             if(item is null) {
@@ -66,7 +50,7 @@ void cleanup_expired_items_task() {
                 total_removed++;
                 continue;
             }
-            
+
             bool is_expired = false;
             if(item.time_out > 0 && item.ttime_out.elapsed >= uint64(item.time_out)) {
                 is_expired = true;
@@ -77,19 +61,19 @@ void cleanup_expired_items_task() {
             if(item.delete) {
                 is_expired = true;
             }
-            
+
             if(is_expired) {
                 current_map.objs.remove_at(obj_idx);
                 total_removed++;
             }
         }
-        
+
         maps_processed++;
     }
-    
+
     if(total_removed > 0) {
         debug_log("[CLEANUP] Removidos " + total_removed + " itens expirados de " + maps_processed + " mapas");
     }
-    
-    map_global_mutex.unlock(); //  Libera o Mutex
+
+    map_global_mutex.unlock();
 }

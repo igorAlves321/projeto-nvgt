@@ -1,12 +1,4 @@
-// systems_advanced.nvgt - Sistemas Avançados Implementados
-// Criado para consolidar implementações dos itens 4-18
-//  TODOS OS SISTEMAS IMPLEMENTADOS
 
-// ============================================================================
-//  ITEM 6: SISTEMA DE AUTENTICAÇÃO
-// ============================================================================
-
-// Carrega lista de banidos
 string[] load_banned_players() {
 	string[] banned;
 	file f;
@@ -18,7 +10,6 @@ string[] load_banned_players() {
 	return banned;
 }
 
-// Verifica se jogador está banido
 bool is_player_banned(string charname) {
 	string[] banned = load_banned_players();
 	for(uint i = 0; i < banned.length(); i++) {
@@ -29,7 +20,6 @@ bool is_player_banned(string charname) {
 	return false;
 }
 
-// Adiciona jogador à lista de banidos
 void ban_player(string charname, string reason = "Violação das regras") {
 	file f;
 	if(f.open("banidos.dat", "ab")) {
@@ -39,17 +29,16 @@ void ban_player(string charname, string reason = "Violação das regras") {
 	}
 }
 
-// Remove jogador da lista de banidos
 void unban_player(string charname) {
 	string[] banned = load_banned_players();
 	string[] new_list;
-	
+
 	for(uint i = 0; i < banned.length(); i++) {
 		if(banned[i].lower() != charname.lower()) {
 			new_list.insert_last(banned[i]);
 		}
 	}
-	
+
 	file f;
 	if(f.open("banidos.dat", "wb")) {
 		f.write(join(new_list, "\r\n"));
@@ -58,98 +47,80 @@ void unban_player(string charname) {
 	}
 }
 
-// ============================================================================
-//  ITEM 7: SISTEMA DE COMBATE AVANÇADO
-// ============================================================================
-
-// Calcula dano com base em equipamentos e armas
 int calculate_combat_damage(int player_index, int base_damage) {
 	if(player_index < 0 || player_index >= int(players.length())) {
 		return base_damage;
 	}
 
 	int final_damage = base_damage;
-	
-	// Bônus de arma (se estiver equipada)
+
 	string equipped_weapon = get_equipped_item_in_slot(players[player_index], EQUIP_SLOT_WEAPON);
 	if(equipped_weapon != "" && equipped_weapon != "soco") {
-		// Multiplicador leve para não duplicar o dano base do projétil.
-		final_damage += int(base_damage * 0.10); // +10%
+		final_damage += int(base_damage * 0.10);
 	}
-	
-	// Bônus de equipamentos
+
 	if(players[player_index].inv_item_number("anel_de_força") > 0) {
-		final_damage += int(final_damage * 0.1); // +10%
+		final_damage += int(final_damage * 0.1);
 	}
-	
+
 	if(players[player_index].inv_item_number("luvas_de_combate") > 0) {
-		final_damage += int(final_damage * 0.15); // +15%
+		final_damage += int(final_damage * 0.15);
 	}
-	
+
 	if(players[player_index].inv_item_number("amuleto_de_poder") > 0) {
-		final_damage += int(final_damage * 0.2); // +20%
+		final_damage += int(final_damage * 0.2);
 	}
-	
-	// Chance de crítico (5% base)
+
 	if(random(1, 100) <= 5) {
 		final_damage = final_damage * 2;
 		send_reliable_text(players[player_index].peer_id, "msg2 CRÍTICO!", 0);
 	}
-	
+
 	return final_damage;
 }
 
-// Calcula redução de dano por armadura
 int calculate_damage_reduction(int player_index, int incoming_damage) {
 	double reduction = 0.0;
-	
-	// Proteção de roupas
+
 	reduction += players[player_index].clothing_protection / 100.0;
-	
-	// Proteção de equipamentos
+
 	if(players[player_index].colete_aprova_de_balas > 0) {
-		reduction += 0.3; // 30% de redução
+		reduction += 0.3;
 	}
-	
+
 	if(players[player_index].capacetepolicia > 0) {
-		reduction += 0.1; // 10% de redução
+		reduction += 0.1;
 	}
-	
+
 	if(players[player_index].casacopeles > 0) {
-		reduction += 0.15; // 15% de redução
+		reduction += 0.15;
 	}
-	
-	// Máximo de 90% de redução
+
 	if(reduction > 0.9) reduction = 0.9;
-	
+
 	int reduced_damage = int(incoming_damage * (1.0 - reduction));
 	return reduced_damage;
 }
 
-// ============================================================================
-//  ITEM 9: SISTEMA DE ESTATÍSTICAS
-// ============================================================================
-
 class statistics {
-	// Estatísticas globais do servidor
 	int total_kills = 0;
 	int total_deaths = 0;
 	int total_items_crafted = 0;
 	int total_npcs_killed = 0;
-	int total_playtime = 0; // Em minutos
-	
-	dictionary player_stats; // charname => string com stats
-	
+	int total_playtime = 0;
+
+	dictionary player_stats;
+
 	statistics() {
 		load_stats();
 	}
-	
+
 	void load_stats() {
 		file f;
 		if(f.open("server/stats.dat", "rb")) {
 			string content = f.read();
 			f.close();
-			
+
 			string[] lines = content.split("\r\n");
 			for(uint i = 0; i < lines.length(); i++) {
 				if(lines[i].find(":") > -1) {
@@ -163,7 +134,7 @@ class statistics {
 			}
 		}
 	}
-	
+
 	void save_stats() {
 		file f;
 		if(f.open("server/stats.dat", "wb")) {
@@ -176,24 +147,24 @@ class statistics {
 			f.close();
 		}
 	}
-	
+
 	void register_kill(string killer, string victim) {
 		total_kills++;
 		debug_log("STATS: " + killer + " matou " + victim);
 	}
-	
+
 	void register_death(string player) {
 		total_deaths++;
 	}
-	
+
 	void register_craft(string player, string item) {
 		total_items_crafted++;
 	}
-	
+
 	void register_npc_kill(string player) {
 		total_npcs_killed++;
 	}
-	
+
 	string get_server_stats() {
 		string stats = "=== ESTATÍSTICAS DO SERVIDOR ===\n";
 		stats += "Total de Kills: " + total_kills + "\n";
@@ -207,77 +178,69 @@ class statistics {
 
 statistics server_stats;
 
-// ============================================================================
-//  ITEM 10: SISTEMA TEMPORAL (DIA/NOITE)
-// ============================================================================
-
 class time_system {
-	int current_hour = 12; // 0-23
-	int current_minute = 0; // 0-59
+	int current_hour = 12;
+	int current_minute = 0;
 	int day_number = 1;
 	timer tick_timer;
-	int tick_rate = 1000; // 1 segundo real = 1 minuto de jogo
-	
+	int tick_rate = 1000;
+
 	time_system() {
 		tick_timer.restart();
 	}
-	
+
 	void update() {
 		if(tick_timer.elapsed >= tick_rate) {
 			tick_timer.restart();
-			advance_time(1); // Avança 1 minuto de jogo
+			advance_time(1);
 		}
 	}
-	
+
 	void advance_time(int minutes) {
 		current_minute += minutes;
-		
+
 		if(current_minute >= 60) {
 			current_hour += current_minute / 60;
 			current_minute = current_minute % 60;
 		}
-		
+
 		if(current_hour >= 24) {
 			day_number += current_hour / 24;
 			current_hour = current_hour % 24;
-			
-			// Novo dia - eventos
+
 			on_new_day();
 		}
-		
-		// Broadcast para todos os jogadores a cada hora
+
 		if(current_minute == 0) {
 			broadcast_time();
 		}
 	}
-	
+
 	void on_new_day() {
-		// Eventos que acontecem a cada novo dia
 		debug_log("TIME: Novo dia começou - Dia " + day_number);
-		
-		// Broadcast para todos
+
 		for(uint i = 0; i < players.length(); i++) {
 			send_reliable_text(players[i].peer_id, "msg2 Um novo dia começou! Dia " + day_number, 0);
 		}
 	}
-	
+
 	void broadcast_time() {
 		string period = current_hour < 12 ? "AM" : "PM";
 		string display_hour = current_hour == 0 ? "12" : (current_hour > 12 ? "" + (current_hour - 12) : "" + current_hour);
-		
+
 		for(uint i = 0; i < players.length(); i++) {
 			send_reliable_text(players[i].peer_id, "time " + display_hour + ":00 " + period, 0);
 		}
 	}
-	
+
 	bool is_night() {
 		return (current_hour >= 20 || current_hour < 6);
 	}
-	
+
 	bool is_day() {
 		return !is_night();
 	}
-	
+
 	string get_time_string() {
 		string h = current_hour < 10 ? "0" + current_hour : "" + current_hour;
 		string m = current_minute < 10 ? "0" + current_minute : "" + current_minute;
@@ -287,30 +250,26 @@ class time_system {
 
 time_system game_time;
 
-// ============================================================================
-//  ITEM 11: SISTEMA DE EQUIPES
-// ============================================================================
-
 class team {
 	string name;
 	string[] members;
 	string leader;
 	int max_members = 8;
-	
+
 	team(string team_name, string team_leader) {
 		name = team_name;
 		leader = team_leader;
 		members.insert_last(team_leader);
 	}
-	
+
 	bool add_member(string player_name) {
 		if(members.length() >= max_members) return false;
 		if(is_member(player_name)) return false;
-		
+
 		members.insert_last(player_name);
 		return true;
 	}
-	
+
 	bool remove_member(string player_name) {
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) {
@@ -320,14 +279,14 @@ class team {
 		}
 		return false;
 	}
-	
+
 	bool is_member(string player_name) {
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) return true;
 		}
 		return false;
 	}
-	
+
 	string get_members_list() {
 		return join(members, ", ");
 	}
@@ -345,10 +304,8 @@ bool are_teammates(string player1, string player2) {
 }
 
 void team_chat(string sender, string message) {
-	// Encontrar equipe do sender
 	for(uint i = 0; i < teams.length(); i++) {
 		if(teams[i].is_member(sender)) {
-			// Enviar para todos os membros
 			for(uint j = 0; j < teams[i].members.length(); j++) {
 				int player_index = get_player_index_from(teams[i].members[j]);
 				if(player_index > -1) {
@@ -360,10 +317,6 @@ void team_chat(string sender, string message) {
 	}
 }
 
-// ============================================================================
-//  ITEM 15: ZONAS DESABILITADAS (GAME DISABLED)
-// ============================================================================
-
 class game_disabled_zone {
 	int minx, maxx, miny, maxy;
 	string map;
@@ -371,7 +324,7 @@ class game_disabled_zone {
 	bool disable_items;
 	bool disable_commands;
 	string message;
-	
+
 	game_disabled_zone(int mx, int Mx, int my, int My, string m, string msg = "Zona segura") {
 		minx = mx; maxx = Mx;
 		miny = my; maxy = My;
@@ -381,7 +334,7 @@ class game_disabled_zone {
 		disable_items = false;
 		disable_commands = false;
 	}
-	
+
 	bool is_inside(int x, int y, string player_map) {
 		if(player_map != map) return false;
 		return (x >= minx && x <= maxx && y >= miny && y <= maxy);
@@ -390,25 +343,21 @@ class game_disabled_zone {
 
 game_disabled_zone@[] game_disabled_zones;
 
-// Inicializar zonas desabilitadas padrão
 void init_disabled_zones() {
-	// Zona segura - Test (spawn inicial)
 	game_disabled_zone@ zona_test = game_disabled_zone(0, 50, 0, 50, "test", "Zona Segura - Test");
 	zona_test.disable_pvp = true;
 	zona_test.disable_items = false;
 	zona_test.disable_commands = false;
 	game_disabled_zones.insert_last(zona_test);
-	
-	// Zona segura - Hospital
+
 	game_disabled_zone@ zona_hospital = game_disabled_zone(0, 30, 0, 30, "hospital", "Zona Segura - Hospital");
 	zona_hospital.disable_pvp = true;
 	game_disabled_zones.insert_last(zona_hospital);
-	
-	// Zona segura - Delegacia
+
 	game_disabled_zone@ zona_delegacia = game_disabled_zone(0, 25, 0, 25, "delegacia", "Zona Segura - Delegacia");
 	zona_delegacia.disable_pvp = true;
 	game_disabled_zones.insert_last(zona_delegacia);
-	
+
 	debug_log("ZONES: " + game_disabled_zones.length() + " zonas desabilitadas inicializadas");
 }
 
@@ -421,33 +370,26 @@ bool is_in_disabled_zone(int player_index) {
 	return false;
 }
 
-// ============================================================================
-//  ITEM 16: SISTEMA DE ITENS MAGNÉTICOS
-// ============================================================================
-
 void magnetic_item_pull(int player_index, int radius = 5) {
-	// Puxar itens num raio ao redor do jogador
 	if(!players[player_index].inv_item_exists("imã")) return;
-	
+
 	int px = players[player_index].x;
 	int py = players[player_index].y;
 	string pmap = players[player_index].map;
-	
+
 	for(uint i = 0; i < objs.length(); i++) {
 		if(objs[i].map != pmap) continue;
 		if(!objs[i].obtainable) continue;
-		
+
 		int distance = abs(objs[i].x - px) + abs(objs[i].y - py);
-		
+
 		if(distance <= radius && distance > 0) {
-			// Mover item em direção ao jogador
 			if(objs[i].x < px) objs[i].x++;
 			else if(objs[i].x > px) objs[i].x--;
-			
+
 			if(objs[i].y < py) objs[i].y++;
 			else if(objs[i].y > py) objs[i].y--;
-			
-			// Se chegou no jogador, pegar automaticamente
+
 			if(objs[i].x == px && objs[i].y == py) {
 				objs[i].get(player_index);
 				objs[i].delete = true;
@@ -456,39 +398,29 @@ void magnetic_item_pull(int player_index, int radius = 5) {
 	}
 }
 
-// ============================================================================
-//  ITEM 17: SISTEMA DE EXPERIÊNCIA
-// ============================================================================
-
 void ganhaxp(int player_index, int xp_amount, int gold_amount = 0) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
-	
-	// Aplicar XP duplo se ativo
+
 	if(doublexp == 1) {
 		xp_amount *= 2;
 		send_reliable_text(players[player_index].peer_id, "msg2 XP DUPLO ATIVO!", 0);
 	}
-	
-	// Adicionar XP
+
 	players[player_index].xp += xp_amount;
-	
-	// Adicionar ouro
+
 	if(gold_amount > 0) {
 		players[player_index].inv_add_item("coins", gold_amount);
-		
+
 		if(doublegold == 1) {
 			players[player_index].inv_add_item("coins", gold_amount);
 			send_reliable_text(players[player_index].peer_id, "msg2 GOLD DUPLO ATIVO!", 0);
 		}
-		
-		//  INTEGRAÇÃO: Atualizar achievement de gold total
+
 		set_achievement_progress(players[player_index].charname, "gold_total", int(players[player_index].gold));
 	}
-	
-	// Verificar se subiu de nível
+
 	check_level_up(player_index);
-	
-	// Notificar jogador
+
 	string msg = "Você ganhou " + xp_amount + " XP";
 	if(gold_amount > 0) {
 		msg += " e " + gold_amount + " coins";
@@ -497,33 +429,25 @@ void ganhaxp(int player_index, int xp_amount, int gold_amount = 0) {
 }
 
 void check_level_up(int player_index) {
-	// Fórmula de XP necessária: level * 1000
 	while(players[player_index].xp >= players[player_index].xprequerida) {
 		players[player_index].level++;
 		players[player_index].xp -= players[player_index].xprequerida;
 		players[player_index].xprequerida = int(players[player_index].level * 1000);
-		
-		// Recompensas por nível
+
 		players[player_index].maxhealth += 100;
 		players[player_index].health = players[player_index].maxhealth;
-		
-		// Notificar
+
 		send_reliable_text(players[player_index].peer_id, "msg2 LEVEL UP! Você alcançou o nível " + int(players[player_index].level) + "!", 0);
 		send_reliable_text(players[player_index].peer_id, "play levelup.ogg", 0);
-		
-		// Broadcast para todos
+
 		for(uint i = 0; i < players.length(); i++) {
 			send_reliable_text(players[i].peer_id, "msg2 " + players[player_index].charname + " alcançou o nível " + int(players[player_index].level) + "!", 0);
 		}
-		
-		//  INTEGRAÇÃO: Atualizar achievement de level
+
 		set_achievement_progress(players[player_index].charname, "level", int(players[player_index].level));
-		
-		//  INTEGRAÇÃO: Atualizar título por nível (como no BGT)
+
 		settitle(player_index);
-		
+
 		debug_log("LEVELUP: " + players[player_index].charname + " → Nível " + int(players[player_index].level));
 	}
 }
-
-

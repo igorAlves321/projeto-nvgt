@@ -1,28 +1,21 @@
-// guilds.nvgt - Sistema de Guilds/Clans
-// Conversao: Novo sistema para NVGT
-// Fase 4: Sistemas Sociais
-
-// ============================================================================
-// TASK 2.8.1: PERSISTASNCIA DE GUILDS EM ARQUIVO
-// ============================================================================
 
 const string GUILDS_FILE = "database/guilds.dat";
 
 class guild {
 	string name;
 	string leader;
-	string[] officers;  // Maximo 5
+	string[] officers;
 	string[] members;
 	int guild_gold;
-	string tag;  // [TAG] - maximo 5 caracteres
-	dictionary storage;  // Armazem compartilhado: item -> quantity
+	string tag;
+	dictionary storage;
 	timer creation_date;
 	int max_members;
 	int max_officers;
-	dictionary pending_invites;  // player -> timestamp
-	int level;  // Nivel da guild (1-10)
-	int xp;  // XP da guild
-	
+	dictionary pending_invites;
+	int level;
+	int xp;
+
 	guild(string guild_name, string leader_name, string guild_tag) {
 		this.name = guild_name;
 		this.leader = leader_name;
@@ -35,59 +28,57 @@ class guild {
 		members.insert_last(leader_name);
 		creation_date.restart();
 	}
-	
+
 	bool is_member(string player_name) {
 		if(leader == player_name) return true;
-		
+
 		for(uint i = 0; i < officers.length(); i++) {
 			if(officers[i] == player_name) return true;
 		}
-		
+
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) return true;
 		}
-		
+
 		return false;
 	}
-	
+
 	bool is_leader(string player_name) {
 		return leader == player_name;
 	}
-	
+
 	bool is_officer(string player_name) {
 		if(leader == player_name) return true;
-		
+
 		for(uint i = 0; i < officers.length(); i++) {
 			if(officers[i] == player_name) return true;
 		}
-		
+
 		return false;
 	}
-	
+
 	bool is_full() {
 		return (officers.length() + members.length() + 1) >= uint(max_members);
 	}
-	
+
 	int member_count() {
-		return officers.length() + members.length() + 1;  // +1 para o líder
+		return officers.length() + members.length() + 1;
 	}
-	
+
 	void add_member(string player_name) {
 		if(!is_member(player_name) && !is_full()) {
 			members.insert_last(player_name);
 		}
 	}
-	
+
 	void remove_member(string player_name) {
-		// Remover dos oficiais
 		for(uint i = 0; i < officers.length(); i++) {
 			if(officers[i] == player_name) {
 				officers.remove_at(i);
 				return;
 			}
 		}
-		
-		// Remover dos membros
+
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) {
 				members.remove_at(i);
@@ -95,11 +86,10 @@ class guild {
 			}
 		}
 	}
-	
+
 	void promote_to_officer(string player_name) {
 		if(officers.length() >= uint(max_officers)) return;
-		
-		// Remover dos membros e adicionar aos oficiais
+
 		for(uint i = 0; i < members.length(); i++) {
 			if(members[i] == player_name) {
 				members.remove_at(i);
@@ -108,9 +98,8 @@ class guild {
 			}
 		}
 	}
-	
+
 	void demote_to_member(string player_name) {
-		// Remover dos oficiais e adicionar aos membros
 		for(uint i = 0; i < officers.length(); i++) {
 			if(officers[i] == player_name) {
 				officers.remove_at(i);
@@ -119,23 +108,20 @@ class guild {
 			}
 		}
 	}
-	
+
 	void broadcast_message(string message) {
-		// Enviar para o líder
 		int leader_idx = get_player_index_from(leader);
 		if(leader_idx >= 0) {
 			send_reliable_text(players[leader_idx].peer_id, "msg2 [Guild] " + message, 0);
 		}
-		
-		// Enviar para oficiais
+
 		for(uint i = 0; i < officers.length(); i++) {
 			int idx = get_player_index_from(officers[i]);
 			if(idx >= 0) {
 				send_reliable_text(players[idx].peer_id, "msg2 [Guild] " + message, 0);
 			}
 		}
-		
-		// Enviar para membros
+
 		for(uint i = 0; i < members.length(); i++) {
 			int idx = get_player_index_from(members[i]);
 			if(idx >= 0) {
@@ -143,47 +129,44 @@ class guild {
 			}
 		}
 	}
-	
+
 	void add_invite(string player_name) {
 		pending_invites.set(player_name, "" + time_stamp());
 	}
-	
+
 	bool has_invite(string player_name) {
 		return pending_invites.exists(player_name);
 	}
-	
+
 	void remove_invite(string player_name) {
 		pending_invites.delete(player_name);
 	}
-	
+
 	void add_gold(int amount) {
 		guild_gold += amount;
 	}
-	
+
 	void remove_gold(int amount) {
 		guild_gold -= amount;
 		if(guild_gold < 0) guild_gold = 0;
 	}
-	
+
 	void add_xp(int amount) {
 		xp += amount;
-		
-		// Verificar level up
+
 		while(xp >= get_required_xp_for_level(level + 1) && level < 10) {
 			level++;
 			broadcast_message("Guild subiu para nAvel " + level + "!");
 		}
 	}
-	
+
 	int get_required_xp_for_level(int target_level) {
-		return target_level * target_level * 1000;  // 1000, 4000, 9000, etc.
+		return target_level * target_level * 1000;
 	}
 }
 
-// Array global de guilds ativas
 guild@[] active_guilds;
 
-// Dictionary de membros para guild (player_name -> guild_name)
 dictionary player_guilds;
 
 void guild_save_social_state_if_online(string player_name) {
@@ -191,27 +174,24 @@ void guild_save_social_state_if_online(string player_name) {
 	if(idx >= 0) save_player_to_database(players[idx]);
 }
 
-// Obter guild de um jogador
 guild@ get_player_guild(string player_name) {
 	if(!player_guilds.exists(player_name)) return null;
-	
+
 	string guild_name = string(player_guilds[player_name]);
-	
+
 	for(uint i = 0; i < active_guilds.length(); i++) {
 		if(active_guilds[i].name == guild_name) {
 			return active_guilds[i];
 		}
 	}
-	
+
 	return null;
 }
 
-// Verificar se jogador está em guild
 bool is_in_guild(string player_name) {
 	return player_guilds.exists(player_name);
 }
 
-// Obter guild por nome
 guild@ get_guild_by_name(string guild_name) {
 	for(uint i = 0; i < active_guilds.length(); i++) {
 		if(active_guilds[i].name == guild_name) {
@@ -221,104 +201,94 @@ guild@ get_guild_by_name(string guild_name) {
 	return null;
 }
 
-// Comando: Criar guild
 void cmd_createguild(int player_index, string guild_name, string guild_tag = "") {
 	if(is_in_guild(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você ja está em uma guild!", 0);
 		return;
 	}
-	
-	// Custo de criacao
+
 	int cost = 10000;
 	if(players[player_index].gold < cost) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Criar guild custa " + cost + " gold!", 0);
 		return;
 	}
-	
-	// Validar nome
+
 	if(guild_name.length() < 3 || guild_name.length() > 20) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Nome deve ter entre 3 e 20 caracteres!", 0);
 		return;
 	}
-	
-	// Verificar se ja existe
+
 	if(get_guild_by_name(guild_name) !is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Ja existe uma guild com esse nome!", 0);
 		return;
 	}
-	
-	// Validar tag
+
 	if(guild_tag == "") {
 		guild_tag = guild_name.substr(0, 3).upper();
 	}
-	
+
 	if(guild_tag.length() > 5) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Tag deve ter no maximo 5 caracteres!", 0);
 		return;
 	}
-	
-	// Cobrar e criar
+
 	players[player_index].gold -= cost;
-	
+
 	guild g(guild_name, players[player_index].charname, guild_tag);
 	active_guilds.insert_last(g);
 	player_guilds.set(players[player_index].charname, guild_name);
 	guild_save_social_state_if_online(players[player_index].charname);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Guild '" + guild_name + "' criada! Tag: [" + guild_tag + "]", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Você e o líder. Use /inviteguild para convidar membros", 0);
-	
+
 	debug_log("GUILD: " + players[player_index].charname + " criou guild '" + guild_name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Convidar para guild
 void cmd_inviteguild(int player_index, string target_name) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(!g.is_officer(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas líder e oficiais podem convidar!", 0);
 		return;
 	}
-	
+
 	if(g.is_full()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Guild cheia! Maximo: " + g.max_members + " membros", 0);
 		return;
 	}
-	
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
 		return;
 	}
-	
+
 	if(is_in_guild(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " ja está em uma guild!", 0);
 		return;
 	}
-	
-	// Adicionar convite
+
 	g.add_invite(target_name);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Convite enviado para " + target_name, 0);
 	send_reliable_text(players[target].peer_id, "msg2 Você foi convidado para a guild '" + g.name + "' [" + g.tag + "]!", 0);
 	send_reliable_text(players[target].peer_id, "msg2 Use /joinguild para aceitar", 0);
-	
+
 	debug_log("GUILD: " + players[player_index].charname + " convidou " + target_name + " para '" + g.name + "'");
 }
 
-// Comando: Entrar em guild
 void cmd_joinguild(int player_index) {
 	if(is_in_guild(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você ja está em uma guild!", 0);
 		return;
 	}
-	
-	// Procurar convite pendente
+
 	guild@ found_guild = null;
 	for(uint i = 0; i < active_guilds.length(); i++) {
 		if(active_guilds[i].has_invite(players[player_index].charname)) {
@@ -326,119 +296,109 @@ void cmd_joinguild(int player_index) {
 			break;
 		}
 	}
-	
+
 	if(found_guild is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não tem convites pendentes!", 0);
 		return;
 	}
-	
+
 	if(found_guild.is_full()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Guild cheia!", 0);
 		found_guild.remove_invite(players[player_index].charname);
 		return;
 	}
-	
-	// Adicionar a guild
+
 	found_guild.add_member(players[player_index].charname);
 	found_guild.remove_invite(players[player_index].charname);
 	player_guilds.set(players[player_index].charname, found_guild.name);
 	guild_save_social_state_if_online(players[player_index].charname);
-	
-	// Notificar
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Você entrou na guild '" + found_guild.name + "' [" + found_guild.tag + "]!", 0);
 	found_guild.broadcast_message(players[player_index].charname + " entrou na guild!");
-	
+
 	debug_log("GUILD: " + players[player_index].charname + " entrou em '" + found_guild.name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Sair da guild
 void cmd_leaveguild(int player_index) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	string pname = players[player_index].charname;
-	
-	// Se e o líder, precisa dissolver a guild
+
 	if(g.is_leader(pname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Como líder, use /disbandguild para dissolver a guild", 0);
 		return;
 	}
-	
-	// Remover da guild
+
 	g.remove_member(pname);
 	player_guilds.delete(pname);
 	guild_save_social_state_if_online(pname);
-	
+
 	g.broadcast_message(pname + " saiu da guild");
 	send_reliable_text(players[player_index].peer_id, "msg2 Você saiu da guild", 0);
-	
+
 	debug_log("GUILD: " + pname + " saiu de '" + g.name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Expulsar membro
 void cmd_kickguild(int player_index, string target_name) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(!g.is_officer(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas líder e oficiais podem expulsar!", 0);
 		return;
 	}
-	
+
 	if(!g.is_member(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está na guild!", 0);
 		return;
 	}
-	
+
 	if(g.is_leader(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não pode expulsar o líder!", 0);
 		return;
 	}
-	
-	// Apenas líder pode expulsar oficiais
+
 	if(g.is_officer(target_name) && !g.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode expulsar oficiais!", 0);
 		return;
 	}
-	
-	// Expulsar
+
 	int target = get_player_index_from(target_name);
 	if(target >= 0) {
 		send_reliable_text(players[target].peer_id, "msg2 Você foi expulso da guild!", 0);
 	}
-	
+
 	g.remove_member(target_name);
 	player_guilds.delete(target_name);
 	guild_save_social_state_if_online(target_name);
-	
+
 	g.broadcast_message(target_name + " foi expulso da guild");
-	
+
 	debug_log("GUILD: " + players[player_index].charname + " expulsou " + target_name + " de '" + g.name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Dissolver guild (líder)
 void cmd_disbandguild(int player_index) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(!g.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode dissolver a guild!", 0);
 		return;
 	}
-	
-	// Notificar todos os membros
+
 	g.broadcast_message("Guild '" + g.name + "' foi dissolvida pelo líder");
 	guild_save_social_state_if_online(g.leader);
 	for(uint i = 0; i < g.officers.length(); i++) {
@@ -447,8 +407,7 @@ void cmd_disbandguild(int player_index) {
 	for(uint i = 0; i < g.members.length(); i++) {
 		guild_save_social_state_if_online(g.members[i]);
 	}
-	
-	// Remover todos do dictionary
+
 	player_guilds.delete(g.leader);
 	for(uint i = 0; i < g.officers.length(); i++) {
 		player_guilds.delete(g.officers[i]);
@@ -456,45 +415,41 @@ void cmd_disbandguild(int player_index) {
 	for(uint i = 0; i < g.members.length(); i++) {
 		player_guilds.delete(g.members[i]);
 	}
-	
-	// Remover guild
+
 	for(uint i = 0; i < active_guilds.length(); i++) {
 		if(active_guilds[i].name == g.name) {
 			active_guilds.remove_at(i);
 			break;
 		}
 	}
-	
+
 	debug_log("GUILD: '" + g.name + "' dissolvida por " + players[player_index].charname);
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Chat da guild
 void cmd_guildchat(int player_index, string message) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
-	// Enviar para todos os membros
+
 	g.broadcast_message(players[player_index].charname + ": " + message);
 }
 
-// Comando: Info da guild
 void cmd_guildinfo(int player_index) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Guild: " + g.name + " [" + g.tag + "] ===", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Lider: " + g.leader, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Nivel: " + g.level + " (XP: " + g.xp + ")", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Membros: " + g.member_count() + "/" + g.max_members, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Tesouro: " + g.guild_gold + " gold", 0);
-	
+
 	if(g.officers.length() > 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Oficiais: " + g.officers.length(), 0);
 		for(uint i = 0; i < g.officers.length(); i++) {
@@ -503,85 +458,76 @@ void cmd_guildinfo(int player_index) {
 	}
 }
 
-// Comando: Promover a oficial
 void cmd_promoteguild(int player_index, string target_name) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(!g.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode promover!", 0);
 		return;
 	}
-	
+
 	if(g.officers.length() >= uint(g.max_officers)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Maximo de oficiais atingido! (" + g.max_officers + ")", 0);
 		return;
 	}
-	
+
 	g.promote_to_officer(target_name);
 	g.broadcast_message(target_name + " foi promovido a oficial!");
-	
+
 	debug_log("GUILD: " + target_name + " promovido em '" + g.name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Rebaixar a membro
 void cmd_demoteguild(int player_index, string target_name) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(!g.is_leader(players[player_index].charname)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Apenas o líder pode rebaixar!", 0);
 		return;
 	}
-	
+
 	g.demote_to_member(target_name);
 	g.broadcast_message(target_name + " foi rebaixado a membro");
-	
+
 	debug_log("GUILD: " + target_name + " rebaixado em '" + g.name + "'");
-	save_guilds(); // Persistir
+	save_guilds();
 }
 
-// Comando: Doar gold para guild
 void cmd_donateguild(int player_index, int amount) {
 	guild@ g = get_player_guild(players[player_index].charname);
 	if(g is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não está em uma guild!", 0);
 		return;
 	}
-	
+
 	if(amount <= 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Quantidade invalida!", 0);
 		return;
 	}
-	
+
 	if(players[player_index].gold < amount) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não tem " + amount + " gold!", 0);
 		return;
 	}
-	
+
 	players[player_index].gold -= amount;
 	g.add_gold(amount);
-	
+
 	g.broadcast_message(players[player_index].charname + " doou " + amount + " gold!");
-	
+
 	debug_log("GUILD: " + players[player_index].charname + " doou " + amount + " gold para '" + g.name + "'");
-	
-	// Salvar apos doacao
+
 	save_guilds();
 }
 
-// ============================================================================
-// TASK 2.8.1: FUNCOES DE PERSISTASNCIA DE GUILDS
-// ============================================================================
-
-// Serializar guild para string
 string serialize_guild(guild@ g) {
 	string data = "";
 	data += g.name + "|";
@@ -590,31 +536,28 @@ string serialize_guild(guild@ g) {
 	data += g.guild_gold + "|";
 	data += g.level + "|";
 	data += g.xp + "|";
-	
-	// Officers (separados por vArgula)
+
 	string off = "";
 	for(uint i = 0; i < g.officers.length(); i++) {
 		if(i > 0) off += ",";
 		off += g.officers[i];
 	}
 	data += off + "|";
-	
-	// Members (separados por vArgula)
+
 	string mem = "";
 	for(uint i = 0; i < g.members.length(); i++) {
 		if(i > 0) mem += ",";
 		mem += g.members[i];
 	}
 	data += mem;
-	
+
 	return data;
 }
 
-// Deserializar string para guild
 guild@ deserialize_guild(string data) {
 	string[] parts = data.split("|");
 	if(parts.length() < 8) return null;
-	
+
 	string name = parts[0];
 	string leader = parts[1];
 	string tag = parts[2];
@@ -623,16 +566,14 @@ guild@ deserialize_guild(string data) {
 	int gxp = parse_int(parts[5]);
 	string officers_str = parts[6];
 	string members_str = parts[7];
-	
+
 	guild g(name, leader, tag);
 	g.guild_gold = gold;
 	g.level = lvl;
 	g.xp = gxp;
-	
-	// Limpar members padrao (líder ja adicionado no construtor)
+
 	g.members.resize(0);
-	
-	// Adicionar oficiais
+
 	if(officers_str != "") {
 		string[] offs = officers_str.split(",");
 		for(uint i = 0; i < offs.length(); i++) {
@@ -641,8 +582,7 @@ guild@ deserialize_guild(string data) {
 			}
 		}
 	}
-	
-	// Adicionar membros
+
 	if(members_str != "") {
 		string[] mems = members_str.split(",");
 		for(uint i = 0; i < mems.length(); i++) {
@@ -651,61 +591,57 @@ guild@ deserialize_guild(string data) {
 			}
 		}
 	}
-	
+
 	return g;
 }
 
-// Salvar todas as guilds em arquivo
 void save_guilds() {
 	file f;
 	if(!f.open(GUILDS_FILE, "w")) {
 		debug_log("GUILD: Erro ao salvar guilds");
 		return;
 	}
-	
+
 	string content = "";
 	for(uint i = 0; i < active_guilds.length(); i++) {
 		if(i > 0) content += "\n";
 		content += serialize_guild(active_guilds[i]);
 	}
-	
+
 	f.write(content);
 	f.close();
-	
+
 	debug_log("GUILD: Salvo " + active_guilds.length() + " guilds");
 }
 
-// Carregar todas as guilds de arquivo
 void load_guilds() {
 	if(!file_exists(GUILDS_FILE)) {
 		debug_log("GUILD: Arquivo de guilds não encontrado, criando novo");
 		return;
 	}
-	
+
 	file f;
 	if(!f.open(GUILDS_FILE, "r")) {
 		debug_log("GUILD: Erro ao carregar guilds");
 		return;
 	}
-	
+
 	string content = f.read();
 	f.close();
-	
+
 	if(content == "") return;
-	
-	// Limpar arrays existentes
+
 	active_guilds.resize(0);
 	player_guilds.delete_all();
-	
+
 	string[] lines = content.split("\n");
 	for(uint i = 0; i < lines.length(); i++) {
 		if(lines[i] == "") continue;
-		
+
 		guild@ g = deserialize_guild(lines[i]);
 		if(g !is null) {
 			active_guilds.insert_last(g);
-			
-			// Mapear jogadores para guild
+
 			player_guilds.set(g.leader, g.name);
 			for(uint j = 0; j < g.officers.length(); j++) {
 				player_guilds.set(g.officers[j], g.name);
@@ -715,16 +651,10 @@ void load_guilds() {
 			}
 		}
 	}
-	
+
 	debug_log("GUILD: Carregado " + active_guilds.length() + " guilds");
 }
 
-// Inicializar sistema de guilds (chamar no startup do servidor)
 void init_guilds() {
 	load_guilds();
 }
-
-
-
-
-

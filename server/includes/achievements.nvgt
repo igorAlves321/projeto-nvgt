@@ -1,8 +1,4 @@
-// achievements.nvgt - Sistema de Conquistas/Achievements
-// Conversão: Novo sistema para NVGT
-// Fase 5: Conteúdo Avançado
 
-// Categorias de achievement
 enum achievement_category {
 	ACH_COMBAT,
 	ACH_EXPLORATION,
@@ -11,18 +7,17 @@ enum achievement_category {
 	ACH_SPECIAL
 }
 
-// Definição de achievement
 class achievement_definition {
 	int id;
 	string name;
 	string description;
 	achievement_category category;
 	int points;
-	dictionary requirements;  // tipo_requisito -> valor necessário
-	dictionary rewards;       // tipo_recompensa -> quantidade
+	dictionary requirements;
+	dictionary rewards;
 	bool is_secret;
-	string title_reward;      // Título desbloqueado
-	
+	string title_reward;
+
 	achievement_definition(int ach_id, string ach_name, string desc, achievement_category cat) {
 		this.id = ach_id;
 		this.name = ach_name;
@@ -32,31 +27,30 @@ class achievement_definition {
 		this.is_secret = false;
 		this.title_reward = "";
 	}
-	
+
 	void add_requirement(string req_type, int value) {
 		requirements.set(req_type, "" + value);
 	}
-	
+
 	void add_reward(string reward_type, int amount) {
 		rewards.set(reward_type, "" + amount);
 	}
 }
 
-// Progresso de achievement do jogador
 class achievement_progress {
 	string player_name;
-	string[] unlocked_achievements;  // IDs de achievements desbloqueados
-	dictionary progress;              // achievement_id + "_" + req_type -> valor atual
+	string[] unlocked_achievements;
+	dictionary progress;
 	int total_points;
 	string active_title;
 	string[] unlocked_titles;
-	
+
 	achievement_progress(string pname) {
 		this.player_name = pname;
 		this.total_points = 0;
 		this.active_title = "";
 	}
-	
+
 	bool has_achievement(int ach_id) {
 		for(uint i = 0; i < unlocked_achievements.length(); i++) {
 			if(unlocked_achievements[i] == "" + ach_id) {
@@ -65,7 +59,7 @@ class achievement_progress {
 		}
 		return false;
 	}
-	
+
 	void update_progress(int ach_id, string req_type, int value) {
 		string key = "" + ach_id + "_" + req_type;
 		if(progress.exists(key)) {
@@ -75,12 +69,12 @@ class achievement_progress {
 			progress.set(key, "" + value);
 		}
 	}
-	
+
 	void set_progress(int ach_id, string req_type, int value) {
 		string key = "" + ach_id + "_" + req_type;
 		progress.set(key, "" + value);
 	}
-	
+
 	int get_progress(int ach_id, string req_type) {
 		string key = "" + ach_id + "_" + req_type;
 		if(progress.exists(key)) {
@@ -88,7 +82,7 @@ class achievement_progress {
 		}
 		return 0;
 	}
-	
+
 	bool check_achievement_complete(achievement_definition@ adef) {
 		string[] req_keys = adef.requirements.get_keys();
 		for(uint i = 0; i < req_keys.length(); i++) {
@@ -100,16 +94,16 @@ class achievement_progress {
 		}
 		return true;
 	}
-	
+
 	void unlock_achievement(int ach_id, int points, string title = "") {
 		unlocked_achievements.insert_last("" + ach_id);
 		total_points += points;
-		
+
 		if(title != "" && !has_title(title)) {
 			unlocked_titles.insert_last(title);
 		}
 	}
-	
+
 	bool has_title(string title) {
 		for(uint i = 0; i < unlocked_titles.length(); i++) {
 			if(unlocked_titles[i] == title) {
@@ -118,67 +112,61 @@ class achievement_progress {
 		}
 		return false;
 	}
-	
+
 	void save() {
 		string path = "players/" + player_name + "/achievements.dat";
-		
+
 		file f;
 		if(!f.open(path, "wb")) {
 			debug_log("ACHIEVEMENTS: Erro ao salvar achievements de " + player_name);
 			return;
 		}
-		
-		// Salvar achievements desbloqueados
+
 		f.write("" + unlocked_achievements.length() + "\n");
 		for(uint i = 0; i < unlocked_achievements.length(); i++) {
 			f.write(unlocked_achievements[i] + "\n");
 		}
-		
-		// Salvar progresso
+
 		string[] prog_keys = progress.get_keys();
 		f.write("" + prog_keys.length() + "\n");
 		for(uint i = 0; i < prog_keys.length(); i++) {
 			f.write(prog_keys[i] + "\n");
 			f.write("" + int(progress[prog_keys[i]]) + "\n");
 		}
-		
-		// Salvar pontos e título
+
 		f.write("" + total_points + "\n");
 		f.write(active_title + "\n");
-		
-		// Salvar títulos
+
 		f.write("" + unlocked_titles.length() + "\n");
 		for(uint i = 0; i < unlocked_titles.length(); i++) {
 			f.write(unlocked_titles[i] + "\n");
 		}
-		
+
 		f.close();
 		debug_log("ACHIEVEMENTS: Progresso de " + player_name + " salvo");
 	}
-	
+
 	void load() {
 		string path = "players/" + player_name + "/achievements.dat";
-		
+
 		file f;
 		if(!f.open(path, "rb")) {
-			return;  // Arquivo não existe
+			return;
 		}
-		
+
 		string content = f.read();
 		f.close();
-		
+
 		string[] lines = content.split("\n");
 		if(lines.length() < 1) return;
-		
+
 		int line_idx = 0;
-		
-		// Carregar achievements
+
 		int ach_count = parse_int(lines[line_idx++]);
 		for(int i = 0; i < ach_count && line_idx < int(lines.length()); i++) {
 			unlocked_achievements.insert_last(lines[line_idx++]);
 		}
-		
-		// Carregar progresso
+
 		if(line_idx < int(lines.length())) {
 			int prog_count = parse_int(lines[line_idx++]);
 			for(int i = 0; i < prog_count && line_idx + 1 < int(lines.length()); i++) {
@@ -187,146 +175,135 @@ class achievement_progress {
 				progress.set(key, "" + val);
 			}
 		}
-		
-		// Carregar pontos e título
+
 		if(line_idx < int(lines.length())) {
 			total_points = parse_int(lines[line_idx++]);
 		}
 		if(line_idx < int(lines.length())) {
 			active_title = lines[line_idx++];
 		}
-		
-		// Carregar títulos
+
 		if(line_idx < int(lines.length())) {
 			int title_count = parse_int(lines[line_idx++]);
 			for(int i = 0; i < title_count && line_idx < int(lines.length()); i++) {
 				unlocked_titles.insert_last(lines[line_idx++]);
 			}
 		}
-		
+
 		debug_log("ACHIEVEMENTS: Progresso de " + player_name + " carregado (" + unlocked_achievements.length() + " conquistas)");
 	}
 }
 
-// Banco de dados de achievements
 achievement_definition@[] achievement_database;
 
-// Dictionary de progresso de achievements
 dictionary player_achievements;
 
-// Inicializar sistema de achievements
 void init_achievements_system() {
 	achievement_database.resize(0);
-	
-	// COMBATE
+
 	achievement_definition a1(1, "Primeira Vitória", "Derrote seu primeiro inimigo", ACH_COMBAT);
 	a1.add_requirement("kills", 1);
 	a1.add_reward("gold", 50);
 	a1.points = 5;
 	achievement_database.insert_last(a1);
-	
+
 	achievement_definition a2(2, "Caçador Experiente", "Derrote 100 inimigos", ACH_COMBAT);
 	a2.add_requirement("kills", 100);
 	a2.add_reward("gold", 500);
 	a2.title_reward = "Caçador";
 	a2.points = 15;
 	achievement_database.insert_last(a2);
-	
+
 	achievement_definition a3(3, "Matador Implacável", "Derrote 1000 inimigos", ACH_COMBAT);
 	a3.add_requirement("kills", 1000);
 	a3.add_reward("gold", 5000);
 	a3.title_reward = "Implacável";
 	a3.points = 30;
 	achievement_database.insert_last(a3);
-	
+
 	achievement_definition a4(4, "Caçador de Chefes", "Derrote 10 bosses", ACH_COMBAT);
 	a4.add_requirement("boss_kills", 10);
 	a4.add_reward("gold", 2000);
 	a4.title_reward = "Caçador de Chefes";
 	a4.points = 25;
 	achievement_database.insert_last(a4);
-	
-	// EXPLORAÇÃO
+
 	achievement_definition a5(5, "Explorador Novato", "Descubra 5 localizações", ACH_EXPLORATION);
 	a5.add_requirement("locations_discovered", 5);
 	a5.add_reward("xp", 200);
 	a5.points = 10;
 	achievement_database.insert_last(a5);
-	
+
 	achievement_definition a6(6, "Cartógrafo", "Descubra 20 localizações", ACH_EXPLORATION);
 	a6.add_requirement("locations_discovered", 20);
 	a6.add_reward("xp", 1000);
 	a6.title_reward = "Cartógrafo";
 	a6.points = 20;
 	achievement_database.insert_last(a6);
-	
-	// SOCIAL
+
 	achievement_definition a7(7, "Sociável", "Adicione 10 amigos", ACH_SOCIAL);
 	a7.add_requirement("friends_count", 10);
 	a7.add_reward("gold", 200);
 	a7.points = 10;
 	achievement_database.insert_last(a7);
-	
+
 	achievement_definition a8(8, "Membro de Guild", "Entre em uma guild", ACH_SOCIAL);
 	a8.add_requirement("guild_joined", 1);
 	a8.add_reward("gold", 500);
 	a8.points = 15;
 	achievement_database.insert_last(a8);
-	
+
 	achievement_definition a9(9, "Líder de Guild", "Crie uma guild", ACH_SOCIAL);
 	a9.add_requirement("guild_created", 1);
 	a9.add_reward("gold", 1000);
 	a9.title_reward = "Líder";
 	a9.points = 20;
 	achievement_database.insert_last(a9);
-	
-	// ECONOMIA
+
 	achievement_definition a10(10, "Empreendedor", "Acumule 10.000 gold", ACH_ECONOMY);
 	a10.add_requirement("gold_total", 10000);
 	a10.add_reward("xp", 500);
 	a10.points = 15;
 	achievement_database.insert_last(a10);
-	
+
 	achievement_definition a11(11, "Magnata", "Acumule 100.000 gold", ACH_ECONOMY);
 	a11.add_requirement("gold_total", 100000);
 	a11.add_reward("xp", 2000);
 	a11.title_reward = "Magnata";
 	a11.points = 30;
 	achievement_database.insert_last(a11);
-	
+
 	achievement_definition a12(12, "Comerciante", "Complete 50 trocas", ACH_ECONOMY);
 	a12.add_requirement("trades_completed", 50);
 	a12.add_reward("gold", 1000);
 	a12.title_reward = "Comerciante";
 	a12.points = 20;
 	achievement_database.insert_last(a12);
-	
-	// ESPECIAL
+
 	achievement_definition a13(13, "Veterano", "Jogue por 30 dias", ACH_SPECIAL);
 	a13.add_requirement("days_played", 30);
 	a13.add_reward("gold", 5000);
 	a13.title_reward = "Veterano";
 	a13.points = 25;
 	achievement_database.insert_last(a13);
-	
+
 	achievement_definition a14(14, "Lenda Viva", "Alcance nível 50", ACH_SPECIAL);
 	a14.add_requirement("level", 50);
 	a14.add_reward("gold", 10000);
 	a14.title_reward = "Lenda Viva";
 	a14.points = 50;
 	achievement_database.insert_last(a14);
-	
+
 	achievement_definition a15(15, "Colecionador", "Complete 50 quests", ACH_SPECIAL);
 	a15.add_requirement("quests_completed", 50);
 	a15.add_reward("xp", 5000);
 	a15.title_reward = "Colecionador de Quests";
 	a15.points = 30;
 	achievement_database.insert_last(a15);
-	
+
 	debug_log("ACHIEVEMENTS: Sistema inicializado com " + achievement_database.length() + " conquistas");
 }
 
-// Obter achievement progress do jogador
 achievement_progress@ get_player_achievements(string player_name) {
 	if(!player_achievements.exists(player_name)) {
 		achievement_progress ap(player_name);
@@ -334,11 +311,10 @@ achievement_progress@ get_player_achievements(string player_name) {
 		player_achievements.set(player_name, @ap);
 		return ap;
 	}
-	
+
 	return cast<achievement_progress@>(player_achievements[player_name]);
 }
 
-// Obter achievement por ID
 achievement_definition@ get_achievement_by_id(int ach_id) {
 	for(uint i = 0; i < achievement_database.length(); i++) {
 		if(achievement_database[i].id == ach_id) {
@@ -348,23 +324,18 @@ achievement_definition@ get_achievement_by_id(int ach_id) {
 	return null;
 }
 
-// Verificar e desbloquear achievement
 void check_achievement(string player_name, int ach_id) {
 	achievement_progress@ ap = get_player_achievements(player_name);
-	
-	// Já desbloqueado?
+
 	if(ap.has_achievement(ach_id)) return;
-	
+
 	achievement_definition@ adef = get_achievement_by_id(ach_id);
 	if(adef is null) return;
-	
-	// Verificar se está completo
+
 	if(ap.check_achievement_complete(adef)) {
-		// Desbloquear!
 		ap.unlock_achievement(ach_id, adef.points, adef.title_reward);
 		ap.save();
-		
-		// Notificar jogador
+
 		int player_idx = get_player_index_from(player_name);
 		if(player_idx >= 0) {
 			send_reliable_text(players[player_idx].peer_id, "msg2 =============================", 0);
@@ -372,12 +343,11 @@ void check_achievement(string player_name, int ach_id) {
 			send_reliable_text(players[player_idx].peer_id, "msg2 " + adef.name, 0);
 			send_reliable_text(players[player_idx].peer_id, "msg2 " + adef.description, 0);
 			send_reliable_text(players[player_idx].peer_id, "msg2 +" + adef.points + " pontos de conquista", 0);
-			
+
 			if(adef.title_reward != "") {
 				send_reliable_text(players[player_idx].peer_id, "msg2 Título desbloqueado: " + adef.title_reward, 0);
 			}
-			
-			// Dar recompensas
+
 			string[] reward_keys = adef.rewards.get_keys();
 			for(uint i = 0; i < reward_keys.length(); i++) {
 				int amount = int(adef.rewards[reward_keys[i]]);
@@ -389,63 +359,59 @@ void check_achievement(string player_name, int ach_id) {
 					send_reliable_text(players[player_idx].peer_id, "msg2 +" + amount + " XP", 0);
 				}
 			}
-			
+
 			send_reliable_text(players[player_idx].peer_id, "msg2 =============================", 0);
 		}
-		
+
 		debug_log("ACHIEVEMENTS: " + player_name + " desbloqueou '" + adef.name + "'");
 	}
 }
 
-// Atualizar progresso de achievement
 void update_achievement_progress(string player_name, string req_type, int value) {
 	achievement_progress@ ap = get_player_achievements(player_name);
-	
-	// Atualizar progresso de todos os achievements relevantes
+
 	for(uint i = 0; i < achievement_database.length(); i++) {
 		if(ap.has_achievement(achievement_database[i].id)) continue;
-		
+
 		if(achievement_database[i].requirements.exists(req_type)) {
 			ap.update_progress(achievement_database[i].id, req_type, value);
 			check_achievement(player_name, achievement_database[i].id);
 		}
 	}
-	
+
 	ap.save();
 }
 
-// Definir progresso absoluto de achievement
 void set_achievement_progress(string player_name, string req_type, int value) {
 	achievement_progress@ ap = get_player_achievements(player_name);
-	
+
 	for(uint i = 0; i < achievement_database.length(); i++) {
 		if(ap.has_achievement(achievement_database[i].id)) continue;
-		
+
 		if(achievement_database[i].requirements.exists(req_type)) {
 			ap.set_progress(achievement_database[i].id, req_type, value);
 			check_achievement(player_name, achievement_database[i].id);
 		}
 	}
-	
+
 	ap.save();
 }
 
-// Comando: Listar achievements
 void cmd_achievements(int player_index, string filter = "all") {
 	achievement_progress@ ap = get_player_achievements(players[player_index].charname);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Conquistas (" + ap.unlocked_achievements.length() + "/" + achievement_database.length() + ") ===", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Pontos Totais: " + ap.total_points, 0);
-	
+
 	for(uint i = 0; i < achievement_database.length(); i++) {
 		achievement_definition@ adef = achievement_database[i];
 		bool unlocked = ap.has_achievement(adef.id);
-		
+
 		if(filter != "all") {
 			if(filter == "unlocked" && !unlocked) continue;
 			if(filter == "locked" && unlocked) continue;
 		}
-		
+
 		if(adef.is_secret && !unlocked) {
 			send_reliable_text(players[player_index].peer_id, "msg2 #" + adef.id + " - [SECRETA]", 0);
 		} else {
@@ -458,37 +424,35 @@ void cmd_achievements(int player_index, string filter = "all") {
 			send_reliable_text(players[player_index].peer_id, "msg2 " + line, 0);
 		}
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Use /achievementinfo <id> para detalhes", 0);
 }
 
-// Comando: Ver info de achievement
 void cmd_achievementinfo(int player_index, int ach_id) {
 	achievement_definition@ adef = get_achievement_by_id(ach_id);
 	if(adef is null) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Conquista não encontrada!", 0);
 		return;
 	}
-	
+
 	achievement_progress@ ap = get_player_achievements(players[player_index].charname);
 	bool unlocked = ap.has_achievement(ach_id);
-	
+
 	if(adef.is_secret && !unlocked) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Esta é uma conquista secreta!", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Conquista #" + adef.id + " ===", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + adef.name, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + adef.description, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Pontos: " + adef.points, 0);
-	
+
 	if(unlocked) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Status:  DESBLOQUEADA", 0);
 	} else {
 		send_reliable_text(players[player_index].peer_id, "msg2 Status: Bloqueada", 0);
-		
-		// Mostrar progresso
+
 		send_reliable_text(players[player_index].peer_id, "msg2 --- Progresso ---", 0);
 		string[] req_keys = adef.requirements.get_keys();
 		for(uint i = 0; i < req_keys.length(); i++) {
@@ -497,52 +461,48 @@ void cmd_achievementinfo(int player_index, int ach_id) {
 			send_reliable_text(players[player_index].peer_id, "msg2 " + req_keys[i] + ": " + current + "/" + required, 0);
 		}
 	}
-	
+
 	if(adef.title_reward != "") {
 		send_reliable_text(players[player_index].peer_id, "msg2 Título: " + adef.title_reward, 0);
 	}
 }
 
-// Comando: Listar títulos
 void cmd_titles(int player_index) {
 	achievement_progress@ ap = get_player_achievements(players[player_index].charname);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Títulos Desbloqueados (" + ap.unlocked_titles.length() + ") ===", 0);
-	
+
 	if(ap.active_title != "") {
 		send_reliable_text(players[player_index].peer_id, "msg2 Título Ativo: " + ap.active_title, 0);
 	}
-	
+
 	for(uint i = 0; i < ap.unlocked_titles.length(); i++) {
 		string marker = (ap.unlocked_titles[i] == ap.active_title) ? "[ATIVO] " : "";
 		send_reliable_text(players[player_index].peer_id, "msg2 " + marker + ap.unlocked_titles[i], 0);
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Use /settitle <título> para equipar", 0);
 }
 
-// Comando: Equipar título
 void cmd_settitle(int player_index, string title) {
 	achievement_progress@ ap = get_player_achievements(players[player_index].charname);
-	
+
 	if(!ap.has_title(title)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não desbloqueou esse título!", 0);
 		return;
 	}
-	
+
 	ap.active_title = title;
 	ap.save();
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Título equipado: " + title, 0);
 }
 
-// Comando: Remover título
 void cmd_removetitle(int player_index) {
 	achievement_progress@ ap = get_player_achievements(players[player_index].charname);
-	
+
 	ap.active_title = "";
 	ap.save();
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Título removido", 0);
 }
-

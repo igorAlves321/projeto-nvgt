@@ -1,21 +1,3 @@
-// load_player.nvgt - Sistema Completo de Carregamento do Jogador
-//  Epic 1 Task 2: Reescrever load_configs.bgt + get_player_info.bgt
-//
-// Este módulo é responsável por carregar completamente um jogador do banco de dados
-// e reintegrá-lo no ambiente do servidor após autenticação bem-sucedida.
-//
-// Estrutura de carregamento:
-// 1. Carregar dados básicos do banco SQLite
-// 2. Restaurar inventário e equipamentos
-// 3. Validar e restaurar localização no mapa
-// 4. Popular estruturas globais
-// 5. Restaurar dados sociais (guild, party, friends)
-// 6. Sincronizar estado com o cliente
-// 7. Registrar timers pessoais
-
-// ============================================================
-// 1. CARREGAR DADOS COMPLETOS DO BANCO SQLITE
-// ============================================================
 
 bool load_player_data_complete(player@ p) {
     if(!database_initialized || p is null) {
@@ -25,7 +7,6 @@ bool load_player_data_complete(player@ p) {
 
     debug_log("=== Carregando dados completos de " + p.charname + " ===");
 
-    // Query completa para carregar todos os dados do jogador
     string query = """
         SELECT
             level, experience, gold, hp, max_hp, mp, max_mp, race,
@@ -56,7 +37,6 @@ bool load_player_data_complete(player@ p) {
     if(stmt.step() == SQLITE_ROW) {
         int col = 0;
 
-        // Dados básicos
         p.player_level = stmt.column_int(col++);
         p.level = p.player_level;
         p.exp = stmt.column_int(col++);
@@ -69,7 +49,6 @@ bool load_player_data_complete(player@ p) {
         p.max_mp = stmt.column_int(col++);
         p.race = stmt.column_text(col++);
 
-        // Localização
         p.map = stmt.column_text(col++);
         p.map_name = p.map;
         p.mapaatual = p.map;
@@ -77,83 +56,66 @@ bool load_player_data_complete(player@ p) {
         p.y = stmt.column_int(col++);
         p.z = stmt.column_int(col++);
 
-        // Admin
         p.admin_status = (stmt.column_int(col++) == 1);
         p.is_admin = p.admin_status;
         p.admin = p.admin_status;
 
-        // Gênero (sexo2 é usado para sufixos: "o" masculino, "a" feminino)
         p.sexo = stmt.column_int(col++);
         p.sexo2 = (p.sexo == 0 ? "o" : "a");
 
-        // Inventário e equipamentos (JSON serializado)
         string inventory_json = stmt.column_text(col++);
         string equipment_json = stmt.column_text(col++);
 
-        // Economia
         p.stryx = stmt.column_double(col++);
         p.creditos = stmt.column_double(col++);
         p.saldo = stmt.column_double(col++);
         p.gcoins = stmt.column_int(col++);
         p.greais = stmt.column_int(col++);
 
-        // Estatísticas
         p.kills = stmt.column_int(col++);
         p.matou = p.kills;
         p.deaths = stmt.column_int(col++);
         p.playtime = stmt.column_double(col++);
 
-        // Arena
         p.arena_wins = stmt.column_int(col++);
         p.arena_kills = stmt.column_int(col++);
 
-        // Bounty
         p.bounty_on_head = stmt.column_int(col++);
         p.bounty_value = stmt.column_int(col++);
         p.bounty_owner = stmt.column_text(col++);
 
-        // Título e rank
         p.title = stmt.column_text(col++);
         p.rank = stmt.column_int(col++);
 
-        // Datas de conta
         p.last_login_at = stmt.column_text(col++);
         p.created_at = stmt.column_text(col++);
 
-        // XP e estatísticas
         p.xprequerida = stmt.column_int(col++);
         p.matou = stmt.column_int(col++);
         p.reencarnou = stmt.column_int(col++);
 
-        // Status/Condições
         p.stamina = stmt.column_int(col++);
         p.fome = stmt.column_int(col++);
         p.sanity = stmt.column_double(col++);
         p.radiation = stmt.column_int(col++);
 
-        // Configurações
         p.voice_id = stmt.column_text(col++);
         p.idiomachat = stmt.column_text(col++);
 
-        // IDs sociais (guild, party)
         int guild_id = stmt.column_int(col++);
         int party_id = stmt.column_int(col++);
 
-        // Configurar valores derivados
         p.health = p.hp;
         p.maxhealth = p.max_hp;
 
         debug_log("✓ Dados básicos carregados para " + p.charname);
 
-        // Carregar inventário e equipamentos
         if(inventory_json != "" && inventory_json != "{}") {
             load_player_inventory(p, inventory_json);
         } else {
-            // Se inventário vazio (conta antiga), dar inventário padrão
             debug_log(" Inventário vazio para " + p.charname + ", aplicando inventário padrão...");
             string default_inv = get_default_inventory_json();
             load_player_inventory(p, default_inv);
-            // Salvar no banco para não precisar fazer isso novamente
             save_player_inventory_to_db(p);
         }
 
@@ -161,9 +123,6 @@ bool load_player_data_complete(player@ p) {
             load_player_equipment(p, equipment_json);
         }
 
-        // Carregar dados sociais
-        // Referência BGT: o estado social vem do sistema social ativo.
-        // Em NVGT, executamos sempre e deixamos o resolver lidar com IDs 0/inválidos.
         load_player_guild(p, guild_id);
         load_player_party(p, party_id);
 
@@ -173,11 +132,6 @@ bool load_player_data_complete(player@ p) {
     debug_log("ERRO: Jogador " + p.charname + " não encontrado no banco de dados");
     return false;
 }
-
-// ============================================================
-// 2. RESTAURAR INVENTÁRIO E EQUIPAMENTOS
-// ============================================================
-
 
 bool load_player_inventory_from_database(player@ p, bool allow_legacy_file_fallback = false) {
     if(@p == null || !database_initialized) return false;
@@ -352,7 +306,6 @@ void load_player_inventory(player@ p, string inventory_json) {
     debug_log("Inventario carregado: " + p.inv.get_keys().length() + " tipos de itens");
 }
 
-// Salvar inventário do jogador no banco de dados
 void save_player_inventory_to_db(player@ p) {
     if(@p == null) return;
 
@@ -389,7 +342,6 @@ string build_player_equipment_json(player@ p) {
     string slot_name = "";
     string item_name = "";
 
-    // Slots padronizados NVGT
     if(p.colete_aprova_de_balas == 1) { slot_name = "body"; item_name = "colete_aprova_de_balas"; }
     else if(p.coletemilitar == 1) { slot_name = "body"; item_name = "coletemilitar"; }
     else if(p.coletecamuflado == 1) { slot_name = "body"; item_name = "coletecamuflado"; }
@@ -450,7 +402,6 @@ string build_player_equipment_json(player@ p) {
         json += "\"accessory_2\":\"anel\"";
     }
 
-    // Compatibilidade legada (ainda usada em alguns sistemas)
     if(p.bracadeira == 1) {
         if(!first) json += ",";
         first = false;
@@ -486,7 +437,6 @@ void save_player_equipment_to_db(player@ p) {
 void load_player_equipment(player@ p, string equipment_json) {
     debug_log("Carregando equipamentos de " + p.charname);
 
-    // Reset defensivo das flags de equipamento antes da restauração.
     p.colete_aprova_de_balas = 0;
     p.coletemilitar = 0;
     p.coletecamuflado = 0;
@@ -550,8 +500,6 @@ void load_player_equipment(player@ p, string equipment_json) {
 }
 
 void apply_equipment_to_player(player@ p, string slot, string item_name) {
-    // Aplicar equipamento baseado no slot
-    // Esta função deve marcar as flags corretas no player baseado no item
 
     slot = slot.trim_whitespace().lower();
     item_name = item_name.trim_whitespace().lower();
@@ -626,15 +574,12 @@ void apply_equipment_to_player(player@ p, string slot, string item_name) {
         }
     }
 
-    // Recalcular proteção total das roupas
     recalculate_clothing_protection(p);
 }
 
 void recalculate_clothing_protection(player@ p) {
-    // Recalcular proteção total baseada nos equipamentos
     p.clothing_protection = 0;
 
-    // Cada peça contribui com uma porcentagem
     if(p.colete_aprova_de_balas == 1) p.clothing_protection += 30;
     else if(p.coletemilitar == 1) p.clothing_protection += 25;
     else if(p.coletemizuno == 1) p.clothing_protection += 20;
@@ -646,15 +591,10 @@ void recalculate_clothing_protection(player@ p) {
     if(p.caneleirametal == 1) p.clothing_protection += 10;
     else if(p.caneleiramadeira == 1) p.clothing_protection += 5;
 
-    // Limite máximo de 90% de proteção
     if(p.clothing_protection > 90) p.clothing_protection = 90;
 
     debug_log("Proteção total de " + p.charname + ": " + p.clothing_protection + "%");
 }
-
-// ============================================================
-// 3. VALIDAR E RESTAURAR LOCALIZAÇÃO NO MAPA
-// ============================================================
 
 bool validate_and_restore_location(player@ p) {
     debug_log("Validando localização de " + p.charname + " [" + p.map + " (" + p.x + "," + p.y + ")]");
@@ -695,7 +635,6 @@ bool validate_and_restore_location(player@ p) {
         p.y = 0;
         p.z = 0;
 
-        // fallback de segurança caso (0,0) também esteja bloqueado
         if(!is_walkable(p.x, p.y, p.map)) {
             p.x = 1;
             p.y = 1;
@@ -712,37 +651,21 @@ bool validate_and_restore_location(player@ p) {
     return true;
 }
 
-// ============================================================
-// 4. POPULAR ESTRUTURAS GLOBAIS
-// ============================================================
-
 void populate_global_structures(player@ p) {
     debug_log("Populando estruturas globais para " + p.charname);
-
-    // Adicionar aos arrays globais de jogadores online
-    // (já foi adicionado ao array players[] no spawn_player_session)
-
-    // Atualizar contadores
-    // connected_count já é atualizado automaticamente pelo sistema de rede
 
     debug_log("✓ Estruturas globais populadas");
 }
 
-// ============================================================
-// 5. RESTAURAR DADOS SOCIAIS
-// ============================================================
-
 void load_player_guild(player@ p, int guild_id) {
     debug_log("Carregando guild de " + p.charname + " (ID: " + guild_id + ")");
 
-    // 1) Caminho principal: dicionário já carregado pelo sistema de guilds.
     guild@ g = get_player_guild(p.charname);
     if(g !is null) {
         debug_log("✓ Guild vinculada: " + g.name + " [" + g.tag + "]");
         return;
     }
 
-    // 2) Fallback: tenta localizar membro na lista ativa de guilds.
     for(uint i = 0; i < active_guilds.length(); i++) {
         guild@ candidate = active_guilds[i];
         if(candidate !is null && candidate.is_member(p.charname)) {
@@ -752,7 +675,6 @@ void load_player_guild(player@ p, int guild_id) {
         }
     }
 
-    // 3) Fallback opcional por id (quando DB usa índice 1-based da lista ativa).
     if(guild_id > 0 && guild_id <= int(active_guilds.length())) {
         guild@ by_id = active_guilds[guild_id - 1];
         if(by_id !is null && by_id.is_member(p.charname)) {
@@ -770,14 +692,12 @@ void load_player_guild(player@ p, int guild_id) {
 void load_player_party(player@ p, int party_id) {
     debug_log("Carregando party de " + p.charname + " (ID: " + party_id + ")");
 
-    // 1) Caminho principal: party já ativa em memória.
     party@ pty = get_player_party(p.charname);
     if(pty !is null) {
         debug_log("✓ Party já ativa para " + p.charname + " (líder: " + pty.leader + ")");
         return;
     }
 
-    // 2) Fallback: varredura direta em todas as parties ativas.
     for(uint i = 0; i < active_parties.length(); i++) {
         if(active_parties[i] !is null && active_parties[i].is_member(p.charname)) {
             debug_log("✓ Party restaurada por varredura (líder: " + active_parties[i].leader + ")");
@@ -785,7 +705,6 @@ void load_player_party(player@ p, int party_id) {
         }
     }
 
-    // 3) Fallback opcional por id (quando DB usa índice 1-based da lista ativa).
     if(party_id > 0 && party_id <= int(active_parties.length())) {
         party@ by_id = active_parties[party_id - 1];
         if(by_id !is null && by_id.is_member(p.charname)) {
@@ -802,7 +721,6 @@ void load_player_party(player@ p, int party_id) {
 void load_player_friends(player@ p) {
     debug_log("Carregando amigos de " + p.charname);
 
-    // Sistema atual de amigos persiste em arquivo players/<user>/friends.dat
     load_player_friends(p.charname);
 
     int pindex = get_player_index_from(p.charname);
@@ -813,47 +731,34 @@ void load_player_friends(player@ p) {
     debug_log("✓ Lista de amigos carregada");
 }
 
-// ============================================================
-// 6. SINCRONIZAR ESTADO COM O CLIENTE
-// ============================================================
-
 void sync_player_state_to_client(player@ p) {
     debug_log("Sincronizando estado de " + p.charname + " com o cliente");
 
-    // Enviar inventário
     send_inventory_to_client(p);
 
-    // Enviar equipamentos
     send_equipment_to_client(p);
 
-    // Enviar stats (vida, stamina, xp)
     send_stats_to_client(p);
 
-    // Enviar configurações
     send_configs_to_client(p);
 
-    // Enviar lista de jogadores no mapa
     send_players(p);
 
-    // Enviar mensagem de boas-vindas
     send_welcome_message(p);
 
     debug_log("✓ Estado sincronizado com o cliente");
 }
 
-// Enviar lista de jogadores no mapa para o cliente (compatibilidade BGT)
 void send_players(player@ p, bool to_others = true) {
-    // Encontrar índice do mapa do jogador
     int mapindex = p.mapindex;
     if(mapindex < 0 || mapindex >= int(server_maps.length())) {
         debug_log("AVISO: send_players - mapindex inválido para " + p.charname);
         return;
     }
-    
-    // Construir lista de jogadores no mapa
+
     string final = "set_map_players ";
     int count = 0;
-    
+
     for(uint x = 0; x < server_maps[mapindex].mapplayers.length(); x++) {
         int pindex = server_maps[mapindex].mapplayers[x];
         if(pindex >= 0 && pindex < int(players.length())) {
@@ -866,16 +771,14 @@ void send_players(player@ p, bool to_others = true) {
             count++;
         }
     }
-    
-    // Se não há jogadores, enviar "none"
+
     if(count == 0) {
         final = "set_map_players none";
     }
-    
+
     send_reliable_text(p.peer_id, final, 6);
     debug_log("  ✓ Lista de jogadores enviada (" + count + " jogadores no mapa)");
-    
-    // Notificar outros jogadores no mapa
+
     if(to_others && mapindex >= 0) {
         string add_packet = "add_player_to_map " + p.charname + " " + p.x + " " + p.y + " " + p.bipar + " " + p.pacifico + " " + p.peer_id;
         server_maps[mapindex].send_to_others(p.peer_id, 6, add_packet, true);
@@ -883,21 +786,19 @@ void send_players(player@ p, bool to_others = true) {
 }
 
 void send_inventory_to_client(player@ p) {
-    // Construir pacote de inventário no formato que o cliente espera:
-    // "setinv item1=qtd\r\nitem2=qtd\r\n..."
     string[] keys = p.inv.get_keys();
-    
+
     if(keys.length() == 0) {
         debug_log("   Inventário vazio para " + p.charname);
         return;
     }
-    
+
     string inv_packet = "setinv ";
     for(uint i = 0; i < keys.length(); i++) {
         string item_name = keys[i];
         int quantidade = 0;
         p.inv.get(item_name, quantidade);
-        
+
         if(quantidade > 0) {
             inv_packet += item_name + "=" + quantidade + "\r\n";
         }
@@ -907,8 +808,6 @@ void send_inventory_to_client(player@ p) {
     debug_log("  ✓ Inventário enviado (" + keys.length() + " itens)");
 }
 
-// Envia atualização incremental de um item para o cliente
-// Formato: "inv item=quantidade\r\n"
 void send_item_update_to_client(player@ p, string item_name, int quantidade) {
     if(@p == null) return;
     string packet = "inv " + item_name + "=" + quantidade + "\r\n";
@@ -916,7 +815,6 @@ void send_item_update_to_client(player@ p, string item_name, int quantidade) {
 }
 
 void send_equipment_to_client(player@ p) {
-    // Protocolo estruturado para cliente: setequipment item1,item2,...
     string[] equipped;
 
     if(p.colete_aprova_de_balas == 1) equipped.insert_last("colete_aprova_de_balas");
@@ -943,7 +841,6 @@ void send_equipment_to_client(player@ p) {
 }
 
 void send_stats_to_client(player@ p) {
-    // Enviar stats para o cliente
     string stats_packet = "stats|";
     stats_packet += p.health + "|";
     stats_packet += p.maxhealth + "|";
@@ -959,7 +856,6 @@ void send_stats_to_client(player@ p) {
 }
 
 void send_configs_to_client(player@ p) {
-    // Normalização de valores persistidos antes de sincronizar.
     if(p.idiomachat == "" || p.idiomachat == "null") {
         p.idiomachat = "pt";
     }
@@ -972,14 +868,12 @@ void send_configs_to_client(player@ p) {
         p.voice_id = "default";
     }
 
-    // Protocolo estruturado para cliente: setconfig idioma|voice|voice_id
     send_reliable_text(p.peer_id, "setconfig " + p.idiomachat + "|" + p.voice + "|" + p.voice_id, 0);
 
     debug_log("  ✓ Configurações enviadas");
 }
 
 void send_welcome_message(player@ p) {
-    // Mensagem de boas-vindas
     string welcome = "Bem-vindo de volta, " + p.charname + "!";
 
     send_reliable_text(p.peer_id, "say " + welcome, 0);
@@ -987,37 +881,23 @@ void send_welcome_message(player@ p) {
         send_reliable_text(p.peer_id, "say Último login: " + p.last_login_at, 0);
     }
 
-    // Informações adicionais
     send_reliable_text(p.peer_id, "say Nível: " + p.level + " | XP: " + p.exp + "/" + p.xprequerida, 0);
     send_reliable_text(p.peer_id, "say Ouro: " + p.gold + " | Stryx: " + p.stryx, 0);
 
     debug_log("  ✓ Mensagem de boas-vindas enviada");
 }
 
-// ============================================================
-// 7. REGISTRAR TIMERS PESSOAIS
-// ============================================================
-
 void register_player_timers(player@ p) {
     debug_log("Registrando timers pessoais de " + p.charname);
 
-    // Reiniciar todos os timers do jogador
     p.playtimer.restart();
     p.safetimer.restart();
     p.pingtimer.restart();
     p.afksecondtimer.restart();
 
-    // Outros timers específicos conforme necessário
-
     debug_log("✓ Timers registrados");
 }
 
-// ============================================================
-// FUNÇÃO PRINCIPAL DE CARREGAMENTO COMPLETO
-// ============================================================
-
-// Função principal que orquestra todo o carregamento do jogador
-// Esta função deve ser chamada após a autenticação bem-sucedida
 bool load_player_complete(player@ p) {
     if(p is null) {
         debug_log("ERRO: load_player_complete - player é nulo");
@@ -1028,31 +908,22 @@ bool load_player_complete(player@ p) {
     debug_log("║     CARREGAMENTO COMPLETO DE JOGADOR: " + p.charname);
     debug_log("╚════════════════════════════════════════════════════════════╝");
 
-    // PASSO 1: Carregar dados completos do banco SQLite
     if(!load_player_data_complete(p)) {
         debug_log("✗ FALHA NO PASSO 1: Carregamento de dados");
         return false;
     }
 
-    // PASSO 2: Inventário e equipamentos já são carregados no passo 1
-
-    // PASSO 3: Validar e restaurar localização
     if(!validate_and_restore_location(p)) {
         debug_log("✗ FALHA NO PASSO 3: Validação de localização");
         return false;
     }
 
-    // PASSO 4: Popular estruturas globais
     populate_global_structures(p);
 
-    // PASSO 5: Restaurar dados sociais
     load_player_friends(p);
-    // Guild e party já foram carregados no passo 1
 
-    // PASSO 6: Sincronizar estado com o cliente
     sync_player_state_to_client(p);
 
-    // PASSO 7: Registrar timers pessoais
     register_player_timers(p);
 
     debug_log("╔════════════════════════════════════════════════════════════╗");
@@ -1062,22 +933,3 @@ bool load_player_complete(player@ p) {
 
     return true;
 }
-
-// ============================================================
-// RESULTADO ESPERADO
-// ============================================================
-//
-// Com este módulo implementado:
-//  Jogador é carregado completamente do banco de dados
-//  Inventário e equipamentos são restaurados
-//  Localização no mapa é validada
-//  Estruturas globais são populadas
-//  Dados sociais são carregados
-//  Estado é sincronizado com o cliente
-//  Timers pessoais são iniciados
-//  Jogador pode entrar no jogo completamente funcional
-//
-// Este é o sistema que substitui load_configs.bgt + get_player_info.bgt
-// ============================================================
-
-

@@ -1,7 +1,4 @@
-// voids.nvgt - Sistema de Funções Utilitárias do EVM Server (convertido de BGT)
-// Conversão: BGT → NVGT - Parte 1: Funções Básicas
 
-// Função para verificar se jogador é admin do apartamento
 bool adm_apartamento(string nome, string mapa) {
 	string n1 = nome.upper();
 	string n2 = mapa.upper();
@@ -9,7 +6,7 @@ bool adm_apartamento(string nome, string mapa) {
 	n2 = n2.replace("apartamento_de_", "");
 	n1 = n1.replace("\r\n", "");
 	n2 = n2.replace("\r\n", "");
-	
+
 	if (n1 == n2) {
 		int index = get_player_index_from(n1);
 		if (index > -1) {
@@ -19,57 +16,48 @@ bool adm_apartamento(string nome, string mapa) {
 	return false;
 }
 
-// Função para comparar strings ignorando case
 bool igual(string n1, string n2) {
 	if (n1.lower() == n2.lower()) return true;
 	return false;
 }
 
-// Função para dar item a um jogador
 void daritem(string nome, string item, int quantidade) {
 	int index = get_player_index_from(nome);
 	if (index < 0) return;
-	
+
 	if (item != "xp") {
 		players[index].inv_add_item(item, quantidade);
-		// net.send_reliable_text(players[index].peer_id, "msgpegouitem " + quantidade + " " + item, 0);
-		
+
 		if (doublegold == 1) {
 			if (item == "reais" || item == "coins") {
 				players[index].inv_add_item(item, quantidade);
-				// net.send_reliable_text(players[index].peer_id, "msgvocêganhamais " + quantidade, 0);
 			}
 		}
 	}
 	else if (item == "xp") {
 		players[index].xp += quantidade;
-		// net.send_reliable_text(players[index].peer_id, "msgvocêganhou " + quantidade, 0);
-		
+
 		if (doublexp == 1) {
 			players[index].xp += quantidade;
-			// net.send_reliable_text(players[index].peer_id, "msgvocêganhou2 " + quantidade, 0);
 		}
 	}
 }
 
-// Função para pegar lancha do jogador
 string pegarlancha(int index) {
-	// Agora inv é dictionary, então iteramos pelas chaves
 	string[] keys = players[index].inv.get_keys();
 	for (uint i = 0; i < keys.length(); i++) {
 		if (keys[i].find("chave_da_lancha_de_") != -1) {
 			string it = keys[i];
-			it = it.substr(19); // Remove "chave_da_lancha_de_" (19 caracteres)
+			it = it.substr(19);
 			return it;
 		}
 	}
 	return "";
 }
 
-// Função para mostrar tempo de atividade do servidor
 void ctime(int index) {
 	string upstring;
-	
+
 	if (upw() == 1) upstring += "uma semana, ";
 	if (upw() == 2) upstring += "duas semanas, ";
 	if (upw() > 2) upstring += upw() + " semanas, ";
@@ -77,7 +65,7 @@ void ctime(int index) {
 	if (upd() == 1) upstring += "um dia, ";
 	if (upd() == 2) upstring += "dois dias, ";
 	if (upd() > 2) upstring += upd() + " dias, ";
-	
+
 	if (uph() == 1) upstring += "uma hora, ";
 	if (uph() == 2) upstring += "duas horas, ";
 	if (uph() > 2) upstring += uph() + " horas, ";
@@ -87,16 +75,14 @@ void ctime(int index) {
 
 	if (ups() == 1) upstring += "um segundo";
 	if (ups() > 1) upstring += ups() + " segundos";
-	
-	// net.send_reliable_text(event.peer_id, "msgservidorativo " + upstring + ".", 0);
+
 }
 
-// Função para enviar mensagem para administradores
 void eadm(string msg, string sound = "notifybleeps.ogg") {
 	msgadm_array.insert_at(0, msg);
 	for (uint i = 0; i < players.length(); i++) {
 		if(!players[i].is_logged_in) continue;
-		
+
 		bool can_receive = false;
 		if (players[i].check_admin()) {
 			can_receive = true;
@@ -104,12 +90,11 @@ void eadm(string msg, string sound = "notifybleeps.ogg") {
 		if (players[i].moderador == true) {
 			can_receive = true;
 		}
-		// Verificar arquivos de permissão
 		if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
 		   file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
 			can_receive = true;
 		}
-		
+
 		if(can_receive) {
 			send_reliable_text(players[i].peer_id, "ps " + sound, 0);
 			send_reliable_text(players[i].peer_id, "msg4 " + msg, 0);
@@ -117,20 +102,16 @@ void eadm(string msg, string sound = "notifybleeps.ogg") {
 	}
 }
 
-// Função para processar comandos OPC
 void opc(int index, string[] parsed) {
 	string msg = get_event_message().replace(parsed[0] + " " + parsed[1] + " ", "");
 	if (parsed[1] == "ideia") {
 		if (msg.length() < 120) {
-			// net.send_reliable_text(players[index].peer_id, "msgnormal A mensagem é muito curta.", 0);
 		} else {
-			// net.send_reliable_text(players[index].peer_id, "msgnormal Ideia enviada!", 0);
 			eadm("Ideia de " + players[index].charname + ": " + msg);
 		}
 	}
 }
 
-// Função para verificar comando customizado
 bool dcomando(int index, string[] parsed) {
 	string v = parsed[0].replace("/", "");
 	if (file_exists("qcomandos/" + v + ".md")) {
@@ -138,7 +119,7 @@ bool dcomando(int index, string[] parsed) {
 		f.open("qcomandos/" + v + ".md", "r");
 		string[] vv = f.read().split("\r\n");
 		f.close();
-		
+
 		bool r = false;
 		for (uint i = 0; i < vv.length(); i++) {
 			if (vv[i].lower() == players[index].charname.lower()) {
@@ -151,11 +132,6 @@ bool dcomando(int index, string[] parsed) {
 	return false;
 }
 
-// ============================================================================
-// FUNÇÕES AUXILIARES PARA COMANDOS ADMIN
-// ============================================================================
-
-// Broadcast para todos os jogadores online
 void broadcast_all(string message) {
 	for(uint i = 0; i < players.length(); i++) {
 		if(players[i].is_logged_in && players[i].online) {
@@ -164,7 +140,6 @@ void broadcast_all(string message) {
 	}
 }
 
-// Broadcast para todos em um mapa específico
 void broadcast_message_to_map(string map_name, string message) {
 	for(uint i = 0; i < players.length(); i++) {
 		if(players[i].is_logged_in && players[i].online && players[i].map == map_name) {
@@ -173,42 +148,35 @@ void broadcast_message_to_map(string map_name, string message) {
 	}
 }
 
-// Teleportar jogador para um mapa e posição
 void teleport_player(int player_index, string map_name, int x, int y, int z) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
-	
-	// Atualizar dados do jogador
+
 	string old_map = players[player_index].map;
 	players[player_index].map = map_name;
 	players[player_index].x = x;
 	players[player_index].y = y;
 	players[player_index].z = z;
-	
-	// Enviar comando de teleporte para o cliente
+
 	send_reliable_text(players[player_index].peer_id, "changemap " + map_name + " " + x + " " + y + " " + z, 0);
-	
+
 	debug_log("TELEPORT: " + players[player_index].charname + " de " + old_map + " para " + map_name);
 }
 
-// Adicionar item ao inventário do jogador
 void add_item_to_player(int player_index, string item_name, int quantity) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
-	
-	// O inventário é um dictionary: inv[item_name] = quantity
+
 	int current_qty = 0;
 	if(players[player_index].inv.exists(item_name)) {
 		players[player_index].inv.get(item_name, current_qty);
 	}
 	players[player_index].inv.set(item_name, current_qty + quantity);
-	
-	// Atualizar cliente
+
 	send_reliable_text(players[player_index].peer_id, "invupdate " + item_name + " " + (current_qty + quantity), 0);
 }
 
-// Remover item do inventário do jogador
 void remove_item_from_player(int player_index, string item_name, int quantity) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
-	
+
 	int current_qty = 0;
 	if(players[player_index].inv.exists(item_name)) {
 		players[player_index].inv.get(item_name, current_qty);
@@ -219,27 +187,24 @@ void remove_item_from_player(int player_index, string item_name, int quantity) {
 		} else {
 			players[player_index].inv.set(item_name, new_qty);
 		}
-		
-		// Atualizar cliente
+
 		send_reliable_text(players[player_index].peer_id, "invremove " + item_name + " " + new_qty, 0);
 	}
 }
 
-// Remover ban temporário
 bool remove_temp_ban(string player_name) {
-	// Verificar arquivo de bans temporários
 	if(!file_exists("tempbans.usr")) return false;
-	
+
 	file f;
 	if(!f.open("tempbans.usr", "r")) return false;
-	
+
 	string content = f.read();
 	f.close();
-	
+
 	string[] lines = content.split("\n");
 	string new_content = "";
 	bool found = false;
-	
+
 	for(uint i = 0; i < lines.length(); i++) {
 		if(lines[i].find(player_name) < 0) {
 			new_content += lines[i] + "\n";
@@ -247,7 +212,7 @@ bool remove_temp_ban(string player_name) {
 			found = true;
 		}
 	}
-	
+
 	if(found) {
 		file f2;
 		if(f2.open("tempbans.usr", "w")) {
@@ -255,48 +220,40 @@ bool remove_temp_ban(string player_name) {
 			f2.close();
 		}
 	}
-	
+
 	return found;
 }
 
-// Salvar dados de um jogador
 void save_player(int player_index) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
 	if(!players[player_index].is_logged_in) return;
-	
+
 	players[player_index].save_player_data();
 }
 
-// Carregar configurações do servidor
 void load_server_config() {
 	reload_all_server_data();
 }
 
-// NOTA: Funções de cargos (get_player_roles, add_role_to_player, remove_role_from_player)
-// estão definidas em roles.nvgt - usar aquelas funções
-
-// Obter lista de toda a equipe
 string[] get_all_staff() {
 	string[] staff;
-	
-	// Listar pasta de jogadores
+
 	string[]@ player_folders = find_directories("players/");
-	
+
 	for(uint i = 0; i < player_folders.length(); i++) {
 		string player_name = player_folders[i];
 		string base_path = "players/" + player_name + "/";
-		
+
 		string role_str = "";
 		if(file_exists(base_path + "dev.usr")) role_str = "[DEV]";
 		else if(file_exists(base_path + "admin.usr")) role_str = "[ADMIN]";
 		else if(file_exists(base_path + "moderator.usr")) role_str = "[MOD]";
 		else if(file_exists(base_path + "builder.usr")) role_str = "[BUILDER]";
-		
+
 		if(role_str != "") {
 			staff.insert_last(role_str + " " + player_name);
 		}
 	}
-	
+
 	return staff;
 }
-

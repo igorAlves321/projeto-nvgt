@@ -1,65 +1,43 @@
-// echo.nvgt - Sistema de Eco para Navegação por Áudio
-// Task 2.2: Implementar Sistema de Movimento Faltantes (Eco)
-// Fornece feedback auditivo baseado em distância para acessibilidade
 
 #include "rotation.nvgt"
 
-// ============================================
-// Constantes de Configuração do Eco
-// ============================================
-const double MAX_ECHO_DISTANCE = 50.0;  // Distância máxima de detecção (em tiles)
-const double MIN_VOLUME = -100.0;       // Volume mínimo (silêncio)
-const double MAX_VOLUME = 0.0;          // Volume máximo (0 dB)
-const double RAYCAST_STEP = 0.5;        // Precisão do raycasting (menor = mais preciso)
-const int BASE_DELAY_MS = 10;           // Delay base por unidade de distância
-const string ECHO_SOUND_FILE = "echo_pulse.ogg";  // Som do pulso de eco (carregado via pack)
+const double MAX_ECHO_DISTANCE = 50.0;
+const double MIN_VOLUME = -100.0;
+const double MAX_VOLUME = 0.0;
+const double RAYCAST_STEP = 0.5;
+const int BASE_DELAY_MS = 10;
+const string ECHO_SOUND_FILE = "echo_pulse.ogg";
 
-// ============================================
-// Classe de Resultado de Raycasting
-// ============================================
 class RaycastHit {
-    bool hit = false;           // Se houve acerto
-    double distance = 0.0;      // Distância até o acerto
-    double x_hit = 0.0;         // Coordenada X do acerto
-    double y_hit = 0.0;         // Coordenada Y do acerto
-    string tile_type = "";      // Tipo de tile atingido
+    bool hit = false;
+    double distance = 0.0;
+    double x_hit = 0.0;
+    double y_hit = 0.0;
+    string tile_type = "";
 
     RaycastHit() {}
 }
 
-// ============================================
-// Funções de Raycasting
-// ============================================
-
-// Simula lançamento de raio na direção do jogador para encontrar obstáculo
-// Usa have_tile_at() para detectar plataformas/paredes
 RaycastHit@ simulate_raycast(int player_x, int player_y, double player_yaw) {
     RaycastHit@ result = RaycastHit();
 
-    // Calcular ângulo em radianos
     double theta = calculate_theta(player_yaw);
 
-    // Vetores de direção unitários
     double dir_x = cos(theta);
     double dir_y = sin(theta);
 
-    // Raycasting incremental
     double current_distance = 0.0;
     double test_x = double(player_x);
     double test_y = double(player_y);
 
-    // Loop até MAX_ECHO_DISTANCE ou até encontrar obstáculo
     while (current_distance < MAX_ECHO_DISTANCE) {
-        // Avançar um passo na direção
         current_distance += RAYCAST_STEP;
         test_x = double(player_x) + (current_distance * dir_x);
         test_y = double(player_y) + (current_distance * dir_y);
 
-        // Verificar se há tile/plataforma nesta posição
         int tile_index = have_tile_at(int(test_x), int(test_y));
 
         if (tile_index != -1) {
-            // Acertou uma plataforma!
             result.hit = true;
             result.distance = current_distance;
             result.x_hit = test_x;
@@ -72,98 +50,67 @@ RaycastHit@ simulate_raycast(int player_x, int player_y, double player_yaw) {
     return @result;
 }
 
-// Versão sobrecargada que usa o jogador principal (me)
 RaycastHit@ simulate_raycast() {
     return simulate_raycast(me.x, me.y, me.yaw);
 }
 
-// ============================================
-// Funções de Modulação de Áudio
-// ============================================
-
-// Calcula volume baseado na distância
-// Quanto mais próximo, maior o volume (interpolação inversa)
 double calculate_echo_volume(double distance) {
     if (distance <= 0.0) return MAX_VOLUME;
     if (distance >= MAX_ECHO_DISTANCE) return MIN_VOLUME;
 
-    // Normalizar distância (0.0 a 1.0)
     double normalized_distance = distance / MAX_ECHO_DISTANCE;
 
-    // Interpolação inversa: perto = alto, longe = baixo
     double volume_range = MAX_VOLUME - MIN_VOLUME;
     double calculated_volume = MIN_VOLUME + ((1.0 - normalized_distance) * volume_range);
 
     return calculated_volume;
 }
 
-// Calcula delay (atraso) baseado na distância
-// Simula tempo de propagação do som
 int calculate_echo_delay(double distance) {
     if (distance <= 0.0) return 0;
 
-    // Delay proporcional à distância
     int delay_ms = int(distance * BASE_DELAY_MS);
 
     return delay_ms;
 }
 
-// ============================================
-// Sistema Principal de Eco
-// ============================================
-
-// Função principal de feedback de eco
-// Dispara som modulado baseado na distância detectada
 void calculate_echo_feedback() {
-    // Executar raycasting
     RaycastHit@ hit = simulate_raycast();
 
-    // Verificar se detectou algo
     if (!hit.hit) {
         speak("Eco: Nenhuma parede detectada dentro do alcance.");
         return;
     }
 
-    // Verificar distância máxima
     if (hit.distance > MAX_ECHO_DISTANCE) {
         speak("Eco: Nenhuma parede detectada dentro do alcance.");
         return;
     }
 
-    // Calcular modulação de áudio
     double volume = calculate_echo_volume(hit.distance);
     int delay_ms = calculate_echo_delay(hit.distance);
 
-    // Criar e configurar som de eco
     sound echo_pulse;
 
-    // Tentar carregar som (se existir)
     if (!echo_pulse.load(get_sound_path(ECHO_SOUND_FILE))) {
-        // Se não houver arquivo, usar som de beep curto
         echo_pulse.load(get_sound_path("menu/beep.ogg"));
     }
 
-    // Configurar volume calculado
     echo_pulse.volume = volume;
 
-    // Aplicar delay antes de tocar
     if (delay_ms > 0) {
         wait(delay_ms);
     }
 
-    // Tocar som de eco
     echo_pulse.play();
 
-    // Feedback textual (opcional, para debug/acessibilidade extra)
     string distance_str = format_float(hit.distance, "", 0, 1);
     string volume_str = format_float(volume, "", 0, 1);
     string message = "Eco: Parede a " + distance_str + "m. Volume: " + volume_str + "dB.";
 
-    // Usar speak para não interromper o fluxo
     speak(message);
 }
 
-// Versão com coordenadas e ângulo customizados
 void calculate_echo_feedback(int x, int y, double yaw) {
     RaycastHit@ hit = simulate_raycast(x, y, yaw);
 
@@ -192,11 +139,6 @@ void calculate_echo_feedback(int x, int y, double yaw) {
     speak("Eco: Parede a " + distance_str + "m.");
 }
 
-// ============================================
-// Funções Auxiliares de Eco
-// ============================================
-
-// Retorna informações detalhadas do último raycast
 string get_echo_info() {
     RaycastHit@ hit = simulate_raycast();
 
@@ -214,12 +156,11 @@ string get_echo_info() {
     return info;
 }
 
-// Eco rápido sem delay (para uso em combate/ação rápida)
 void quick_echo() {
     RaycastHit@ hit = simulate_raycast();
 
     if (!hit.hit || hit.distance > MAX_ECHO_DISTANCE) {
-        return; // Silencioso se não detectar nada
+        return;
     }
 
     double volume = calculate_echo_volume(hit.distance);
@@ -233,11 +174,9 @@ void quick_echo() {
     echo_pulse.play();
 }
 
-// Eco direcional - verifica múltiplas direções
 void directional_echo() {
     double original_yaw = me.yaw;
 
-    // Verificar frente, esquerda, direita, trás
     double[] directions = {0.0, -90.0, 90.0, 180.0};
     string[] dir_names = {"Frente", "Esquerda", "Direita", "Trás"};
 

@@ -1,51 +1,35 @@
-// admin_commands.nvgt - Sistema de Comandos Administrativos
-// ITEM 4: COMANDOS ADMINISTRATIVOS
-// Task 1.2.1: Validacao de Inputs Admin
-
-// ============================================================================
-// " CONSTANTES DE SEGURANAA (Task 1.2.1)
-// ============================================================================
-// Limites para validacao de inputs em comandos administrativos
 
 const int ADMIN_MIN_LEVEL = 1;
 const int ADMIN_MAX_LEVEL = 100;
-const int ADMIN_MAX_GOLD = 999999999;   // ~1 bilhao
+const int ADMIN_MAX_GOLD = 999999999;
 const int ADMIN_MAX_XP = 999999999;
 const int ADMIN_MAX_ITEM_QTY = 9999;
-const int ADMIN_MAX_DURATION = 525600;  // 1 ano em minutos
-const int ADMIN_MAX_COORD = 99999;      // Limite de coordenadas
+const int ADMIN_MAX_DURATION = 525600;
+const int ADMIN_MAX_COORD = 99999;
 const int ADMIN_MIN_COORD = -99999;
-const int ADMIN_MAX_REASON_LEN = 500;   // Tamanho maximo de razao para ban/kick
+const int ADMIN_MAX_REASON_LEN = 500;
 
-// ============================================================================
-// " FUNCOES DE VALIDACAO (Task 1.2.1)
-// ============================================================================
-
-// Envia erro formatado para o admin e retorna false para interromper execucao
 bool send_admin_error(int player_index, string command, string message) {
     send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] /" + command + ": " + message, 0);
     debug_log("ADMIN ERROR: " + players[player_index].charname + " - /" + command + " - " + message);
     return false;
 }
 
-// Valida se uma string contem apenas dAgitos (numeros positivos)
 bool is_valid_number(string str) {
     if(str.length() == 0) return false;
-    
-    // Permite sinal negativo no inAcio
+
     uint start = 0;
     if(str[0] == '-') {
-        if(str.length() == 1) return false; // Apenas "-" não e valido
+        if(str.length() == 1) return false;
         start = 1;
     }
-    
+
     for(uint i = start; i < str.length(); i++) {
         if(str[i] < '0' || str[i] > '9') return false;
     }
     return true;
 }
 
-// Valida se uma string contem apenas dAgitos positivos (sem sinal negativo)
 bool is_positive_number(string str) {
     if(str.length() == 0) return false;
     for(uint i = 0; i < str.length(); i++) {
@@ -54,109 +38,89 @@ bool is_positive_number(string str) {
     return true;
 }
 
-// Valida nome de jogador (não vazio, sem caracteres especiais perigosos)
 bool is_valid_player_name(string name) {
     if(name.length() == 0) return false;
-    if(name.length() > 32) return false; // Limite razoavel
-    
-    // Verificar caracteres perigosos
+    if(name.length() > 32) return false;
+
     if(name.find(";") >= 0) return false;
     if(name.find("|") >= 0) return false;
     if(name.find("\\") >= 0) return false;
     if(name.find("\"") >= 0) return false;
     if(name.find("'") >= 0) return false;
-    
+
     return true;
 }
 
-// Valida nome de item (não vazio, caracteres validos)
 bool is_valid_item_name(string item) {
     if(item.length() == 0) return false;
     if(item.length() > 64) return false;
-    
-    // Verificar caracteres perigosos
+
     if(item.find(";") >= 0) return false;
     if(item.find("|") >= 0) return false;
     if(item.find("\\") >= 0) return false;
-    
+
     return true;
 }
 
-// Valida nome de mapa
 bool is_valid_map_name(string map_name) {
     if(map_name.length() == 0) return false;
     if(map_name.length() > 64) return false;
-    
-    // Verificar caracteres perigosos para path traversal
+
     if(map_name.find("..") >= 0) return false;
     if(map_name.find("/") >= 0) return false;
     if(map_name.find("\\") >= 0) return false;
     if(map_name.find(":") >= 0) return false;
-    
+
     return true;
 }
 
-// Valida se um valor inteiro está dentro dos limites
 bool is_within_limits(int value, int min_val, int max_val) {
     return (value >= min_val && value <= max_val);
 }
 
-// Valida coordenada
 bool is_valid_coord(int coord) {
     return is_within_limits(coord, ADMIN_MIN_COORD, ADMIN_MAX_COORD);
 }
 
-// ============================================================================
-// " VERIFICAAAO DE PERMISSOES
-// ============================================================================
-
-// Verifica permissao de admin
 bool is_admin(int player_index) {
 	return players[player_index].admin;
 }
 
-// Verifica se e super admin (usando admin_status)
 bool is_super_admin(int player_index) {
 	return players[player_index].admin_status;
 }
 
-// Permissao para gerenciar catalogo de itens (admin/dev)
 bool can_access_item_builder(int player_index) {
     if(player_index < 0 || player_index >= int(players.length())) return false;
     string username = players[player_index].charname;
     return check_is_admin(username);
 }
 
-
-// Comando /playtime
 void cmd_playtime(int player_index, string target_name = "") {
 	if(!is_admin(player_index)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você não tem permissao!", 0);
 		return;
 	}
-	
+
 	if(target_name == "") {
-		// Mostrar proprio tempo
 		int minutes = int(players[player_index].playtimer.elapsed / 60000);
 		send_reliable_text(players[player_index].peer_id, "msg2 Seu tempo conectado: " + minutes + " minutos", 0);
 	} else {
-		// 2. Validacao de Nome do Jogador
 		if(!is_valid_player_name(target_name)) {
 			send_admin_error(player_index, "playtime", "Nome de jogador invalido!");
 			return;
 		}
-		
-		// 3. Validacao de Entidade
+
 		int target = get_player_index_from(target_name);
 		if(target == -1) {
 			send_admin_error(player_index, "playtime", "Jogador '" + target_name + "' não encontrado ou offline.");
 			return;
 		}
-		
+
 		int minutes = int(players[target].playtimer.elapsed / 60000);
 		send_reliable_text(players[player_index].peer_id, "msg2 Tempo de " + target_name + ": " + minutes + " minutos", 0);
 	}
-	
+
 	debug_log("ADMIN: " + players[player_index].charname + " usou /playtime");
 }
 
@@ -165,110 +129,97 @@ void cmd_kick(int player_index, string target_name, string reason = "Expulso por
 		send_admin_error(player_index, "kick", "Você não tem permissao!");
 		return;
 	}
-	
+
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "kick", "Nome de jogador invalido!");
 		return;
 	}
-	
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_admin_error(player_index, "kick", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
-	
+
 	if(players[target].admin) {
 		send_admin_error(player_index, "kick", "Você não pode kickar este jogador (admin protegido)!");
 		return;
 	}
-	
+
 	if(reason.length() > 256) {
 		reason = reason.substr(0, 256);
 	}
-	
+
 	uint64 target_peer = players[target].peer_id;
-	
+
 	send_reliable_text(target_peer, "msg2 Você foi chutado do servidor! Motivo: " + reason, 0);
 	send_reliable_text(target_peer, "chutad", 0);
-	
+
 	for(uint i = 0; i < players.length(); i++) {
 		if(players[i].peer_id != target_peer) {
 			send_reliable_text(players[i].peer_id, "msg2 " + target_name + " foi chutado do servidor. Motivo: " + reason, 0);
 		}
 	}
-	
+
 	debug_log("ADMIN: " + players[player_index].charname + " chutou " + target_name + " - Motivo: " + reason);
-	
+
 	wait(500);
-	
+
 	force_disconnect_and_cleanup(target_peer, true);
 }
 
-// Comando /inventory
-// Task 1.2.1: Validacao completa de inputs
 void cmd_inventory(int player_index, string target_name) {
-	// 1. Validacao de Permissao
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "inventory", "Você não tem permissao!");
 		return;
 	}
-	
-	// 2. Validacao de Nome do Jogador
+
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "inventory", "Nome de jogador invalido!");
 		return;
 	}
-	
-	// 3. Validacao de Entidade (Jogador Existe?)
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_admin_error(player_index, "inventory", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
-	
-	// --- EXECUAAO DA LA"GICA ---
-	// Serializar inventario
+
 	string inv = players[target].inv.serialize();
 	string[] items = inv.split("|");
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Inventario de " + target_name + " ===", 0);
-	
+
 	for(uint i = 0; i < items.length(); i++) {
 		if(items[i].find(":") > -1) {
 			string[] parts = items[i].split(":");
 			send_reliable_text(players[player_index].peer_id, "msg2 " + parts[0] + " x" + parts[1], 0);
 		}
 	}
-	
+
 	debug_log("ADMIN: " + players[player_index].charname + " visualizou inventario de " + target_name);
 }
 
-// Comando /freezeall
-// Task 1.2.1: Validacao de inputs
 void cmd_freezeall(int player_index, int duration = 10) {
-	// 1. Validacao de Permissao
 	if(!is_super_admin(player_index)) {
 		send_admin_error(player_index, "freezeall", "Você precisa ser super admin!");
 		return;
 	}
-	
-	// 2. Validacao de Duracao
-	if(!is_within_limits(duration, 1, 3600)) { // Maximo 1 hora
+
+	if(!is_within_limits(duration, 1, 3600)) {
 		send_admin_error(player_index, "freezeall", "Duracao deve ser entre 1 e 3600 segundos.");
 		return;
 	}
-	
-	// --- EXECUAAO DA LA"GICA ---
+
 	for(uint i = 0; i < players.length(); i++) {
-		if(!players[i].admin) { // Não congelar admins
+		if(!players[i].admin) {
 			players[i].congelado = 1;
 			send_reliable_text(players[i].peer_id, "msg2 Você foi congelado por " + duration + " segundos!", 0);
 		}
 	}
-	
+
 	debug_log("ADMIN: " + players[player_index].charname + " congelou todos os jogadores por " + duration + "s");
-	
-	// Broadcast
+
 	for(uint i = 0; i < players.length(); i++) {
 		send_reliable_text(players[i].peer_id, "msg2 ADMIN CONGELOU TODOS POR " + duration + " SEGUNDOS!", 0);
 	}
@@ -279,18 +230,16 @@ void cmd_backup(int player_index) {
 		send_admin_error(player_index, "backup", "Você precisa ser super admin!");
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Iniciando backup do banco em server/backups/ ...", 0);
-	
+
 	auto_save_all_players();
 	perform_database_backup();
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Backup solicitado com sucesso.", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " solicitou backup do banco");
 }
 
-// Comando /forcedc (forca desconexão de todos)
-// Task 1.2.1: Validacao de permissao
 void cmd_forcedc(int player_index) {
     if(!is_super_admin(player_index)) {
         send_admin_error(player_index, "forcedc", "Você precisa ser super admin!");
@@ -299,90 +248,72 @@ void cmd_forcedc(int player_index) {
 
     debug_log("ADMIN: " + players[player_index].charname + " forcou desconexao de todos");
 
-    // Notificar todos e desconectar de forma imediata/segura
     for(uint i = 0; i < players.length(); i++) {
         send_reliable_text(players[i].peer_id, "msg2 SERVIDOR REINICIANDO AGORA!", 0);
     }
 
-    // Salvar estado antes de encerrar
     auto_save_all_players();
     perform_database_backup();
 
-    // Encerrar o loop principal do servidor (shutdown gracioso)
     server_running = false;
 }
 
 #include "admin_teleport_commands.nvgt"
 
-// Comando /givexp
-// Task 1.2.1: Validacao completa de inputs
 void cmd_givexp(int player_index, string target_name, int xp_amount) {
-	// 1. Validacao de Permissao
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "givexp", "Você não tem permissao!");
 		return;
 	}
-	
-	// 2. Validacao de Nome do Jogador
+
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "givexp", "Nome de jogador invalido!");
 		return;
 	}
-	
-	// 3. Validacao de Entidade (Jogador Existe?)
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_admin_error(player_index, "givexp", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
-	
-	// 4. Validacao de Limites de XP
+
 	if(!is_within_limits(xp_amount, 1, ADMIN_MAX_XP)) {
 		send_admin_error(player_index, "givexp", "Quantidade de XP deve ser entre 1 e " + ADMIN_MAX_XP + ".");
 		return;
 	}
-	
-	// --- EXECUAAO DA LA"GICA ---
+
 	ganhaxp(target, xp_amount, 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 Você deu " + xp_amount + " XP para " + target_name, 0);
 	debug_log("ADMIN: " + players[player_index].charname + " deu " + xp_amount + " XP para " + target_name);
 }
 
-// Comando /giveitem
-// Task 1.2.1: Validacao completa de inputs
 void cmd_giveitem(int player_index, string target_name, string item_name, int quantity = 1) {
-	// 1. Validacao de Permissao
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "giveitem", "Você não tem permissao!");
 		return;
 	}
-	
-	// 2. Validacao de Nome do Jogador
+
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "giveitem", "Nome de jogador inválido!");
 		return;
 	}
-	
-	// 3. Validacao de Entidade (Jogador Existe?)
+
 	int target = get_player_index_from(target_name);
 	if(target == -1) {
 		send_admin_error(player_index, "giveitem", "Jogador '" + target_name + "' não encontrado ou offline.");
 		return;
 	}
-	
-	// 4. Validacao de Nome do Item
+
 	if(!is_valid_item_name(item_name)) {
 		send_admin_error(player_index, "giveitem", "Nome de item inválido!");
 		return;
 	}
-	
-	// 5. Validacao de Quantidade
+
 	if(!is_within_limits(quantity, 1, ADMIN_MAX_ITEM_QTY)) {
 		send_admin_error(player_index, "giveitem", "Quantidade deve ser entre 1 e " + ADMIN_MAX_ITEM_QTY + ".");
 		return;
 	}
-	
-	// --- EXECUAAO DA LA"GICA ---
+
 	players[target].inv_add_item(item_name, quantity);
 	send_reliable_text(players[player_index].peer_id, "msg2 Você deu " + quantity + "x " + item_name + " para " + target_name, 0);
 	send_reliable_text(players[target].peer_id, "msg2 Você recebeu " + quantity + "x " + item_name + " de um admin", 0);
@@ -395,8 +326,6 @@ void cmd_giveitem(int player_index, string target_name, string item_name, int qu
 
 #include "admin_grant_commands.nvgt"
 
-// Comando /pinfo - InformacAes do jogador (menu navegavel)
-// Envia dados estruturados para o cliente criar menu acessAvel
 void cmd_pinfo(int player_index, string target_name) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "pinfo", "Você não tem permissao!");
@@ -409,14 +338,11 @@ void cmd_pinfo(int player_index, string target_name) {
 	}
 
 	int target = get_player_index_from(target_name);
-	
-	// Verificar status de ban (para online e offline)
-	// check_ban_db(username, comp_id, &out reason, &out remaining_seconds)
+
 	string ban_reason = "";
 	int ban_remaining = 0;
 	bool is_banned = check_ban_db(target_name, "", ban_reason, ban_remaining);
-	
-	// Converter segundos restantes para string legAvel
+
 	string ban_expire = "N/A";
 	if(is_banned && ban_remaining > 0) {
 		int hours = ban_remaining / 3600;
@@ -425,64 +351,57 @@ void cmd_pinfo(int player_index, string target_name) {
 	} else if(is_banned && ban_remaining == -1) {
 		ban_expire = "Permanente";
 	}
-	
-	// Formato: pinfo_data:nome|status|banido|razao_ban|expira_ban|nivel|xp|hp|mapa|pos|admin|gold
-	// PIPE (|) separa campos
+
 	string data = "pinfo_data:";
-	
-	// Jogador ONLINE
+
 	if(target != -1) {
-		data += target_name + "|";                                    // 0: Nome
-		data += "Online|";                                            // 1: Status
-		data += (is_banned ? "Sim" : "Não") + "|";                   // 2: Banido?
-		data += (is_banned ? ban_reason : "N/A") + "|";              // 3: Razão do ban
-		data += (is_banned ? ban_expire : "N/A") + "|";              // 4: Expira ban
-		data += players[target].level + "|";                          // 5: Nivel
-		data += players[target].xp + "|";                             // 6: XP
-		data += players[target].health + "/" + players[target].max_health + "|"; // 7: HP
-		data += players[target].map + "|";                            // 8: Mapa
-		data += players[target].x + "," + players[target].y + "|";   // 9: Posicao
-		data += (players[target].admin ? "Sim" : "Não") + "|";       // 10: Admin?
-		data += players[target].gold;                                 // 11: Ouro
-		
+		data += target_name + "|";
+		data += "Online|";
+		data += (is_banned ? "Sim" : "Não") + "|";
+		data += (is_banned ? ban_reason : "N/A") + "|";
+		data += (is_banned ? ban_expire : "N/A") + "|";
+		data += players[target].level + "|";
+		data += players[target].xp + "|";
+		data += players[target].health + "/" + players[target].max_health + "|";
+		data += players[target].map + "|";
+		data += players[target].x + "," + players[target].y + "|";
+		data += (players[target].admin ? "Sim" : "Não") + "|";
+		data += players[target].gold;
+
 		send_reliable_text(players[player_index].peer_id, data, 0);
 		debug_log("ADMIN: " + players[player_index].charname + " consultou info de " + target_name + " (online)");
 		return;
 	}
-	
-	// Jogador OFFLINE - buscar no sistema de arquivos
-	bool exists = file_exists("players/" + target_name + "/player.dat") || 
+
+	bool exists = file_exists("players/" + target_name + "/player.dat") ||
 	              file_exists("players/" + target_name + "/player.usr");
-	
+
 	if(!exists) {
 		send_admin_error(player_index, "pinfo", "Jogador '" + target_name + "' não encontrado no sistema!");
 		return;
 	}
-	
-	// Verificar se e admin
+
 	bool is_admin_player = file_exists("players/" + target_name + "/admin.usr");
-	
-	// Dados offline (campos indisponAveis marcados como "?")
-	data += target_name + "|";                                    // 0: Nome
-	data += "Offline|";                                           // 1: Status
-	data += (is_banned ? "Sim" : "Não") + "|";                   // 2: Banido?
-	data += (is_banned ? ban_reason : "N/A") + "|";              // 3: Razão do ban
-	data += (is_banned ? ban_expire : "N/A") + "|";              // 4: Expira ban
-	data += "?|";                                                 // 5: Nivel (desconhecido offline)
-	data += "?|";                                                 // 6: XP (desconhecido offline)
-	data += "?|";                                                 // 7: HP (desconhecido offline)
-	data += "?|";                                                 // 8: Mapa (desconhecido offline)
-	data += "?|";                                                 // 9: Posicao (desconhecido offline)
-	data += (is_admin_player ? "Sim" : "Não") + "|";             // 10: Admin?
-	data += "?";                                                  // 11: Ouro (desconhecido offline)
-	
+
+	data += target_name + "|";
+	data += "Offline|";
+	data += (is_banned ? "Sim" : "Não") + "|";
+	data += (is_banned ? ban_reason : "N/A") + "|";
+	data += (is_banned ? ban_expire : "N/A") + "|";
+	data += "?|";
+	data += "?|";
+	data += "?|";
+	data += "?|";
+	data += "?|";
+	data += (is_admin_player ? "Sim" : "Não") + "|";
+	data += "?";
+
 	send_reliable_text(players[player_index].peer_id, data, 0);
 	debug_log("ADMIN: " + players[player_index].charname + " consultou info de " + target_name + " (offline)");
 }
 
 #include "admin_player_state_commands.nvgt"
 
-// Comando /freeze - Congelar jogo
 void cmd_freeze(int player_index) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "freeze", "Você não tem permissao!");
@@ -497,7 +416,6 @@ void cmd_freeze(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " congelou o jogo");
 }
 
-// Comando /unfreeze - Descongelar jogo
 void cmd_unfreeze(int player_index) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "unfreeze", "Você não tem permissao!");
@@ -512,7 +430,6 @@ void cmd_unfreeze(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " descongelou o jogo");
 }
 
-// Comando /n - Aviso global (notificacao)
 void cmd_notify(int player_index, string message) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "n", "Você não tem permissao!");
@@ -530,7 +447,6 @@ void cmd_notify(int player_index, string message) {
 	debug_log("ADMIN: " + players[player_index].charname + " enviou aviso: " + message);
 }
 
-// Comando /regalos - Dar presente para todos os jogadores online
 void cmd_regalos(int player_index, string item_name, int quantity = 1) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "regalos", "Você não tem permissao!");
@@ -562,7 +478,6 @@ void cmd_regalos(int player_index, string item_name, int quantity = 1) {
 	debug_log("ADMIN: " + players[player_index].charname + " deu presente para " + count + " jogadores");
 }
 
-// Comando /xps - Toggle XP especial
 void cmd_xps(int player_index) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "xps", "Você não tem permissao!");
@@ -578,7 +493,6 @@ void cmd_xps(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " " + status + " XP especial");
 }
 
-// Comando /pvp - Toggle PvP global
 void cmd_pvp(int player_index) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "pvp", "Você não tem permissao!");
@@ -594,7 +508,6 @@ void cmd_pvp(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " " + status + " PvP global");
 }
 
-// Comando /invis - Modo invisivel
 void cmd_invis(int player_index) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "invis", "Apenas devs podem usar este comando!");
@@ -609,7 +522,6 @@ void cmd_invis(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " " + status + " modo invisivel");
 }
 
-// Comando /god - Modo invencAvel
 void cmd_god(int player_index) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "god", "Apenas devs podem usar este comando!");
@@ -624,7 +536,6 @@ void cmd_god(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " " + status + " modo deus");
 }
 
-// Comando /serverstats - EstatAsticas do servidor
 void cmd_serverstats(int player_index) {
 	if(!is_admin(player_index)) {
 		send_admin_error(player_index, "serverstats", "Você não tem permissao!");
@@ -646,7 +557,6 @@ void cmd_serverstats(int player_index) {
 	send_reliable_text(players[player_index].peer_id, "msg2 " + stats, 0);
 }
 
-// Comando /forcesave - Forcar salvar todos os jogadores
 void cmd_forcesave(int player_index) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "forcesave", "Apenas devs podem usar este comando!");
@@ -665,7 +575,6 @@ void cmd_forcesave(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " forcou salvamento de " + saved + " jogadores");
 }
 
-// Comando /reload - Recarregar configuracoes
 void cmd_reload(int player_index) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "reload", "Apenas devs podem usar este comando!");
@@ -678,7 +587,6 @@ void cmd_reload(int player_index) {
 	debug_log("ADMIN: " + players[player_index].charname + " recarregou configuracoes");
 }
 
-// Comando /addcargo - Adicionar cargo a jogador
 void cmd_addcargo(int player_index, string target_name, string role) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "addcargo", "Apenas devs podem usar este comando!");
@@ -706,7 +614,7 @@ void cmd_addcargo(int player_index, string target_name, string role) {
 
 	if(add_role(target_name, role)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Cargo " + role + " adicionado a " + target_name, 0);
-		
+
 		int target = get_player_index_from(target_name);
 		if(target != -1) {
 			send_reliable_text(players[target].peer_id, "msg2 Você recebeu o cargo: " + role, 0);
@@ -718,7 +626,6 @@ void cmd_addcargo(int player_index, string target_name, string role) {
 	}
 }
 
-// Comando /removecargo - Remover cargo de jogador
 void cmd_removecargo(int player_index, string target_name, string role) {
 	if(!has_role(players[player_index].charname, "dev")) {
 		send_admin_error(player_index, "removecargo", "Apenas devs podem usar este comando!");
@@ -732,7 +639,7 @@ void cmd_removecargo(int player_index, string target_name, string role) {
 
 	if(remove_role(target_name, role)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Cargo " + role + " removido de " + target_name, 0);
-		
+
 		int target = get_player_index_from(target_name);
 		if(target != -1) {
 			send_reliable_text(players[target].peer_id, "msg2 Seu cargo foi removido: " + role, 0);
@@ -744,7 +651,6 @@ void cmd_removecargo(int player_index, string target_name, string role) {
 	}
 }
 
-// Comando /cargos - Ver cargos de um jogador
 void cmd_cargos(int player_index, string target_name) {
 	if(!is_valid_player_name(target_name)) {
 		send_admin_error(player_index, "cargos", "Nome de jogador inválido!");
@@ -761,7 +667,6 @@ void cmd_cargos(int player_index, string target_name) {
 	}
 }
 
-// Comando /listadmins - Listar equipe do servidor
 void cmd_listadmins(int player_index) {
 	string[] admins = get_all_staff();
 
@@ -776,7 +681,6 @@ void cmd_listadmins(int player_index) {
 	}
 }
 
-// Helper para formatar uptime
 string format_uptime(uint64 milliseconds) {
 	int seconds = milliseconds / 1000;
 	int minutes = seconds / 60;
@@ -790,9 +694,4 @@ string format_uptime(uint64 milliseconds) {
 	return days + "d " + hours + "h " + minutes + "m " + seconds + "s";
 }
 
-// ============================================================================
-// " CONSTRUTOR DE ITENS - Item Builder Tool (Admin Only)
-// ============================================================================
-
 #include "admin_item_builder_commands.nvgt"
-

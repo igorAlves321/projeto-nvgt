@@ -1,6 +1,3 @@
-// sequestrador.nvgt - Sistema de Sequestrador do EVM Server (convertido de BGT)
-// Conversão: BGT → NVGT
-// NPC inimigo que usa armas de fogo e persegue jogadores em 2D
 
 sequestrador@[] sequestradors;
 
@@ -13,7 +10,7 @@ class sequestrador {
 	timer sequestradortimer;
 	timer tempoatirar;
 	int sequestradortime = 300;
-	
+
 	sequestrador(int cx, int cy, string cmap) {
 		x = cx;
 		y = cy;
@@ -21,7 +18,6 @@ class sequestrador {
 	}
 }
 
-// Calcula distância entre sequestrador e jogador
 int get_sequestrador_distance(sequestrador@ s, player@ p) {
 	if (s.map != p.map) return -1;
 	return get_distance(s.x, p.x, s.y, p.y);
@@ -29,44 +25,37 @@ int get_sequestrador_distance(sequestrador@ s, player@ p) {
 
 void sequestradorloop() {
 	for (uint i = 0; i < sequestradors.length(); i++) {
-		// Sistema de morte
 		if (sequestradors[i].vida <= 0) {
 			send_reliable(0, "msg2 " + sequestradors[i].golpeado + "; ;matou um; ;sequestrador;!", 3);
-			
+
 			int xx = get_player_index_from(sequestradors[i].golpeado);
 			if (xx > -1) {
 				ganhaxp(players[xx].charname, random(10000, 20000));
 				players[xx].inv_add_item("corpo_de_sequestrador", 10);
-				
-				//  INTEGRAÇÃO: Atualizar quests e achievements
+
 				quest_update_kill(players[xx].charname, "sequestrador");
 				update_achievement_progress(players[xx].charname, "kills", 1);
 			}
-			
-			// Drop de M4A1
+
 			spawn_obj(sequestradors[i].x, sequestradors[i].y, "m4a1", 1, sequestradors[i].map);
 			sequestradors.remove_at(i);
 			break;
 		}
-		
-		// Sistema de movimento e combate
+
 		if (sequestradors[i].sequestradortimer.elapsed >= sequestradors[i].sequestradortime) {
 			for (uint i2 = 0; i2 < players.length(); i2++) {
 				bool andou = false;
-				
-				// Recarregar
+
 				if (sequestradors[i].tiros <= 0) {
 					sequestradors[i].tiros = 30;
 					sequestradors[i].tempoatirar.restart();
 					net.send_packet(0, "play carregar_m4a1.ogg " + sequestradors[i].x + " " + sequestradors[i].y, sequestradors[i].map);
 				}
-				
-				// Sistema de ataque (alcance 15, dano 50-100)
+
 				if (get_sequestrador_distance(sequestradors[i], players[i2]) > -1 && get_sequestrador_distance(sequestradors[i], players[i2]) <= 15 && players[i2].afk == false && players[i2].newbie == false && sequestradors[i].tempoatirar.elapsed >= 500 && sequestradors[i].tiros > 0 && players[i2].insz == false) {
 					sequestradors[i].tempoatirar.restart();
 					net.send_packet(0, "play m4a1.ogg " + sequestradors[i].x + " " + sequestradors[i].y, sequestradors[i].map);
-					
-					// Verificar reflexão de dano
+
 					int dano = random(50, 100);
 					int r = refletir(i2, "sequestrador", sequestradors[i].x, sequestradors[i].y, dano);
 					if (r > 0) {
@@ -74,7 +63,7 @@ void sequestradorloop() {
 						sequestradors[i].golpeado = players[i2].charname;
 						break;
 					}
-					
+
 					players[i2].health -= dano;
 					net.send_packet(0, "inithurt " + players[i2].charname + " " + players[i2].x + " " + players[i2].y + " " + players[i2].voice + " " + players[i2].pitch, players[i2].map);
 					players[i2].lasthit = "sequestrador";
@@ -82,8 +71,7 @@ void sequestradorloop() {
 					andou = true;
 					break;
 				}
-				
-				// Movimento X - seguir jogador
+
 				if (sequestradors[i].x > players[i2].x + 3 && players[i2].insz == false && players[i2].map == sequestradors[i].map && players[i2].newbie == false && players[i2].afk == false && andou == false) {
 					sequestradors[i].x--;
 					string ss = get_tile_at(sequestradors[i].x, sequestradors[i].y, sequestradors[i].map);
@@ -98,8 +86,7 @@ void sequestradorloop() {
 					sequestradors[i].sequestradortimer.restart();
 					andou = true;
 				}
-				
-				// Movimento Y - seguir jogador (2D)
+
 				else if (sequestradors[i].y > players[i2].y + 3 && sequestradors[i].map == players[i2].map && players[i2].afk == false && players[i2].newbie == false && players[i2].insz == false && andou == false) {
 					sequestradors[i].y--;
 					string ss = get_tile_at(sequestradors[i].x, sequestradors[i].y, sequestradors[i].map);

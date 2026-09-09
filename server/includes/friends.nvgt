@@ -1,35 +1,32 @@
-// friends.nvgt - Sistema de Amigos
-// Conversao: Novo sistema para NVGT
-// Fase 4: Sistemas Sociais
 
 class friend_list {
 	string owner;
 	string[] friends;
 	int max_friends;
-	
+
 	friend_list(string owner_name) {
 		this.owner = owner_name;
 		this.max_friends = 50;
 	}
-	
+
 	bool is_friend(string player_name) {
 		for(uint i = 0; i < friends.length(); i++) {
 			if(friends[i] == player_name) return true;
 		}
 		return false;
 	}
-	
+
 	bool is_full() {
 		return friends.length() >= uint(max_friends);
 	}
-	
+
 	void add_friend(string player_name) {
 		if(!is_friend(player_name) && !is_full()) {
 			friends.insert_last(player_name);
 			save();
 		}
 	}
-	
+
 	void remove_friend(string player_name) {
 		for(uint i = 0; i < friends.length(); i++) {
 			if(friends[i] == player_name) {
@@ -39,7 +36,7 @@ class friend_list {
 			}
 		}
 	}
-	
+
 	void save() {
 		string path = "players/" + owner + "/friends.dat";
 		file f;
@@ -47,32 +44,32 @@ class friend_list {
 			debug_log("FRIENDS: Erro ao salvar lista de " + owner);
 			return;
 		}
-		
+
 		string content = "";
 		for(uint i = 0; i < friends.length(); i++) {
 			if(i > 0) content += ",";
 			content += friends[i];
 		}
-		
+
 		f.write(content);
 		f.close();
 	}
-	
+
 	void load() {
 		string path = "players/" + owner + "/friends.dat";
 		if(!file_exists(path)) return;
-		
+
 		file f;
 		if(!f.open(path, "r")) {
 			debug_log("FRIENDS: Erro ao carregar lista de " + owner);
 			return;
 		}
-		
+
 		string content = f.read();
 		f.close();
-		
+
 		if(content == "") return;
-		
+
 		string[] loaded = content.split(",");
 		for(uint i = 0; i < loaded.length(); i++) {
 			if(loaded[i] != "" && !is_friend(loaded[i])) {
@@ -80,7 +77,7 @@ class friend_list {
 			}
 		}
 	}
-	
+
 	string[] get_online_friends() {
 		string[] online;
 		for(uint i = 0; i < friends.length(); i++) {
@@ -90,7 +87,7 @@ class friend_list {
 		}
 		return online;
 	}
-	
+
 	string[] get_offline_friends() {
 		string[] offline;
 		for(uint i = 0; i < friends.length(); i++) {
@@ -102,87 +99,77 @@ class friend_list {
 	}
 }
 
-// Dictionary global de listas de amigos (player_name -> friend_list)
 dictionary player_friends;
 
-// Obter ou criar lista de amigos
 friend_list@ get_friend_list(string player_name) {
 	if(player_friends.exists(player_name)) {
 		return cast<friend_list@>(player_friends[player_name]);
 	}
-	
-	// Criar nova lista
+
 	friend_list fl(player_name);
 	fl.load();
 	@player_friends[player_name] = @fl;
 	return fl;
 }
 
-// Comando: Adicionar amigo
 void cmd_addfriend(int player_index, string target_name) {
 	if(players[player_index].charname == target_name) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não pode adicionar a si mesmo!", 0);
 		return;
 	}
-	
+
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	if(fl.is_friend(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " ja está na sua lista!", 0);
 		return;
 	}
-	
+
 	if(fl.is_full()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Lista cheia! Maximo: " + fl.max_friends + " amigos", 0);
 		return;
 	}
-	
-	// Verificar se jogador existe (deve ter jogado pelo menos uma vez)
+
 	if(!directory_exists("players/" + target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
 		return;
 	}
-	
-	// Adicionar
+
 	fl.add_friend(target_name);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " adicionado aos amigos!", 0);
-	
-	// Notificar se estiver online
+
 	int target_idx = get_player_index_from(target_name);
 	if(target_idx >= 0) {
 		send_reliable_text(players[target_idx].peer_id, "msg2 " + players[player_index].charname + " te adicionou como amigo!", 0);
 	}
-	
+
 	debug_log("FRIENDS: " + players[player_index].charname + " adicionou " + target_name);
 }
 
-// Comando: Remover amigo
 void cmd_removefriend(int player_index, string target_name) {
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	if(!fl.is_friend(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está na sua lista!", 0);
 		return;
 	}
-	
+
 	fl.remove_friend(target_name);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " removido dos amigos", 0);
-	
+
 	debug_log("FRIENDS: " + players[player_index].charname + " removeu " + target_name);
 }
 
-// Comando: Listar amigos
 void cmd_friends(int player_index) {
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	if(fl.friends.length() == 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 Você ainda não tem amigos.", 0);
 		return;
 	}
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 === Lista de Amigos (" + fl.friends.length() + "/" + fl.max_friends + ") ===", 0);
-	
-	// Online
+
 	string[] online = fl.get_online_friends();
 	if(online.length() > 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [Online]", 0);
@@ -193,8 +180,7 @@ void cmd_friends(int player_index) {
 			}
 		}
 	}
-	
-	// Offline
+
 	string[] offline = fl.get_offline_friends();
 	if(offline.length() > 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [Offline]", 0);
@@ -204,15 +190,14 @@ void cmd_friends(int player_index) {
 	}
 }
 
-// Comando: Status de amigo
 void cmd_friendstatus(int player_index, string target_name) {
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	if(!fl.is_friend(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está na sua lista!", 0);
 		return;
 	}
-	
+
 	int target_idx = get_player_index_from(target_name);
 	if(target_idx >= 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " está ONLINE", 0);
@@ -223,66 +208,57 @@ void cmd_friendstatus(int player_index, string target_name) {
 	}
 }
 
-// Comando: Mensagem privada (PM)
 void cmd_pm(int player_index, string target_name, string message) {
-	// Verificar se está tentando mandar mensagem para si mesmo
 	if(target_name.lower() == players[player_index].charname.lower()) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não pode enviar mensagem privada para si mesmo.", 0);
 		return;
 	}
-	
+
 	int target_idx = get_player_index_from(target_name);
 	if(target_idx < 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está online!", 0);
 		return;
 	}
-	
-	// Enviar mensagem
+
 	send_reliable_text(players[player_index].peer_id, "msg2 [PM para " + target_name + "] " + message, 0);
 	send_reliable_text(players[target_idx].peer_id, "msg2 [PM de " + players[player_index].charname + "] " + message, 0);
-	
+
 	debug_log("PM: " + players[player_index].charname + " -> " + target_name + ": " + message);
 }
 
-// Comando: Teleportar para amigo
 void cmd_tpfriend(int player_index, string target_name) {
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	if(!fl.is_friend(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está na sua lista de amigos!", 0);
 		return;
 	}
-	
+
 	int target_idx = get_player_index_from(target_name);
 	if(target_idx < 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " não está online!", 0);
 		return;
 	}
-	
-	// Custo de teleporte
+
 	int cost = 100;
 	if(players[player_index].gold < cost) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Teleporte custa " + cost + " gold!", 0);
 		return;
 	}
-	
-	// Cobrar e teleportar
+
 	players[player_index].gold -= cost;
 	move_player_to_map(player_index, players[target_idx].map, players[target_idx].x, players[target_idx].y);
-	
+
 	send_reliable_text(players[player_index].peer_id, "msg2 Teleportado para " + target_name + " (-" + cost + " gold)", 0);
 	send_reliable_text(players[target_idx].peer_id, "msg2 " + players[player_index].charname + " se teleportou ate você!", 0);
-	
+
 	debug_log("FRIENDS: " + players[player_index].charname + " teleportou para " + target_name);
 }
 
-// Carregar lista de amigos ao logar
 void load_player_friends(string player_name) {
 	friend_list@ fl = get_friend_list(player_name);
-	// Ja carrega automaticamente no get_friend_list
 }
 
-// Salvar lista de amigos ao deslogar
 void save_player_friends(string player_name) {
 	if(player_friends.exists(player_name)) {
 		friend_list@ fl = cast<friend_list@>(player_friends[player_name]);
@@ -292,19 +268,12 @@ void save_player_friends(string player_name) {
 	}
 }
 
-// ============================================================================
-// TASK 2.8.3: NOTIFICAAAO DE STATUS ONLINE/OFFLINE
-// ============================================================================
-
-// Notificar amigos quando jogador faz LOGIN
 void notify_friends_login(string player_name) {
 	friend_list@ fl = get_friend_list(player_name);
-	
-	// Notificar todos os amigos online que este jogador logou
+
 	for(uint i = 0; i < fl.friends.length(); i++) {
 		int friend_idx = get_player_index_from(fl.friends[i]);
 		if(friend_idx >= 0) {
-			// Verificar se o amigo tambem tem esse jogador na lista
 			friend_list@ friend_fl = get_friend_list(fl.friends[i]);
 			if(friend_fl !is null && friend_fl.is_friend(player_name)) {
 				send_reliable_text(players[friend_idx].peer_id, "ps friend_online.ogg", 0);
@@ -312,22 +281,19 @@ void notify_friends_login(string player_name) {
 			}
 		}
 	}
-	
+
 	debug_log("FRIENDS: Notificado login de " + player_name);
 }
 
-// Notificar amigos quando jogador faz LOGOUT
 void notify_friends_logout(string player_name) {
 	if(!player_friends.exists(player_name)) return;
-	
+
 	friend_list@ fl = cast<friend_list@>(player_friends[player_name]);
 	if(fl is null) return;
-	
-	// Notificar todos os amigos online que este jogador saiu
+
 	for(uint i = 0; i < fl.friends.length(); i++) {
 		int friend_idx = get_player_index_from(fl.friends[i]);
 		if(friend_idx >= 0) {
-			// Verificar se o amigo tambem tem esse jogador na lista
 			friend_list@ friend_fl = get_friend_list(fl.friends[i]);
 			if(friend_fl !is null && friend_fl.is_friend(player_name)) {
 				send_reliable_text(players[friend_idx].peer_id, "ps friend_offline.ogg", 0);
@@ -335,18 +301,17 @@ void notify_friends_logout(string player_name) {
 			}
 		}
 	}
-	
+
 	debug_log("FRIENDS: Notificado logout de " + player_name);
 }
 
-// Verificar quais amigos estao online no momento do login
 void check_online_friends(int player_index) {
 	friend_list@ fl = get_friend_list(players[player_index].charname);
-	
+
 	string[] online = fl.get_online_friends();
 	if(online.length() > 0) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [Amigos Online] " + online.length() + " amigo(s) online:", 0);
-		for(uint i = 0; i < online.length() && i < 5; i++) {  // Mostrar no maximo 5
+		for(uint i = 0; i < online.length() && i < 5; i++) {
 			send_reliable_text(players[player_index].peer_id, "msg2 - " + online[i], 0);
 		}
 		if(online.length() > 5) {
@@ -354,7 +319,3 @@ void check_online_friends(int player_index) {
 		}
 	}
 }
-
-
-
-

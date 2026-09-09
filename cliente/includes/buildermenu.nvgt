@@ -1,13 +1,7 @@
-// Menu de construção (Builder) convertido para NVGT
-// Sistema completo de criação e edição de mapas
 
-// menu.nvgt já é incluído pelo client.nvgt
-
-// Menu principal de builder
 void buildermenu() {
 	setupmenu();
-	
-	// Elementos básicos de construção
+
 	game_menu.add_item(pu.get_value("BUILDER_TREE"), "arbol");
 	game_menu.add_item(pu.get_value("BUILDER_ANTIGAME"), "antigame");
 	game_menu.add_item(pu.get_value("BUILDER_DEATH_AREA"), "deaths");
@@ -22,11 +16,11 @@ void buildermenu() {
 	game_menu.add_item(pu.get_value("BUILDER_LOCATION"), "where");
 	game_menu.add_item(pu.get_value("BUILDER_CRAFT"), "craft");
 	game_menu.add_item(pu.get_value("BUILDER_NEW_MAP"), "newmap");
-	
+
 	if(mapname == "portal_espiritual") {
 		game_menu.add_item(pu.get_value("BUILDER_NEW_YMAP"), "newymap");
 	}
-	
+
 	game_menu.add_item(pu.get_value("BUILDER_RESPAWN_ITEMS"), "respawnitems");
 	game_menu.add_item(pu.get_value("BUILDER_SINK"), "lavabo");
 	game_menu.add_item(pu.get_value("BUILDER_TOILET"), "retrete");
@@ -61,20 +55,18 @@ void buildermenu() {
 	game_menu.add_item(pu.get_value("BUILDER_SAFE_ZONE"), "safezone");
 	game_menu.add_item(pu.get_value("BUILDER_ADVANCED_OPTS"), "correccion");
 	game_menu.add_item(pu.get_value("BUILDER_CLOSE"), "closemenu");
-	
+
 	game_menu.intro_text = pu.get_value("BUILDER_INTRO");
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
-	
+
 	if(selected_id == "closemenu" || mres == -1) {
 		return;
 	}
-	
-	// Processar seleção
+
 	process_builder_selection(selected_id);
 }
 
-// Processa seleção do menu de builder
 void process_builder_selection(string selected_id) {
 	if(selected_id == "retrete") {
 		builder_create_toilet();
@@ -216,7 +208,6 @@ void process_builder_selection(string selected_id) {
 	}
 }
 
-// Helper para enviar ao servidor
 void send_to_server(string packet, int channel, bool reliable) {
 	if(!is_connected) {
 		debug_log("send_to_server bloqueado: sem conexão ativa. pacote='" + packet + "'");
@@ -240,9 +231,6 @@ void send_to_server(string packet, int channel, bool reliable) {
 	}
 }
 
-// ===== FUNÇÕES DE CRIAÇÃO DE ELEMENTOS =====
-
-// Criar vaso sanitário
 void builder_create_toilet() {
 	input_form form(pu.get_value("BUILDER_TOILET_TITLE"));
 	form.add_number_field("x", pu.get_value("BUILDER_X_COORD"), 0, true);
@@ -259,7 +247,6 @@ void builder_create_toilet() {
 	}
 }
 
-// Criar pia
 void builder_create_sink() {
 	input_form form(pu.get_value("BUILDER_SINK_TITLE"));
 	form.add_number_field("x", pu.get_value("BUILDER_X_COORD"), 0, true);
@@ -276,7 +263,6 @@ void builder_create_sink() {
 	}
 }
 
-// Criar itens respawnáveis
 void builder_create_respawn_items() {
 	input_form form(pu.get_value("BUILDER_RESPAWN_TITLE"));
 	form.add_text_field("item", pu.get_value("BUILDER_ITEM_NAME"), "", true);
@@ -286,7 +272,7 @@ void builder_create_respawn_items() {
 	form.add_number_field("disappear_time", pu.get_value("BUILDER_DISAPPEAR_TIME"), 30000, true);
 	form.add_text_field("sound", pu.get_value("BUILDER_SOUND_COLLECT"), "", true);
 	form.add_number_field("respawn_time", pu.get_value("BUILDER_RESPAWN_TIME"), 60000, true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		string item, sound_name;
@@ -298,16 +284,15 @@ void builder_create_respawn_items() {
 		result.get("disappear_time", disappear_time);
 		result.get("sound", sound_name);
 		result.get("respawn_time", respawn_time);
-		
+
 		if(item != "" && qty > 0 && x > 0 && y > 0) {
-			string data = "item:" + int(x) + ":" + int(y) + ":" + int(disappear_time) + ":0:" + 
+			string data = "item:" + int(x) + ":" + int(y) + ":" + int(disappear_time) + ":0:" +
 			              int(qty) + ":" + item + ":" + sound_name + ":" + int(respawn_time);
 			send_to_server("add_line::" + data, 13, true);
 		}
 	}
 }
 
-// Criar zona de extração
 void builder_create_extraction_zone() {
 	input_form form(pu.get_value("BUILDER_EXTRACT_TITLE"));
 	form.add_number_field("x1", pu.get_value("BUILDER_X_MIN"), 0, true);
@@ -320,7 +305,7 @@ void builder_create_extraction_zone() {
 	form.add_text_field("item", pu.get_value("BUILDER_ITEM_NAME"), "", true);
 	form.add_text_field("sound_press", pu.get_value("BUILDER_SOUND_PRESS"), "", true);
 	form.add_text_field("sound_spawn", pu.get_value("BUILDER_SOUND_SPAWN"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2, qty, presses, speed;
@@ -329,7 +314,7 @@ void builder_create_extraction_zone() {
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("qty", qty); result.get("presses", presses); result.get("speed", speed);
 		result.get("item", item); result.get("sound_press", sound_press); result.get("sound_spawn", sound_spawn);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && item != "") {
 			string data = "ex:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 			              int(qty) + ":" + int(presses) + ":" + int(speed) + ":" + item + ":" +
@@ -339,13 +324,11 @@ void builder_create_extraction_zone() {
 	}
 }
 
-// Criar bot (NPC)
 void builder_create_bot() {
 	bool confirm = simple_yes_no(pu.get_value("BUILDER_BOT_WARNING"));
-	
+
 	if(!confirm) return;
-	
-	// Form complexo para criação de bot
+
 	input_form form(pu.get_value("Criar Bot - Parte 1"));
 	form.description = pu.get_value("Preencha os dados básicos do bot.");
 	form.add_number_field("x", pu.get_value("coordenada x onde aparecerá."), 0, true);
@@ -356,16 +339,15 @@ void builder_create_bot() {
 	form.add_number_field("damage_received", pu.get_value("Dano que receberá (0 = padrão arma)."), 0, true);
 	form.add_number_field("damage_dealt", pu.get_value("Dano que fará."), 10, true);
 	form.add_number_field("mirror_damage", pu.get_value("Dano do espelho refletor?"), 5, true);
-	
+
 	dictionary@ result = form.run();
 	if(form.user_canceled) return;
-	
+
 	double x, y, vida, xp, attack_dist, damage_received, damage_dealt, mirror_damage;
 	result.get("x", x); result.get("y", y); result.get("vida", vida); result.get("xp", xp);
 	result.get("attack_dist", attack_dist); result.get("damage_received", damage_received);
 	result.get("damage_dealt", damage_dealt); result.get("mirror_damage", mirror_damage);
-	
-	// Form parte 2
+
 	input_form form2(pu.get_value("Criar Bot - Parte 2"));
 	form2.add_number_field("attack_time", pu.get_value("Tempo entre ataques (ms)."), 1000, true);
 	form2.add_number_field("walk_time", pu.get_value("Tempo entre passos (ms)."), 200, true);
@@ -375,17 +357,16 @@ void builder_create_bot() {
 	form2.add_text_field("calm_sounds", pu.get_value("Sons calmos (sem .ogg, vírgulas)."), "", true);
 	form2.add_text_field("death_sound", pu.get_value("Som de morte (sem .ogg)."), "", true);
 	form2.add_text_field("name", pu.get_value("Nome do bot."), "", true);
-	
+
 	dictionary@ result2 = form2.run();
 	if(form2.user_canceled) return;
-	
+
 	double attack_time, walk_time, calm_time;
 	string items, attack_sounds, calm_sounds, death_sound, name;
 	result2.get("attack_time", attack_time); result2.get("walk_time", walk_time); result2.get("calm_time", calm_time);
 	result2.get("items", items); result2.get("attack_sounds", attack_sounds); result2.get("calm_sounds", calm_sounds);
 	result2.get("death_sound", death_sound); result2.get("name", name);
-	
-	// Form parte 3
+
 	input_form form3(pu.get_value("Criar Bot - Parte 3"));
 	form3.add_text_field("death_msg", pu.get_value("Mensagem ao morrer (*g* = sexo, *nick* = nome)."), "", true);
 	form3.add_number_field("respawn_time", pu.get_value("Tempo para aparecer (ms)."), 60000, true);
@@ -394,24 +375,22 @@ void builder_create_bot() {
 	form3.add_number_field("x_max", pu.get_value("Coordenada x máxima para caminhar."), 0, true);
 	form3.add_text_field("hit_sounds", pu.get_value("Sons ao receber dano (default = padrão)."), "default", true);
 	form3.add_number_field("degradation", pu.get_value("Degradação na arma do jogador."), 1, true);
-	
+
 	dictionary@ result3 = form3.run();
 	if(form3.user_canceled) return;
-	
+
 	string death_msg, footsteps, hit_sounds;
 	double respawn_time, x_min, x_max, degradation;
 	result3.get("death_msg", death_msg); result3.get("respawn_time", respawn_time);
 	result3.get("footsteps", footsteps); result3.get("x_min", x_min); result3.get("x_max", x_max);
 	result3.get("hit_sounds", hit_sounds); result3.get("degradation", degradation);
-	
-	// Perguntas sim/não
+
 	bool multi_respawn = simple_yes_no(pu.get_value("Respawnará mais deste bot enquanto ele estiver vivo?"));
 	bool bomb_damage = simple_yes_no(pu.get_value("Será danificado por bombas?"));
-	
+
 	string s19 = multi_respawn ? "1" : "0";
 	string s20 = bomb_damage ? "1" : "0";
-	
-	// Montar string do bot
+
 	if(x > 0 && y > 0 && name != "") {
 		string data = "npc:" + int(x) + ":" + int(y) + ":" + int(vida) + ":" + int(xp) + ":" +
 		              int(attack_dist) + ":" + int(damage_received) + ":" + int(damage_dealt) + ":" +
@@ -424,7 +403,6 @@ void builder_create_bot() {
 	}
 }
 
-// Criar som ambiente
 void builder_create_ambient_sound() {
 	input_form form(pu.get_value("Som ambiente"));
 	form.add_number_field("x1", pu.get_value("Início da coordenada x"), 0, true);
@@ -432,7 +410,7 @@ void builder_create_ambient_sound() {
 	form.add_number_field("y1", pu.get_value("Início da coordenada y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim da coordenada y"), 0, true);
 	form.add_text_field("sound", pu.get_value("Nome do som (com extensão .ogg)"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
@@ -440,7 +418,7 @@ void builder_create_ambient_sound() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("sound", sound_name);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && sound_name != "") {
 			string data = "ss:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" + sound_name;
 			send_to_server("add_line::" + data, 13, true);
@@ -448,7 +426,6 @@ void builder_create_ambient_sound() {
 	}
 }
 
-// Criar música do mapa
 void builder_create_map_music() {
 	input_form form(pu.get_value("Música do mapa"));
 	form.add_number_field("x1", pu.get_value("Início da coordenada x"), 0, true);
@@ -456,7 +433,7 @@ void builder_create_map_music() {
 	form.add_number_field("y1", pu.get_value("Início da coordenada y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim da coordenada y"), 0, true);
 	form.add_text_field("sound", pu.get_value("Nome da música"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
@@ -464,7 +441,7 @@ void builder_create_map_music() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("sound", sound_name);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && sound_name != "") {
 			string data = "ss2:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" + sound_name;
 			send_to_server("add_line::" + data, 13, true);
@@ -472,7 +449,6 @@ void builder_create_map_music() {
 	}
 }
 
-// Definir localização do mapa
 void builder_set_location() {
 	input_form form(pu.get_value("Localização"));
 	form.add_text_field("location", pu.get_value("Nova localização que aparecerá ao dar F1"), "", true);
@@ -486,7 +462,6 @@ void builder_set_location() {
 	}
 }
 
-// Criar coordenadas de respawn
 void builder_create_respawn_coords() {
 	input_form form(pu.get_value("Coordenadas de reaparecimento"));
 	form.add_number_field("x1", pu.get_value("Início da coordenada x"), 0, true);
@@ -497,7 +472,7 @@ void builder_create_respawn_coords() {
 	form.add_number_field("respawn_y", pu.get_value("Coordenada y de reaparecimento"), 0, true);
 	form.add_text_field("prev_map", pu.get_value("Mapa anterior necessário"), "", true);
 	form.add_text_field("message", pu.get_value("Mensagem ao atravessar"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2, respawn_x, respawn_y;
@@ -506,7 +481,7 @@ void builder_create_respawn_coords() {
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("respawn_x", respawn_x); result.get("respawn_y", respawn_y);
 		result.get("prev_map", prev_map); result.get("message", message);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			string data = "newymap:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 			              int(respawn_x) + ":" + int(respawn_y) + ":" + prev_map + ":" + message;
@@ -515,7 +490,6 @@ void builder_create_respawn_coords() {
 	}
 }
 
-// Criar zona
 void builder_create_zone() {
 	input_form form(pu.get_value("Criar zona"));
 	form.add_number_field("x1", pu.get_value("Início da coordenada x"), 0, true);
@@ -523,7 +497,7 @@ void builder_create_zone() {
 	form.add_number_field("y1", pu.get_value("Início da coordenada y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim da coordenada y"), 0, true);
 	form.add_text_field("text", pu.get_value("Texto da zona"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
@@ -531,7 +505,7 @@ void builder_create_zone() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("text", text);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && text != "") {
 			string data = "z:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" + text;
 			send_to_server("add_line::" + data, 13, true);
@@ -539,14 +513,13 @@ void builder_create_zone() {
 	}
 }
 
-// Criar novo mapa
 void builder_create_new_map() {
 	input_form form(pu.get_value("Criar novo mapa"));
 	form.add_text_field("name", pu.get_value("Nome do mapa (sem espaços)"), "", true);
 	form.add_number_field("width", pu.get_value("Largura máxima"), 100, true);
 	form.add_number_field("height", pu.get_value("Altura máxima"), 100, true);
 	form.add_text_field("floor", pu.get_value("Som do chão (sem step1.ogg)"), "1", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		string name, floor;
@@ -555,14 +528,13 @@ void builder_create_new_map() {
 		result.get("width", width);
 		result.get("height", height);
 		result.get("floor", floor);
-		
+
 		if(name != "" && width > 0 && height > 0) {
 			send_to_server("/newmap " + name + " " + int(width) + " " + int(height) + " " + floor, 1, false);
 		}
 	}
 }
 
-// Atualizar mapa
 void builder_update_map() {
 	input_form form(pu.get_value("Atualizar mapa"));
 	form.add_text_field("code", pu.get_value("Nome do mapa (vazio = mapa atual):"), "", true);
@@ -575,7 +547,6 @@ void builder_update_map() {
 	}
 }
 
-// Desativar elemento
 void builder_disable_element() {
 	input_form form(pu.get_value("Desativar elemento"));
 	form.add_text_field("element", pu.get_value("Elemento a desativar neste mapa"), "", true);
@@ -589,7 +560,6 @@ void builder_disable_element() {
 	}
 }
 
-// Desativar arma
 void builder_disable_weapon() {
 	input_form form(pu.get_value("Desativar arma"));
 	form.add_text_field("weapon", pu.get_value("Arma a desativar neste mapa"), "", true);
@@ -603,27 +573,22 @@ void builder_disable_weapon() {
 	}
 }
 
-// Desfazer última criação
 void builder_undo_last() {
-	// Verificar se há algo para desfazer
 	if(map2.length() == 0) {
 		speak(pu.get_value("BUILDER_UNDO_EMPTY"));
 		return;
 	}
-	
-	// Obter a última linha adicionada ao mapa
+
 	string last_line = map2[map2.length() - 1];
-	
-	// Extrair o tipo de elemento da última linha
+
 	string[] parts = string_split(last_line, ":");
 	if(parts.length() == 0) {
 		speak(pu.get_value("Erro ao processar última criação."));
 		return;
 	}
-	
+
 	string element_type = parts[0];
-	
-	// Mapear tipos legíveis
+
 	string element_name = "";
 	if(element_type == "w") element_name = pu.get_value("BUILDER_WALL");
 	else if(element_type == "w2") element_name = pu.get_value("BUILDER_ADVANCED_WALL");
@@ -659,28 +624,24 @@ void builder_undo_last() {
 	else if(element_type == "newymap") element_name = pu.get_value("BUILDER_NEW_YMAP");
 	else if(element_type == "teto") element_name = pu.get_value("teto");
 	else element_name = element_type;
-	
-	// Confirmar desfazer
+
 	bool confirm = simple_yes_no(pu.get_value("BUILDER_UNDO_CONFIRM") + element_name + "?");
-	
+
 	if(!confirm) {
 		speak(pu.get_value("Operação cancelada."));
 		return;
 	}
-	
-	// Remover última linha do array local
+
 	map2.remove_at(map2.length() - 1);
-	
-	// Enviar comando ao servidor para remover
+
 	send_to_server("undo_last::" + last_line, 13, true);
-	
+
 	speak(pu.get_value("BUILDER_UNDO_DONE") + element_name);
-	
-	// Oferecer opção de continuar desfazendo
+
 	if(map2.length() > 0) {
 		bool continue_undo = simple_yes_no(pu.get_value("BUILDER_UNDO_MORE"));
 		if(continue_undo) {
-			builder_undo_last(); // Recursivo
+			builder_undo_last();
 		}
 	}
 	else {
@@ -688,21 +649,20 @@ void builder_undo_last() {
 	}
 }
 
-// Criar plataforma
 void builder_create_platform() {
 	input_form form(pu.get_value("Criar plataforma"));
 	form.add_number_field("x1", pu.get_value("Início da coordenada x"), 0, true);
 	form.add_number_field("x2", pu.get_value("Fim da coordenada x"), 0, true);
 	form.add_number_field("height", pu.get_value("Altura da plataforma"), 0, true);
 	form.add_text_field("sound", pu.get_value("Som do chão (sem step1.ogg)"), "1", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, height;
 		string sound_name;
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("height", height); result.get("sound", sound_name);
-		
+
 		if(x1 > 0 && x2 > 0 && height > 0) {
 			string data = "p:" + int(x1) + ":" + int(x2) + ":" + int(height) + ":" + sound_name;
 			send_to_server("add_line::" + data, 13, true);
@@ -710,7 +670,6 @@ void builder_create_platform() {
 	}
 }
 
-// Criar areia movediça
 void builder_create_quicksand() {
 	input_form form(pu.get_value("Areia movediça"));
 	form.add_number_field("x", pu.get_value("Coordenada x da areia"), 0, true);
@@ -725,7 +684,6 @@ void builder_create_quicksand() {
 	}
 }
 
-// Criar porta
 void builder_create_door(bool complete) {
 	input_form form(pu.get_value("Criar porta"));
 	form.add_number_field("x_loc", pu.get_value("Localização x da porta"), 0, true);
@@ -734,7 +692,7 @@ void builder_create_door(bool complete) {
 	form.add_number_field("y_dest", pu.get_value("Altura destino (y)"), 0, true);
 	form.add_text_field("sound_open", pu.get_value("Som de abertura"), "door_open.ogg", true);
 	form.add_text_field("sound_close", pu.get_value("Som de fechamento"), "door_close.ogg", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x_loc, y_loc, x_dest, y_dest;
@@ -742,7 +700,7 @@ void builder_create_door(bool complete) {
 		result.get("x_loc", x_loc); result.get("y_loc", y_loc);
 		result.get("x_dest", x_dest); result.get("y_dest", y_dest);
 		result.get("sound_open", sound_open); result.get("sound_close", sound_close);
-		
+
 		if(x_loc > 0 && y_loc > 0 && x_dest > 0 && y_dest > 0) {
 			string data = "dr:" + int(x_loc) + ":" + int(y_loc) + ":" + int(x_dest) + ":" + int(y_dest) +
 			              ":200:none:none:" + sound_open + ":" + sound_close;
@@ -751,20 +709,19 @@ void builder_create_door(bool complete) {
 	}
 }
 
-// Criar elevador
 void builder_create_elevator() {
 	input_form form(pu.get_value("Criar elevador"));
 	form.add_number_field("x_start", pu.get_value("Coordenada x de início"), 0, true);
 	form.add_number_field("y_start", pu.get_value("Coordenada y de início"), 0, true);
 	form.add_number_field("x_dest", pu.get_value("Coordenada x de destino"), 0, true);
 	form.add_number_field("y_dest", pu.get_value("Coordenada y de destino"), 0, true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x_start, y_start, x_dest, y_dest;
 		result.get("x_start", x_start); result.get("y_start", y_start);
 		result.get("x_dest", x_dest); result.get("y_dest", y_dest);
-		
+
 		if(x_start > 0 && y_start > 0 && x_dest > 0 && y_dest > 0) {
 			string data = "elv:" + int(x_start) + ":" + int(y_start) + ":" + int(x_dest) + ":" + int(y_dest);
 			send_to_server("add_line::" + data, 13, true);
@@ -772,87 +729,82 @@ void builder_create_elevator() {
 	}
 }
 
-// Criar texto
 void builder_create_text() {
 	input_form form(pu.get_value("Criar texto"));
 	form.add_number_field("x", pu.get_value("Coordenada x"), 0, true);
 	form.add_number_field("y", pu.get_value("Coordenada y"), 0, true);
 	form.add_text_field("content", pu.get_value("Conteúdo do texto"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x, y;
 		string content;
 		result.get("x", x); result.get("y", y); result.get("content", content);
-		
+
 		if(x > 0 && y > 0 && content != "") {
 			send_to_server("add_line::txt:" + int(x) + ":" + int(y) + ":" + content, 13, true);
 		}
 	}
 }
 
-// Criar diálogo
 void builder_create_dialog() {
 	input_form form(pu.get_value("Criar diálogo"));
 	form.add_number_field("x", pu.get_value("Coordenada x"), 0, true);
 	form.add_number_field("y", pu.get_value("Coordenada y"), 0, true);
 	form.add_text_field("content", pu.get_value("Conteúdo do diálogo"), "", true);
 	form.add_text_field("sound", pu.get_value("Som ao ativar (sem .ogg)"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x, y;
 		string content, sound_name;
 		result.get("x", x); result.get("y", y);
 		result.get("content", content); result.get("sound", sound_name);
-		
+
 		if(x > 0 && y > 0 && content != "" && sound_name != "") {
 			send_to_server("add_line::dlg:" + int(x) + ":" + int(y) + ":" + content + ":" + sound_name, 13, true);
 		}
 	}
 }
 
-// Criar safezone
 void builder_create_safezone() {
 	input_form form(pu.get_value("Criar zona protegida"));
 	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
 	form.add_number_field("x2", pu.get_value("Fim x"), 0, true);
 	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			send_to_server("add_line::sz:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2), 13, true);
 		}
 	}
 }
 
-// Criar área anti-jogo
 void builder_create_antigame_area() {
 	input_form form(pu.get_value("Área anti-jogo"));
 	form.add_number_field("x1", pu.get_value("Coordenada x início"), 0, true);
 	form.add_number_field("x2", pu.get_value("Coordenada x final"), 0, true);
 	form.add_number_field("y1", pu.get_value("Coordenada y início"), 0, true);
 	form.add_number_field("y2", pu.get_value("Coordenada y final"), 0, true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			send_to_server("add_line::disable_game:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2), 13, true);
 		}
 	}
 }
 
-// Criar área de morte
 void builder_create_death_area() {
 	input_form form(pu.get_value("Área de morte"));
 	form.add_number_field("x1", pu.get_value("Coordenada x mínima"), 0, true);
@@ -861,7 +813,7 @@ void builder_create_death_area() {
 	form.add_number_field("y2", pu.get_value("Coordenada y máxima"), 0, true);
 	form.add_number_field("time", pu.get_value("Tempo para efeito (ms)"), 1000, true);
 	form.add_text_field("death_msg", pu.get_value("Mensagem de morte (*g*=sexo, *nick*=nome)"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2, time;
@@ -869,11 +821,11 @@ void builder_create_death_area() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("time", time); result.get("death_msg", death_msg);
-		
+
 		bool progressive = simple_yes_no(pu.get_value("A morte será progressiva?"));
 		string s6 = progressive ? "1" : "0";
 		string s7 = "0";
-		
+
 		if(progressive) {
 			input_form form2(pu.get_value("Dano progressivo"));
 			form2.add_number_field("damage", pu.get_value("Quanta vida tirará?"), 10, true);
@@ -884,12 +836,12 @@ void builder_create_death_area() {
 				s7 = "" + int(damage);
 			}
 		}
-		
+
 		bool requires_item = simple_yes_no(pu.get_value("Requer item para evitar efeitos?"));
 		string s9 = "nada";
 		string s10 = "0";
 		string s11 = "0";
-		
+
 		if(requires_item) {
 			input_form form3(pu.get_value("Item necessário"));
 			form3.add_text_field("item", pu.get_value("Nome do item"), "", true);
@@ -903,7 +855,7 @@ void builder_create_death_area() {
 				s11 = "" + int(qty);
 			}
 		}
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			string data = "death:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 			              int(time) + ":" + s6 + ":" + s7 + ":" + death_msg + ":" + s9 + ":" + s10 + ":" + s11;
@@ -912,7 +864,6 @@ void builder_create_death_area() {
 	}
 }
 
-// Adicionar URL
 void builder_add_url() {
 	input_form form(pu.get_value("Adicionar URL"));
 	form.add_text_field("url", pu.get_value("URL que se reproduzirá neste mapa"), "", true);
@@ -926,7 +877,6 @@ void builder_add_url() {
 	}
 }
 
-// Criar escada
 void builder_create_stair() {
 	input_form form(pu.get_value("Criar escada"));
 	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
@@ -934,7 +884,7 @@ void builder_create_stair() {
 	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
 	form.add_text_field("sound", pu.get_value("Som (sem step1.ogg)"), "1", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
@@ -942,14 +892,13 @@ void builder_create_stair() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("sound", sound_name);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			send_to_server("add_line::sc:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" + sound_name, 13, true);
 		}
 	}
 }
 
-// Criar árvore
 void builder_create_tree() {
 	input_form form(pu.get_value("Criar árvore"));
 	form.add_number_field("x", pu.get_value("Coordenada x"), 0, true);
@@ -958,18 +907,18 @@ void builder_create_tree() {
 	form.add_number_field("life", pu.get_value("Vida da árvore"), 100, true);
 	form.add_number_field("respawn_time", pu.get_value("Tempo para reaparecer (ms)"), 60000, true);
 	form.add_text_field("name", pu.get_value("Nome da árvore (ao pressionar M)"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x, y1, y2, life, respawn_time;
 		string name;
 		result.get("x", x); result.get("y1", y1); result.get("y2", y2);
 		result.get("life", life); result.get("respawn_time", respawn_time); result.get("name", name);
-		
+
 		bool spawn_items = simple_yes_no(pu.get_value("Spawnará itens ao cair?"));
 		string s6 = spawn_items ? "1" : "0";
 		string s7 = "nada";
-		
+
 		if(spawn_items) {
 			input_form form2(pu.get_value("Itens da árvore"));
 			form2.add_text_field("items", pu.get_value("Itens (item.1,item2.2)"), "", true);
@@ -978,7 +927,7 @@ void builder_create_tree() {
 				result2.get("items", s7);
 			}
 		}
-		
+
 		if(x > 0 && y1 > 0 && y2 > 0 && name != "") {
 			string data = "arbol:" + int(x) + ":" + int(y1) + ":" + int(y2) + ":" + int(life) + ":" +
 			              int(respawn_time) + ":" + s6 + ":" + s7 + ":" + name;
@@ -987,7 +936,6 @@ void builder_create_tree() {
 	}
 }
 
-// Criar parede com vida
 void builder_create_wall_with_life() {
 	input_form form(pu.get_value("Parede com vida"));
 	form.add_number_field("x", pu.get_value("Coordenada x"), 0, true);
@@ -998,7 +946,7 @@ void builder_create_wall_with_life() {
 	form.add_text_field("name", pu.get_value("Nome (ao pressionar M)"), "", true);
 	form.add_text_field("hit_sound", pu.get_value("Som ao chocar (sem .ogg)"), "wall", true);
 	form.add_text_field("break_sound", pu.get_value("Som ao quebrar (sem .ogg)"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x, y1, y2, life, respawn_time;
@@ -1006,11 +954,11 @@ void builder_create_wall_with_life() {
 		result.get("x", x); result.get("y1", y1); result.get("y2", y2);
 		result.get("life", life); result.get("respawn_time", respawn_time);
 		result.get("name", name); result.get("hit_sound", hit_sound); result.get("break_sound", break_sound);
-		
+
 		bool spawn_items = simple_yes_no(pu.get_value("Spawnará itens ao cair?"));
 		string s6 = spawn_items ? "1" : "0";
 		string s7 = "nada";
-		
+
 		if(spawn_items) {
 			input_form form2(pu.get_value("Itens"));
 			form2.add_text_field("items", pu.get_value("Itens (item.1,item2.2)"), "", true);
@@ -1019,7 +967,7 @@ void builder_create_wall_with_life() {
 				result2.get("items", s7);
 			}
 		}
-		
+
 		if(x > 0 && y1 > 0 && y2 > 0) {
 			string data = "wall:" + int(x) + ":" + int(y1) + ":" + int(y2) + ":" + int(life) + ":" +
 			              int(respawn_time) + ":" + s6 + ":" + s7 + ":" + name + ":" + hit_sound + ":" + break_sound;
@@ -1028,27 +976,25 @@ void builder_create_wall_with_life() {
 	}
 }
 
-// Criar parede simples
 void builder_create_wall() {
 	input_form form(pu.get_value("Criar parede"));
 	form.add_number_field("x", pu.get_value("Coordenada x"), 0, true);
 	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
 	form.add_text_field("sound", pu.get_value("Som da parede (sem .ogg)"), "wall", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x, y1, y2;
 		string sound_name;
 		result.get("x", x); result.get("y1", y1); result.get("y2", y2); result.get("sound", sound_name);
-		
+
 		if(x > 0 && y1 > 0 && y2 > 0) {
 			send_to_server("add_line::w:" + int(x) + ":" + int(y1) + ":" + int(y2) + ":" + sound_name, 13, true);
 		}
 	}
 }
 
-// Criar parede avançada
 void builder_create_advanced_wall() {
 	input_form form(pu.get_value("Parede avançada"));
 	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
@@ -1056,7 +1002,7 @@ void builder_create_advanced_wall() {
 	form.add_number_field("y1", pu.get_value("Início y"), 0, true);
 	form.add_number_field("y2", pu.get_value("Fim y"), 0, true);
 	form.add_text_field("sound", pu.get_value("Som (sem .ogg)"), "wall", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2;
@@ -1064,19 +1010,18 @@ void builder_create_advanced_wall() {
 		result.get("x1", x1); result.get("x2", x2);
 		result.get("y1", y1); result.get("y2", y2);
 		result.get("sound", sound_name);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0) {
 			send_to_server("add_line::w2:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" + sound_name, 13, true);
 		}
 	}
 }
 
-// Deletar mapa
 void builder_delete_map() {
 	input_form form(pu.get_value("Deletar mapa"));
 	form.description = pu.get_value("ATENÇÃO: Isso deletará permanentemente o mapa!");
 	form.add_text_field("mapname", pu.get_value("Nome do mapa a eliminar"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		string mapname;
@@ -1090,7 +1035,6 @@ void builder_delete_map() {
 	}
 }
 
-// Criar passagem
 void builder_create_passage() {
 	input_form form(pu.get_value("Passagem"));
 	form.add_number_field("x1", pu.get_value("Início x"), 0, true);
@@ -1101,7 +1045,7 @@ void builder_create_passage() {
 	form.add_number_field("dest_y", pu.get_value("Destino y"), 0, true);
 	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
 	form.add_text_field("message", pu.get_value("Mensagem ao chegar"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(!form.user_canceled) {
 		double x1, x2, y1, y2, dest_x, dest_y;
@@ -1109,7 +1053,7 @@ void builder_create_passage() {
 		result.get("x1", x1); result.get("x2", x2); result.get("y1", y1); result.get("y2", y2);
 		result.get("dest_x", dest_x); result.get("dest_y", dest_y);
 		result.get("dest_map", dest_map); result.get("message", message);
-		
+
 		if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "") {
 			string data = "tp:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 			              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" + message;
@@ -1118,7 +1062,6 @@ void builder_create_passage() {
 	}
 }
 
-// Passagem cronometrada (timed passage)
 void builder_create_timed_passage() {
 	input_form form(pu.get_value("Passagem cronometrada - Parte 1"));
 	form.description = pu.get_value("Crie uma passagem que só funciona em horários específicos.");
@@ -1129,18 +1072,17 @@ void builder_create_timed_passage() {
 	form.add_number_field("dest_x", pu.get_value("Destino x"), 0, true);
 	form.add_number_field("dest_y", pu.get_value("Destino y"), 0, true);
 	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(form.user_canceled) return;
-	
+
 	double x1, x2, y1, y2, dest_x, dest_y;
 	string dest_map;
 	result.get("x1", x1); result.get("x2", x2);
 	result.get("y1", y1); result.get("y2", y2);
 	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
 	result.get("dest_map", dest_map);
-	
-	// Parte 2: Configuração de tempo
+
 	input_form form2(pu.get_value("Passagem cronometrada - Parte 2"));
 	form2.description = pu.get_value("Configure os horários de funcionamento.");
 	form2.add_number_field("start_hour", pu.get_value("Hora de início (0-23)"), 0, true);
@@ -1149,29 +1091,28 @@ void builder_create_timed_passage() {
 	form2.add_number_field("end_minute", pu.get_value("Minuto de fim (0-59)"), 59, true);
 	form2.add_text_field("message_active", pu.get_value("Mensagem quando ativo"), "", false);
 	form2.add_text_field("message_inactive", pu.get_value("Mensagem quando inativo"), "", false);
-	
+
 	dictionary@ result2 = form2.run();
 	if(form2.user_canceled) return;
-	
+
 	double start_hour, start_minute, end_hour, end_minute;
 	string message_active, message_inactive;
 	result2.get("start_hour", start_hour); result2.get("start_minute", start_minute);
 	result2.get("end_hour", end_hour); result2.get("end_minute", end_minute);
 	result2.get("message_active", message_active); result2.get("message_inactive", message_inactive);
-	
-	// Parte 3: Configurações adicionais
+
 	bool weekdays_only = simple_yes_no(pu.get_value("Funciona apenas em dias de semana (seg-sex)?"));
 	bool weekends_only = simple_yes_no(pu.get_value("Funciona apenas em fins de semana (sáb-dom)?"));
 	bool require_item = simple_yes_no(pu.get_value("Requer item para atravessar?"));
-	
+
 	string required_item = "none";
 	int required_qty = 0;
-	
+
 	if(require_item) {
 		input_form form3(pu.get_value("Item requerido"));
 		form3.add_text_field("item", pu.get_value("Nome do item"), "", true);
 		form3.add_number_field("qty", pu.get_value("Quantidade"), 1, true);
-		
+
 		dictionary@ result3 = form3.run();
 		if(!form3.user_canceled) {
 			double qty;
@@ -1180,24 +1121,22 @@ void builder_create_timed_passage() {
 			required_qty = int(qty);
 		}
 	}
-	
-	// Montar dados
+
 	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "") {
 		string weekday_flag = weekdays_only ? "1" : (weekends_only ? "2" : "0");
-		
+
 		string data = "timed_passage:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
 		              int(start_hour) + ":" + int(start_minute) + ":" +
 		              int(end_hour) + ":" + int(end_minute) + ":" +
 		              weekday_flag + ":" + required_item + ":" + required_qty + ":" +
 		              message_active + ":" + message_inactive;
-		
+
 		send_to_server("add_line::" + data, 13, true);
 		speak(pu.get_value("Passagem cronometrada criada com sucesso!"));
 	}
 }
 
-// Portamapa (mapgate) - Portal que leva a outro mapa
 void builder_create_mapgate() {
 	input_form form(pu.get_value("Portamapa - Parte 1"));
 	form.description = pu.get_value("Crie um portal para outro mapa.");
@@ -1208,36 +1147,34 @@ void builder_create_mapgate() {
 	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
 	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
 	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(form.user_canceled) return;
-	
+
 	double x1, x2, y1, y2, dest_x, dest_y;
 	string dest_map;
 	result.get("x1", x1); result.get("x2", x2);
 	result.get("y1", y1); result.get("y2", y2);
 	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
 	result.get("dest_map", dest_map);
-	
-	// Parte 2: Configurações
+
 	input_form form2(pu.get_value("Portamapa - Parte 2"));
 	form2.add_text_field("message", pu.get_value("Mensagem ao atravessar"), "", false);
 	form2.add_text_field("sound", pu.get_value("Som ao atravessar (sem .ogg)"), "", false);
 	form2.add_number_field("cooldown", pu.get_value("Tempo de espera entre usos (ms)"), 0, false);
-	
+
 	dictionary@ result2 = form2.run();
 	if(form2.user_canceled) return;
-	
+
 	string message, sound_name;
 	double cooldown;
 	result2.get("message", message);
 	result2.get("sound", sound_name);
 	result2.get("cooldown", cooldown);
-	
-	// Restrições opcionais
+
 	bool require_level = simple_yes_no(pu.get_value("Requer nível mínimo?"));
 	int min_level = 0;
-	
+
 	if(require_level) {
 		input_form form3(pu.get_value("Nível mínimo"));
 		form3.add_number_field("level", pu.get_value("Nível mínimo necessário"), 1, true);
@@ -1248,23 +1185,21 @@ void builder_create_mapgate() {
 			min_level = int(level);
 		}
 	}
-	
+
 	bool team_only = simple_yes_no(pu.get_value("Apenas para membros de equipe?"));
 	bool pvp_disabled = simple_yes_no(pu.get_value("Desabilitar PVP ao atravessar?"));
-	
-	// Montar dados
+
 	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "") {
 		string data = "mapgate:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
 		              message + ":" + sound_name + ":" + int(cooldown) + ":" +
 		              min_level + ":" + (team_only ? "1" : "0") + ":" + (pvp_disabled ? "1" : "0");
-		
+
 		send_to_server("add_line::" + data, 13, true);
 		speak(pu.get_value("Portamapa criado com sucesso!"));
 	}
 }
 
-// Portamapa que requer item 1
 void builder_create_mapgate_item1() {
 	input_form form(pu.get_value("Portamapa com item - Parte 1"));
 	form.description = pu.get_value("Portal que requer um item específico.");
@@ -1275,52 +1210,48 @@ void builder_create_mapgate_item1() {
 	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
 	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
 	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(form.user_canceled) return;
-	
+
 	double x1, x2, y1, y2, dest_x, dest_y;
 	string dest_map;
 	result.get("x1", x1); result.get("x2", x2);
 	result.get("y1", y1); result.get("y2", y2);
 	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
 	result.get("dest_map", dest_map);
-	
-	// Configurar item necessário
+
 	input_form form2(pu.get_value("Portamapa com item - Parte 2"));
 	form2.description = pu.get_value("Configure o item necessário para atravessar.");
 	form2.add_text_field("item", pu.get_value("Nome do item necessário"), "", true);
 	form2.add_number_field("qty", pu.get_value("Quantidade necessária"), 1, true);
 	form2.add_text_field("message_success", pu.get_value("Mensagem ao atravessar"), "", false);
 	form2.add_text_field("message_fail", pu.get_value("Mensagem quando não tem item"), "", false);
-	
+
 	dictionary@ result2 = form2.run();
 	if(form2.user_canceled) return;
-	
+
 	string item, message_success, message_fail;
 	double qty;
 	result2.get("item", item);
 	result2.get("qty", qty);
 	result2.get("message_success", message_success);
 	result2.get("message_fail", message_fail);
-	
-	// Opções adicionais
+
 	bool consume_item = simple_yes_no(pu.get_value("Consumir o item ao atravessar?"));
 	bool one_way = simple_yes_no(pu.get_value("Portal de mão única (sem volta)?"));
-	
-	// Montar dados
+
 	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "" && item != "") {
 		string data = "mapgate_item:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
 		              item + ":" + int(qty) + ":" + (consume_item ? "1" : "0") + ":" +
 		              (one_way ? "1" : "0") + ":" + message_success + ":" + message_fail;
-		
+
 		send_to_server("add_line::" + data, 13, true);
 		speak(pu.get_value("Portamapa com item criado com sucesso!"));
 	}
 }
 
-// Portamapa que requer item 2 (versão avançada com múltiplos itens)
 void builder_create_mapgate_item2() {
 	input_form form(pu.get_value("Portamapa com múltiplos itens - Parte 1"));
 	form.description = pu.get_value("Portal que requer vários itens diferentes.");
@@ -1331,37 +1262,35 @@ void builder_create_mapgate_item2() {
 	form.add_number_field("dest_x", pu.get_value("Coordenada x de destino"), 0, true);
 	form.add_number_field("dest_y", pu.get_value("Coordenada y de destino"), 0, true);
 	form.add_text_field("dest_map", pu.get_value("Mapa de destino"), "", true);
-	
+
 	dictionary@ result = form.run();
 	if(form.user_canceled) return;
-	
+
 	double x1, x2, y1, y2, dest_x, dest_y;
 	string dest_map;
 	result.get("x1", x1); result.get("x2", x2);
 	result.get("y1", y1); result.get("y2", y2);
 	result.get("dest_x", dest_x); result.get("dest_y", dest_y);
 	result.get("dest_map", dest_map);
-	
-	// Configurar múltiplos itens
+
 	input_form form2(pu.get_value("Portamapa com múltiplos itens - Parte 2"));
 	form2.description = pu.get_value("Liste os itens necessários (formato: item1.qty1,item2.qty2)");
 	form2.add_text_field("items", pu.get_value("Itens e quantidades"), "", true);
 	form2.add_text_field("message_success", pu.get_value("Mensagem de sucesso"), "", false);
 	form2.add_text_field("message_fail", pu.get_value("Mensagem de falha"), "", false);
-	
+
 	dictionary@ result2 = form2.run();
 	if(form2.user_canceled) return;
-	
+
 	string items, message_success, message_fail;
 	result2.get("items", items);
 	result2.get("message_success", message_success);
 	result2.get("message_fail", message_fail);
-	
-	// Opções avançadas
+
 	bool consume_items = simple_yes_no(pu.get_value("Consumir todos os itens ao atravessar?"));
 	bool require_all = simple_yes_no(pu.get_value("Requer TODOS os itens (se não, requer apenas 1)?"));
 	bool reset_cooldown = simple_yes_no(pu.get_value("Tem tempo de espera entre usos?"));
-	
+
 	int cooldown_time = 0;
 	if(reset_cooldown) {
 		input_form form3(pu.get_value("Tempo de espera"));
@@ -1373,23 +1302,20 @@ void builder_create_mapgate_item2() {
 			cooldown_time = int(time);
 		}
 	}
-	
-	// Montar dados
+
 	if(x1 > 0 && x2 > 0 && y1 > 0 && y2 > 0 && dest_map != "" && items != "") {
 		string data = "mapgate_multi:" + int(x1) + ":" + int(x2) + ":" + int(y1) + ":" + int(y2) + ":" +
 		              int(dest_x) + ":" + int(dest_y) + ":" + dest_map + ":" +
 		              items + ":" + (consume_items ? "1" : "0") + ":" +
 		              (require_all ? "1" : "0") + ":" + cooldown_time + ":" +
 		              message_success + ":" + message_fail;
-		
+
 		send_to_server("add_line::" + data, 13, true);
 		speak(pu.get_value("Portamapa com múltiplos itens criado com sucesso!"));
 	}
 }
 
-// Entradas do construtor que delegam para menus especializados
 void craftmenu() {
-	// Usa o construtor de itens para receitas e materiais.
 	speak(pu.get_value("Abrindo construtor de itens para receitas e materiais."), true);
 	item_builder_menu();
 }
@@ -1527,4 +1453,3 @@ void correccionmenu() {
 		return;
 	}
 }
-

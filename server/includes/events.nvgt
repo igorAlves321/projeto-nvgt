@@ -1,48 +1,35 @@
-// ========================================
-// SISTEMA DE EVENTOS - FASE 5
-// ========================================
-// Sistema completo de eventos temporários do servidor
-// com ranking, recompensas e tipos variados
 
 #include "globals.nvgt"
 
-// ========================================
-// ENUMS
-// ========================================
-
 enum event_type {
-    EVENT_PVP_ARENA,      // Arena PvP
-    EVENT_COLLECTION,     // Coletar itens
-    EVENT_SURVIVAL,       // Sobreviver ondas
-    EVENT_TREASURE_HUNT,  // Caça ao tesouro
-    EVENT_BOSS_SPAWN,     // Boss world event
-    EVENT_RACE,           // Corrida
-    EVENT_QUIZ            // Quiz/Trivia
+    EVENT_PVP_ARENA,
+    EVENT_COLLECTION,
+    EVENT_SURVIVAL,
+    EVENT_TREASURE_HUNT,
+    EVENT_BOSS_SPAWN,
+    EVENT_RACE,
+    EVENT_QUIZ
 }
 
 enum event_state {
-    EVENT_SCHEDULED,      // Agendado
-    EVENT_REGISTERING,    // Aceitando registros
-    EVENT_ACTIVE,         // Em andamento
-    EVENT_COMPLETED,      // Concluído
-    EVENT_CANCELLED       // Cancelado
+    EVENT_SCHEDULED,
+    EVENT_REGISTERING,
+    EVENT_ACTIVE,
+    EVENT_COMPLETED,
+    EVENT_CANCELLED
 }
-
-// ========================================
-// CLASSES
-// ========================================
 
 class event_participant {
     string player_name;
     int score;
     int rank;
-    int kills;            // Para PvP
-    int deaths;           // Para PvP
-    int items_collected;  // Para Collection
-    int waves_survived;   // Para Survival
+    int kills;
+    int deaths;
+    int items_collected;
+    int waves_survived;
     timer join_time;
     bool eliminated;
-    
+
     event_participant(string name) {
         player_name = name;
         score = 0;
@@ -56,13 +43,13 @@ class event_participant {
 }
 
 class event_reward {
-    int rank_min;         // Rank mínimo (1 = primeiro)
-    int rank_max;         // Rank máximo (-1 = todos)
+    int rank_min;
+    int rank_max;
     int gold;
     int xp;
-    dictionary items;     // item_name -> quantity
-    string title;         // Título especial
-    
+    dictionary items;
+    string title;
+
     event_reward() {
         rank_min = 1;
         rank_max = 1;
@@ -77,36 +64,30 @@ class game_event {
     string description;
     event_type type;
     event_state state;
-    
-    // Timing
+
     timer scheduled_time;
     int duration_minutes;
     timer start_time;
     timer registration_start;
     int registration_duration_minutes;
-    
-    // Requisitos
+
     int min_level;
     int max_level;
     int min_participants;
     int max_participants;
     int entry_fee_gold;
-    
-    // Participantes
+
     event_participant@[] participants;
     string[] registered_players;
-    
-    // Recompensas
+
     event_reward@[] rewards;
     int participation_gold;
     int participation_xp;
-    
-    // Configurações específicas por tipo
-    dictionary config;    // Configurações flexíveis
-    
-    // Ranking
+
+    dictionary config;
+
     bool is_ranked;
-    
+
     game_event() {
         id = 0;
         type = EVENT_PVP_ARENA;
@@ -122,67 +103,45 @@ class game_event {
         participation_xp = 50;
         is_ranked = true;
     }
-    
-    // Registra jogador
+
     bool register_player(string player_name) {
-        // Verifica estado
         if (state != EVENT_REGISTERING) {
             return false;
         }
-        
-        // Verifica se já registrado
+
         for (uint i = 0; i < registered_players.length(); i++) {
             if (registered_players[i] == player_name) {
                 return false;
             }
         }
-        
-        // Verifica limite
+
         if (int(registered_players.length()) >= max_participants) {
             return false;
         }
-        
-        // Verifica nível
-        // int player_level = get_player_level(player_name);
-        // if (player_level < min_level || player_level > max_level) {
-        //     return false;
-        // }
-        
-        // Verifica gold
-        // if (!has_gold(player_name, entry_fee_gold)) {
-        //     return false;
-        // }
-        
-        // Deduz taxa de entrada
-        // remove_gold(player_name, entry_fee_gold);
-        
+
         registered_players.insert_last(player_name);
         broadcast_to_participants(player_name + " se registrou! (" + registered_players.length() + "/" + max_participants + ")");
-        
+
         return true;
     }
-    
-    // Inicia evento
+
     void start() {
-        // Verifica participantes mínimos
         if (int(registered_players.length()) < min_participants) {
             cancel("Participantes insuficientes.");
             return;
         }
-        
+
         state = EVENT_ACTIVE;
         start_time.restart();
-        
-        // Cria participantes
+
         for (uint i = 0; i < registered_players.length(); i++) {
             event_participant@ ep = event_participant(registered_players[i]);
             participants.insert_last(ep);
         }
-        
+
         broadcast_global(" Evento '" + name + "' iniciado!");
         broadcast_to_participants("O evento começou! Boa sorte!");
-        
-        // Configurações específicas por tipo
+
         switch (type) {
             case EVENT_PVP_ARENA:
                 start_pvp_arena();
@@ -201,40 +160,31 @@ class game_event {
                 break;
         }
     }
-    
-    // Finaliza evento
+
     void end() {
         state = EVENT_COMPLETED;
-        
-        // Calcula ranking
+
         calculate_rankings();
-        
-        // Distribui recompensas
+
         distribute_rewards();
-        
+
         broadcast_global("Evento '" + name + "' finalizado!");
-        
-        // Salva histórico
+
         save_event_history();
     }
-    
-    // Cancela evento
+
     void cancel(string reason) {
         state = EVENT_CANCELLED;
-        
-        // Reembolsa taxa de entrada
+
         for (uint i = 0; i < registered_players.length(); i++) {
-            // add_gold(registered_players[i], entry_fee_gold);
         }
-        
+
         broadcast_global("Evento '" + name + "' cancelado: " + reason);
     }
-    
-    // Calcula rankings
+
     void calculate_rankings() {
         if (!is_ranked || participants.length() == 0) return;
-        
-        // Ordena por score (bubble sort simples)
+
         for (uint i = 0; i < participants.length(); i++) {
             for (uint j = i + 1; j < participants.length(); j++) {
                 if (participants[j].score > participants[i].score) {
@@ -244,165 +194,131 @@ class game_event {
                 }
             }
         }
-        
-        // Atribui ranks
+
         for (uint i = 0; i < participants.length(); i++) {
             participants[i].rank = i + 1;
         }
     }
-    
-    // Distribui recompensas
+
     void distribute_rewards() {
         for (uint i = 0; i < participants.length(); i++) {
             event_participant@ p = participants[i];
             int total_gold = participation_gold;
             int total_xp = participation_xp;
             string msg = "=== RECOMPENSAS DO EVENTO ===\n\n";
-            
+
             if (p.rank > 0) {
                 msg += "Sua colocação: #" + p.rank + "\n";
                 msg += "Score: " + p.score + "\n\n";
             }
-            
-            // Verifica recompensas de ranking
+
             for (uint j = 0; j < rewards.length(); j++) {
                 event_reward@ r = rewards[j];
-                
+
                 bool qualifies = false;
                 if (r.rank_max == -1) {
                     qualifies = (p.rank >= r.rank_min);
                 } else {
                     qualifies = (p.rank >= r.rank_min && p.rank <= r.rank_max);
                 }
-                
+
                 if (qualifies) {
                     total_gold += r.gold;
                     total_xp += r.xp;
-                    
+
                     if (r.title != "") {
                         msg += "🏆 Novo título: " + r.title + "\n";
-                        // unlock_title(p.player_name, r.title);
                     }
-                    
+
                     string[] items = r.items.get_keys();
                     for (uint k = 0; k < items.length(); k++) {
                         int qty;
                         r.items.get(items[k], qty);
                         msg += "📦 Item: " + items[k] + " x" + qty + "\n";
-                        // add_item(p.player_name, items[k], qty);
                     }
                 }
             }
-            
+
             msg += "\n💰 Gold: " + total_gold + "\n";
             msg += "⭐ XP: " + total_xp + "\n";
-            
-            // add_gold(p.player_name, total_gold);
-            // add_xp(p.player_name, total_xp);
-            
-            // send_message(p.player_name, msg);
+
         }
     }
-    
-    // Broadcast para participantes
+
     void broadcast_to_participants(string message) {
         for (uint i = 0; i < participants.length(); i++) {
-            // send_message(participants[i].player_name, message);
         }
-        
-        // Também envia para registrados (se ainda não iniciou)
+
         for (uint i = 0; i < registered_players.length(); i++) {
-            // send_message(registered_players[i], message);
         }
     }
-    
-    // Broadcast global
+
     void broadcast_global(string message) {
-        // global_broadcast(message);
     }
-    
-    // Verifica se tempo acabou
+
     bool check_timeout() {
         if (state != EVENT_ACTIVE) return false;
-        
+
         if (start_time.elapsed >= duration_minutes * 60 * 1000) {
             end();
             return true;
         }
         return false;
     }
-    
-    // ========================================
-    // EVENTOS ESPECÍFICOS
-    // ========================================
-    
+
     void start_pvp_arena() {
         broadcast_to_participants("⚔️ ARENA PVP ATIVADA!");
         broadcast_to_participants("Elimine outros jogadores para ganhar pontos!");
-        // Teleporta todos para arena
     }
-    
+
     void start_collection() {
         int item_count = 100;
         if (config.exists("item_count")) {
             config.get("item_count", item_count);
         }
-        
+
         broadcast_to_participants("📦 EVENTO DE COLETA!");
         broadcast_to_participants("Colete o máximo de itens em " + duration_minutes + " minutos!");
-        // Spawna itens no mapa
     }
-    
+
     void start_survival() {
         broadcast_to_participants("👹 EVENTO DE SOBREVIVÊNCIA!");
         broadcast_to_participants("Sobreviva o máximo de ondas possível!");
-        // Inicia sistema de ondas
     }
-    
+
     void start_treasure_hunt() {
         int treasures = 10;
         if (config.exists("treasure_count")) {
             config.get("treasure_count", treasures);
         }
-        
+
         broadcast_to_participants("💎 CAÇA AO TESOURO!");
         broadcast_to_participants("Encontre " + treasures + " tesouros escondidos!");
-        // Esconde tesouros no mapa
     }
-    
+
     void start_boss_spawn() {
         broadcast_to_participants("🐉 BOSS WORLD SPAWN!");
         broadcast_to_participants("Derrote o boss para ganhar recompensas!");
-        // Spawna boss world
     }
-    
-    // Salva histórico
+
     void save_event_history() {
-        // Implementar salvamento em arquivo
     }
 }
-
-// ========================================
-// SISTEMA GLOBAL DE EVENTOS
-// ========================================
 
 game_event@[] scheduled_events;
 game_event@[] active_events;
 game_event@[] event_history;
 
-// Inicializa sistema de eventos
 void init_events_system() {
     scheduled_events.resize(0);
     active_events.resize(0);
     event_history.resize(0);
-    
+
     create_default_events();
     schedule_automatic_events();
 }
 
-// Cria eventos padrão
 void create_default_events() {
-    // Evento 1: Arena PvP
     {
         game_event@ e = game_event();
         e.id = 1;
@@ -418,8 +334,7 @@ void create_default_events() {
         e.entry_fee_gold = 100;
         e.participation_gold = 200;
         e.participation_xp = 500;
-        
-        // Recompensas
+
         event_reward@ r1 = event_reward();
         r1.rank_min = 1;
         r1.rank_max = 1;
@@ -428,7 +343,7 @@ void create_default_events() {
         r1.title = "Campeão da Arena";
         r1.items.set("Espada do Campeão", 1);
         e.rewards.insert_last(r1);
-        
+
         event_reward@ r2 = event_reward();
         r2.rank_min = 2;
         r2.rank_max = 3;
@@ -436,11 +351,10 @@ void create_default_events() {
         r2.xp = 1500;
         r2.items.set("Poção de Vida Superior", 5);
         e.rewards.insert_last(r2);
-        
+
         scheduled_events.insert_last(e);
     }
-    
-    // Evento 2: Coleta de Cristais
+
     {
         game_event@ e = game_event();
         e.id = 2;
@@ -458,8 +372,7 @@ void create_default_events() {
         e.participation_xp = 200;
         e.config.set("item_count", 200);
         e.config.set("item_name", "Cristal Mágico");
-        
-        // Recompensas
+
         event_reward@ r1 = event_reward();
         r1.rank_min = 1;
         r1.rank_max = 1;
@@ -467,25 +380,24 @@ void create_default_events() {
         r1.xp = 2000;
         r1.title = "Colecionador Mestre";
         e.rewards.insert_last(r1);
-        
+
         event_reward@ r2 = event_reward();
         r2.rank_min = 2;
         r2.rank_max = 5;
         r2.gold = 1500;
         r2.xp = 1000;
         e.rewards.insert_last(r2);
-        
+
         event_reward@ r3 = event_reward();
         r3.rank_min = 6;
         r3.rank_max = 10;
         r3.gold = 800;
         r3.xp = 500;
         e.rewards.insert_last(r3);
-        
+
         scheduled_events.insert_last(e);
     }
-    
-    // Evento 3: Sobrevivência Zumbi
+
     {
         game_event@ e = game_event();
         e.id = 3;
@@ -501,8 +413,7 @@ void create_default_events() {
         e.entry_fee_gold = 200;
         e.participation_gold = 500;
         e.participation_xp = 800;
-        
-        // Recompensas
+
         event_reward@ r1 = event_reward();
         r1.rank_min = 1;
         r1.rank_max = 1;
@@ -511,18 +422,17 @@ void create_default_events() {
         r1.title = "Sobrevivente Supremo";
         r1.items.set("Arma Anti-Zumbi", 1);
         e.rewards.insert_last(r1);
-        
+
         event_reward@ r2 = event_reward();
         r2.rank_min = 2;
         r2.rank_max = 3;
         r2.gold = 5000;
         r2.xp = 2500;
         e.rewards.insert_last(r2);
-        
+
         scheduled_events.insert_last(e);
     }
-    
-    // Evento 4: Caça ao Tesouro
+
     {
         game_event@ e = game_event();
         e.id = 4;
@@ -539,8 +449,7 @@ void create_default_events() {
         e.participation_gold = 250;
         e.participation_xp = 400;
         e.config.set("treasure_count", 20);
-        
-        // Recompensas
+
         event_reward@ r1 = event_reward();
         r1.rank_min = 1;
         r1.rank_max = 1;
@@ -549,18 +458,17 @@ void create_default_events() {
         r1.title = "Caçador de Tesouros";
         r1.items.set("Mapa do Tesouro Lendário", 1);
         e.rewards.insert_last(r1);
-        
+
         event_reward@ r2 = event_reward();
         r2.rank_min = 2;
         r2.rank_max = 5;
         r2.gold = 3000;
         r2.xp = 1500;
         e.rewards.insert_last(r2);
-        
+
         scheduled_events.insert_last(e);
     }
-    
-    // Evento 5: Boss World Event
+
     {
         game_event@ e = game_event();
         e.id = 5;
@@ -576,8 +484,7 @@ void create_default_events() {
         e.entry_fee_gold = 500;
         e.participation_gold = 1000;
         e.participation_xp = 2000;
-        
-        // Recompensas baseadas em dano
+
         event_reward@ r1 = event_reward();
         r1.rank_min = 1;
         r1.rank_max = 1;
@@ -587,7 +494,7 @@ void create_default_events() {
         r1.items.set("Escama de Dragão Ancestral", 5);
         r1.items.set("Espada Draconiana", 1);
         e.rewards.insert_last(r1);
-        
+
         event_reward@ r2 = event_reward();
         r2.rank_min = 2;
         r2.rank_max = 5;
@@ -595,7 +502,7 @@ void create_default_events() {
         r2.xp = 5000;
         r2.items.set("Escama de Dragão Ancestral", 3);
         e.rewards.insert_last(r2);
-        
+
         event_reward@ r3 = event_reward();
         r3.rank_min = 6;
         r3.rank_max = 10;
@@ -603,23 +510,13 @@ void create_default_events() {
         r3.xp = 2500;
         r3.items.set("Escama de Dragão Ancestral", 1);
         e.rewards.insert_last(r3);
-        
+
         scheduled_events.insert_last(e);
     }
 }
 
-// Agenda eventos automáticos
 void schedule_automatic_events() {
-    // Implementar agendamento automático
-    // Ex: Arena PvP a cada 2 horas
-    // Boss World Event 1x por dia
-    // etc.
 }
-
-// ========================================
-// COMANDOS
-// ========================================
-
 
 void events_send_to_player(int client_index, const string&in message) {
     if(client_index < 0 || client_index >= int(players.length())) return;
@@ -641,11 +538,9 @@ bool event_is_in_active_list(int event_id) {
     }
     return false;
 }
-// /events - Lista eventos disponíveis
 void cmd_events(int client_index, string[] args) {
     string msg = "=== EVENTOS DISPONÍVEIS ===\n\n";
-    
-    // Eventos ativos
+
     if (active_events.length() > 0) {
         msg += "🔥 EVENTOS ATIVOS:\n";
         for (uint i = 0; i < active_events.length(); i++) {
@@ -656,13 +551,12 @@ void cmd_events(int client_index, string[] args) {
             msg += "Participantes: " + e.participants.length() + "\n---\n";
         }
     }
-    
-    // Eventos em registro
+
     if (scheduled_events.length() > 0) {
         msg += "\n📋 PRÓXIMOS EVENTOS:\n";
         for (uint i = 0; i < scheduled_events.length(); i++) {
             game_event@ e = scheduled_events[i];
-            
+
             if (e.state == EVENT_REGISTERING) {
                 msg += "[" + e.id + "] " + e.name + " (REGISTRANDO)\n";
                 msg += "Registrados: " + e.registered_players.length();
@@ -674,30 +568,29 @@ void cmd_events(int client_index, string[] args) {
             }
         }
     }
-    
+
     msg += "\nUse /eventinfo <id> para detalhes.";
     events_send_to_player(client_index, msg);
 }
 
-// /eventinfo <id> - Informações do evento
 void cmd_eventinfo(int client_index, string[] args) {
     if (args.length() < 1) {
         events_send_to_player(client_index, "Use: /eventinfo <id>");
         return;
     }
-    
+
     int id = string_to_number(args[0]);
     game_event@ e = get_event(id);
-    
+
     if (e is null) {
         events_send_to_player(client_index, "Evento não encontrado.");
         return;
     }
-    
+
     string msg = "=== " + e.name + " ===\n\n";
     msg += e.description + "\n\n";
     msg += "Tipo: ";
-    
+
     switch (e.type) {
         case EVENT_PVP_ARENA: msg += "⚔️ Arena PvP\n"; break;
         case EVENT_COLLECTION: msg += "📦 Coleta\n"; break;
@@ -705,18 +598,18 @@ void cmd_eventinfo(int client_index, string[] args) {
         case EVENT_TREASURE_HUNT: msg += "💎 Caça ao Tesouro\n"; break;
         case EVENT_BOSS_SPAWN: msg += "🐉 Boss World\n"; break;
     }
-    
+
     msg += "Nível: " + e.min_level + "-" + e.max_level + "\n";
     msg += "Participantes: " + e.min_participants + "-" + e.max_participants + "\n";
     msg += "Duração: " + e.duration_minutes + " minutos\n";
-    
+
     if (e.entry_fee_gold > 0) {
         msg += "Taxa de entrada: " + e.entry_fee_gold + " gold\n";
     }
-    
+
     msg += "\nRECOMPENSAS:\n";
     msg += "Participação: " + e.participation_gold + " gold, " + e.participation_xp + " XP\n";
-    
+
     if (e.rewards.length() > 0) {
         msg += "\nRecompensas de ranking:\n";
         for (uint i = 0; i < e.rewards.length(); i++) {
@@ -726,17 +619,16 @@ void cmd_eventinfo(int client_index, string[] args) {
                 msg += "-" + r.rank_max;
             }
             msg += ": " + r.gold + " gold, " + r.xp + " XP\n";
-            
+
             if (r.title != "") {
                 msg += "  Título: " + r.title + "\n";
             }
         }
     }
-    
+
     events_send_to_player(client_index, msg);
 }
 
-// /registerevent <id> - Registra em evento
 void cmd_registerevent(int client_index, string[] args) {
     if (args.length() < 1) {
         events_send_to_player(client_index, "Use: /registerevent <id>");
@@ -780,7 +672,6 @@ void cmd_registerevent(int client_index, string[] args) {
     events_send_to_player(client_index, "Não foi possível registrar (você pode ja estar inscrito).");
 }
 
-// /startevent <id> - Inicia evento (admin)
 void cmd_startevent(int client_index, string[] args) {
     if (args.length() < 1) {
         events_send_to_player(client_index, "Use: /startevent <id>");
@@ -808,7 +699,6 @@ void cmd_startevent(int client_index, string[] args) {
     }
 }
 
-// /endevent <id> - Finaliza evento (admin)
 void cmd_endevent(int client_index, string[] args) {
     if (args.length() < 1) {
         events_send_to_player(client_index, "Use: /endevent <id>");
@@ -831,12 +721,10 @@ void cmd_endevent(int client_index, string[] args) {
     }
 }
 
-// /eventranking - Mostra ranking do evento atual
 void cmd_eventranking(int client_index, string[] args) {
     events_send_to_player(client_index, "Ranking de evento ainda não esta disponivel neste build.");
 }
 
-// Busca evento por ID
 game_event@ get_event(int id) {
     for (uint i = 0; i < scheduled_events.length(); i++) {
         if (scheduled_events[i].id == id) {
@@ -853,18 +741,12 @@ game_event@ get_event(int id) {
     return null;
 }
 
-// ========================================
-// LOOP PRINCIPAL
-// ========================================
-
 void events_loop() {
-    // 1) Scheduled -> Registering (abertura automatica)
     for (uint i = 0; i < scheduled_events.length(); i++) {
         game_event@ e = scheduled_events[i];
         if (e is null) continue;
 
         if (e.state == EVENT_SCHEDULED) {
-            // Abre registro apos 1 minuto de ciclo (ou imediatamente se configurado)
             int schedule_delay_ms = 60000;
             if(e.config.exists("schedule_delay_ms")) e.config.get("schedule_delay_ms", schedule_delay_ms);
             if (e.scheduled_time.elapsed >= schedule_delay_ms) {
@@ -875,7 +757,6 @@ void events_loop() {
             }
         }
 
-        // 2) Registering -> Active/Cancelled
         else if (e.state == EVENT_REGISTERING) {
             if (e.registration_start.elapsed >= e.registration_duration_minutes * 60 * 1000) {
                 if (int(e.registered_players.length()) < e.min_participants) {
@@ -885,7 +766,6 @@ void events_loop() {
                     e.start();
                     if(!event_is_in_active_list(e.id)) active_events.insert_last(e);
 
-                    // Cobra taxa e teleporta participantes para mapa do evento
                     string event_map = "arena";
                     int event_x = 10;
                     int event_y = 10;
@@ -915,7 +795,6 @@ void events_loop() {
         }
     }
 
-    // 3) Active -> Completed (premiacao + retorno)
     for (int i = int(active_events.length()) - 1; i >= 0; i--) {
         game_event@ e = active_events[i];
         if (e is null) { active_events.remove_at(i); continue; }
@@ -953,15 +832,8 @@ void events_loop() {
     }
 }
 
-// ========================================
-// PERSISTÊNCIA
-// ========================================
-
 void save_events_data() {
-    // Salva histórico de eventos
 }
 
 void load_events_data() {
-    // Carrega histórico de eventos
 }
-

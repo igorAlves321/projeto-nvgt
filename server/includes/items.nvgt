@@ -1,17 +1,12 @@
-﻿// Sistema de itens do servidor NVGT
-// Usando banco de dados SQLite para persistÃªncia
+﻿
 
 #include "globals.nvgt"
 #include "network.nvgt"
 #include "shared_globals.nvgt"
-// items.nvgt - Sistema de Itens do EVM Server (convertido de BGT)
-// ConversÃ£o completa: BGT â†’ NVGT
 
-// Estrutura de item
 class GameItem {
     int id;
     string name;
-    // Campos legados BGT (fonte de verdade no banco)
     string items_to_give;
     string audio;
     string msg;
@@ -26,35 +21,30 @@ class GameItem {
     float fill_hunger;
     float degradation;
 
-    // Campos de compatibilidade (mantidos para cÃ³digo atual)
     string display_name;
     string description;
-    string item_type;      // weapon, armor, consumable, misc
-    string category;       // sword, bow, potion, etc.
-    
-    // EstatÃ­sticas
+    string item_type;
+    string category;
+
     int damage;
     int defense;
     int heal_amount;
     int mp_restore;
-    
-    // Propriedades
+
     bool stackable;
     int max_stack;
     float weight;
-    int value;             // preÃ§o base
-    
-    // Raridade
-    string rarity;         // common, uncommon, rare, epic, legendary
+    int value;
+
+    string rarity;
     float drop_rate;
     bool craftable;
     bool sellable;
     bool tradeable;
-    
-    // Som
+
     string sound_file;
     string use_sound;
-    
+
     GameItem() {
         id = 0;
         name = "";
@@ -75,29 +65,28 @@ class GameItem {
         description = "";
         item_type = "legacy";
         category = "";
-        
+
         damage = 0;
         defense = 0;
         heal_amount = 0;
         mp_restore = 0;
-        
+
         stackable = true;
         max_stack = 99;
         weight = 1.0;
         value = 1;
-        
+
         rarity = "common";
         drop_rate = 1.0;
         craftable = false;
         sellable = true;
         tradeable = true;
-        
+
         sound_file = "";
         use_sound = "";
     }
 }
 
-// Item no mundo
 class WorldItem {
     int id;
     int item_id;
@@ -108,7 +97,7 @@ class WorldItem {
     bool is_active;
     int respawn_time;
     timer spawn_timer;
-    
+
     WorldItem() {
         id = 0;
         item_id = 0;
@@ -122,14 +111,10 @@ class WorldItem {
     }
 }
 
-// Sistema global de itens
-dictionary items_database;        // id -> GameItem
-dictionary items_by_name;         // name -> GameItem
-WorldItem@[] world_items;         // Itens no mundo
-dictionary world_items_by_map;    // map_name -> WorldItem[]
-
-// ReferÃªncia ao banco de dados - declaraÃ§Ã£o global
-// Estas variÃ¡veis sÃ£o definidas em server.nvgt
+dictionary items_database;
+dictionary items_by_name;
+WorldItem@[] world_items;
+dictionary world_items_by_map;
 
 bool items_table_has_column(const string&in table_name, const string&in column_name) {
     sqlite3statement@ stmt = bancoJogo.prepare("PRAGMA table_info(" + table_name + ");");
@@ -219,11 +204,9 @@ void migrate_items_table_to_bgt_if_needed() {
     debug_log("MIGRATION: tabela items convertida para schema legado BGT.");
 }
 
-// Criar tabelas de itens no banco
 void create_items_tables() {
     if(!database_initialized) return;
-    
-    // Tabela de definicoes de itens (schema legado BGT)
+
     string create_items = """
         CREATE TABLE IF NOT EXISTS items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,8 +228,7 @@ void create_items_tables() {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     """;
-    
-    // Tabela de itens no mundo
+
     string create_world_items = """
         CREATE TABLE IF NOT EXISTS world_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,66 +238,63 @@ void create_items_tables() {
             y INTEGER NOT NULL,
             z INTEGER DEFAULT 0,
             quantity INTEGER DEFAULT 1,
-            
+
             -- Spawn info
             spawned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             expires_at DATETIME,
             spawned_by TEXT DEFAULT 'system',
-            
+
             -- Estado
             is_active BOOLEAN DEFAULT TRUE,
             respawn_time INTEGER DEFAULT 0,
-            
+
             FOREIGN KEY (item_id) REFERENCES items(id)
         );
     """;
-    
-    // Tabela de inventarios de jogadores
+
     string create_inventories = """
         CREATE TABLE IF NOT EXISTS player_inventories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             player_id INTEGER NOT NULL,
             item_id INTEGER NOT NULL,
             quantity INTEGER DEFAULT 1,
-            
+
             -- Localizacao no inventario
             slot_type TEXT DEFAULT 'inventory',
             slot_position INTEGER,
-            
+
             -- Propriedades do item especifico
             durability REAL DEFAULT 100.0,
             enchantments TEXT,
             custom_name TEXT,
-            
+
             -- Historico
             acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             acquired_from TEXT DEFAULT 'unknown',
-            
+
             UNIQUE(player_id, slot_type, slot_position),
             FOREIGN KEY (player_id) REFERENCES players(id),
             FOREIGN KEY (item_id) REFERENCES items(id)
         );
     """;
-    
-    // Executar criacao
+
     if(bancoJogo.execute(create_items) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela items: " + bancoJogo.get_last_error_text());
     }
-    
+
     if(bancoJogo.execute(create_world_items) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela world_items: " + bancoJogo.get_last_error_text());
     }
-    
+
     if(bancoJogo.execute(create_inventories) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela player_inventories: " + bancoJogo.get_last_error_text());
     }
 
     migrate_items_table_to_bgt_if_needed();
-    
+
     debug_log("Tabelas de itens criadas com sucesso");
 }
 
-// Carregar itens do banco de dados
 void load_items_from_database() {
     if(!database_initialized) return;
 
@@ -327,7 +306,6 @@ void load_items_from_database() {
         return;
     }
 
-    // Recarrega caches
     items_database.delete_all();
     items_by_name.delete_all();
 
@@ -351,7 +329,6 @@ void load_items_from_database() {
         item.fill_hunger = stmt.column_double(13);
         item.degradation = stmt.column_double(14);
 
-        // Compatibilidade com chamadas antigas
         item.display_name = item.name;
         item.description = item.msg;
         item.item_type = "legacy";
@@ -446,14 +423,12 @@ void import_legacy_weapons_catalog() {
     }
 }
 
-// Inserir itens padrao no banco (alinhado ao schema legado BGT)
 void seed_default_items() {
     if(!database_initialized) return;
-    
-    // Verificar se ja existem itens
+
     string check_query = "SELECT COUNT(*) FROM items;";
     sqlite3statement@ check_stmt = bancoJogo.prepare(check_query);
-    
+
     if(@check_stmt != null && check_stmt.step() == SQLITE_ROW) {
         int existing_count = check_stmt.column_int(0);
         if(existing_count > 0) {
@@ -461,10 +436,9 @@ void seed_default_items() {
             return;
         }
     }
-    
+
     debug_log("Inserindo itens padrao no banco de dados (schema legado)...");
-    
-    // Itens focados no que o schema legado usa: name, msg, audio, health
+
     create_item("potion", "Pocao de Vida", "Recupera 50 de vida", "consumable", "legacy",
                 0, 0, 50, 0, true, 99, 1.0, 0, "common", 1.0, false, true, true, "potion_use.wav", "");
 
@@ -488,11 +462,10 @@ void seed_default_items() {
 
     create_item("wooden_bow", "Arco de Madeira", "Arma legado. Alcance tratado por outros sistemas", "weapon", "legacy",
                 0, 0, 0, 0, false, 1, 1.0, 0, "common", 1.0, false, true, true, "bow_shoot.wav", "");
-    
+
     debug_log("Itens padrao inseridos no banco de dados (schema legado)");
 }
 
-// Criar novo item no banco
 bool create_item(string name, string display_name, string description, string item_type, string category,
                  int damage, int defense, int heal_amount, int mp_restore,
                  bool stackable, int max_stack, float weight, int value,
@@ -500,7 +473,6 @@ bool create_item(string name, string display_name, string description, string it
                  string sound_file, string use_sound) {
     if(!database_initialized) return false;
 
-    // Compatibilidade: mantém assinatura nova, mas persiste no formato legado BGT.
     string audio_value = sound_file;
     if(audio_value == "") audio_value = use_sound;
     if(audio_value == "") audio_value = "none";
@@ -550,7 +522,6 @@ bool create_item(string name, string display_name, string description, string it
     return true;
 }
 
-// Buscar item por nome
 GameItem@ get_item_by_name(string name) {
     if(items_by_name.exists(name)) {
         GameItem@ item;
@@ -560,7 +531,6 @@ GameItem@ get_item_by_name(string name) {
     return null;
 }
 
-// Buscar item por ID
 GameItem@ get_item_by_id(int id) {
     string id_str = "" + id;
     if(items_database.exists(id_str)) {
@@ -571,7 +541,6 @@ GameItem@ get_item_by_id(int id) {
     return null;
 }
 
-// Spawnar item no mundo
 bool spawn_item_at(string item_name, string map_name, int x, int y, int z, int quantity = 1, string spawned_by = "system") {
     GameItem@ item = get_item_by_name(item_name);
     if(item is null) {
@@ -599,7 +568,6 @@ bool spawn_item_at(string item_name, string map_name, int x, int y, int z, int q
     return true;
 }
 
-// Pegar item do mundo
 bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
     int player_index = get_player_index_from(player_name);
     if(player_index < 0 || player_index >= int(players.length())) return false;
@@ -618,7 +586,6 @@ bool pickup_item_at(string player_name, string map_name, int x, int y, int z) {
     return false;
 }
 
-// Carregar itens do mundo do banco
 void migrate_legacy_world_items_to_drops() {
     if(!database_initialized) return;
 
@@ -672,11 +639,9 @@ void migrate_legacy_world_items_to_drops() {
 }
 
 void load_world_items_from_database() {
-    // Mantido apenas por compatibilidade de chamadas legadas
     migrate_legacy_world_items_to_drops();
 }
 
-// Obter itens em um mapa especÃ­fico
 WorldItem@[] get_items_in_map(string map_name) {
     WorldItem@[] items_here;
 
@@ -705,9 +670,7 @@ WorldItem@[] get_items_in_map(string map_name) {
     return items_here;
 }
 
-// Obter item na posiÃ§Ã£o especÃ­fica
 WorldItem@ get_item_at_position(string map_name, int x, int y, int z) {
-    // Compatibilidade: projetar um drop moderno como WorldItem para cÃ³digos legados
     string[] map_drops = get_drops_in_map(map_name);
     for(uint i = 0; i < map_drops.length(); i++) {
         drop_entity@ d = get_drop(map_drops[i]);
@@ -733,43 +696,28 @@ WorldItem@ get_item_at_position(string map_name, int x, int y, int z) {
     return null;
 }
 
-// Inicializar sistema de itens
 void init_items_system() {
     debug_log("Inicializando sistema de itens...");
-    
-    // Criar tabelas
+
     create_items_tables();
-    
-    // Inserir itens padrÃ£o se necessÃ¡rio
+
     seed_default_items();
 
     import_legacy_weapons_catalog();
 
-    // Carregar itens do banco
     load_items_from_database();
-    
-    // Carregar itens do mundo
+
     migrate_legacy_world_items_to_drops();
 
     int active_drops = int(global_drops.get_size());
     debug_log("Sistema de itens inicializado com " + items_database.get_size() + " tipos de itens e " + active_drops + " drops ativos");
 }
 
-// Limpar itens expirados (executar periodicamente)
-//  Task 1.1.2: Atualizado para processar banco de dados E memÃ³ria
 void cleanup_expired_items() {
     if(!database_initialized) return;
 
-    // Compatibilidade legado: limpa residuos na tabela antiga
     string cleanup_query = "DELETE FROM world_items WHERE expires_at IS NOT NULL AND expires_at < DATETIME('now');";
     bancoJogo.execute(cleanup_query);
 
-    // Fluxo moderno: limpeza real dos drops ativos
     cleanup_expired_drops();
 }
-
-
-
-
-
-

@@ -1,71 +1,38 @@
-// network_handlers.nvgt - Sistema Completo de Handlers de Rede
-// [OK] Epic 1 Task 3: Sistema de Rede e Handlers (NVGT / ENet)
-//
-// Este modulo implementa o sistema completo de handlers de mensagens de rede
-// usando a API NVGT/ENet, com dispatcher manual e protocolo bem definido.
-//
-// Estrutura:
-// 1. Definicao de protocolo (prefixos de mensagens)
-// 2. Dispatcher manual (roteador de mensagens)
-// 3. Handlers por categoria:
-//    - Combate (ataques, habilidades)
-//    - Inventario (usar items, equipar, dropar)
-//    - Mapa (movimento, teleporte, interacoes)
-//    - Social (chat, party, guild, trade)
-//    - Admin (comandos administrativos)
-//    - Habilidades (magias, skills)
 
-// ============================================================
-// 1. DEFINICAO DE PROTOCOLO - PREFIXOS DE MENSAGENS
-// ============================================================
+const string MSG_COMBAT = "COMBAT:";
+const string MSG_SKILL = "SKILL:";
+const string MSG_MAGIC = "MAGIC:";
+const string MSG_DAMAGE = "DAMAGE:";
 
-// Protocolo baseado em prefixos para organizacao clara das mensagens
-// Formato: PREFIXO:dados|separados|por|pipe
-// Exemplo: CHAT:Ola a todos!
-// Exemplo: COMBAT:attack|goblin_1|espada_ferro
-// Exemplo: INV:use|pocao_vida
+const string MSG_INV = "INV:";
+const string MSG_USE = "USE:";
+const string MSG_EQUIP = "EQUIP:";
+const string MSG_DROP = "DROP:";
+const string MSG_PICKUP = "PICKUP:";
 
-// === COMBATE ===
-const string MSG_COMBAT = "COMBAT:";        // Ataques e combate
-const string MSG_SKILL = "SKILL:";          // Uso de habilidades
-const string MSG_MAGIC = "MAGIC:";          // Uso de magias
-const string MSG_DAMAGE = "DAMAGE:";        // Aplicar dano (servidor -> cliente)
+const string MSG_MOVE = "MOVE:";
+const string MSG_TELEPORT = "TELEPORT:";
+const string MSG_INTERACT = "INTERACT:";
+const string MSG_DOOR = "DOOR:";
+const string MSG_ELEVATOR = "ELEVATOR:";
 
-// === INVENTARIO ===
-const string MSG_INV = "INV:";              // Comandos de inventario
-const string MSG_USE = "USE:";              // Usar item
-const string MSG_EQUIP = "EQUIP:";          // Equipar item
-const string MSG_DROP = "DROP:";            // Dropar item
-const string MSG_PICKUP = "PICKUP:";        // Pegar item do chao
+const string MSG_CHAT = "CHAT:";
+const string MSG_WHISPER = "WHISPER:";
+const string MSG_PARTY = "PARTY:";
+const string MSG_GUILD = "GUILD:";
+const string MSG_TRADE = "TRADE:";
+const string MSG_FRIEND = "FRIEND:";
 
-// === MAPA ===
-const string MSG_MOVE = "MOVE:";            // Movimento do jogador
-const string MSG_TELEPORT = "TELEPORT:";    // Teleporte
-const string MSG_INTERACT = "INTERACT:";    // Interagir com objeto
-const string MSG_DOOR = "DOOR:";            // Abrir/fechar porta
-const string MSG_ELEVATOR = "ELEVATOR:";    // Usar elevador
+const string MSG_ADMIN = "ADMIN:";
+const string MSG_BUILDER = "BUILDER:";
+const string MSG_KICK = "KICK:";
+const string MSG_BAN = "BAN:";
 
-// === SOCIAL ===
-const string MSG_CHAT = "CHAT:";            // Chat global
-const string MSG_WHISPER = "WHISPER:";      // Mensagem privada
-const string MSG_PARTY = "PARTY:";          // Comandos de party
-const string MSG_GUILD = "GUILD:";          // Comandos de guild
-const string MSG_TRADE = "TRADE:";          // Comercio entre jogadores
-const string MSG_FRIEND = "FRIEND:";        // Sistema de amigos
+const string MSG_VOICE = "VOICE_MSG|";
 
-// === ADMIN ===
-const string MSG_ADMIN = "ADMIN:";          // Comandos administrativos
-const string MSG_BUILDER = "BUILDER:";      // Modo construtor
-const string MSG_KICK = "KICK:";            // Expulsar jogador
-const string MSG_BAN = "BAN:";              // Banir jogador
-
-// === VOICE CHAT ===
-const string MSG_VOICE = "VOICE_MSG|";      // Mensagem de voz (audio)
-
-// === SISTEMA ===
-const string MSG_PING = "PING";             // Ping
-const string MSG_PONG = "PONG";             // Pong (resposta)
-const string MSG_UPDATE = "UPDATE:";        // Atualizacao de estado
+const string MSG_PING = "PING";
+const string MSG_PONG = "PONG";
+const string MSG_UPDATE = "UPDATE:";
 
 const uint NETWORK_HANDLER_MAX_MESSAGE_CHARS = 8192;
 
@@ -195,11 +162,6 @@ void network_send_action_error(player@ p, const string&in scope, const string&in
     send_reliable_text(p.peer_id, "say " + scope + ": acao desconhecida '" + action + "'.", 0);
 }
 
-// ============================================================
-// 2. DISPATCHER MANUAL - ROTEADOR DE MENSAGENS
-// ============================================================
-
-// Funcao principal de dispatch que roteia mensagens para handlers especificos
 void dispatch_network_message(player@ p, string message) {
     if(p is null) return;
     if(message.trim_whitespace() == "") return;
@@ -210,37 +172,28 @@ void dispatch_network_message(player@ p, string message) {
 
     debug_log("[DISPATCH] " + p.name + " -> " + message.substr(0, min(50, message.length())));
 
-    // ============================================================
-    // PROTOCOLO JSON - Sistema de Inventario Sincronizado
-    // ============================================================
-    // Detectar mensagens JSON (comecam com '{' e contem "type")
     if(message.length() > 0 && message.substr(0, 1) == "{" && message.find("\"type\"") >= 0) {
         string json_type = json_get_type(message);
 
-        // Mensagens de inventario JSON
         if(json_type.find("inv_") == 0) {
             dispatch_inventory_json(p, message);
             return;
         }
 
-        // Mensagens de equipamentos JSON
         if(json_type == "equip" || json_type == "unequip" || json_type == "get_equipment") {
             dispatch_equipment_json(p, message);
             return;
         }
 
-        // Mensagens de drops/loot JSON
         if(json_type == "pickup" || json_type == "drop_request_list") {
             dispatch_drop_json(p, message);
             return;
         }
 
-        // Outros tipos de mensagens JSON podem ser adicionados aqui
         debug_log("[ALERTA] Mensagem JSON não reconhecida: " + json_type);
         return;
     }
 
-    // === COMBATE ===
     if(message.find(MSG_COMBAT) == 0) {
         handle_combat(p, message.substr(MSG_COMBAT.length()));
         return;
@@ -256,7 +209,6 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === INVENTARIO ===
     if(message.find(MSG_INV) == 0) {
         handle_inventory(p, message.substr(MSG_INV.length()));
         return;
@@ -282,7 +234,6 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === MAPA ===
     if(message.find(MSG_MOVE) == 0) {
         handle_move(p, message.substr(MSG_MOVE.length()));
         return;
@@ -308,7 +259,6 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === SOCIAL ===
     if(message.find(MSG_CHAT) == 0) {
         handle_chat(p, message.substr(MSG_CHAT.length()));
         return;
@@ -339,13 +289,11 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === VOICE CHAT ===
     if(message.find(MSG_VOICE) == 0) {
         handle_voice_message(p, message);
         return;
     }
 
-    // === ADMIN ===
     if(message.find(MSG_ADMIN) == 0) {
         if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
             send_reliable_text(p.peer_id, "say Acesso negado: você não e administrador.", 0);
@@ -364,7 +312,6 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === SISTEMA ===
     if(message == MSG_PING) {
         handle_ping(p);
         return;
@@ -375,19 +322,10 @@ void dispatch_network_message(player@ p, string message) {
         return;
     }
 
-    // === FALLBACK: Comando desconhecido ===
     network_reject_invalid_payload(p, "dispatch_network_message", "mensagem desconhecida", message);
 }
 
-// ============================================================
-// 3. HANDLERS DE COMBATE
-// ============================================================
-
 void handle_combat(player@ p, string data) {
-    // Formato: action|params
-    // Exemplo: COMBAT:attack|goblin_1|espada_ferro
-    // Exemplo: COMBAT:shoot|m4a1|12|3
-    // Exemplo: COMBAT:reload|m4a1
 
     if(!network_require_non_empty(p, "handle_combat", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -506,8 +444,6 @@ void handle_combat(player@ p, string data) {
 }
 
 void handle_skill(player@ p, string data) {
-    // Formato: skill_name|target
-    // Exemplo: SKILL:rajada|goblin_1
 
     if(!network_require_non_empty(p, "handle_skill", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -527,8 +463,6 @@ void handle_skill(player@ p, string data) {
 }
 
 void handle_magic(player@ p, string data) {
-    // Formato: magic_name|target|mana_cost
-    // Exemplo: MAGIC:bola_de_fogo|goblin_1|20
 
     if(!network_require_non_empty(p, "handle_magic", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -549,13 +483,11 @@ void handle_magic(player@ p, string data) {
 
     debug_log("[MAGIC] " + p.name + " conjurando: " + magic_name);
 
-    // Verificar mana
     if(p.mp < mana_cost) {
         send_reliable_text(p.peer_id, "say Mana insuficiente", 0);
         return;
     }
 
-    // Consumir mana
     p.mp -= mana_cost;
 
     string cast_msg = "Você conjurou " + magic_name;
@@ -564,15 +496,7 @@ void handle_magic(player@ p, string data) {
     send_reliable_text(p.peer_id, "say " + cast_msg, 0);
 }
 
-// ============================================================
-// 4. HANDLERS DE INVENTARIO
-// ============================================================
-
 void handle_inventory(player@ p, string data) {
-    // Comandos gerais de inventario
-    // Formato: action|params
-    // Exemplo: INV:list
-    // Exemplo: INV:info|espada_ferro
 
     if(!network_require_non_empty(p, "handle_inventory", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -621,8 +545,6 @@ void handle_inventory(player@ p, string data) {
 }
 
 void handle_use_item(player@ p, string data) {
-    // Formato: item_name
-    // Exemplo: USE:pocao_vida
 
     string item_name = data.trim_whitespace();
     if(item_name == "") {
@@ -633,23 +555,16 @@ void handle_use_item(player@ p, string data) {
 
     debug_log("[USE] " + p.name + " usando: " + item_name);
 
-    // Obter indice do jogador
     int player_index = get_player_index_from(p.charname);
     if(player_index < 0) {
         send_reliable_text(p.peer_id, "say Erro: Jogador não encontrado.", 0);
         return;
     }
 
-    // Delegar ao sistema de consumiveis (que ja faz verificacoes e remove item)
-    // O sistema de consumables.nvgt verifica inventario, aplica efeitos e remove item
     use_item(player_index, item_name);
-    // Mensagens de erro/sucesso ja sao enviadas pelo sistema de consumables
 }
 
 void handle_equip_item(player@ p, string data) {
-    // Formato: item_name|slot
-    // Exemplo: EQUIP:espada_ferro|weapon
-    // Exemplo: EQUIP:colete_kevlar|armor
 
     if(!network_require_non_empty(p, "handle_equip_item", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -672,8 +587,6 @@ void handle_equip_item(player@ p, string data) {
 }
 
 void handle_drop_item(player@ p, string data) {
-    // Formato: item_name|quantidade
-    // Exemplo: DROP:pocao_vida|5
 
     if(!network_require_non_empty(p, "handle_drop_item", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -743,15 +656,12 @@ bool pickup_ground_item_at(player@ p) {
 }
 
 void handle_pickup_item(player@ p, string data) {
-    // Formato: item_id
-    // Exemplo: PICKUP:drop_123 ou PICKUP:chao
 
     string item_id = data.trim_whitespace();
     if(item_id == "") item_id = "chao";
 
     debug_log("PICKUP_NET: " + p.name + " -> " + item_id);
 
-    // Pickup explicito por drop_id
     if(item_id.find("drop_") == 0) {
         drop_entity@ by_id = get_drop(item_id);
         if(by_id is null) {
@@ -781,18 +691,7 @@ void handle_pickup_item(player@ p, string data) {
     send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
 }
 
-// ============================================================
-// 5. HANDLERS DE MAPA
-// ============================================================
-
 void handle_move(player@ p, string data) {
-    // Formato aceito:
-    //   x|y           - posicao simples
-    //   x=10;y=20     - formato chave=valor
-    //   step_sound|x|y - com som de passo (3 partes)
-    // Exemplo: MOVE:40|12
-    // Exemplo: MOVE:x=40;y=12
-    // Exemplo: MOVE:grassstep1.ogg|40|12
 
     if(!network_require_non_empty(p, "handle_move", data)) return;
 
@@ -800,9 +699,7 @@ void handle_move(player@ p, string data) {
     int new_y = p.y;
     string step_sound = "";
 
-    // Suportar todos os formatos
     if(data.find(";") >= 0) {
-        // Formato x=10;y=20
         string[] parts = data.split(";");
         for(uint i = 0; i < parts.length(); i++) {
             string[] kv = parts[i].split("=");
@@ -825,10 +722,8 @@ void handle_move(player@ p, string data) {
             }
         }
     } else {
-        // Formato com | (pipe)
         string[] parts = split_pipe_trimmed(data);
         if(parts.length() == 2) {
-            // Formato: x|y
             if(parts[0] == "" || parts[1] == "") {
                 network_log_invalid_payload(p, "handle_move", "x ou y vazio", data);
                 return;
@@ -838,7 +733,6 @@ void handle_move(player@ p, string data) {
                 return;
             }
         } else if(parts.length() >= 3) {
-            // Formato: step_sound|x|y
             step_sound = parts[0];
             if(parts[1] == "" || parts[2] == "") {
                 network_log_invalid_payload(p, "handle_move", "x ou y vazio no formato com step", data);
@@ -854,44 +748,35 @@ void handle_move(player@ p, string data) {
         }
     }
 
-    // ===== VALIDACOES (Task 4 - movimento_jogador.md) =====
-    
-    // Validar jogador não está paralisado ou AFK
     if(p.paralisado || p.paralisado2 || p.afk) {
         send_reliable_text(p.peer_id, "msg2 ;Você não pode se mover agora.;", 0);
         return;
     }
-    
-    // Validar movimento não e muito grande (anti-cheat)
+
     if(!is_valid_movement(p.x, p.y, new_x, new_y, 10)) {
         debug_log("[ALERTA] Movimento inválido (MOVE:) " + p.name + ": (" + p.x + "," + p.y + ") -> (" + new_x + "," + new_y + ")");
         send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
         return;
     }
-    
-    // Verificar se a posicao e caminhavel
+
     if(!is_walkable(new_x, new_y, p.map_name)) {
         send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
         return;
     }
-    
-    // Obter tipo do tile para sons de passos (usa o enviado ou detecta)
+
     string tile_type = step_sound != "" ? step_sound : get_tile_at(new_x, new_y, p.map_name);
-    
-    // Usar a funcao move() da classe player (inclui minas, zonas de morte, etc.)
+
     p.move(tile_type, new_x, new_y, 0);
 
     int player_index = get_player_index_from(p.charname);
     if(player_index >= 0) {
         process_map_step(player_index);
     }
-    
+
     debug_log("[MOVE] " + p.name + " -> (" + new_x + ", " + new_y + ") [" + tile_type + "]");
 }
 
 void handle_teleport(player@ p, string data) {
-    // Formato: map_name|x|y
-    // Exemplo: TELEPORT:cidade|100|50
 
     if(!network_require_non_empty(p, "handle_teleport", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -910,7 +795,6 @@ void handle_teleport(player@ p, string data) {
 
     debug_log("[TELEPORT] " + p.name + " teleportando para " + map_name + " (" + x + "," + y + ")");
 
-    // Seguranca: teleporte por pacote so para admin/dev
     if(!has_role(p.charname, "admin") && !has_role(p.charname, "dev")) {
         send_reliable_text(p.peer_id, "say Acesso negado para teleporte.", 0);
         return;
@@ -944,9 +828,6 @@ void handle_teleport(player@ p, string data) {
 }
 
 void handle_interact(player@ p, string data) {
-    // Formato: object_id|action
-    // Exemplo: INTERACT:door_123|open
-    // Exemplo: INTERACT:npc_merchant|talk
 
     if(data.trim_whitespace() == "") {
         int player_index = get_player_index_from(p.charname);
@@ -968,7 +849,6 @@ void handle_interact(player@ p, string data) {
 
     debug_log("[INTERACT] " + p.name + " interagindo com " + object_id + " (" + action + ")");
 
-    // Integracoes rapidas com fluxos existentes
     if(object_id == "pickup" || action == "pickup") {
         bool ok = pickup_ground_item_at(p);
         if(!ok) send_reliable_text(p.peer_id, "say Nenhum item para pegar.", 0);
@@ -986,8 +866,6 @@ void handle_interact(player@ p, string data) {
 }
 
 void handle_door(player@ p, string data) {
-    // Formato: door_id|action
-    // Exemplo: DOOR:123|open
 
     if(!network_require_non_empty(p, "handle_door", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1005,8 +883,6 @@ void handle_door(player@ p, string data) {
 }
 
 void handle_elevator(player@ p, string data) {
-    // Formato: elevator_id|floor
-    // Exemplo: ELEVATOR:lobby|3
 
     if(!network_require_non_empty(p, "handle_elevator", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1028,8 +904,6 @@ void handle_elevator(player@ p, string data) {
 }
 
 void handle_whisper(player@ p, string data) {
-    // Formato: target_name|message
-    // Exemplo: WHISPER:Joao|Ola, tudo bem?
 
     if(!network_require_non_empty(p, "handle_whisper", data)) return;
     string[] parts = data.split("|");
@@ -1057,7 +931,6 @@ void handle_whisper(player@ p, string data) {
 
     debug_log("[WHISPER] " + p.name + " -> " + target_name + ": " + message);
 
-    // Encontrar jogador alvo
     player@ target = get_player_by_name(target_name);
     if(target is null) {
         send_reliable_text(p.peer_id, "say Jogador não encontrado: " + target_name, 0);
@@ -1072,14 +945,8 @@ void handle_whisper(player@ p, string data) {
     send_pm(sender_index, target_name, message);
 }
 
-// ============================================================
-// 6. HANDLERS SOCIAIS
-// ============================================================
-
 void handle_chat(player@ p, string data) {
-    // Formato: mensagem
-    // Exemplo: CHAT:Ola a todos!
-    
+
     string message = data.trim_whitespace();
     if(message.length() == 0) return;
 
@@ -1092,10 +959,6 @@ void handle_chat(player@ p, string data) {
 }
 
 void handle_party(player@ p, string data) {
-    // Formato: action|params
-    // Exemplo: PARTY:invite|Joao
-    // Exemplo: PARTY:accept
-    // Exemplo: PARTY:leave
 
     if(!network_require_non_empty(p, "handle_party", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1133,10 +996,6 @@ void handle_party(player@ p, string data) {
 }
 
 void handle_guild(player@ p, string data) {
-    // Formato: action|params
-    // Exemplo: GUILD:create|MinhaGuild
-    // Exemplo: GUILD:invite|Joao
-    // Exemplo: GUILD:leave
 
     if(!network_require_non_empty(p, "handle_guild", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1187,10 +1046,6 @@ void handle_guild(player@ p, string data) {
 }
 
 void handle_trade(player@ p, string data) {
-    // Formato: action|params
-    // Exemplo: TRADE:request|Joao
-    // Exemplo: TRADE:offer|espada_ferro|1
-    // Exemplo: TRADE:accept
 
     if(!network_require_non_empty(p, "handle_trade", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1234,10 +1089,6 @@ void handle_trade(player@ p, string data) {
 }
 
 void handle_friend(player@ p, string data) {
-    // Formato: action|player_name
-    // Exemplo: FRIEND:add|Joao
-    // Exemplo: FRIEND:remove|Maria
-    // Exemplo: FRIEND:list
 
     if(!network_require_non_empty(p, "handle_friend", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1270,15 +1121,7 @@ void handle_friend(player@ p, string data) {
     }
 }
 
-// ============================================================
-// 7. HANDLERS DE ADMIN
-// ============================================================
-
 void handle_admin(player@ p, string data) {
-    // Formato: command|params
-    // Exemplo: ADMIN:teleport|Joao|cidade|100|50
-    // Exemplo: ADMIN:give|Joao|pocao_vida|10
-    // Exemplo: ADMIN:freeze|Maria
 
     if(!network_can_use_admin_channel(p)) {
         send_reliable_text(p.peer_id, "say Acesso negado: você não e administrador.", 0);
@@ -1310,9 +1153,6 @@ void handle_admin(player@ p, string data) {
 }
 
 void handle_builder(player@ p, string data) {
-    // Formato: action|params
-    // Exemplo: BUILDER:create|wall|100|50
-    // Exemplo: BUILDER:delete|obj_123
 
     if(!network_can_use_builder_channel(p)) {
         send_reliable_text(p.peer_id, "say Acesso negado: você não e construtor.", 0);
@@ -1371,7 +1211,6 @@ void handle_builder(player@ p, string data) {
         return;
     }
 
-    // fallback: rota para o parser principal de comandos
     string fallback_cmd = "/" + action;
     if(parts.length() > 1) fallback_cmd += " " + join_parts_from(parts, 1, " ");
     if(!process_command(p, fallback_cmd)) {
@@ -1379,19 +1218,11 @@ void handle_builder(player@ p, string data) {
     }
 }
 
-// ============================================================
-// 8. HANDLERS DE SISTEMA
-// ============================================================
-
 void handle_ping(player@ p) {
-    // Responder com PONG
     send_reliable_text(p.peer_id, MSG_PONG, 0);
 }
 
 void handle_update(player@ p, string data) {
-    // Atualizacao de estado do cliente
-    // Formato: stat_name|value
-    // Exemplo: UPDATE:health|80
 
     if(!network_require_non_empty(p, "handle_update", data)) return;
     string[] parts = split_pipe_trimmed(data);
@@ -1445,12 +1276,6 @@ void handle_update(player@ p, string data) {
     send_reliable_text(p.peer_id, "say Campo de update não permitido: " + stat_name, 0);
 }
 
-// ============================================================
-// FUNCAO PRINCIPAL DE PROCESSAMENTO
-// ============================================================
-
-// Esta funcao substitui/complementa o process_player_command() existente
-// Ela verifica se a mensagem usa o novo protocolo, senao usa fallback
 void process_network_message(uint64 peer_id, string message) {
     if(message.trim_whitespace() == "") return;
     if(message.length() > NETWORK_HANDLER_MAX_MESSAGE_CHARS) {
@@ -1465,38 +1290,8 @@ void process_network_message(uint64 peer_id, string message) {
     }
 
     if(is_modern_network_message(message)) {
-        // Usa novo protocolo, dispatch
         dispatch_network_message(p, message);
     } else {
-        // Usa protocolo antigo, fallback para process_player_command
         process_player_command(peer_id, message);
     }
 }
-
-// ============================================================
-// RESULTADO ESPERADO
-// ============================================================
-//
-// Com este modulo implementado:
-// [OK] Protocolo de mensagens bem definido com prefixos
-// [OK] Dispatcher manual organizado por categoria
-// [OK] Handlers separados para:
-//    - Combate (ataque, skills, magia)
-//    - Inventario (usar, equipar, dropar, pegar)
-//    - Mapa (movimento, teleporte, interacoes)
-//    - Social (chat, whisper, party, guild, trade, friends)
-//    - Admin (comandos administrativos e builder)
-//    - Sistema (ping/pong, updates)
-// [OK] Facil expansao para novos comandos
-// [OK] Logs detalhados de todas as acoes
-// [OK] Compatibilidade com codigo existente via fallback
-//
-// Este e o sistema de rede moderno e organizado do NVGT!
-// ============================================================
-
-
-
-
-
-
-

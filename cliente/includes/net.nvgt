@@ -1,45 +1,31 @@
-// Sistema de rede modernizado para NVGT
 #include "net/msg2_handler.nvgt"
 #include "net/message_handlers.nvgt"
 #include "net/sync_handlers.nvgt"
 #include "net/channel0_handlers.nvgt"
 
-// ============================================================================
-// FLAG DE DEBUG - Descomente para ativar speaks de debug
-// ============================================================================
-// IMPORTANTE: Manter false em producao para evitar "speak" de pacotes de rede
 const bool NET_DEBUG_SPEAKS = false;
 
-// ============================================================================
-// CANAIS DE REDE (ENet Channels)
-// ============================================================================
-// Cada canal pode ter suas proprias configuracoes de confiabilidade
 enum NetChannel {
-    CH_DEFAULT = 0,     // Canal padrao para mensagens gerais
-    CH_CHAT = 1,        // Canal de chat (confiavel)
-    CH_MOVE = 2,        // Canal de movimento (pode perder pacotes)
-    CH_SYSTEM = 3,      // Canal de sistema (login, logout, etc)
-    CH_ACTION = 4,      // Canal de acoes (ataques, uso de itens)
-    CH_AUDIO = 5,       // Canal de audio (sincronizacao de sons)
-    CH_ADMIN = 6,       // Canal administrativo
-    CH_SYNC = 7         // Canal de sincronizacao de estado
+    CH_DEFAULT = 0,
+    CH_CHAT = 1,
+    CH_MOVE = 2,
+    CH_SYSTEM = 3,
+    CH_ACTION = 4,
+    CH_AUDIO = 5,
+    CH_ADMIN = 6,
+    CH_SYNC = 7
 }
 
 const int NET_CHANNEL_COUNT = 8;
 
-// ============================================================================
-// CONFIGURACOES DE REDE
-// ============================================================================
 const network_event@ event;
 bool encryption = true;
 double idversion = 1.0;
 int connecttime = 10000;
 timer connecttimer;
 
-// Chave de criptografia para pacotes (DEVE SER IGUAL AO SERVIDOR)
 const string PACKET_ENCRYPTION_KEY = "evm_server_key_2024";
 
-// Funcoes de criptografia/descriptografia de pacotes
 string encrypt_packet(string message) {
     return string_aes_encrypt(message, PACKET_ENCRYPTION_KEY);
 }
@@ -107,20 +93,19 @@ void net_create() {
 
 	speak(pu.get_value("Conectando..."));
 
-	// Usar conexao global ao inves de criar local
 	@event = null;
-	con.setup_client(20, 100); // Deve coincidir com max_channels do servidor (20 canais como no BGT original)
+	con.setup_client(20, 100);
 	uint64 server_peer = con.connect(game_serveraddress, game_serverport);
-	
+
 	if(server_peer == 0) {
 		dlg(pu.get_value("Erro ao conectar ao servidor"));
 		account_creating = false;
 		menuprincipal();
 		return;
 	}
-	
-	peer_id = server_peer; // Armazenar peer_id global
-	is_connected = true;   // Marcar como conectado
+
+	peer_id = server_peer;
+	is_connected = true;
 	connecttimer.restart();
 
 	while(true) {
@@ -149,10 +134,9 @@ void net_create() {
 
 		if(event.type == event_connect) {
 			uint64 connected_peer = event.peer_id;
-			// Seguranca: Enviar hash SHA-256 da senha ao inves de texto plano
 			string hashed_password = hash_password(password);
 			string create_msg = "xt55 " + username + " " + hashed_password + " " + email + " " + selected_gender;
-			con.send(connected_peer, encrypt_packet(create_msg), 0, true); // Criptografar antes de enviar
+			con.send(connected_peer, encrypt_packet(create_msg), 0, true);
 		}
 		else if(event.type == event_receive) {
 			try {
@@ -164,15 +148,14 @@ void net_create() {
 					menuprincipal();
 					return;
 				}
-				string received_msg = normalize_legacy_text(decrypt_packet(event.message)); // Descriptografar + normalizar
+				string received_msg = normalize_legacy_text(decrypt_packet(event.message));
 				if(received_msg == "created") {
 					account_creating = false;
 					net_un = username;
-					net_pw = password; // Armazenar senha original localmente (sera criptografada por writeprefs)
+					net_pw = password;
 					un = username;
 					pw = password;
 					writeprefs();
-					// NAO destruir conexao - manter ativa para login
 					dlg(pu.get_value("Conta criada com sucesso! Pressione enter para logar-se."));
 					net_logar();
 					return;
@@ -207,14 +190,12 @@ void net_create() {
 }
 
 void net_logar(bool localhost = false) {
-	// Validacao: Verificar se ha conta configurada
 	if(net_un == "" || net_pw == "") {
 		dlg(pu.get_value("Você não tem uma conta configurada. Por favor, crie uma conta primeiro ou configure suas credenciais."));
 		menuprincipal();
 		return;
 	}
-	
-	// Salvar preferencias antes de conectar
+
 	writeprefs();
 
 	speak(pu.get_value("Conectando ao servidor..."));
@@ -226,39 +207,38 @@ void net_logar(bool localhost = false) {
 	debug_log("=== INICIANDO TENTATIVA DE CONEXAO ===");
 	debug_log("Endereco: " + target_address + " Porta: " + game_serverport);
 	if(NET_DEBUG_SPEAKS) speak("DEBUG: Iniciando conexão para " + target_address + " porta " + game_serverport);
-	is_connected = false; // Flag global
+	is_connected = false;
 	@event = null;
-	
+
 	debug_log("Chamando setup_client(20, 150)");
 	if(NET_DEBUG_SPEAKS) speak("DEBUG: Chamando setup_client com 20 canais e 150ms timeout");
-	con.setup_client(20, 150); // 20 canais como no BGT original (0-19)
-	
+	con.setup_client(20, 150);
+
 	debug_log("Chamando connect()");
 	if(NET_DEBUG_SPEAKS) speak("DEBUG: Chamando connect para " + target_address + " porta " + game_serverport);
 	uint64 server_peer = con.connect(target_address, game_serverport);
 	uint64 expected_peer = server_peer;
-	
+
 	if(server_peer == 0) {
 		dlg(pu.get_value("Erro ao conectar ao servidor"));
 		reset();
 		menuprincipal();
 		return;
 	}
-	
-	peer_id = server_peer; // Armazenar peer_id global
-	
+
+	peer_id = server_peer;
+
 	debug_log("Aguardando evento de conexão... timeout=" + connecttime + "ms");
 	if(NET_DEBUG_SPEAKS) speak("DEBUG: Aguardando evento de conexão");
 	connecttimer.restart();
 
-	// Criar tela de conexao com audio_form para permitir cancelamento
 	audio_form conectando_form;
 	conectando_form.create_window(pu.get_value("Conectando ao servidor... Pressione ESC para cancelar."), false, true);
-	
+
 	while(true) {
 		wait(5);
-		conectando_form.monitor(); // Processa eventos da interface
-		@event = con.request(); // Poll de eventos de rede (obrigatorio para receber connect/receive/disconnect)
+		conectando_form.monitor();
+		@event = con.request();
 
 		if(key_pressed(KEY_ESCAPE)) {
 			debug_log("Usuario cancelou a conexão");
@@ -284,7 +264,6 @@ void net_logar(bool localhost = false) {
 			continue;
 		}
 
-		// Ignorar event_none (tipo 0 - sem eventos)
 		if(event.type == event_none) {
 			if(!is_connected && connecttimer.elapsed >= connecttime) {
 				debug_log("TIMEOUT apos " + connecttimer.elapsed + "ms - Servidor não respondeu");
@@ -296,14 +275,13 @@ void net_logar(bool localhost = false) {
 				menuprincipal();
 				return;
 			}
-			continue; // Aguardar eventos reais
+			continue;
 		}
 
 		debug_log("Evento recebido: tipo=" + event.type + ", peer_id=" + event.peer_id);
 		if(NET_DEBUG_SPEAKS) speak("DEBUG: Evento recebido - tipo=" + event.type + " peer=" + event.peer_id);
 
 		if(event.type == event_disconnect) {
-			// Ignora desconexao de peers antigos (ex.: sessao anterior derrubada pelo servidor).
 			if(event.peer_id != expected_peer) {
 				debug_log("Ignorando desconexão de peer antigo durante login: " + event.peer_id + " (esperado: " + expected_peer + ")");
 				continue;
@@ -334,12 +312,11 @@ void net_logar(bool localhost = false) {
 			expected_peer = event.peer_id;
 			net_peer_id = event.peer_id;
 			server_peer_id = event.peer_id;
-			peer_id = int(event.peer_id);  // Atualizar peer_id global (int) para compatibilidade BGT
-			// Seguranca: Enviar hash SHA-256 da senha ao inves de texto plano
+			peer_id = int(event.peer_id);
 			string hashed_password = hash_password(net_pw);
 			string login_msg = "h33j " + net_un + " " + hashed_password + " " + gversion + " " + banned;
 			debug_log("Enviando credenciais: " + net_un + " (hash omitido por seguranca)");
-			con.send(net_peer_id, encrypt_packet(login_msg), 0, true); // Criptografar antes de enviar
+			con.send(net_peer_id, encrypt_packet(login_msg), 0, true);
 			debug_log("Credenciais enviadas, aguardando resposta do servidor");
 			if(NET_DEBUG_SPEAKS) speak("DEBUG: Credenciais enviadas, aguardando resposta");
 			continue;
@@ -355,7 +332,7 @@ void net_logar(bool localhost = false) {
 					menuprincipal();
 					return;
 				}
-				string full_msg = normalize_legacy_text(decrypt_packet(event.message)); // Descriptografar + normalizar
+				string full_msg = normalize_legacy_text(decrypt_packet(event.message));
 				debug_log("Mensagem recebida do servidor: '" + full_msg + "'");
 				string[] parsed = full_msg.split(" ");
 
@@ -364,16 +341,13 @@ void net_logar(bool localhost = false) {
 					if(parsed[0] == "y") me.y = string_to_number(parsed[1]);
 				}
 
-				// Processar comando changemap (recebido APOS loggedin)
 				if(parsed.length() >= 1) {
 					if(parsed[0] == "changemap") {
 						debug_log("- CHANGEMAP recebido - carregando mapa completo");
 
-						// Carregar mapa sem o prefixo do comando (formato esperado: "map:...\r\n...")
 						string map_payload = string_replace(full_msg, "changemap ", "", false);
 						load_map(map_payload);
 
-						// Extrair coordenadas do mapa carregado
 						string[] ldata = delinear(map_payload);
 						for(uint i = 0; i < ldata.length(); i++) {
 							string[] parts = ldata[i].split(":");
@@ -391,30 +365,25 @@ void net_logar(bool localhost = false) {
 						debug_log("Mapa carregado! " + mapname + " (" + me.x + "," + me.y + ")");
 						speak("Você esta no mapa: " + mapname + ". Use as setas para se mover.");
 
-						// AGORA SIM entra no loop do jogo
 						game();
 						debug_log("game() retornou (desconexão ou saida)");
 						return;
 					}
 				}
-				
-				// Processar loggedin (aguarda changemap para entrar no jogo)
+
 				if(full_msg.find("loggedin") != -1) {
 					debug_log("LOGGEDIN recebido! Aguardando changemap...");
 					username = net_un;
 					is_connected = true;
-					
-					// Resetar backoff ao conectar com sucesso
+
 					reconnect_attempts = 0;
 					reconnect_delay = MIN_RECONNECT_DELAY;
 					waiting_to_reconnect = false;
 					kicked_to_menu = false;
-					
+
 					speak(pu.get_value("Logado com sucesso! Carregando mundo..."));
-					// NAO chama game() aqui - aguarda changemap
 				}
-				
-				// Outros comandos
+
 				if(parsed.length() >= 1) {
 					if(parsed[0] == "usarcolete") {
 						salvavida = 1;
@@ -427,8 +396,7 @@ void net_logar(bool localhost = false) {
 						return;
 					}
 				}
-				
-				// Processar erros
+
 				if(full_msg.lower().find("erro") != -1) {
 					dlg(pu.get_value(full_msg));
 					con.destroy();
@@ -449,23 +417,16 @@ void net_logar(bool localhost = false) {
 	}
 }
 
-// ==========================================
-// NETLOOP - PROCESSAMENTO DE EVENTOS DE REDE
-// ==========================================
-// Processa todos os eventos de rede recebidos do servidor
-// Deve ser chamado continuamente no game loop
 void netloop() {
-	if(!is_connected) return; // Usar flag global
-	
+	if(!is_connected) return;
+
 	const network_event@ ev;
-	// Processar multiplos eventos em um frame
-	while((@ev = con.request()) !is null && ev.type != event_none) { // Usar conexao global
+	while((@ev = con.request()) !is null && ev.type != event_none) {
 		if(@ev is null) continue;
-		
-		// === DESCONEXAO ===
+
 		if(ev.type == event_disconnect) {
 			speak(pu.get_value("Conexao perdida com o servidor."));
-			is_connected = false; // Atualizar flag
+			is_connected = false;
 			reset();
 			if(kicked_to_menu) {
 				kicked_to_menu = false;
@@ -477,8 +438,7 @@ void netloop() {
 			relogin_flag = true;
 			return;
 		}
-		
-		// === RECEBIMENTO DE MENSAGENS ===
+
 		if(ev.type == event_receive) {
 			try {
 				if(ev.message.length() > MAX_PACKET_ENCRYPTED_CHARS) {
@@ -490,70 +450,41 @@ void netloop() {
 				}
 				string full_msg = normalize_legacy_text(decrypt_packet(ev.message));
 				string[] parsed = full_msg.split(" ");
-				
+
 				if(parsed.length() == 0) continue;
-				
-				// ===================================================
-				// CANAL 0 - EVENTOS PRINCIPAIS
-				// ===================================================
+
 				if(ev.channel == 0) {
 					process_channel_0(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 1 - CHAT PRINCIPAL
-				// ===================================================
 				else if(ev.channel == 1) {
 					process_channel_1(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 2 - AVISOS
-				// ===================================================
 				else if(ev.channel == 2) {
 					add_add_item("avisos", full_msg);
 				}
-				// ===================================================
-				// CANAL 3 - MORTES
-				// ===================================================
 				else if(ev.channel == 3) {
 					process_channel_3(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 4 - SONS DE TIRO
-				// ===================================================
 				else if(ev.channel == 4) {
 					process_channel_4(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 5 - SONS DE MAPA
-				// ===================================================
 				else if(ev.channel == 5) {
 					process_channel_5(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 6 - INFORMACOES DE JOGADORES
-				// ===================================================
 				else if(ev.channel == 6) {
 					process_channel_6(full_msg, parsed, ev);
 				}
-				// ===================================================
-				// CANAL 7 - AUDIO DE VOZ
-				// ===================================================
 				else if(ev.channel == 7) {
 					process_channel_7(full_msg, parsed, ev);
 				}
 			}
 			catch {
 				log_client_network_exception("netloop:event_receive", ev.peer_id, ev.message);
-				// Nao derruba cliente; ignora somente o pacote invalido.
 				continue;
 			}
 		}
 	}
 }
-
-// ==========================================
-// PROCESSADORES DE CANAIS
-// ==========================================
 
 void show_items_list_menu(string raw_list) {
 	if(ausente) return;
@@ -574,7 +505,6 @@ void show_items_list_menu(string raw_list) {
 		string line = lines[i];
 		if(line == "" || line.length() < 2) continue;
 
-		// Itens chegam no formato: [tipo] id - nome...
 		if(line.find("[") != 0) continue;
 		int type_end = line.find("]");
 		int dash_pos = line.find(" - ");
@@ -640,10 +570,8 @@ bool net_json_try_get_string(const string &in json, const string &in field, stri
 void process_channel_0(string full_msg, string[] parsed, const network_event@ ev) {
 	if(handle_channel0_physical_inventory(full_msg, parsed)) return;
 	if(handle_channel0_remote_movement(parsed)) return;
-	
-	// === GRUPO 1: GERENCIAMENTO DE JOGADORES ===
+
 	if(parsed[0] == "pong") {
-		// Calcular tempo de ping
 		int ping_time = pingtimer.elapsed;
 		p.play_stationary("pingend.ogg", false);
 		speak("Ping: " + ping_time + " milissegundos", true);
@@ -651,16 +579,14 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		debug_log("Pong recebido! Ping: " + ping_time + "ms");
 	}
 	else if(parsed[0] == "say" && parsed.length() > 1) {
-		// Mensagem simples do servidor (falar direto)
-		string message = full_msg.substr(4); // Remove "say "
+		string message = full_msg.substr(4);
 		speak(message, true);
 		debug_log(" Servidor disse: " + message);
 	}
 	else if(parsed[0] == "listplayers") {
-		// Lista de todos os jogadores online (resposta ao F5/getplayers)
 		string data = "";
 		if(full_msg.length() > 12) {
-			data = full_msg.substr(12); // Remove "listplayers "
+			data = full_msg.substr(12);
 		}
 		debug_log("Recebido listplayers, dados: '" + data + "' (len=" + data.length() + ")");
 		playersmenu(data);
@@ -687,13 +613,11 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		process_msg2_packet(full_msg);
 	}
 	else if(parsed[0] == "inv" && parsed.length() >= 1) {
-		// Atualizacao incremental de inventario
 		debug_log("Recebido pacote inv: " + full_msg);
 		load_inv(full_msg);
 		debug_log("Inventario apos load_inv: " + player_inv.get_size() + " itens");
 	}
 	else if(parsed[0] == "setinv" && parsed.length() >= 1) {
-		// Substituicao completa do inventario
 		debug_log("Recebido pacote setinv: " + full_msg.substr(0, 100) + "...");
 		setinv(full_msg);
 		debug_log("Inventario apos setinv: " + player_inv.get_size() + " itens");
@@ -713,22 +637,18 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		exit();
 	}
 	else if(parsed[0] == "upl" && parsed.length() >= 4) {
-		// Formato do servidor: upl peer_id x y
 		int sender_peer_id = string_to_number(parsed[1]);
 		int px = string_to_number(parsed[2]);
 		int py = string_to_number(parsed[3]);
-		
-		// Atualizar posicao do jogador por peer_id (sem som)
+
 		update_player_by_peer_id(sender_peer_id, px, py);
 	}
 	else if(parsed[0] == "update_player2" && parsed.length() >= 5) {
-		// Formato alternativo: update_player2 name x y map
 		if(parsed[1] != un && parsed[4] == mapname) {
 			update_player(parsed[1], string_to_number(parsed[2]), string_to_number(parsed[3]), parsed[4]);
 		}
 	}
 	else if(parsed[0] == "pp" && parsed.length() > 1) {
-		// Jogador pacifico
 		set_player_peaceful(parsed[1], true);
 	}
 	else if(parsed[0] == "playerbeep" && parsed.length() > 2) {
@@ -764,19 +684,15 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			}
 		}
 	}
-	
-	// === GRUPO 2: MOVIMENTO E POSICIONAMENTO ===
+
 	else if(parsed[0] == "s" && parsed.length() >= 5) {
-		// Formato do servidor: s peer_id steps x y
 		int sender_peer_id = string_to_number(parsed[1]);
 		string step_sound = parsed[2];
 		int px = string_to_number(parsed[3]);
 		int py = string_to_number(parsed[4]);
-		
-		// Atualizar posicao do jogador no array
+
 		update_player_by_peer_id(sender_peer_id, px, py);
-		
-		// Tocar som do passo na posicao do jogador
+
 		if(step_sound != "" && step_sound != "0") {
 			p.play_2d(step_sound + ".ogg", me.x, me.y, px, py, false);
 		} else {
@@ -787,17 +703,14 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		me.x = string_to_number(parsed[1]);
 		me.y = string_to_number(parsed[2]);
 	}
-	//  Task 2.2: Handler de rotacao (yaw)
 	else if(parsed[0] == "yaw" && parsed.length() >= 2) {
 		me.yaw = string_to_number(parsed[1]);
 		debug_log(" Yaw atualizado: " + me.yaw + "");
 	}
-	// Task 2.2: Handler de stance (agachar/sentar)
 	else if(parsed[0] == "stance" && parsed.length() >= 2) {
 		int new_stance = string_to_number(parsed[1]);
 		me.stance = new_stance;
 
-		// Feedback sonoro baseado na postura
 		string stance_name = "em pe";
 		string stance_sound = "stance_stand.ogg";
 
@@ -813,13 +726,10 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		speak("Agora você esta " + stance_name + ".", true);
 		debug_log(" Stance atualizado: " + stance_name + " (" + new_stance + ")");
 	}
-	// Task 2.2: Handler de stance de outros jogadores
 	else if(parsed[0] == "player_stance" && parsed.length() >= 3) {
-		// player_stance peer_id stance
 		uint64 other_peer_id = string_to_number(parsed[1]);
 		int other_stance = string_to_number(parsed[2]);
 
-		// Atualizar stance do jogador no array
 		for(uint i = 0; i < players.length(); i++) {
 			if(players[i].peer_id == other_peer_id) {
 				players[i].stance = other_stance;
@@ -842,11 +752,11 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		int fh = string_to_number(parsed[5]);
 		if(parsed[1] != un && parsed[4] == mapname) {
 			if(fh < 20) {
-				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "land.ogg", 
+				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "land.ogg",
 				          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 			}
 			else {
-				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "hardland.ogg", 
+				p.play_2d(get_tile_at(string_to_number(parsed[2]), string_to_number(parsed[3])) + "hardland.ogg",
 				          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 			}
 		}
@@ -862,41 +772,40 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		me.y += 35;
 		centar();
 	}
-	
-	// === GRUPO 5: SISTEMA DE CHAT ===
+
 	else if(parsed[0] == "local" && parsed.length() > 1) {
 		debug_log(" Chat local recebido");
 		string msg = string_replace(full_msg, "local ", "", false);
-		add_add_item("local", msg, true);  // Usa sistema de adds
+		add_add_item("local", msg, true);
 	}
 	else if(parsed[0] == "pm" && parsed.length() > 1) {
 		debug_log(" PM recebido");
 		string msg = string_replace(full_msg, "pm ", "", false);
-		add_add_item("privado", msg, true);  // Usa sistema de adds
+		add_add_item("privado", msg, true);
 	}
 	else if(parsed[0] == "team" && parsed.length() > 1) {
 		debug_log(" Chat de equipe recebido");
 		string msg = string_replace(full_msg, "team ", "", false);
-		add_add_item("equipe", msg, true);  // Usa sistema de adds
+		add_add_item("equipe", msg, true);
 	}
 	else if(parsed[0] == "say" && parsed.length() > 1) {
 		debug_log(" Chat global recebido");
 		string msg = string_replace(full_msg, "say ", "", false);
-		add_add_item("global", msg, true);  // Usa sistema de adds
+		add_add_item("global", msg, true);
 	}
 	else if(parsed[0] == "hablarbot" && parsed.length() > 1) {
 		debug_log(" Chat NPC recebido");
 		string npc_name = parsed[1];
-		string msg = npc_name + " diz: " + 
+		string msg = npc_name + " diz: " +
 					string_replace(full_msg, "hablarbot " + npc_name + " ", "", false);
-		add_add_item("local", msg, true);  // Usa sistema de adds
+		add_add_item("local", msg, true);
 	}
 	else if(parsed[0] == "system" && parsed.length() > 1) {
 		debug_log(" Mensagem de sistema recebida");
 		string msg = string_replace(full_msg, "system ", "", false);
-		add_add_item("servidor", msg, false);  // Usa sistema de adds
+		add_add_item("servidor", msg, false);
 	}
-	
+
 	else if(parsed[0] == "changemap") {
 		string map_payload = string_replace(full_msg, "changemap ", "", false);
 		load_map(map_payload);
@@ -907,15 +816,10 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		load_map(map_payload, false);
 		connect = true;
 	}
-	
-	// === GRUPO 3: INVENTARIO ===
-	// (removido - ja processado no inicio da funcao)
-	
-	// === GRUPO 4: AUDIO ===
+
 	else if(handle_channel0_audio(parsed)) {
 	}
-	
-	// === GRUPO 5: ESTADOS DO JOGADOR ===
+
 	else if(parsed[0] == "startfloat") floating = true;
 	else if(parsed[0] == "stopfloat") floating = false;
 	else if(parsed[0] == "startcloak") cloaked = true;
@@ -943,7 +847,6 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "retirarcolete") salvavida = 0;
 	else if(parsed[0] == "ausente0") ausente = false;
 	else if(parsed[0] == "ausente1") ausente = true;
-	// Handler para pacifico - atualiza status de jogador
 	else if(parsed[0] == "pp" && parsed.length() >= 3) {
 		string player_name = parsed[1];
 		int pacifico_status = string_to_number(parsed[2]);
@@ -954,14 +857,12 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			}
 		}
 	}
-	// ininovato/fimnovato - modo novato/protecao
 	else if(parsed[0] == "ininovato") novato = 1;
 	else if(parsed[0] == "fimnovato") novato = 0;
 	else if(parsed[0] == "seguro") nvaicair = 1;
 	else if(parsed[0] == "aveloz") dveloz = 1;
 	else if(parsed[0] == "dveloz") dveloz = 0;
-	
-	// === GRUPO 6: CLIMA E AMBIENTE ===
+
 	else if(parsed[0] == "chuvaativa") {
 		chuvaativa = 1;
 		chuva();
@@ -976,14 +877,14 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	else if(parsed[0] == "addambiente" && parsed.length() >= 6) {
 		destroy_all_ambientes();
-		spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]), 
+		spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]),
 		               string_to_number(parsed[3]), string_to_number(parsed[4]), parsed[5], "123");
 	}
 	else if(parsed[0] == "rsonsmo") {
 		destroy_all_msounds();
 	}
 	else if(parsed[0] == "cm" && parsed.length() >= 6) {
-		createmsound(string_to_number(parsed[1]), parsed[2], string_to_number(parsed[3]), 
+		createmsound(string_to_number(parsed[1]), parsed[2], string_to_number(parsed[3]),
 		             string_to_number(parsed[4]), parsed[5]);
 	}
 	else if(parsed[0] == "destroymsound" && parsed.length() >= 2) {
@@ -992,8 +893,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "um" && parsed.length() >= 4) {
 		updatemsound(string_to_number(parsed[1]), string_to_number(parsed[2]), string_to_number(parsed[3]));
 	}
-	
-	// === GRUPO 7: MENSAGENS ===
+
 	else if(parsed[0] == "msg" && parsed.length() > 1) {
 		process_msg(full_msg, parsed);
 	}
@@ -1031,45 +931,37 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			add_add_item("avisos", pu.get_value(m));
 		}
 	}
-	//  CHAT LOCAL: fm |titulo| nome |acao| mensagem
 	else if(parsed[0] == "fm") {
 		process_fm(full_msg, parsed);
 	}
-	//  MENSAGEM PRIVADA: pm de/para nome: mensagem
 	else if(parsed[0] == "pm") {
 		process_pm(full_msg, parsed);
 	}
-	//  NOTIFICACAO DE CONEXAO: msgconexoes mensagem
 	else if(parsed[0] == "msgconexoes") {
 		process_msgconexoes(full_msg, parsed);
 	}
-	//  TASK 3.3 QOL: Traducao recebida
 	else if(parsed[0] == "translated") {
 		string data = full_msg.replace("translated ", "");
 		process_translated_message(data);
 	}
-	//  TASK 3.3 QOL: Habilitar traducao
 	else if(parsed[0] == "enabletranslate") {
 		process_enable_translate();
 	}
-	//  TASK 3.3 QOL: Desabilitar traducao
 	else if(parsed[0] == "disabletranslate") {
 		process_disable_translate();
 	}
-	
-	//  PINFO: Menu navegavel de informacoes do jogador
+
 	else if(full_msg.find("pinfo_data:") == 0) {
 		process_pinfo_data(full_msg);
 	}
-	
-	// === GRUPO 8: COMBATE ===
+
 	else if(parsed[0] == "finalhit" && parsed.length() > 3) {
 		for(uint i = 0; i < sons.length(); i++) {
 			string[] ss = sons[i].split(":");
 			if(ss.length() > 1 && ss[1] == parsed[1]) {
 				p.play_2d(ss[0], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 				if(parsed.length() > 7) {
-					p.play_2d("v" + string_to_number(parsed[8]) + "dor" + random(1, 3) + ".ogg", 
+					p.play_2d("v" + string_to_number(parsed[8]) + "dor" + random(1, 3) + ".ogg",
 					          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 				}
 				break;
@@ -1080,11 +972,10 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 	}
 	else if(parsed[0] == "inithurt" && parsed.length() > 3) {
-		p.play_2d("v" + string_to_number(parsed[1]) + "quejido" + random(1, 4) + ".ogg", 
+		p.play_2d("v" + string_to_number(parsed[1]) + "quejido" + random(1, 4) + ".ogg",
 		          me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
 	}
-	
-	// === GRUPO 9: ARMAS ===
+
 	else if(parsed[0] == "reset_weapons") {
 		weapons.resize(0);
 	}
@@ -1098,15 +989,14 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 				continue;
 			}
 			if(get_weapon_index(data[10]) < 0) {
-				create_weapon(string_to_number(data[0]), string_to_number(data[1]), string_to_number(data[2]), 
-				              string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]), 
-				              string_to_number(data[6]), data[7], data[8], data[9], data[10], data[11], 
+				create_weapon(string_to_number(data[0]), string_to_number(data[1]), string_to_number(data[2]),
+				              string_to_number(data[3]), string_to_number(data[4]), string_to_number(data[5]),
+				              string_to_number(data[6]), data[7], data[8], data[9], data[10], data[11],
 				              data[12], data[13], string_to_number(data[14]), data[15]);
 			}
 		}
 	}
-	
-	// === GRUPO 10: MENUS ===
+
 	else if(parsed[0] == "dataportal" || parsed[0] == "use_portal") {
 		string content = full_msg.replace(parsed[0] + " ", "");
 		telemenu(content.split("\r\n"));
@@ -1152,8 +1042,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		string mensagem = full_msg.replace(parsed[0] + " ", "");
 		menul5(mensagem.split("\r\n"));
 	}
-	
-	// === GRUPO 11: ADMIN ===
+
 	else if(parsed[0] == "djogador") {
 		desenvolvedordm = 1;
 		is_dev = true;
@@ -1197,7 +1086,6 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		exit();
 	}
 	else if(parsed[0] == "reiniciar") {
-		// Feedback sonoro/tela para reinício forçado pelo servidor.
 		if(file_exists(get_sound_path("reiniciando.ogg"))) {
 			p.play_stationary("reiniciando.ogg", false);
 		} else {
@@ -1211,13 +1099,12 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "chutad") {
 		chutad();
 	}
-	
-	// === GRUPO 12: OUTROS ===
+
 	else if(parsed[0] == "set_married_variable" && parsed.length() > 1) {
-		married = 1;  // int, nao bool
+		married = 1;
 	}
 	else if(parsed[0] == "set_parabatai_variable" && parsed.length() > 1) {
-		parabatyed = 1;  // int, nao bool
+		parabatyed = 1;
 	}
 	else if(parsed[0] == "setstatus") {
 		string m = full_msg.replace(parsed[0] + " ", "");
@@ -1269,10 +1156,7 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(handle_channel0_npc(parsed)) {
 		return;
 	}
-	// === FALLBACK: Mensagem desconhecida ===
 	else {
-		// Compatibilidade: alguns fluxos antigos enviam "som.ogg x y" sem prefixo "play"
-		// Exemplo: "abrirziper.ogg 52 0"
 		if(parsed.length() >= 3 && parsed[0].find(".ogg") >= 0) {
 			p.play_2d(parsed[0], me.x, me.y, string_to_number(parsed[1]), string_to_number(parsed[2]), false);
 			return;
@@ -1282,4 +1166,3 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 }
 
 #include "net/channel_handlers.nvgt"
-

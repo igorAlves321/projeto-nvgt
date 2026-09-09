@@ -1,72 +1,42 @@
-// client_tracker.nvgt - Sistema de Rate Limiting (Anti-Flood)
-// Protege o servidor contra ataques de flood de pacotes
 
-/**
- * ClientTracker - Rastreia pacotes por segundo de cada cliente
- * 
- * Uso:
- * - Chamar check_limit() a cada pacote recebido
- * - Se retornar false, cliente está fazendo flood → kick
- */
 class ClientTracker {
-    timer window_timer;       // Timer da janela de 1 segundo
-    int packet_count = 0;     // Contador de pacotes na janela atual
-    
-    // Configuração: Max pacotes por segundo
-    // Audio games geralmente enviam 10-20 pps (movimento + rotação)
-    // Valor 50 dá margem para lag spikes sem falsos positivos
+    timer window_timer;
+    int packet_count = 0;
+
     int MAX_PPS = 50;
-    
-    // Número de violações antes de kick (tolerância)
+
     int violations = 0;
-    int MAX_VIOLATIONS = 3;  // 3 segundos seguidos de flood = kick
-    
-    /**
-     * Verifica se o cliente está dentro do limite de pacotes
-     * @return true se OK, false se está fazendo flood
-     */
+    int MAX_VIOLATIONS = 3;
+
     bool check_limit() {
         packet_count++;
-        
-        // Se passou 1 segundo, avalia o ciclo anterior
+
         if(window_timer.elapsed >= 1000) {
-            // Se excedeu no ciclo anterior, conta violação
             if(packet_count > MAX_PPS) {
                 violations++;
             } else {
-                // Se ficou dentro do limite, reseta violações
                 violations = 0;
             }
-            
-            // Reseta para novo ciclo
+
             packet_count = 0;
             window_timer.restart();
-            
-            // Se atingiu max violações, é flood confirmado
+
             if(violations >= MAX_VIOLATIONS) {
                 return false;
             }
         }
-        
-        // Proteção extra: se em um único segundo enviou MUITO acima do limite
-        // (ex: 200+ pacotes), kick imediato sem esperar próximo ciclo
+
         if(packet_count > MAX_PPS * 4) {
-            return false;  // Flood agressivo detectado
+            return false;
         }
-        
-        return true;  // Tudo OK
+
+        return true;
     }
-    
-    /**
-     * Retorna estatísticas para debug/log
-     */
+
     string get_stats() {
         return "PPS: " + packet_count + "/" + MAX_PPS + ", Violations: " + violations + "/" + MAX_VIOLATIONS;
     }
-    
-    /**
-     * Reseta todos os contadores (útil após reconexão)
-     */
+
     void reset() {
         packet_count = 0;
         violations = 0;
@@ -74,30 +44,22 @@ class ClientTracker {
     }
 }
 
-// Dictionary global para rastrear conexões ativas
 dictionary client_trackers;
 
-/**
- * Obtém ou cria tracker para um peer
- */
 ClientTracker@ get_tracker(uint64 peer_id) {
     string key = "" + peer_id;
-    
+
     if(client_trackers.exists(key)) {
         ClientTracker@ t;
         client_trackers.get(key, @t);
         return t;
     }
-    
-    // Criar novo tracker
+
     ClientTracker@ new_tracker = ClientTracker();
     client_trackers.set(key, @new_tracker);
     return new_tracker;
 }
 
-/**
- * Remove tracker de um peer (quando desconecta)
- */
 void remove_tracker(uint64 peer_id) {
     string key = "" + peer_id;
     if(client_trackers.exists(key)) {
@@ -105,10 +67,6 @@ void remove_tracker(uint64 peer_id) {
     }
 }
 
-/**
- * Verifica rate limit para um peer
- * @return true se OK, false se excedeu limite (deve kickar)
- */
 bool check_client_rate_limit(uint64 peer_id) {
     ClientTracker@ tracker = get_tracker(peer_id);
     return tracker.check_limit();

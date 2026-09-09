@@ -1,18 +1,15 @@
-// combat.nvgt - Sistema de combate para servidor EVM
-// Conversão BGT → NVGT - Sistema completo de combate
 
 #include "globals.nvgt"
 
-// Classe para gerenciar um combate ativo
 class CombatInstance {
     string attacker_id;
     string defender_id;
     bool in_progress;
-    bool is_finished; //  Flag para indicar combate finalizado
+    bool is_finished;
     uint64 start_time;
     uint64 last_action_time;
-    uint64 expiration_time; //  Tempo absoluto de expiração
-    string battle_status; // ongoing, victory, defeat, flee
+    uint64 expiration_time;
+    string battle_status;
 
     CombatInstance() {
         in_progress = false;
@@ -30,25 +27,23 @@ class CombatInstance {
         is_finished = false;
         start_time = get_time_stamp();
         last_action_time = start_time;
-        expiration_time = start_time + 30000; // Expira em 30 segundos
+        expiration_time = start_time + 30000;
         battle_status = "ongoing";
     }
 
     bool is_expired(uint64 current_time) {
-        // Retorna true se o tempo atual >= tempo de expiração
         return current_time >= expiration_time;
     }
 
     void update_action_time() {
         last_action_time = get_time_stamp();
-        expiration_time = last_action_time + 30000; // Renova expiração
+        expiration_time = last_action_time + 30000;
     }
 }
 
-//  Sistema global de combate com array e mutex
 mutex combat_mutex;
 CombatInstance@[] active_combats;
-dictionary combat_defense_flags; // player_id -> 1 (defesa ativa para o próximo ataque)
+dictionary combat_defense_flags;
 
 void set_player_defending(string player_id) {
     if(player_id == "") return;
@@ -61,8 +56,6 @@ bool consume_player_defense(string player_id) {
     combat_defense_flags.delete(player_id);
     return true;
 }
-
-// Funções de combate
 
 bool is_player_in_combat(string player_id) {
     combat_mutex.lock();
@@ -82,25 +75,20 @@ bool is_player_in_combat(string player_id) {
 }
 
 bool start_combat(string attacker_id, string defender_id) {
-    // Verificar se algum dos jogadores já está em combate
     if(is_player_in_combat(attacker_id) || is_player_in_combat(defender_id)) {
         return false;
     }
 
-    //  Criar instância única de combate (ambos jogadores compartilham a mesma instância)
     CombatInstance@ combat = CombatInstance(attacker_id, defender_id);
 
-    //  Adicionar ao array com proteção de mutex
     combat_mutex.lock();
     active_combats.insert_last(@combat);
     combat_mutex.unlock();
 
-    // Log do início do combate
     log_combat_action(attacker_id, defender_id, "combat_start", "", 0, 0,
                      get_player_hp(attacker_id), get_player_hp(attacker_id),
                      get_player_hp(defender_id), get_player_hp(defender_id), "ongoing");
 
-    // Notificar players
     player@ att = get_player_by_id(attacker_id);
     player@ def = get_player_by_id(defender_id);
 
@@ -108,7 +96,6 @@ bool start_combat(string attacker_id, string defender_id) {
         att.send_message("say Combate iniciado contra " + def.name + "!");
         def.send_message("say " + att.name + " iniciou um combate contra você!");
 
-        // Notificar players próximos
         string[] nearby = get_nearby_players(att.map_name, att.x, att.y, att.z, 10);
         for(uint i = 0; i < nearby.length(); i++) {
             if(nearby[i] != attacker_id && nearby[i] != defender_id) {
@@ -126,30 +113,25 @@ bool start_combat(string attacker_id, string defender_id) {
 void end_combat(string player_id, string reason) {
     combat_mutex.lock();
 
-    //  Buscar combate no array
     for(uint i = 0; i < active_combats.length(); i++) {
         if(active_combats[i] !is null) {
             if(active_combats[i].attacker_id == player_id || active_combats[i].defender_id == player_id) {
                 CombatInstance@ combat = active_combats[i];
                 string opponent_id = combat.attacker_id == player_id ? combat.defender_id : combat.attacker_id;
 
-                //  Marcar como finalizado (cleanup_expired_combats removerá depois)
                 combat.is_finished = true;
                 combat.in_progress = false;
                 combat.battle_status = reason;
 
                 combat_mutex.unlock();
 
-                // Log do fim do combate
                 log_combat_action(player_id, opponent_id, "combat_end", reason, 0, 0,
                                  get_player_hp(player_id), get_player_hp(player_id),
                                  get_player_hp(opponent_id), get_player_hp(opponent_id), reason);
 
-                // Limpar flag de defesa ao encerrar combate
                 if(combat_defense_flags.exists(player_id)) combat_defense_flags.delete(player_id);
                 if(combat_defense_flags.exists(opponent_id)) combat_defense_flags.delete(opponent_id);
 
-                // Notificar players
                 player@ player = get_player_by_id(player_id);
                 player@ opponent = get_player_by_id(opponent_id);
 
@@ -180,24 +162,20 @@ void end_combat(string player_id, string reason) {
 int calculate_damage(string attacker_id, string defender_id, string weapon_type = "") {
     player@ attacker = get_player_by_id(attacker_id);
     player@ defender = get_player_by_id(defender_id);
-    
+
     if(attacker is null || defender is null) return 0;
-    
-    // Damage base do atacante
+
     int base_damage = attacker.player_level * 2 + 10;
-    
-    // Modificadores de arma (se especificado)
+
     if(weapon_type != "") {
         GameItem@ weapon = get_item_by_name(weapon_type);
         if(weapon !is null) {
             base_damage += weapon.damage;
         }
     }
-    
-    // Defesa do defensor
+
     int defense = defender.player_level + 5;
 
-    // Defesa de equipamentos/roupas
     int equip_defense = 0;
     if(defender.escudo == 1) equip_defense += 8;
     if(defender.colete_aprova_de_balas == 1) equip_defense += 6;
@@ -213,22 +191,19 @@ int calculate_damage(string attacker_id, string defender_id, string weapon_type 
     double clothing_reduction = defender.clothing_protection / 100.0;
     if(clothing_reduction < 0.0) clothing_reduction = 0.0;
     if(clothing_reduction > 0.90) clothing_reduction = 0.90;
-    
-    // Calcular damage final
+
     int final_damage = base_damage - defense - equip_defense;
     if(final_damage < 1) final_damage = 1;
     final_damage = int(double(final_damage) * (1.0 - clothing_reduction));
     if(final_damage < 1) final_damage = 1;
-    
-    // Chance de crítico (5%)
+
     if(random(1, 100) <= 5) {
         final_damage *= 2;
     }
-    
-    // Variação aleatória (±20%)
+
     int variation = random(-20, 20);
     final_damage = final_damage + (final_damage * variation / 100);
-    
+
     return final_damage;
 }
 
@@ -236,24 +211,21 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
     if(!is_player_in_combat(attacker_id)) {
         return false;
     }
-    
+
     player@ attacker = get_player_by_id(attacker_id);
     player@ defender = get_player_by_id(defender_id);
-    
+
     if(attacker is null || defender is null) return false;
-    
-    //  Verificar se está em zona segura
+
     if(is_in_safezone(defender.x, defender.y, defender.map)) {
         attacker.send_message("say Você não pode atacar em uma zona segura!");
         return false;
     }
-    
-    // Calcular damage
+
     int damage = calculate_damage(attacker_id, defender_id, weapon_type);
     int defender_hp_before = defender.hp;
     int blocked_damage = 0;
 
-    // Defesa ativa reduz o próximo dano recebido (consome ao usar)
     if(consume_player_defense(defender_id)) {
         int reduced = int(damage * 0.5);
         if(reduced < 1) reduced = 1;
@@ -261,12 +233,10 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
         damage = reduced;
         defender.send_message("say Sua defesa reduziu parte do dano recebido!");
     }
-    
-    // Aplicar damage
+
     defender.hp -= damage;
     if(defender.hp < 0) defender.hp = 0;
 
-    //  Atualizar tempo de ação do combate
     combat_mutex.lock();
     for(uint i = 0; i < active_combats.length(); i++) {
         if(active_combats[i] !is null) {
@@ -277,61 +247,51 @@ bool execute_attack(string attacker_id, string defender_id, string weapon_type =
         }
     }
     combat_mutex.unlock();
-    
-    // Log da ação
+
     string action_type = "attack";
     if(damage >= defender_hp_before * 0.5) action_type = "critical";
-    
+
     log_combat_action(attacker_id, defender_id, action_type, weapon_type, damage, blocked_damage,
                      attacker.hp, attacker.hp, defender_hp_before, defender.hp, "ongoing");
-    
-    // Mensagens
+
     string weapon_text = weapon_type != "" ? " com " + weapon_type : "";
     attacker.send_message("say Você atacou " + defender.name + weapon_text + " causando " + damage + " de dano!");
     defender.send_message("say " + attacker.name + " te atacou" + weapon_text + " causando " + damage + " de dano! HP: " + defender.hp + "/" + defender.max_hp);
-    
-    // Verificar se o defensor morreu
+
     if(defender.hp <= 0) {
-        // Defensor morreu
         attacker.send_message("say Você derrotou " + defender.name + "!");
         defender.send_message("say Você foi derrotado por " + attacker.name + "!");
-        
-        // XP e recompensas
+
         int exp_gain = defender.player_level * 10 + 50;
         int gold_gain = defender.player_level * 5 + random(10, 50);
-        
+
         attacker.exp += exp_gain;
         attacker.gold += gold_gain;
-        
+
         attacker.send_message("say Você ganhou " + exp_gain + " XP e " + gold_gain + " moedas!");
-        
-        // Ressurreição do defensor (respawn)
-        defender.hp = defender.max_hp / 2; // 50% da vida
-        defender.x = 0; // Posição de respawn
+
+        defender.hp = defender.max_hp / 2;
+        defender.x = 0;
         defender.y = 0;
         defender.z = 0;
-        defender.map_name = "spawn"; // Mapa de respawn
-        
+        defender.map_name = "spawn";
+
         defender.send_message("say Você foi ressuscitado no ponto de respawn com metade da vida.");
-        
-        // Finalizar combate
+
         end_combat(attacker_id, "victory");
         end_combat(defender_id, "defeat");
-        
-        // Salvar jogadores - NVGT: usar save_player_to_database em vez de save_player_async
+
         save_player_to_database(@attacker);
         save_player_to_database(@defender);
-        
-        // Atualizar estatísticas
+
         update_statistics("combat_victory");
         update_statistics("combat_defeat");
-        
+
         return true;
     }
-    
-    // Salvar defensor (HP atualizado) - NVGT: usar save_player_to_database
+
     save_player_to_database(@defender);
-    
+
     return true;
 }
 
@@ -340,14 +300,12 @@ bool attempt_flee(string player_id) {
         return false;
     }
 
-    // Chance de fuga baseada no nível (mínimo 30%, máximo 80%)
     player@ player = get_player_by_id(player_id);
     if(player is null) return false;
 
     int flee_chance = 30 + (player.player_level * 2);
     if(flee_chance > 80) flee_chance = 80;
 
-    //  Buscar combate no array
     string opponent_id = "";
     combat_mutex.lock();
     for(uint i = 0; i < active_combats.length(); i++) {
@@ -362,42 +320,37 @@ bool attempt_flee(string player_id) {
 
     if(opponent_id == "") return false;
     player@ opponent = get_player_by_id(opponent_id);
-    
+
     if(random(1, 100) <= flee_chance) {
-        // Fuga bem-sucedida
         player.send_message("say Você conseguiu fugir do combate!");
         if(opponent !is null) {
             opponent.send_message("say " + player.name + " fugiu do combate!");
         }
-        
-        // Log da fuga
+
         log_combat_action(player_id, opponent_id, "flee", "successful", 0, 0,
-                         player.hp, player.hp, 
-                         opponent !is null ? opponent.hp : 0, 
+                         player.hp, player.hp,
+                         opponent !is null ? opponent.hp : 0,
                          opponent !is null ? opponent.hp : 0, "flee");
-        
+
         end_combat(player_id, "flee");
-        
+
         update_statistics("combat_flee");
         return true;
     } else {
-        // Fuga falhou
         player.send_message("say Você tentou fugir mas não conseguiu!");
         if(opponent !is null) {
             opponent.send_message("say " + player.name + " tentou fugir mas falhou!");
         }
-        
-        // Log da tentativa de fuga
+
         log_combat_action(player_id, opponent_id, "flee", "failed", 0, 0,
                          player.hp, player.hp,
                          opponent !is null ? opponent.hp : 0,
                          opponent !is null ? opponent.hp : 0, "ongoing");
-        
+
         return false;
     }
 }
 
-//  Função auxiliar: Buscar combate de um jogador
 CombatInstance@ get_player_combat(string player_id) {
     combat_mutex.lock();
 
@@ -415,30 +368,22 @@ CombatInstance@ get_player_combat(string player_id) {
     return null;
 }
 
-//  PASSO 2: Função de Limpeza Assíncrona com Iteração Reversa
-// Esta função será executada em uma thread separada usando async
 void cleanup_expired_combats_task() {
-    combat_mutex.lock(); //  Travar o Mutex para acesso exclusivo
+    combat_mutex.lock();
 
-    uint64 current_time = ticks(); // Captura o tempo atual usando a função 'ticks()' do NVGT
+    uint64 current_time = ticks();
 
-    //  Iteração reversa (necessária para remover elementos de arrays NVGT sem erro)
-    // Itera de trás para frente para evitar pular elementos ao remover
     for(int i = int(active_combats.length()) - 1; i >= 0; i--) {
         CombatInstance@ combat = active_combats[i];
 
-        // Verificação: Se o combate expirou ou foi encerrado
         if(combat.is_expired(current_time) || combat.is_finished) {
-            // Remoção: Usa o método remove_at do array
             active_combats.remove_at(i);
-            // NOTA: A desalocação da memória é automática pelo NVGT (contagem de referências)
         }
     }
 
-    combat_mutex.unlock(); //  Libera o Mutex
+    combat_mutex.unlock();
 }
 
-// Funções auxiliares que devem ser implementadas em outros módulos
 int get_player_hp(string player_id) {
     player@ player = get_player_by_id(player_id);
     return player !is null ? player.hp : 0;
@@ -446,7 +391,7 @@ int get_player_hp(string player_id) {
 
 string[] get_nearby_players(string map_name, int x, int y, int z, int radius) {
     string[] nearby;
-    
+
     for(uint i = 0; i < players.length(); i++) {
         if(players[i] !is null && players[i].map_name == map_name) {
             int distance = abs(players[i].x - x) + abs(players[i].y - y) + abs(players[i].z - z);
@@ -455,35 +400,32 @@ string[] get_nearby_players(string map_name, int x, int y, int z, int radius) {
             }
         }
     }
-    
+
     return nearby;
 }
 
-// Função para logging de combate (implementada em history.nvgt)
-void log_combat_action(string attacker_id, string defender_id, string action_type, 
+void log_combat_action(string attacker_id, string defender_id, string action_type,
                       string weapon_used, int damage_dealt, int damage_blocked,
                       int attacker_hp_before, int attacker_hp_after,
                       int defender_hp_before, int defender_hp_after, string battle_result) {
-    
-    // NVGT: Usar bancoJogo em vez de server_db
+
     if(!database_initialized || bancoJogo is null) return;
-    
+
     player@ attacker = get_player_by_id(attacker_id);
     player@ defender = get_player_by_id(defender_id);
-    
+
     string attacker_name = attacker !is null ? attacker.name : "Unknown";
     string defender_name = defender !is null ? defender.name : "Unknown";
     string map_name = attacker !is null ? attacker.map_name : "unknown";
     int x = attacker !is null ? attacker.x : 0;
     int y = attacker !is null ? attacker.y : 0;
     int z = attacker !is null ? attacker.z : 0;
-    
+
     string query = "INSERT INTO combat_logs (attacker_id, attacker_name, defender_id, defender_name, " +
                    "action_type, weapon_used, damage_dealt, damage_blocked, " +
                    "attacker_hp_before, attacker_hp_after, defender_hp_before, defender_hp_after, " +
                    "battle_result, map_name, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    
-    // NVGT: db_statement não existe, usar sqlite3statement
+
     sqlite3statement@ stmt = bancoJogo.prepare(query);
     if(stmt !is null) {
         stmt.bind_int(1, string_to_number(attacker_id));
@@ -503,7 +445,7 @@ void log_combat_action(string attacker_id, string defender_id, string action_typ
         stmt.bind_int(15, x);
         stmt.bind_int(16, y);
         stmt.bind_int(17, z);
-        
+
         stmt.step();
     }
 }

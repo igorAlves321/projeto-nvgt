@@ -1,5 +1,3 @@
-// macaco.nvgt - Sistema de Macaco do EVM Server (convertido de BGT)
-// Conversão: BGT → NVGT
 
 macaco@[] macacos;
 
@@ -13,7 +11,7 @@ class macaco {
 	timer tempoatirar;
 	int macacotime = 370;
 	bool modofugir = false;
-	
+
 	macaco(int cx, int cy, string cmap) {
 		x = cx;
 		y = cy;
@@ -21,7 +19,6 @@ class macaco {
 	}
 }
 
-// Calcula distância entre macaco e jogador
 int get_macaco_distance(macaco@ m, player@ p) {
 	if (m.map != p.map) return -1;
 	return get_distance(m.x, p.x, m.y, p.y);
@@ -29,38 +26,33 @@ int get_macaco_distance(macaco@ m, player@ p) {
 
 void macacoloop() {
 	for (uint i = 0; i < macacos.length(); i++) {
-		// Sistema de morte
 		if (macacos[i].vida <= 0) {
 			net.send_packet(0, "play m_macaco.ogg " + macacos[i].x + " " + macacos[i].y, macacos[i].map);
 			string golp = macacos[i].golpeado;
 			send_reliable(0, "msg2 " + golp + "; ;matou um; ;macaco;!", 3);
-			
+
 			int xx = get_player_index_from(golp);
 			if (xx > -1) {
 				players[xx].inv_add_item("corpo_de_macaco", 1);
 				ganhaxp(players[xx].charname, random(5, 10));
-				
-				//  INTEGRAÇÃO: Atualizar quests e achievements
+
 				quest_update_kill(players[xx].charname, "macaco");
 				update_achievement_progress(players[xx].charname, "kills", 1);
 			}
 			macacos.remove_at(i);
 			break;
 		}
-		
-		// Sons periódicos
+
 		if (macacos[i].tsom.elapsed >= macacos[i].asom + random(1000, 2000)) {
 			macacos[i].tsom.restart();
 			string ss = "macaco" + random(1, 3) + ".ogg";
 			net.send_packet(0, "play " + ss + " " + macacos[i].x + " " + macacos[i].y, macacos[i].map);
 		}
-		
-		// Sistema de movimento e combate
+
 		if (macacos[i].macacotimer.elapsed >= macacos[i].macacotime) {
 			macacos[i].macacotimer.restart();
-			
+
 			for (uint i2 = 0; i2 < players.length(); i2++) {
-				// Movimento - seguir jogador
 				if (macacos[i].x > players[i2].x + 1 && players[i2].insz == false && players[i2].map == macacos[i].map && players[i2].newbie == false && players[i2].afk == false && players[i2].pacifico == 0 && macacos[i].modofugir == false) {
 					macacos[i].x--;
 					string ss = get_tile_at(macacos[i].x, macacos[i].y, macacos[i].map);
@@ -75,13 +67,11 @@ void macacoloop() {
 					macacos[i].macacotimer.restart();
 					break;
 				}
-				
-				// Sistema de ataque (dano 50-100)
+
 				if (get_macaco_distance(macacos[i], players[i2]) > -1 && get_macaco_distance(macacos[i], players[i2]) <= 2 && players[i2].afk == false && players[i2].pacifico == 0 && players[i2].newbie == false && macacos[i].tempoatirar.elapsed >= 500 && macacos[i].tiros > 0 && players[i2].insz == false) {
 					macacos[i].tempoatirar.restart();
 					net.send_packet(0, "play macacobater1.ogg " + macacos[i].x + " " + macacos[i].y, macacos[i].map);
-					
-					// Verificar reflexão de dano
+
 					int dano = random(50, 100);
 					int r = refletir(i2, "macaco", macacos[i].x, macacos[i].y, dano);
 					if (r > 0) {
@@ -89,28 +79,24 @@ void macacoloop() {
 						macacos[i].golpeado = players[i2].charname;
 						break;
 					}
-					
+
 					players[i2].health -= dano;
 					net.send_packet(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y, players[i2].map);
 					players[i2].lasthit = "macaco";
 					macacos[i].tiros--;
 					break;
 				}
-				
-				// Reset de tiros
+
 				if (macacos[i].tiros <= 0) {
 					macacos[i].tiros = 1;
 					macacos[i].tempoatirar.restart();
 				}
 			}
-			
-			// Comportamento especial: buscar frutas
+
 			for (uint za = 0; za < objs.length(); za++) {
 				if (macacos[i].map == objs[za].map) {
 					string item = objs[za].item;
-					// Frutas que o macaco busca
 					if (item == "banana" || item == "maçã" || item == "figo" || item == "morango" || item == "goiaba" || item == "pera" || item == "jabuticaba" || item == "caqui" || item == "amora") {
-						// Mover em direção à fruta
 						if (macacos[i].y < objs[za].y) {
 							macacos[i].y++;
 							string ss = get_tile_at(macacos[i].x, macacos[i].y, macacos[i].map);

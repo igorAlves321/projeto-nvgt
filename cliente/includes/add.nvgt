@@ -1,6 +1,3 @@
-// Sistema de gerenciamento de adds convertido para NVGT
-// Convertido de add.bgt
-// Canais só aparecem na navegação quando têm mensagens (exceto "tudo")
 
 int addpos;
 add@[] adds;
@@ -13,8 +10,7 @@ class add{
 	add(string n){
 		name=n;
 	}
-	
-	// Verifica se o canal deve ser visível (tem mensagens ou é "tudo")
+
 	bool is_visible() {
 		return (name == "tudo" || items.length() > 0);
 	}
@@ -26,7 +22,6 @@ void create_add(string bname){
 }
 
 void firstadd(){
-	// Ir para primeiro canal visível
 	for(int i = 0; i < int(adds.length()); i++) {
 		if(adds[i].is_visible()) {
 			addpos = i;
@@ -39,7 +34,6 @@ void firstadd(){
 }
 
 void lastadd(){
-	// Ir para último canal visível
 	for(int i = int(adds.length()) - 1; i >= 0; i--) {
 		if(adds[i].is_visible()) {
 			addpos = i;
@@ -52,7 +46,6 @@ void lastadd(){
 }
 
 void addleft(){
-	// Navegar para canal anterior visível
 	int newpos = addpos - 1;
 	while(newpos >= 0) {
 		if(adds[newpos].is_visible()) {
@@ -62,11 +55,9 @@ void addleft(){
 		}
 		newpos--;
 	}
-	// Se não encontrou, fica no atual
 }
 
 void addright(){
-	// Navegar para próximo canal visível
 	int newpos = addpos + 1;
 	while(newpos < int(adds.length())) {
 		if(adds[newpos].is_visible()) {
@@ -76,7 +67,6 @@ void addright(){
 		}
 		newpos++;
 	}
-	// Se não encontrou, fica no atual
 }
 
 void nextadditem(){
@@ -109,8 +99,7 @@ void bottomadditem(){
 
 void add_add_item(string addname, string item, bool speakitem=true){
 	debug_log("📨 add_add_item chamada: canal='" + addname + "', msg='" + item + "'");
-	
-	// Verificar se o canal existe, se não existir, criar automaticamente
+
 	bool canal_existe = false;
 	for (uint i=0; i<adds.length(); i++) {
 		if (adds[i].name==addname) {
@@ -118,17 +107,15 @@ void add_add_item(string addname, string item, bool speakitem=true){
 			break;
 		}
 	}
-	
+
 	if(!canal_existe) {
 		debug_log("📨 Criando canal: " + addname);
 		create_add(addname);
 	}
-	
-	// Adicionar mensagem ao canal específico e ao canal "tudo" (histórico)
+
 	for (uint i=0; i<adds.length(); i++) {
 		if (adds[i].name==addname||adds[i].name=="tudo"){
 			if (speakitem && adds[i].name!="tudo") {
-				// Tocar som de notificação apropriado
 				if(addname == "global" || addname == "canal_principal") {
 					p.play_stationary("chat.ogg", false);
 				} else if(addname == "local" || addname == "canal_local") {
@@ -149,10 +136,8 @@ void add_add_item(string addname, string item, bool speakitem=true){
 }
 
 void speakfocusedadd(){
-	// Formato: "chat global. 444 de 615" (onde 444 é a posição atual, 615 é o total)
 	string channel_name = pu.get_value(adds[addpos].name);
 	if (adds[addpos].items.length() > 0) {
-		// Posição é baseada em 1 para o usuário
 		int current_pos = adds[addpos].pos + 1;
 		int total = int(adds[addpos].items.length());
 		speak(channel_name + ". " + current_pos + " " + pu.get_value("de") + " " + total + ".");
@@ -168,21 +153,19 @@ int add_active(string addname){
 	return 0;
 }
 
-// Menu de gestão de buffers (reordenar canais de mensagens)
 void buffersmenu() {
 	if(ausente) return;
 	int counter = 0;
 	p.play_stationary("notify37.ogg", false);
 	speak(pu.get_value("Menu de gestão de buffers. Para mover os apartados, pulse alt+j ou alt+k. Para salvar, pulse enter."));
-	
-	// Falar o primeiro canal
+
 	if(adds.length() > 0) {
 		speak(pu.get_value(adds[counter].name));
 	}
-	
+
 	while(true) {
 		wait(5);
-		
+
 		if(key_pressed(KEY_ESCAPE)){
 			break;
 		}
@@ -232,13 +215,11 @@ void buffersmenu() {
 	}
 }
 
-// Ordenar buffer (mover canal para esquerda ou direita)
 void sort_buffer(string buffername, int direction) {
 	for(uint i = 0; i < adds.length(); i++) {
 		if(adds[i].name == buffername) {
 			int new_pos = int(i) + direction;
 			if(new_pos >= 0 && new_pos < int(adds.length())) {
-				// Trocar posições
 				add@ temp = adds[i];
 				@adds[i] = adds[new_pos];
 				@adds[new_pos] = temp;
@@ -248,7 +229,6 @@ void sort_buffer(string buffername, int direction) {
 	}
 }
 
-// Salvar ordem dos buffers
 void save_buffers() {
 	if(adds.length() > 0) {
 		string final_data = "";
@@ -264,16 +244,14 @@ void save_buffers() {
 	}
 }
 
-// Carregar ordem dos buffers
 void load_buffers() {
 	file f;
 	if(f.open("buffers.txt", "r")) {
 		string content = f.read();
 		f.close();
-		
+
 		if(content.length() > 0) {
 			string[] order = content.split("\r\n");
-			// Reordenar adds baseado na ordem salva
 			add@[] new_order;
 			for(uint i = 0; i < order.length(); i++) {
 				for(uint j = 0; j < adds.length(); j++) {
@@ -283,7 +261,6 @@ void load_buffers() {
 					}
 				}
 			}
-			// Adicionar os que não estavam na lista
 			for(uint i = 0; i < adds.length(); i++) {
 				bool found = false;
 				for(uint j = 0; j < new_order.length(); j++) {
@@ -301,29 +278,28 @@ void load_buffers() {
 	}
 }
 
-// Menu de seleção de idioma
 void select_language(bool use_return = true) {
 	string[] langfiles = find_files("lang/*.lang");
 	if(langfiles.length() == 0) {
 		dlg(pu.get_value("Não há arquivos de idioma na pasta lang."));
 		return;
 	}
-	
+
 	setupmenu();
 	for(uint i = 0; i < langfiles.length(); i++) {
 		string lang_name = langfiles[i].replace(".lang", "");
 		game_menu.add_item(lang_name, langfiles[i]);
 	}
 	game_menu.add_item(pu.get_value("Voltar"), "back");
-	
+
 	game_menu.intro_text = pu.get_value("Escolha um arquivo de idioma e pressione enter.");
 	int mres = game_menu.run();
 	string selected_id = game_menu.get_item_id(mres);
-	
+
 	if(mres <= 0 || selected_id == "back") {
 		return;
 	}
-	
+
 	cmfinal = "lang/" + selected_id;
 	pu.set_arquivo(cmfinal);
 	idiomachat = selected_id.replace(".lang", "");

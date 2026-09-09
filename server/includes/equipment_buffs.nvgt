@@ -1,21 +1,4 @@
-// ============================================================
-// SISTEMA DE EQUIPAMENTOS E BUFFS/DEBUFFS
-// ============================================================
-// [OK] Epic 1 Task 6: Sistema de Equipamentos e Buffs (Equip + Buff/Debuff)
-//
-// Implementa sistema completo de equipamentos e efeitos temporarios/permanentes:
-// - Equipar/Desequipar itens em slots especificos
-// - Buffs/Debuffs com duracao e stack behaviors
-// - Calculo automatico de stats finais
-// - Sincronizacao realtime com cliente (JSON)
-// - Scheduler para expiracao de buffs temporarios
-// - Persistencia de equipamentos e buffs permanentes
 
-// ============================================================
-// CONSTANTES
-// ============================================================
-
-// Slots de equipamento disponiveis
 const string EQUIP_SLOT_HEAD = "head";
 const string EQUIP_SLOT_BODY = "body";
 const string EQUIP_SLOT_LEGS = "legs";
@@ -26,30 +9,24 @@ const string EQUIP_SLOT_SHIELD = "shield";
 const string EQUIP_SLOT_ACCESSORY_1 = "accessory_1";
 const string EQUIP_SLOT_ACCESSORY_2 = "accessory_2";
 
-// Stack behaviors
-const string STACK_BEHAVIOR_STACK = "stack";       // Empilha com outros buffs do mesmo tipo
-const string STACK_BEHAVIOR_REFRESH = "refresh";   // Renova duracao se aplicado novamente
-const string STACK_BEHAVIOR_REPLACE = "replace";   // Substitui buff existente
+const string STACK_BEHAVIOR_STACK = "stack";
+const string STACK_BEHAVIOR_REFRESH = "refresh";
+const string STACK_BEHAVIOR_REPLACE = "replace";
 
-// Sources de buffs
 const string BUFF_SOURCE_ITEM = "item";
 const string BUFF_SOURCE_SKILL = "skill";
 const string BUFF_SOURCE_CONSUMABLE = "consumable";
 const string BUFF_SOURCE_ENVIRONMENT = "environment";
 
-// ============================================================
-// CLASSE BUFF
-// ============================================================
-
 class buff {
-    string buff_id;             // UUID unico do buff
-    string source;              // Origem: item, skill, consumable, environment
-    string stat;                // Stat afetado: attack, defense, hp_max, speed, etc.
-    float value;                // Valor do modificador (positivo = buff, negativo = debuff)
-    uint64 applied_at;          // Timestamp de aplicacao (ms)
-    uint64 expires_at;          // Timestamp de expiracao (0 = permanente)
-    string stack_behavior;      // stack, refresh, replace
-    string source_id;           // ID do item/skill que aplicou (para tracking)
+    string buff_id;
+    string source;
+    string stat;
+    float value;
+    uint64 applied_at;
+    uint64 expires_at;
+    string stack_behavior;
+    string source_id;
 
     buff() {
         buff_id = "";
@@ -73,49 +50,38 @@ class buff {
         source_id = src_id;
     }
 
-    // Verificar se buff expirou
     bool is_expired() {
-        if(expires_at == 0) return false;  // Permanente
+        if(expires_at == 0) return false;
         return ticks() >= expires_at;
     }
 
-    // Tempo restante em ms
     uint64 time_remaining() {
-        if(expires_at == 0) return 0;  // Permanente
+        if(expires_at == 0) return 0;
         uint64 now = ticks();
         if(now >= expires_at) return 0;
         return expires_at - now;
     }
 }
 
-// ============================================================
-// ESTRUTURA DE STATS
-// ============================================================
-
 class player_stats {
-    // Stats base
     int hp_max = 100;
     int hp_regen = 1;
     int mp_max = 50;
     int mp_regen = 1;
 
-    // Combate
     int attack = 10;
     int defense = 5;
     float crit_rate = 0.0;
     float crit_damage = 1.5;
 
-    // Movimento
     float speed = 1.0;
     float jump_height = 1.0;
 
-    // Resistencias
     float fire_resist = 0.0;
     float ice_resist = 0.0;
     float poison_resist = 0.0;
     float stun_resist = 0.0;
 
-    // Aplicar buff a estes stats
     void apply_buff(buff@ b) {
         if(b.stat == "hp_max") hp_max += int(b.value);
         else if(b.stat == "hp_regen") hp_regen += int(b.value);
@@ -133,7 +99,6 @@ class player_stats {
         else if(b.stat == "stun_resist") stun_resist += b.value;
     }
 
-    // Copiar stats de outro objeto
     void copy_from(player_stats@ other) {
         hp_max = other.hp_max;
         hp_regen = other.hp_regen;
@@ -152,11 +117,6 @@ class player_stats {
     }
 }
 
-// ============================================================
-// FUNCOES DE SERIALIZACAO JSON
-// ============================================================
-
-// Converter buff para JSON
 string buff_to_json(buff@ b) {
     if(@b == null) return "{}";
 
@@ -175,7 +135,6 @@ string buff_to_json(buff@ b) {
     return json;
 }
 
-// Converter stats para JSON
 string stats_to_json(player_stats@ s) {
     if(@s == null) return "{}";
 
@@ -199,7 +158,6 @@ string stats_to_json(player_stats@ s) {
     return json;
 }
 
-// Converter equipamentos para JSON
 string equipment_to_json(player@ p) {
     if(@p == null) return "{}";
 
@@ -249,16 +207,10 @@ string equipment_to_json(player@ p) {
     return json;
 }
 
-// ============================================================
-// FUNCOES DE GERENCIAMENTO DE BUFFS
-// ============================================================
-
-// Gerar ID unico para buff
 string generate_buff_id() {
     return "buff_" + ticks() + "_" + random(0, 999999);
 }
 
-// Armazenamento global de buffs ativos (player_name -> buff)
 string[] active_buff_owners;
 buff@[] active_buffs_store;
 
@@ -291,7 +243,6 @@ void remove_active_buff_at(int idx) {
     active_buff_owners.remove_at(idx);
 }
 
-// Aplicar buff a um jogador
 bool apply_buff(player@ p, buff@ b) {
     if(@p == null || @b == null) return false;
 
@@ -301,7 +252,6 @@ bool apply_buff(player@ p, buff@ b) {
 
     debug_log("BUFF: Aplicando " + b.buff_id + " a " + owner_name + " (" + b.stat + " +" + b.value + ")");
 
-    // stack behavior basico
     if(b.stack_behavior == STACK_BEHAVIOR_REPLACE || b.stack_behavior == STACK_BEHAVIOR_REFRESH) {
         for(int i = int(active_buffs_store.length()) - 1; i >= 0; i--) {
             buff@ current = active_buffs_store[i];
@@ -318,17 +268,14 @@ bool apply_buff(player@ p, buff@ b) {
     active_buff_owners.insert_last(owner_name);
     active_buffs_store.insert_last(b);
 
-    // Notificar cliente
     string msg = "{\"type\":\"buff_applied\",\"buff\":" + buff_to_json(b) + "}";
     send_reliable_text(p.peer_id, msg, 0);
 
-    // Recalcular stats
     recalculate_player_stats(p);
 
     return true;
 }
 
-// Remover buff de um jogador
 bool remove_buff(player@ p, string buff_id) {
     if(@p == null) return false;
 
@@ -346,17 +293,14 @@ bool remove_buff(player@ p, string buff_id) {
     string msg = "{\"type\":\"buff_expired\",\"buff_id\":\"" + buff_id + "\"}";
     send_reliable_text(p.peer_id, msg, 0);
 
-    // Recalcular stats
     recalculate_player_stats(p);
 
     return true;
 }
 
-// Recalcular stats finais do jogador
 void recalculate_player_stats(player@ p) {
     if(@p == null) return;
 
-    // Criar stats temporarios para calculo
     player_stats calculated_stats;
 
     string owner_name = p.charname;
@@ -368,16 +312,10 @@ void recalculate_player_stats(player@ p) {
         calculated_stats.apply_buff(b);
     }
 
-    // Notificar cliente com stats atualizados
     string msg = "{\"type\":\"stat_update\",\"stats\":" + stats_to_json(calculated_stats) + "}";
     send_unreliable(p.peer_id, msg, 0);
 }
 
-// ============================================================
-// FUNCOES DE EQUIPAMENTOS
-// ============================================================
-
-// Equipar item de um slot do inventario
 string normalize_equipment_item_name(string item_name) {
     return item_name.trim_whitespace().lower();
 }
@@ -563,7 +501,6 @@ bool equip_item(player@ p, string item_name) {
     debug_log("EQUIP: sucesso para " + item_name + " em slot " + slot);
     return true;
 }
-// Desequipar item de um slot
 bool unequip_item(player@ p, string equip_slot) {
     if(@p == null) return false;
 
@@ -620,7 +557,6 @@ bool unequip_item(player@ p, string equip_slot) {
     debug_log("UNEQUIP: sucesso de " + item_name + " no slot " + slot);
     return true;
 }
-// Sincronizar equipamentos e buffs com cliente
 void sync_equipment_and_buffs(player@ p) {
     if(@p == null) return;
 
@@ -639,11 +575,6 @@ string create_equip_result_json(bool success, string reason = "", string message
     return json;
 }
 
-// ============================================================
-// HANDLERS DE PROTOCOLO JSON
-// ============================================================
-
-// Handler: Equipar item
 void handle_equip_request(player@ p, string item_name) {
     if(@p == null) return;
     item_name = item_name.trim_whitespace();
@@ -654,7 +585,6 @@ void handle_equip_request(player@ p, string item_name) {
     equip_item(p, item_name);
 }
 
-// Handler: Desequipar item
 void handle_unequip_request(player@ p, string equip_slot) {
     if(@p == null) return;
     equip_slot = equip_slot.trim_whitespace();
@@ -665,15 +595,10 @@ void handle_unequip_request(player@ p, string equip_slot) {
     unequip_item(p, equip_slot);
 }
 
-// Handler: Requisitar estado de equipamentos
 void handle_get_equipment_request(player@ p) {
     if(@p == null) return;
     sync_equipment_and_buffs(p);
 }
-
-// ============================================================
-// DISPATCHER DE MENSAGENS JSON
-// ============================================================
 
 bool equipment_json_has_only_safe_chars(const string&in value) {
     for(uint i = 0; i < value.length(); i++) {
@@ -683,7 +608,6 @@ bool equipment_json_has_only_safe_chars(const string&in value) {
     return true;
 }
 
-// Parser de JSON para extrair string de campo (suporta escape basico)
 string json_get_string(string json, string field) {
     string search = "\"" + field + "\":\"";
     int pos = json.find(search);
@@ -718,7 +642,6 @@ string equipment_json_get_type(const string&in json_message) {
     return json_get_string(json_message, "type");
 }
 
-// Dispatcher principal para mensagens de equipamentos
 void dispatch_equipment_json(player@ p, string json_message) {
     if(@p == null) return;
     if(json_message.length() == 0 || json_message.length() > 2048) {
@@ -766,16 +689,9 @@ void dispatch_equipment_json(player@ p, string json_message) {
     }
 }
 
-// ============================================================
-// SISTEMA DE EXPIRACAO DE BUFFS (Scheduler)
-// ============================================================
-
-// Timer global para verificar buffs expirados
 timer buff_expiration_timer;
 
-// Verificar e remover buffs expirados (chamar periodicamente no game loop)
 void check_expired_buffs() {
-    // Verificar apenas a cada 1 segundo
     if(buff_expiration_timer.elapsed < 1000) return;
     buff_expiration_timer.restart();
 
@@ -797,11 +713,6 @@ void check_expired_buffs() {
     }
 }
 
-// ============================================================
-// FUNCOES AUXILIARES
-// ============================================================
-
-// Aplicar buff temporario de consumivel
 bool apply_consumable_buff(player@ p, string stat, float value, uint64 duration_ms) {
     if(@p == null) return false;
 
@@ -818,7 +729,6 @@ bool apply_consumable_buff(player@ p, string stat, float value, uint64 duration_
     return apply_buff(p, consumable_buff);
 }
 
-// Aplicar buff de skill
 bool apply_skill_buff(player@ p, string skill_name, string stat, float value, uint64 duration_ms) {
     if(@p == null) return false;
 
@@ -835,7 +745,6 @@ bool apply_skill_buff(player@ p, string skill_name, string stat, float value, ui
     return apply_buff(p, skill_buff);
 }
 
-// Limpar todos os buffs de um jogador (usado em reset/morte)
 void clear_all_buffs(player@ p) {
     if(@p == null) return;
 
@@ -852,10 +761,5 @@ void clear_all_buffs(player@ p) {
 
     recalculate_player_stats(p);
 
-    // Notificar cliente
     send_reliable_text(p.peer_id, "{\"type\":\"buffs_cleared\"}", 0);
 }
-
-
-
-

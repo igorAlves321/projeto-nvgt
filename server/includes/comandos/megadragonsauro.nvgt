@@ -1,6 +1,3 @@
-// megadragonsauro.nvgt - Sistema de Mega Dragonsauro do EVM Server (convertido de BGT)
-// Conversão: BGT → NVGT
-// Boss épico de altíssimo nível
 
 megadragonsauro@[] megadragonsauros;
 
@@ -16,16 +13,15 @@ class megadragonsauro {
 	int asom = 4000;
 	int megadragonsaurotime = 700;
 	bool modofugir = false;
-	
+
 	megadragonsauro(int cx, int cy, string cmap, int cvida) {
 		x = cx;
 		y = cy;
 		map = cmap;
-		vida = 10000000;  // 10 milhões de HP fixo
+		vida = 10000000;
 	}
 }
 
-// Calcula distância entre megadragonsauro e jogador
 int get_megadragonsauro_distance(megadragonsauro@ m, player@ p) {
 	if (m.map != p.map) return -1;
 	return get_distance(m.x, p.x, m.y, p.y);
@@ -33,18 +29,16 @@ int get_megadragonsauro_distance(megadragonsauro@ m, player@ p) {
 
 void megadragonsauroloop() {
 	for (uint i = 0; i < megadragonsauros.length(); i++) {
-		// Sistema de morte
 		if (megadragonsauros[i].vida <= 0) {
 			net.send_packet(0, "play m_dragonsauro.ogg " + megadragonsauros[i].x + " " + megadragonsauros[i].y, megadragonsauros[i].map);
 			string golp = megadragonsauros[i].golpeado;
 			send_reliable(0, "msg2 " + golp + "; ;matou um; ;mega;dragonsauro;!", 3);
-			
+
 			int xx = get_player_index_from(golp);
 			if (xx > -1) {
 				players[xx].inv_add_item("corpo_de_megadragonsauro", 10);
 				ganhaxp(players[xx].charname, random(100000, 100001), random(100000, 100000));
-				
-				//  INTEGRAÇÃO: Atualizar quests e achievements
+
 				quest_update_kill(players[xx].charname, "megadragonsauro");
 				update_achievement_progress(players[xx].charname, "kills", 1);
 				update_achievement_progress(players[xx].charname, "boss_kills", 1);
@@ -52,33 +46,28 @@ void megadragonsauroloop() {
 			megadragonsauros.remove_at(i);
 			break;
 		}
-		
-		// Sons periódicos
+
 		if (megadragonsauros[i].tsom.elapsed >= megadragonsauros[i].asom + random(1000, 2000)) {
 			megadragonsauros[i].tsom.restart();
 			string ss = "dragonsauro" + random(1, 3) + ".ogg";
 			net.send_packet(0, "play " + ss + " " + megadragonsauros[i].x + " " + megadragonsauros[i].y, megadragonsauros[i].map);
 		}
-		
-		// Reset de tiros
+
 		if (megadragonsauros[i].tiros <= 0) {
 			megadragonsauros[i].tiros = 1;
 			megadragonsauros[i].tempoatirar.restart();
 		}
-		
-		// Sistema de movimento e combate
+
 		if (megadragonsauros[i].megadragonsaurotimer.elapsed >= megadragonsauros[i].megadragonsaurotime) {
 			megadragonsauros[i].megadragonsaurotimer.restart();
 			int moveu = 0;
-			
+
 			for (uint i2 = 0; i2 < players.length(); i2++) {
-				// Sistema de ataque primeiro (prioridade, dano 800-2800, alcance 7)
 				if (get_megadragonsauro_distance(megadragonsauros[i], players[i2]) > -1 && get_megadragonsauro_distance(megadragonsauros[i], players[i2]) <= 7 && players[i2].afk == false && players[i2].pacifico == 0 && players[i2].newbie == false && megadragonsauros[i].tempoatirar.elapsed >= 500 && megadragonsauros[i].tiros > 0) {
 					moveu = 1;
 					megadragonsauros[i].tempoatirar.restart();
 					net.send_packet(0, "play dragonsaurobater.ogg " + megadragonsauros[i].x + " " + megadragonsauros[i].y, megadragonsauros[i].map);
-					
-					// Verificar reflexão de dano
+
 					int dano = random(800, 2800);
 					int r = refletir(i2, "dragonsauro", megadragonsauros[i].x, megadragonsauros[i].y, dano);
 					if (r > 0) {
@@ -86,15 +75,14 @@ void megadragonsauroloop() {
 						megadragonsauros[i].golpeado = players[i2].charname;
 						break;
 					}
-					
+
 					players[i2].health -= dano;
 					net.send_packet(0, "inithurt " + players[i2].voice + " " + players[i2].x + " " + players[i2].y, players[i2].map);
 					players[i2].lasthit = "megadragonsauro";
 					megadragonsauros[i].tiros--;
 					return;
 				}
-				
-				// Movimento - seguir jogador (apenas no chão y==0)
+
 				if (megadragonsauros[i].x > players[i2].x + 3 && players[i2].insz == false && players[i2].map == megadragonsauros[i].map && players[i2].newbie == false && players[i2].afk == false && players[i2].pacifico == 0 && megadragonsauros[i].modofugir == false && moveu == 0 && players[i2].y == 0) {
 					moveu = 1;
 					megadragonsauros[i].x--;
