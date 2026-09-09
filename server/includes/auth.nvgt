@@ -53,6 +53,12 @@ void handle_create_account(uint64 peer_id, string username, string password_hash
         return;
     }
 
+    if(nickname_name_is_reserved(username)) {
+        send_reliable_text(peer_id, "Erro: Esse nome esta reservado por uma solicitacao de troca de nome.", 0);
+        debug_log("Criacao falhou: nome reservado em nickname_requests - " + username);
+        return;
+    }
+
     if(!create_player_account(username, password_hash, email, gender)) {
         send_reliable_text(peer_id, "Erro: Falha ao criar conta. Tente novamente.", 0);
         debug_log("ERRO: Falha ao criar conta no banco - " + username);
@@ -84,7 +90,7 @@ void handle_login(uint64 peer_id, string username, string password_input, double
         return;
     }
 
-    if(!player_exists_in_database(username)) {
+    if(!conta_existe(username)) {
         send_reliable_text(peer_id, "Erro: Conta não encontrada.", 0);
         debug_log("Login falhou: conta não existe - " + username);
         return;
@@ -112,6 +118,11 @@ void handle_login(uint64 peer_id, string username, string password_input, double
         debug_log("Login falhou: senha incorreta - " + username);
         log_to_database("WARNING", "AUTH", "Tentativa de login com senha incorreta", 0, username);
         return;
+    }
+
+    if(get_status_conta(username) == CONTA_STATUS_ARQUIVADA) {
+        restaurar_conta(username, "login");
+        send_reliable_text(peer_id, "msgnormal Sua conta estava arquivada por inatividade e foi restaurada.", 0);
     }
 
     if(stored_salt == "" || stored_salt.length() == 0) {
@@ -189,11 +200,13 @@ void handle_login(uint64 peer_id, string username, string password_input, double
     int player_index = get_player_index_from(username);
     if(player_index >= 0) {
         load_player_roles(username);
+        load_spam_strikes(username);
         bool is_dev_check = has_role(username, "dev");
         bool is_admin_check = has_role(username, "admin");
 
         changemap(p.map_name, player_index, p.x, p.y);
         send_inventory_to_client(p);
+        entregar_presentes_pendentes(player_index);
 
         if(is_dev_check) send_reliable_text(peer_id, "djogador", 0);
         if(is_admin_check) send_reliable_text(peer_id, "ajogador", 0);
@@ -203,7 +216,12 @@ void handle_login(uint64 peer_id, string username, string password_input, double
 
     debug_log(username + " logou com sucesso [" + p.map_name + " (" + p.x + "," + p.y + ")]");
     update_player_last_login(username);
+    registrar_dispositivo_conta(username, computer_id);
+    if(conta_exige_troca_senha(username)) {
+        send_reliable_text(peer_id, "msgnormal Sua senha foi redefinida por um administrador. Use /mudarsenha <senha_atual> <senha_nova> para definir uma nova.", 0);
+    }
     log_to_database("INFO", "AUTH", "Login bem-sucedido", 0, username);
+    if(player_index >= 0) nickname_apply_pending_on_login(player_index);
 }
 
 bool is_computer_banned(string computer_id) {

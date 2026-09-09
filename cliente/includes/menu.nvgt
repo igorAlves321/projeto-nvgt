@@ -569,25 +569,33 @@ void optionsmenu2() {
 
 	if(selected_id == "password") {
 		input_form form(pu.get_value("Alterar senha"));
-		form.description = pu.get_value("Digite sua nova senha.");
+		form.description = pu.get_value("Digite sua senha atual e a nova senha.");
+		form.add_text_field("curpass", pu.get_value("Senha atual"), "", true, true);
 		form.add_text_field("newpass", pu.get_value("Nova senha (mínimo 8 caracteres)"), "", true, true);
 		form.add_text_field("confirm", pu.get_value("Confirme a nova senha"), "", true, true);
 
 		dictionary@ result = form.run();
 		if(!form.user_canceled) {
+			string curpass = "";
 			string newpass = "";
 			string confirm = "";
+			result.get("curpass", curpass);
 			result.get("newpass", newpass);
 			result.get("confirm", confirm);
 
-			if(newpass.length() < 8 || msginvalida(newpass)) {
+			if(curpass == "" || msginvalida(curpass)) {
+				dlg(pu.get_value("Digite sua senha atual."));
+			} else if(newpass.length() < 8 || msginvalida(newpass)) {
 				dlg(pu.get_value("Senha inválida. Isso pode ser porque ela contém menos de 8 caracteres, tenha símbolos especiais ou espaços."));
 			} else if(newpass != confirm) {
 				dlg(pu.get_value("As senhas são diferentes."));
+			} else if(curpass == newpass) {
+				dlg(pu.get_value("A nova senha precisa ser diferente da atual."));
 			} else {
 				add_add_item("variado", pu.get_value("Alterando senha..."));
-				string newhash = string_hash(newpass, 2, false);
-				send_reliable(peer_id, "/changepassword " + pwh + " " + newhash, 0);
+				temporal_pw = newpass;
+				string newhash = hash_password(newpass);
+				send_reliable(peer_id, "/mudarsenha " + hash_password(curpass) + " " + newhash, 0);
 			}
 		}
 		optionsmenu2();
@@ -668,6 +676,7 @@ void optionsmenu2() {
 }
 
 #include "menus/world_store_menus.nvgt"
+#include "menus/store_manager_menus.nvgt"
 
 void menuserver(string text, string packet_to_send, int channel, string[] items, string[] sounds) {
 	game_menu.reset(true);

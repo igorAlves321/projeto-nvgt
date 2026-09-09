@@ -607,7 +607,27 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 			speak(pu.get_value("Nenhum item disponivel na loja."), true);
 			return;
 		}
-		store(store_payload);
+		open_store(store_payload);
+	}
+	else if(parsed[0] == "loja_gerenciar") {
+		string gerenciar_payload = "";
+		if(full_msg.length() > 15) {
+			gerenciar_payload = full_msg.substr(15).trim_whitespace();
+		}
+		manage_store(gerenciar_payload);
+	}
+	else if(parsed[0] == "loja_estoque" && parsed.length() > 1) {
+		string estoque_resto = "";
+		if(full_msg.length() > 13) {
+			estoque_resto = full_msg.substr(13).trim_whitespace();
+		}
+		string[] estoque_pedaco = estoque_resto.split("|");
+		if(estoque_pedaco.length() >= 2) {
+			manage_items_on_store(estoque_pedaco[0], estoque_pedaco[1]);
+		}
+		else if(estoque_pedaco.length() == 1) {
+			manage_items_on_store(estoque_pedaco[0], "");
+		}
 	}
 	else if(parsed[0] == "msg2" && parsed.length() > 1) {
 		process_msg2_packet(full_msg);
@@ -875,6 +895,15 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		chuvalivre.volume = string_to_number(parsed[1]);
 		chuvatelhado.volume = string_to_number(parsed[1]);
 	}
+	else if(parsed[0] == "clima" && parsed.length() >= 4) {
+		clima_condicao = parsed[1];
+		clima_intensidade = string_to_number(parsed[2]);
+		clima_audivel = parsed.length() >= 5 ? string_to_number(parsed[4]) : 1;
+		chuvaativa = ((clima_condicao == "chuva" || clima_condicao == "tempestade") && clima_audivel == 1) ? 1 : 0;
+		chuva();
+		chuvalivre.volume = string_to_number(parsed[3]);
+		chuvatelhado.volume = string_to_number(parsed[3]);
+	}
 	else if(parsed[0] == "addambiente" && parsed.length() >= 6) {
 		destroy_all_ambientes();
 		spawn_ambiente(string_to_number(parsed[1]), string_to_number(parsed[2]),
@@ -1042,6 +1071,21 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		string mensagem = full_msg.replace(parsed[0] + " ", "");
 		menul5(mensagem.split("\r\n"));
 	}
+	else if(parsed[0] == "livro_abrir" && parsed.length() > 1) {
+		abrir_livro(full_msg.substr(parsed[0].length() + 1));
+	}
+	else if(parsed[0] == "livro_lista" && parsed.length() > 1) {
+		livros_lista_leitura(full_msg.substr(parsed[0].length() + 1));
+	}
+	else if(parsed[0] == "livro_gerenciar" && parsed.length() > 1) {
+		livros_gerenciar(full_msg.substr(parsed[0].length() + 1));
+	}
+	else if(parsed[0] == "livro_pagina" && parsed.length() > 1) {
+		livros_receber_pagina(full_msg.substr(parsed[0].length() + 1));
+	}
+	else if(parsed[0] == "livro_dados" && parsed.length() > 1) {
+		livros_editar(full_msg.substr(parsed[0].length() + 1));
+	}
 
 	else if(parsed[0] == "djogador") {
 		desenvolvedordm = 1;
@@ -1106,6 +1150,12 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	else if(parsed[0] == "set_parabatai_variable" && parsed.length() > 1) {
 		parabatyed = 1;
 	}
+	else if(parsed[0] == "unset_married_variable") {
+		married = 0;
+	}
+	else if(parsed[0] == "unset_parabatai_variable") {
+		parabatyed = 0;
+	}
 	else if(parsed[0] == "setstatus") {
 		string m = full_msg.replace(parsed[0] + " ", "");
 		for(uint index = 0; index < players.length(); index++) {
@@ -1144,9 +1194,15 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 		}
 	}
 	else if(parsed[0] == "pass_changed") {
-		pwh = temporal_pwh;
+		if(temporal_pw != "") {
+			pw = temporal_pw;
+			net_pw = temporal_pw;
+			pwh = hash_password(temporal_pw);
+		}
+		temporal_pw = "";
 		temporal_pwh = "";
 		writeprefs();
+		dlg(pu.get_value("Senha alterada com sucesso."));
 	}
 	else if(parsed[0] == "channels" && parsed.length() >= 2) {
 		string data = full_msg.replace(parsed[0] + " ", "");

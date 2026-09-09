@@ -21,102 +21,7 @@ class store {
 	}
 
 	bool buy(int index, double value) {
-		value = round(value);
-		bool save = false;
-
-		if(this.money == "stryx") {
-			if(value * this.price > players[index].stryx)
-				return false;
-		}
-		else if(this.money == "creditos") {
-			if(value * this.price > players[index].creditos)
-				return false;
-		}
-		else {
-			if(value * this.price > players[index].inv_item_number(this.money))
-				return false;
-		}
-
-		if(this.item == "lancha" && file_exists("players/" + players[index].charname + "/lancha.md")) {
-			send_reliable_text(players[index].peer_id, "msgnormal Você já tem uma lancha!", 0);
-			return false;
-		}
-
-		if(this.item == "carro" && file_exists("players/" + players[index].charname + "/carro.md")) {
-			send_reliable_text(players[index].peer_id, "msgnormal Você já tem um carro!", 0);
-			return false;
-		}
-
-		if(this.item == "motocicleta" && file_exists("players/" + players[index].charname + "/moto.md")) {
-			send_reliable_text(players[index].peer_id, "msgnormal Você já tem uma moto!", 0);
-			return false;
-		}
-
-		if(this.item == "carro") {
-			players[index].inv_add_item("chave_del_carro_de_" + players[index].charname, 1);
-			players[index].inv_add_item("carro", -value);
-			send_reliable_text(players[index].peer_id, "msgnormal compraste tu automovil! aquí tienes, tu llave.", 0);
-
-			file f;
-			f.open("players/" + players[index].charname + "/carro.md", "w");
-			f.write("a");
-			f.close();
-
-			f.open("carros/" + players[index].charname + ".md", "w");
-			f.write("100");
-			f.close();
-		}
-
-		if(this.item == "motocicleta") {
-			players[index].inv_add_item("chave_da_moto_de_" + players[index].charname, 1);
-			players[index].inv_add_item("moto", -value);
-			send_reliable_text(players[index].peer_id, "msgnormal compraste tu motocicleta! aquí tienes, tu llave.", 0);
-
-			file f;
-			f.open("players/" + players[index].charname + "/moto.md", "w");
-			f.write("a");
-			f.close();
-
-			f.open("motos/" + players[index].charname + ".md", "w");
-			f.write("1000");
-			f.close();
-		}
-
-		if(this.item == "lancha") {
-			players[index].inv_add_item("chave_da_lancha_de_" + players[index].charname, 1);
-			players[index].inv_add_item("lancha", -value);
-			send_reliable_text(players[index].peer_id, "msgnormal compraste tu lancha! la podrás usar solamente en el mar profundo debido a la imposibilidad de nadar por ahí.", 0);
-
-			file f;
-			f.open("players/" + players[index].charname + "/lancha.md", "w");
-			f.write("a");
-			f.close();
-
-			f.open("lanchas/" + players[index].charname + ".md", "w");
-			f.write("100");
-			f.close();
-		}
-
-		if(this.money == "stryx") {
-			players[index].stryx -= round(value * this.price);
-			save = true;
-		}
-		else if(this.money == "creditos") {
-			players[index].creditos -= round(value * this.price);
-			save = true;
-		}
-		else {
-			players[index].inv_add_item(this.money, -round(value * this.price));
-		}
-
-		players[index].inv_add_item(this.item, value);
-
-		if(save) {
-			save_transfer("sistema", players[index].charname, this.item, "mediante compra con " + this.money, value);
-			eadm(players[index].charname + " hizo la compra de " + value + " " + this.item + " con " + this.money + " el " + DATE_DAY + "." + DATE_MONTH + "." + DATE_YEAR + " a " + TIME_HOUR + "." + TIME_MINUTE + ".");
-		}
-
-		return true;
+		return loja_processar_compra(index, "", this.item, int(round(value)));
 	}
 }
 
@@ -224,79 +129,15 @@ sell_item_config@ get_custom_sell_config(string item_name) {
 }
 
 double get_sell_price(string item_name) {
-	sell_item_config@ custom = get_custom_sell_config(item_name);
-	if(custom !is null) {
-		return custom.sell_price;
-	}
-
-	int sale_index = item_exists_for_sale(item_name);
-	if(sale_index >= 0) {
-		return items_sale[sale_index].price * SELL_RATE;
-	}
-
-	return 1.0;
+	return loja_preco_venda(item_name);
 }
 
 string get_sell_currency(string item_name) {
-	sell_item_config@ custom = get_custom_sell_config(item_name);
-	if(custom !is null) {
-		return custom.sell_currency;
-	}
-
-	int sale_index = item_exists_for_sale(item_name);
-	if(sale_index >= 0) {
-		return items_sale[sale_index].money;
-	}
-
-	return "gold";
+	return loja_moeda_venda(item_name);
 }
 
 bool sell_item(int player_index, string item_name, int quantidade) {
-	if(player_index < 0 || player_index >= int(players.length())) return false;
-	if(quantidade <= 0) return false;
-
-	player@ p = @players[player_index];
-
-	int owned = p.inv_item_number(item_name);
-	if(owned < quantidade) {
-		send_reliable_text(p.peer_id, "msgnormal Você não tem " + quantidade + " " + item_name + " para vender. Você possui " + owned + ".", 0);
-		return false;
-	}
-
-	if(item_name.find("chave_") == 0 || item_name.find("quest_") == 0 ||
-	   item_name == "relógio" || item_name == "bússola") {
-		send_reliable_text(p.peer_id, "msgnormal Este item não pode ser vendido.", 0);
-		return false;
-	}
-
-	double sell_price = get_sell_price(item_name);
-	double total_value = sell_price * quantidade;
-	string currency = get_sell_currency(item_name);
-
-	p.inv_add_item(item_name, -quantidade);
-
-	if(currency == "gold" || currency == "reais" || currency == "coins") {
-		p.gold += int(total_value);
-		send_reliable_text(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + int(total_value) + " gold.", 0);
-	}
-	else if(currency == "stryx") {
-		p.stryx += total_value;
-		send_reliable_text(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + total_value + " Stryx.", 0);
-	}
-	else if(currency == "creditos") {
-		p.creditos += total_value;
-		send_reliable_text(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + total_value + " créditos.", 0);
-	}
-	else {
-		p.inv_add_item(currency, int(total_value));
-		send_reliable_text(p.peer_id, "msgnormal Você vendeu " + quantidade + " " + item_name + " por " + int(total_value) + " " + currency + ".", 0);
-	}
-
-	debug_log("💰 " + p.name + " vendeu " + quantidade + " " + item_name + " por " + total_value + " " + currency);
-
-	save_transfer(p.charname, "sistema", item_name, "mediante venda", quantidade);
-
-	return true;
+	return loja_processar_venda(player_index, "", item_name, quantidade);
 }
 
 void handle_sell_item(uint64 peer_id, string[] parsed) {

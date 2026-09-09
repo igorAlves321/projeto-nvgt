@@ -176,7 +176,27 @@ bool init_database() {
 
     create_roles_table();
 
+    create_casamentos_tables();
+    create_livros_tables();
+    create_nickname_requests_table();
+    create_pets_table();
+    create_clima_tables();
+
+    create_command_permissions_tables();
+    seed_command_requirements();
+    create_immunity_table();
+    create_spam_strikes_table();
+
+    criar_tabelas_sorteio();
+    criar_tabelas_presentes();
+
+    criar_tabelas_loja();
+    criar_tabelas_ataque_aereo();
+    migrar_items_for_sale_legado();
+    carregar_catalogo_loja(true);
+
     init_bans_table();
+    criar_tabela_contas();
     migrate_legacy_bans();
 
     return true;
@@ -258,7 +278,14 @@ void create_database_tables() {
 
             -- IDs Sociais
             guild_id INTEGER DEFAULT 0,
-            party_id INTEGER DEFAULT 0
+            party_id INTEGER DEFAULT 0,
+
+            -- Sistema de contas
+            status TEXT DEFAULT 'ativa',
+            arquivada_em DATETIME DEFAULT NULL,
+            computer_id TEXT DEFAULT '',
+            must_change_password INTEGER DEFAULT 0,
+            password_changed_at DATETIME DEFAULT NULL
         );
     """;
 
@@ -359,7 +386,12 @@ void migrate_database() {
         {"arena_kills", "INTEGER", "0"},
         {"kills", "INTEGER", "0"},
         {"deaths", "INTEGER", "0"},
-        {"play_time", "INTEGER", "0"}
+        {"play_time", "INTEGER", "0"},
+        {"status", "TEXT", "'ativa'"},
+        {"arquivada_em", "TEXT", "NULL"},
+        {"computer_id", "TEXT", "''"},
+        {"must_change_password", "INTEGER", "0"},
+        {"password_changed_at", "TEXT", "NULL"}
     };
 
     int migrations_applied = 0;
@@ -903,7 +935,13 @@ void process_player_command(uint64 peer_id, string command) {
         return;
     }
 
-    log_to_database("INFO", "PLAYER", "Comando: " + command, 0, player.name);
+    string cmd_para_log = command;
+    if(comando_e_sensivel(command)) {
+        string[] partes_cmd_log = split_non_empty_tokens(command);
+        if(partes_cmd_log.length() > 0) cmd_para_log = partes_cmd_log[0] + " [ARGUMENTOS OCULTOS]";
+        else cmd_para_log = "[COMANDO SENSIVEL]";
+    }
+    log_to_database("INFO", "PLAYER", "Comando: " + cmd_para_log, 0, player.name);
 
     if(command.find("add_line::") == 0) {
         string element_data = command.substr(10);
@@ -980,6 +1018,13 @@ void process_player_command(uint64 peer_id, string command) {
 
     if(command == "heartbeat") {
         player.last_activity.restart();
+        return;
+    }
+
+    if(command.find("change_name ") == 0) {
+        int nick_pi = get_player_index_from(player.name);
+        if(nick_pi < 0) nick_pi = get_player_index_from(player.charname);
+        if(nick_pi >= 0) cmd_apelido(nick_pi, command.substr(12).trim_whitespace());
         return;
     }
 
@@ -1137,6 +1182,16 @@ void process_player_command(uint64 peer_id, string command) {
              }
              process_zone_interaction(player_index, zsa_msg);
              return;
+        }
+
+        if(cmd == "couplemsg" && parts.length() > 1) {
+            cmd_casalchat(player_index, command.substr(10));
+            return;
+        }
+
+        if(cmd == "parabataimsg" && parts.length() > 1) {
+            cmd_pactochat(player_index, command.substr(13));
+            return;
         }
 
         if(cmd == "adm") {
@@ -1349,6 +1404,7 @@ void process_player_command(uint64 peer_id, string command) {
                 return;
             }
 
+            if(item_name.find("caixa_de_presente_") == 0) { abrir_presente(player_index, item_name); return; }
             use_item(player_index, item_name);
             return;
         }
@@ -1943,6 +1999,7 @@ void server_handle_network_event_const(const network_event@ event) {
             save_player_to_database(player);
             log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
         }
+        if(player !is null) pet_dono_desconectou(player.charname);
         force_disconnect_and_cleanup(event.peer_id, false);
 
         string msg = player_name != "" ? player_name + " desconectou" : "Desconexao: " + event.peer_id;
@@ -2120,6 +2177,7 @@ void main() {
 
         npc_global_loop();
         monstruo_global_loop();
+        pets_loop();
         consumables_loop();
 
         pialoop();
@@ -2133,9 +2191,13 @@ void main() {
 
         game_time.update();
 
+        clima_loop();
+
         arena_loop();
 
         process_history_maintenance();
+
+        loop_contas();
 
         tempbanloop();
 
@@ -2156,6 +2218,14 @@ void main() {
         dungeons_loop();
 
         events_loop();
+
+        casamentos_loop();
+
+        sorteio_loop();
+
+        relogio_loop();
+
+        ataque_aereo_loop();
 
         check_translation_results();
 

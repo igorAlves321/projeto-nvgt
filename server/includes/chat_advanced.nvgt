@@ -15,10 +15,12 @@ class spam_tracker {
 	int warnings;
 	bool is_muted;
 	timer mute_timer;
+	string owner_name;
 
 	spam_tracker() {
 		message_count = 0;
 		warnings = 0;
+		owner_name = "";
 		is_muted = false;
 		last_message.restart();
 		mute_timer.restart();
@@ -30,6 +32,7 @@ class spam_tracker {
 				is_muted = false;
 				warnings = 0;
 				message_count = 0;
+				reset_spam_warnings_db(owner_name);
 			} else {
 				return false;
 			}
@@ -46,9 +49,11 @@ class spam_tracker {
 			if(warnings >= 3) {
 				is_muted = true;
 				mute_timer.restart();
+				register_spam_mute(owner_name, warnings);
 				return false;
 			}
 
+			register_spam_warning(owner_name, warnings);
 			return false;
 		}
 
@@ -72,7 +77,9 @@ dictionary player_spam_trackers;
 spam_tracker@ get_spam_tracker(string player_name) {
 	if(!player_spam_trackers.exists(player_name)) {
 		spam_tracker st;
+		st.owner_name = player_name;
 		player_spam_trackers.set(player_name, @st);
+		load_spam_strikes(player_name);
 		return st;
 	}
 
