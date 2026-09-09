@@ -41,10 +41,9 @@ class voice_message_recorder {
 		if(!ensure_mci_loaded()) return -1;
 		string output;
 		output.resize(255);
-		dictionary result = mci_lib.call("int mciSendStringA(char*, char*, int, int);", command, output, output.length(), 0);
-		int ret = -1;
-		result.get("0", ret);
-		return ret;
+		var@ result = mci_lib.call("int mciSendStringA(char*, char*, int, int);", command, output, output.length(), 0);
+		if(@result == null) return -1;
+		return int(result);
 	}
 	void close_mci_alias() {
 		mci_send("close igvoice wait");
@@ -156,7 +155,7 @@ class voice_message_player {
 	dictionary active_voices;
 	dictionary cleanup_timers;
 	voice_message_player() {
-		sound_global_hrtf = true;
+		set_sound_global_hrtf(true);
 		debug_log("Voice message player inicializado (HRTF ativado)");
 	}
 	void update() {
@@ -205,15 +204,7 @@ class voice_message_player {
 			float relative_x = sender_x - game_me.x;
 			float relative_y = sender_y - game_me.y;
 			float relative_z = sender_z - 0;
-			voice.set_position(
-				0, 0, 0,
-				relative_x,
-				relative_y,
-				relative_z,
-				0,
-				0.01,
-				0.1
-			);
+			voice.set_position_3d(relative_x, relative_y, relative_z);
 			voice.play();
 			@active_voices[sender_id] = @voice;
 			timer@ cleanup_timer = timer();
@@ -266,7 +257,7 @@ class voice_message_player {
 voice_message_recorder voice_recorder;
 voice_message_player voice_player;
 void init_voice_chat() {
-	sound_global_hrtf = true;
+	set_sound_global_hrtf(true);
 	if(!directory_exists(VOICE_TEMP_DIR)) {
 		directory_create(VOICE_TEMP_DIR);
 	}
@@ -274,7 +265,7 @@ void init_voice_chat() {
 	debug_log("Sistema de voice chat inicializado (HRTF: ON)");
 }
 string voice_input_device_label() {
-	string[]@ devices = get_sound_input_devices();
+	const string[]@ devices = get_sound_input_devices();
 	if(@devices != null && voice_input_device >= 0 && voice_input_device < int(devices.length())) {
 		string name = devices[voice_input_device];
 		if(name != "") return name;
@@ -282,7 +273,7 @@ string voice_input_device_label() {
 	return pu.get_value("Padrão do sistema");
 }
 bool select_voice_input_device_menu() {
-	string[]@ devices = get_sound_input_devices();
+	const string[]@ devices = get_sound_input_devices();
 	if(@devices == null || devices.length() == 0) {
 		dlg(pu.get_value("Nenhum dispositivo de entrada de áudio foi encontrado."));
 		return false;
