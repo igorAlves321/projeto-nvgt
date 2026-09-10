@@ -21,10 +21,10 @@ string int_to_string(int value) {
 
 int menu_volume_to_db() {
 	int vol = int(musicamenu);
-	if(vol < 0) vol = 0;
-	if(vol > 100) vol = 100;
-	if(vol == 0) return -100;
-	return (vol / 2) - 50;
+	if(vol <= 0) return -100;
+	if(vol >= 100) return 0;
+	double ratio = double(vol) / 100.0;
+	return int(round(20.0 * log10(ratio), 0));
 }
 
 void stop_menu_music_internal() {
@@ -59,7 +59,11 @@ void fade_menu_music(int steps = 30) {
 	stop_menu_music_internal();
 }
 
-void start_menu_music() {
+void start_menu_music(bool force_new = false) {
+	if(!force_new && menu_music_loaded && menu_music_sound.playing) {
+		ensure_menu_music_volume();
+		return;
+	}
 	stop_menu_music();
 	string track = "m" + int_to_string(random(1, 8)) + ".ogg";
 	debug_log("Tentando carregar musica: " + track);
@@ -310,7 +314,6 @@ void menuprincipal() {
 	}
 	else if(selected_id == "options") {
 		debug_log("📋 Usuário selecionou CONFIGURAÇÕES");
-		fade_menu_music(18);
 		optionsmenu();
 	}
 }
@@ -456,6 +459,7 @@ void optionsmenu_GUI_OLD() {
 			if(new_vol >= 0) {
 				musicamenu = new_vol;
 				ensure_menu_music_volume();
+				writeprefs();
 				form_geral.set_caption(fg_musicvol, pu.get_value("Volume da música do menu") + " (" + int(musicamenu) + "%)");
 			}
 		}

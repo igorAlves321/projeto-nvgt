@@ -277,6 +277,8 @@ float volume_slider_menu(string title, float current_volume) {
 
 	if(current_volume <= 0 || current_volume > 100) current_volume = 50.0;
 
+	float original_volume = current_volume;
+
 	int f_slider = vol_form.create_slider(
 		pu.get_value("Volume"),
 		current_volume,
@@ -291,20 +293,41 @@ float volume_slider_menu(string title, float current_volume) {
 
 	vol_form.focus(f_slider);
 
-	while(!vol_form.is_pressed(f_cancel) && !vol_form.is_pressed(f_ok)) {
+	float last_val = current_volume;
+
+	while(true) {
 		wait(5);
 		vol_form.monitor();
+
+		float cur_val = vol_form.get_slider(f_slider);
+		if(cur_val != last_val) {
+			last_val = cur_val;
+			musicamenu = cur_val;
+			if(cur_val > 0 && (!menu_music_loaded || !menu_music_sound.playing)) {
+				start_menu_music();
+			} else {
+				ensure_menu_music_volume();
+			}
+		}
+
+		if(vol_form.is_pressed(f_cancel)) {
+			musicamenu = original_volume;
+			ensure_menu_music_volume();
+			speak(pu.get_value("Cancelado"));
+			return -1;
+		}
+
+		if(vol_form.is_pressed(f_ok)) {
+			float new_value = vol_form.get_slider(f_slider);
+			musicamenu = new_value;
+			ensure_menu_music_volume();
+			writeprefs();
+			speak(pu.get_value("Volume ajustado para") + " " + int(new_value) + " " + pu.get_value("porcento"));
+			return new_value;
+		}
 	}
 
-	if(vol_form.is_pressed(f_ok)) {
-		float new_value = vol_form.get_slider(f_slider);
-		speak(pu.get_value("Volume ajustado para") + " " + int(new_value) + " " + pu.get_value("porcento"));
-		return new_value;
-	}
-	else {
-		speak(pu.get_value("Cancelado"));
-		return -1;
-	}
+	return -1;
 }
 
 void batualizacao(bool auto_check) {
