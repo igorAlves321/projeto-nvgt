@@ -1,4 +1,4 @@
-﻿#include "globals.nvgt"
+#include "globals.nvgt"
 #include "network.nvgt"
 #include "player.nvgt"
 #include "server_map.nvgt"
@@ -24,7 +24,7 @@ dictionary command_aliases;
 void init_command_system() {
     debug_log("Inicializando sistema de comandos");
     register_command("help", "Mostra lista de comandos disponiveis", false);
-    register_command("who", "Lista jogadores online", false);
+    register_command("who", "Lista jogadores online", false, {"online"});
     register_command("time", "Mostra tempo de jogo", false);
     register_command("save", "Salva seus dados", false);
     register_command("quit", "Sair do jogo", false);
@@ -38,11 +38,10 @@ void init_command_system() {
     register_command("shout", "Gritar (alcance maior)", false, {"yell"}, "shout <mensagem>");
     register_command("ooc", "Chat fora do personagem", false, {"("}, "ooc <mensagem>");
     register_command("inventory", "Ver inventario", false, {"inv", "i"});
-    register_command("get", "Pegar item", false, {"take", "pick"}, "get <item>");
+    register_command("pickup", "Pegar item do chao", false, {"grab", "get", "take", "pick"}, "pickup [item]");
     register_command("drop", "Largar item", false, {"put"}, "drop <item>");
     register_command("use", "Usar item", false, {"activate", "usar"}, "use <item>");
     register_command("give", "Dar item para jogador", false, {"offer"}, "give <item> <jogador>");
-    register_command("pickup", "Pegar item do chao", false, {"grab"}, "pickup [item]");
     register_command("setvoice", "Configurar voz do narrador", false, {}, "setvoice <voz>");
     register_command("hits", "Toggle sons de impacto", false, {}, "hits");
     register_command("idiomachat", "Configurar idioma do chat", false, {}, "idiomachat <idioma>");
@@ -363,7 +362,7 @@ bool execute_command(player@ player, string command, string[] args) {
         cmd_forcedc(player_index);
         return true;
     }
-    else if(command == "tp") {
+    else if(command == "tp" || command == "goto" || command == "teleport") {
         if(args.length() < 1) {
             player.send_message("say Uso: /tp <jogador>");
             return false;
@@ -371,7 +370,7 @@ bool execute_command(player@ player, string command, string[] args) {
         cmd_tp(player_index, args[0]);
         return true;
     }
-    else if(command == "tphere") {
+    else if(command == "tphere" || command == "summon" || command == "bring") {
         if(args.length() < 1) {
             player.send_message("say Uso: /tphere <jogador>");
             return false;
@@ -379,7 +378,7 @@ bool execute_command(player@ player, string command, string[] args) {
         cmd_tphere(player_index, args[0]);
         return true;
     }
-    else if(command == "givexp") {
+    else if(command == "givexp" || command == "add_exp" || command == "addexp" || command == "giveexp") {
         if(args.length() < 2) {
             player.send_message("say Uso: /givexp <jogador> <quantidade>");
             return false;
@@ -387,7 +386,7 @@ bool execute_command(player@ player, string command, string[] args) {
         cmd_givexp(player_index, args[0], string_to_number(args[1]));
         return true;
     }
-    else if(command == "giveitem") {
+    else if(command == "giveitem" || command == "give_item") {
         if(args.length() < 2) {
             player.send_message("say Uso: /giveitem <jogador> <item> [quantidade]");
             return false;
@@ -396,6 +395,241 @@ bool execute_command(player@ player, string command, string[] args) {
         string item = args[1];
         int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
         cmd_giveitem(player_index, target, item, quantity);
+        return true;
+    }
+    else if(command == "takeitem" || command == "take_item") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /take_item <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        cmd_takeitem(player_index, target, item, quantity);
+        return true;
+    }
+    else if(command == "setgold" || command == "set_gold") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /set_gold <jogador> <quantidade>");
+            return false;
+        }
+        cmd_setgold(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "setlevel" || command == "set_level") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /set_level <jogador> <nivel>");
+            return false;
+        }
+        cmd_setlevel(player_index, args[0], string_to_number(args[1]));
+        return true;
+    }
+    else if(command == "shutdown" || command == "reboot") {
+        cmd_forcedc(player_index);
+        return true;
+    }
+    else if(command == "admin_msg" || command == "amsg") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /admin_msg <mensagem>");
+            return false;
+        }
+        eadm("[ADMIN MSG] " + player.charname + ": " + join(args, " "));
+        return true;
+    }
+    else if(command == "builderstats" || command == "bstats") {
+        int m_idx = get_map_index_from(player.map);
+        if(m_idx < 0) {
+            player.send_message("say Mapa atual não encontrado.");
+            return false;
+        }
+        string bmsg = "Mapa: " + server_maps[m_idx].name + " | Tamanho: " + server_maps[m_idx].max_x + "x" + server_maps[m_idx].max_y;
+        bmsg += " | Objetos: " + server_maps[m_idx].objs.length() + " | Zonas: " + game_disabled_zones.length();
+        player.send_message("say " + bmsg);
+        return true;
+    }
+    else if(command == "checkweight" || command == "peso") {
+        double current_w = calculate_inventory_weight(player_index);
+        double max_w = player.max_carry_weight;
+        int pct = max_w > 0 ? int((current_w / max_w) * 100) : 0;
+        player.send_message("say Peso atual: " + current_w + "/" + max_w + " kg (" + pct + "%).");
+        return true;
+    }
+    else if(command == "move") {
+        if(args.length() < 3) {
+            player.send_message("say Uso: /move <jogador> <x> <y>");
+            return false;
+        }
+        int target = get_player_index_from(args[0]);
+        if(target < 0) {
+            player.send_message("say Jogador não encontrado.");
+            return false;
+        }
+        int nx = string_to_number(args[1]);
+        int ny = string_to_number(args[2]);
+        move_player_to_map(target, players[target].map, nx, ny);
+        player.send_message("say Jogador " + args[0] + " movido para " + nx + ", " + ny + ".");
+        return true;
+    }
+    else if(command == "changemap") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /changemap <jogador> <mapa> [x] [y]");
+            return false;
+        }
+        int target = get_player_index_from(args[0]);
+        if(target < 0) {
+            player.send_message("say Jogador não encontrado.");
+            return false;
+        }
+        string nmap = args[1];
+        int nx = args.length() > 2 ? string_to_number(args[2]) : 0;
+        int ny = args.length() > 3 ? string_to_number(args[3]) : 0;
+        move_player_to_map(target, nmap, nx, ny);
+        player.send_message("say Jogador " + args[0] + " transferido para o mapa " + nmap + ".");
+        return true;
+    }
+    else if(command == "map") {
+        int m_idx = get_map_index_from(player.map);
+        if(m_idx >= 0) {
+            player.send_message("say Mapa atual: " + server_maps[m_idx].name + " (" + server_maps[m_idx].max_x + "x" + server_maps[m_idx].max_y + ")");
+        } else {
+            player.send_message("say Mapa atual: " + player.map);
+        }
+        return true;
+    }
+    else if(command == "listmaps") {
+        string mlist = "=== MAPAS (" + server_maps.length() + ") ===\r\n";
+        for(uint i = 0; i < server_maps.length(); i++) {
+            mlist += server_maps[i].name + " (" + server_maps[i].max_x + "x" + server_maps[i].max_y + ")\r\n";
+        }
+        player.send_message("say " + mlist.trim_whitespace());
+        return true;
+    }
+    else if(command == "savemap" || command == "salvarmapa") {
+        map@ current_map = builder_get_player_map(player);
+        builder_save_map(player, current_map);
+        return true;
+    }
+    else if(command == "mapupdate" || command == "atualizarmapa") {
+        if(args.length() >= 1) builder_update_map(player, args[0]);
+        else builder_update_map(player);
+        return true;
+    }
+    else if(command == "rawdata") {
+        if(args.length() >= 1) builder_update_map(player, args[0]);
+        else builder_update_map(player);
+        return true;
+    }
+    else if(command == "newmap") {
+        if(args.length() < 3) {
+            player.send_message("say Uso: /newmap <nome> <largura> <altura> [som_piso]");
+            return false;
+        }
+        string map_name = args[0];
+        int map_width = string_to_number(args[1]);
+        int map_height = string_to_number(args[2]);
+        string floor_sound = args.length() >= 4 ? args[3] : "1";
+        builder_create_new_map(player, map_name, map_width, map_height, floor_sound);
+        return true;
+    }
+    else if(command == "delmap") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /delmap <nome>");
+            return false;
+        }
+        builder_delete_map(player, args[0]);
+        return true;
+    }
+    else if(command == "addzone") {
+        if(args.length() < 5) {
+            player.send_message("say Uso: /addzone <minx> <maxx> <miny> <maxy> <mapa> [mensagem]");
+            return false;
+        }
+        int minx = string_to_number(args[0]);
+        int maxx = string_to_number(args[1]);
+        int miny = string_to_number(args[2]);
+        int maxy = string_to_number(args[3]);
+        string map_name = args[4];
+        string message = args.length() > 5 ? args[5] : "Zona Segura";
+        cmd_addzone(player_index, minx, maxx, miny, maxy, map_name, message);
+        return true;
+    }
+    else if(command == "removezone") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /removezone <indice_zona>");
+            return false;
+        }
+        cmd_removezone(player_index, string_to_number(args[0]));
+        return true;
+    }
+    else if(command == "listzones") {
+        cmd_listzones(player_index);
+        return true;
+    }
+    else if(command == "togglezonepvp") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /togglezonepvp <indice_zona>");
+            return false;
+        }
+        cmd_togglezonepvp(player_index, string_to_number(args[0]));
+        return true;
+    }
+    else if(command == "savezones") {
+        cmd_savezones(player_index);
+        return true;
+    }
+    else if(command == "loadzones") {
+        cmd_loadzones(player_index);
+        return true;
+    }
+    else if(command == "checkzone") {
+        cmd_checkzone(player_index);
+        return true;
+    }
+    else if(command == "craft" || command == "forjar") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /craft <item>");
+            return false;
+        }
+        string item_name = join(args, " ").trim_whitespace();
+        crafting_system.craft(player_index, item_name);
+        return true;
+    }
+    else if(command == "cancraft") {
+        if(args.length() < 1) {
+            player.send_message("say Uso: /cancraft <item>");
+            return false;
+        }
+        string item_name = join(args, " ").trim_whitespace();
+        bool can = crafting_system.can_craft(player_index, item_name);
+        if(can) player.send_message("say Você pode criar " + item_name + ".");
+        else player.send_message("say Você não pode criar " + item_name + " agora.");
+        return true;
+    }
+    else if(command == "recipes") {
+        string output = "";
+        if(args.length() >= 1) {
+            output = crafting_system.show_recipe(join(args, " ").trim_whitespace());
+        } else {
+            output = crafting_system.list_all_recipes();
+        }
+        string[] lines = output.split("\n");
+        for(uint i = 0; i < lines.length(); i++) {
+            if(lines[i].trim_whitespace() != "") {
+                player.send_message("say " + lines[i]);
+            }
+        }
+        return true;
+    }
+    else if(command == "transfer") {
+        if(args.length() < 2) {
+            player.send_message("say Uso: /transfer <jogador> <item> [quantidade]");
+            return false;
+        }
+        string target = args[0];
+        string item_name = args[1];
+        int quantity = args.length() > 2 ? string_to_number(args[2]) : 1;
+        if(quantity <= 0) quantity = 1;
+        transfer_to_nearby(player_index, target, item_name, quantity);
         return true;
     }
     else if(command == "tb" || command == "tempban") {
@@ -778,7 +1012,7 @@ bool execute_command(player@ player, string command, string[] args) {
     if(command == "help") {
         return cmd_help(player, args);
     }
-    else if(command == "who") {
+    else if(command == "who" || command == "online") {
         return cmd_who(player, args);
     }
     else if(command == "time") {
@@ -793,8 +1027,62 @@ bool execute_command(player@ player, string command, string[] args) {
     else if(command == "pm") {
         return cmd_pm(player, args);
     }
+    else if(command == "r" || command == "reply") {
+        return cmd_r(player, args);
+    }
     else if(command == "say") {
         return cmd_say(player, args);
+    }
+    else if(command == "health" || command == "hp") {
+        return cmd_health(player, args);
+    }
+    else if(command == "experience" || command == "exp" || command == "xp") {
+        return cmd_experience(player, args);
+    }
+    else if(command == "level") {
+        return cmd_level(player, args);
+    }
+    else if(command == "score" || command == "stats" || command == "stat") {
+        return cmd_score(player, args);
+    }
+    else if(command == "logs") {
+        return cmd_history(player, args);
+    }
+    else if(command == "look") {
+        return cmd_lc(player, args);
+    }
+    else if(command == "me" || command == "action") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /me <acao>");
+            return false;
+        }
+        string action_msg = "* " + player.charname + " " + join(args, " ");
+        send_reliable_text(0, "say " + action_msg, 0);
+        return true;
+    }
+    else if(command == "shout" || command == "yell") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /shout <mensagem>");
+            return false;
+        }
+        cmd_global(player_index, player.charname + " grita: " + join(args, " "));
+        return true;
+    }
+    else if(command == "ooc") {
+        if(args.length() == 0) {
+            player.send_message("say Uso: /ooc <mensagem>");
+            return false;
+        }
+        cmd_global(player_index, "(( " + player.charname + ": " + join(args, " ") + " ))");
+        return true;
+    }
+    else if(command == "go") {
+        player.send_message("say Movimentação é feita utilizando as setas do teclado.");
+        return true;
+    }
+    else if(command == "rest" || command == "sleep") {
+        player.send_message("say Descanse em uma cama ou área segura para recuperar energia.");
+        return true;
     }
     else if(command == "global" || command == "g") {
         if(args.length() == 0) {

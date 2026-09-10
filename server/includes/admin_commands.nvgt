@@ -321,6 +321,105 @@ void cmd_giveitem(int player_index, string target_name, string item_name, int qu
 	debug_log("ADMIN: " + players[player_index].charname + " deu " + quantity + "x " + item_name + " para " + target_name);
 }
 
+void cmd_takeitem(int player_index, string target_name, string item_name, int quantity = 1) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "takeitem", "Você não tem permissao!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "takeitem", "Nome de jogador inválido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "takeitem", "Jogador '" + target_name + "' não encontrado ou offline.");
+		return;
+	}
+
+	if(!is_valid_item_name(item_name)) {
+		send_admin_error(player_index, "takeitem", "Nome de item inválido!");
+		return;
+	}
+
+	if(!is_within_limits(quantity, 1, ADMIN_MAX_ITEM_QTY)) {
+		send_admin_error(player_index, "takeitem", "Quantidade deve ser entre 1 e " + ADMIN_MAX_ITEM_QTY + ".");
+		return;
+	}
+
+	int current_qty = players[target].inv_item_number(item_name);
+	if(current_qty < quantity) quantity = current_qty;
+	if(quantity <= 0) {
+		send_admin_error(player_index, "takeitem", "O jogador " + target_name + " não possui o item " + item_name + ".");
+		return;
+	}
+
+	players[target].inv_add_item(item_name, -quantity, true);
+	send_reliable_text(players[player_index].peer_id, "msg2 Você removeu " + quantity + "x " + item_name + " de " + target_name, 0);
+	send_reliable_text(players[target].peer_id, "msg2 Um admin removeu " + quantity + "x " + item_name + " do seu inventário", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " removeu " + quantity + "x " + item_name + " de " + target_name);
+}
+
+void cmd_setgold(int player_index, string target_name, double amount) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "setgold", "Você não tem permissao!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "setgold", "Nome de jogador inválido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "setgold", "Jogador '" + target_name + "' não encontrado ou offline.");
+		return;
+	}
+
+	if(amount < 0 || amount > ADMIN_MAX_GOLD) {
+		send_admin_error(player_index, "setgold", "Quantidade de ouro inválida (0 a " + ADMIN_MAX_GOLD + ").");
+		return;
+	}
+
+	players[target].gold = amount;
+	players[target].saldo = amount;
+	send_reliable_text(players[player_index].peer_id, "msg2 Saldo de " + target_name + " definido para " + amount, 0);
+	send_reliable_text(players[target].peer_id, "msg2 Seu saldo foi definido para " + amount + " por um admin.", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " definiu o ouro de " + target_name + " para " + amount);
+}
+
+void cmd_setlevel(int player_index, string target_name, int new_level) {
+	if(!is_admin(player_index)) {
+		send_admin_error(player_index, "setlevel", "Você não tem permissao!");
+		return;
+	}
+
+	if(!is_valid_player_name(target_name)) {
+		send_admin_error(player_index, "setlevel", "Nome de jogador inválido!");
+		return;
+	}
+
+	int target = get_player_index_from(target_name);
+	if(target == -1) {
+		send_admin_error(player_index, "setlevel", "Jogador '" + target_name + "' não encontrado ou offline.");
+		return;
+	}
+
+	if(new_level < 1 || new_level > ADMIN_MAX_LEVEL) {
+		send_admin_error(player_index, "setlevel", "Nível deve ser entre 1 e " + ADMIN_MAX_LEVEL + ".");
+		return;
+	}
+
+	players[target].level = new_level;
+	recalibrar_xp_requerida(players[target]);
+	salvar_progressao(players[target]);
+	send_reliable_text(players[player_index].peer_id, "msg2 Nível de " + target_name + " definido para " + new_level, 0);
+	send_reliable_text(players[target].peer_id, "msg2 Seu nível foi alterado para " + new_level + " por um admin.", 0);
+	debug_log("ADMIN: " + players[player_index].charname + " definiu o nível de " + target_name + " para " + new_level);
+}
+
 #include "admin_zone_commands.nvgt"
 
 #include "admin_moderation_commands.nvgt"
