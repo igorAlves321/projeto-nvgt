@@ -634,6 +634,9 @@ void game(){
 					jumptimer.restart();
 					p.play_stationary("jump.ogg", false);
 					jumping = true;
+					falling = false;
+					fallheight = 0;
+					falltimer.restart();
 					pulou = 1;
 					ty1 = me.y;
 					ty2 = me.y + jumpheight;
@@ -717,6 +720,8 @@ void game(){
 
 			if(get_tile_at(me.x, me.y) == "" && !falling && !dmoving && !jumping && connected && moveable && !floating && !floating2) {
 				falling = true;
+				fallheight = 0;
+				falltimer.restart();
 			}
 			if(falling && connected) {
 				fallloop();
@@ -733,17 +738,47 @@ void game(){
 				if(!ascending && jumptimer.elapsed >= jumptime2 && !atapex) {
 					jumptimer.restart();
 					me.y -= 1;
-					if(me.y <= ty1) {
-						me.y = ty1;
-						step = get_tile_at(me.x, me.y) + "land.ogg";
+
+					int plat_idx = have_tile_at(me.x, me.y);
+					if(plat_idx > -1 && platforms[plat_idx].plattype != "w" && string_contains(platforms[plat_idx].tiles, "wall", 1) < 0) {
+						step = platforms[plat_idx].tiles + "land.ogg";
 						p.play_stationary(step, false);
+						jumping = false;
+						falling = false;
+						fallheight = 0;
+						fallvelocidade = deffallvelocidade;
+						falltimer.restart();
+						canijumptimer.restart();
 						send_unreliable(peer_id, "move " + step + " " + me.x + " " + me.y, 0);
 						send_unreliable(peer_id, "land", 0);
-						jumping = false;
-						canijumptimer.restart();
+						send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
 					}
-					if(jumping) {
-						checkforplatforms();
+					else if(me.y <= ty1) {
+						int origin_plat = have_tile_at(me.x, ty1);
+						if(origin_plat > -1 && platforms[origin_plat].plattype != "w" && string_contains(platforms[origin_plat].tiles, "wall", 1) < 0) {
+							me.y = ty1;
+							step = platforms[origin_plat].tiles + "land.ogg";
+							p.play_stationary(step, false);
+							jumping = false;
+							falling = false;
+							fallheight = 0;
+							fallvelocidade = deffallvelocidade;
+							falltimer.restart();
+							canijumptimer.restart();
+							send_unreliable(peer_id, "move " + step + " " + me.x + " " + me.y, 0);
+							send_unreliable(peer_id, "land", 0);
+							send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
+						}
+						else {
+							jumping = false;
+							falling = true;
+							fallheight = 0;
+							falltimer.restart();
+							send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
+						}
+					}
+					else {
+						send_unreliable(peer_id, "move2 " + me.x + " " + me.y, 0);
 					}
 				}
 
