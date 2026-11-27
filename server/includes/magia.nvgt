@@ -1,0 +1,1322 @@
+// ============================================================================
+//  MAGIA E BACULO
+// ----------------------------------------------------------------------------
+//  Porte dos pacotes "nv", "baculo", "spellslist" e "spellcast" do BGT
+//  (net.bgt:1092-1146) e dos 14 feiticos de use_spell() (player.bgt:625).
+//
+//  Como no BGT, um feitico gasta duas coisas:
+//   - energia elemental (player.elemental_energy), que aqui e a "mana";
+//   - carga do baculo (player.nbaculo, em %), que volta sozinha: +5 a cada
+//     baculotiempo ms ate baculofangelical (playerloop, player.nvgt).
+//  A lista do menu usa mana_minima/carga_minima; o lancamento cobra
+//  custo_mana/custo_carga. No BGT os dois pares ja eram diferentes em alguns
+//  feiticos (meteoro: aparece com 150, custa 200) e isso foi mantido.
+//
+//  Catalogos e estado ficam no SQLite:
+//   - feiticos                 catalogo (INSERT OR IGNORE no boot)
+//   - magia_config             parametros gerais
+//   - magia_jogadores          nivel/carga do baculo e mana, por username
+//   - magia_feiticos_jogador   feiticos aprendidos, usos e recarga restante
+//
+//  Diferencas em relacao ao BGT:
+//   - elemental_energy e nbaculo nao eram gravados em lugar nenhum no port
+//     (sconfigs.nvgt nao e chamado); passam a ser gravados aqui.
+//   - O BGT nao tinha "aprender": todo feitico aparecia assim que a energia e
+//     a carga bastavam. Aqui o feitico e aprendido (e gravado) na primeira vez
+//     em que isso acontece; a lista continua obedecendo as mesmas condicoes.
+//   - O BGT entregava o baculo e 3000 de energia numa missao (voids.bgt:626).
+//     Aqui o baculo vem da loja e a energia inicial e dada uma unica vez a
+//     quem o tem. O item "mana" (saque de mapa e de dungeon) recarrega a
+//     energia quando o menu de feiticos e aberto.
+//   - Os feiticos de dano em area tambem ferem monstros (monstruos_global),
+//     pelo mesmo caminho das balas: vida e golpeado, que monstruo_registrar_dano
+//     repassa aos chefes e as dungeons.
+//   - Um lancamento que nao teria efeito (ja invisivel, parceiro offline,
+//     terremoto em curso) nao cobra nada. O BGT cobrava.
+//   - carga maxima = carga_base + bonus_baculo_reencarnacao
+//     (no BGT, 100 + fangelical * 50).
+//
+//  Ligacao (server.nvgt): #include "includes/magia.nvgt", a linha
+//  "if(handle_magia_packet(peer_id, command)) return;" em
+//  process_player_command() e magia_loop() no laco principal.
+// ============================================================================
+
+const string MAGIA_ITEM_BACULO = "baculo";
+const string MAGIA_ITEM_ALMA = "alma_terrestre";
+const string MAGIA_ITEM_MANA = "mana";
+
+const string MAGIA_LUZ = "luz_de_protecao";
+const string MAGIA_RESPIRO = "respiro_aquatico";
+const string MAGIA_VENTO = "vento_protetor";
+const string MAGIA_LEVITACAO = "levitacao";
+const string MAGIA_SALTO = "salto_mortal";
+const string MAGIA_SALVACAO_PACTO = "salvacao_celestial";
+const string MAGIA_SALVACAO_AMOR = "salvacao_do_amor";
+const string MAGIA_BENCAO = "bencao_de_diamante";
+const string MAGIA_METEORO = "meteoro_luminoso";
+const string MAGIA_PUNHO = "punho_demoniaco";
+const string MAGIA_TERREMOTO = "poder_subterraneo";
+const string MAGIA_CLARAO = "clarao_celestial";
+const string MAGIA_RAIO = "raio_da_vinganca";
+const string MAGIA_BOLA = "bola_do_dragao";
+
+const int MAGIA_TICK_MS = 1000;
+const int MAGIA_SALVAR_MS = 30000;
+const int MAGIA_VARRER_MS = 30000;
+const int MAGIA_NOVA_TENTATIVA_MS = 5000;
+
+class magia_feitico {
+	string nome = "";
+	string nome_original = "";
+	string descricao = "";
+	double custo_mana = 0;
+	int custo_carga = 0;
+	double mana_minima = 0;
+	int carga_minima = 0;
+	int nivel_minimo = 0;
+	int recarga_ms = 0;
+	int alcance = 0;
+	double dano_min = 0;
+	double dano_max = 0;
+	double dano_monstro_min = 0;
+	double dano_monstro_max = 0;
+	int duracao_s = 0;
+	string som = "";
+	string som_impacto = "";
+	bool ofensivo = false;
+	int ordem = 0;
+}
+
+class magia_aprendido {
+	string feitico = "";
+	int usos = 0;
+	bool em_recarga = false;
+	int recarga_total_ms = 0;
+	timer t_recarga;
+
+	int restante_ms() {
+		if(!em_recarga) return 0;
+		int restante = recarga_total_ms - int(t_recarga.elapsed);
+		if(restante <= 0) {
+			em_recarga = false;
+			recarga_total_ms = 0;
+			return 0;
+		}
+		return restante;
+	}
+
+	void iniciar_recarga(int ms) {
+		if(ms <= 0) {
+			em_recarga = false;
+			recarga_total_ms = 0;
+			return;
+		}
+		em_recarga = true;
+		recarga_total_ms = ms;
+		t_recarga.restart();
+	}
+}
+
+class magia_estado {
+	string jogador = "";
+	player@ dono;
+	bool mana_inicial = false;
+	int carga_salva = -1;
+	int nivel_salvo = -1;
+	double mana_salva = -1;
+	dictionary aprendidos;
+	timer t_salvar;
+}
+
+magia_feitico@[] magia_feiticos;
+dictionary magia_cfg;
+dictionary magia_estados;
+bool magia_pronta = false;
+bool magia_tentou_iniciar = false;
+timer magia_t_iniciar;
+timer magia_t_loop;
+timer magia_t_varrer;
+
+// ----------------------------------------------------------------------------
+// Utilitarios
+// ----------------------------------------------------------------------------
+
+void magia_msg(player@ p, string texto) {
+	if(p is null) return;
+	send_reliable_text(p.peer_id, "msg2 ;" + texto + ";", 0);
+}
+
+void magia_som_em(string mapa, int x, int y, string som) {
+	som = som.trim_whitespace();
+	if(som == "" || som == "none") return;
+	int mi = get_map_index_from(mapa);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+	server_maps[mi].send_packet(0, "play " + som, x, y);
+}
+
+// som_impacto aceita varios arquivos separados por "|".
+void magia_impacto_em(string mapa, int x, int y, string sons) {
+	int mi = get_map_index_from(mapa);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+
+	string[] lista = sons.split("|");
+	for(uint i = 0; i < lista.length(); i++) {
+		string som = lista[i].trim_whitespace();
+		if(som == "" || som == "none") continue;
+		server_maps[mi].send_packet(0, "impact " + som, x, y);
+	}
+}
+
+double magia_cfg_num(string chave, double padrao) {
+	double valor = padrao;
+	if(magia_cfg.exists(chave)) magia_cfg.get(chave, valor);
+	return valor;
+}
+
+magia_feitico@ magia_buscar_feitico(string nome) {
+	for(uint i = 0; i < magia_feiticos.length(); i++) {
+		if(magia_feiticos[i].nome == nome) return magia_feiticos[i];
+	}
+	return null;
+}
+
+int magia_sortear(double minimo, double maximo) {
+	int a = int(minimo);
+	int b = int(maximo);
+	if(b < a) b = a;
+	if(a < 0) a = 0;
+	if(b <= 0) return 0;
+	return random(a, b);
+}
+
+int magia_carga_maxima(player@ p) {
+	int maximo = int(magia_cfg_num("carga_base", 100));
+	if(maximo < 10) maximo = 10;
+	if(p.bonus_baculo_reencarnacao > 0) maximo += p.bonus_baculo_reencarnacao;
+	return maximo;
+}
+
+// Nivel 1 e o baculo de quem nunca reencarnou; cada reencarnacao soma um.
+int magia_nivel_baculo(player@ p) {
+	if(p.bonus_baculo_reencarnacao <= 0 || REENCARNACAO_BONUS_BACULO <= 0) return 1;
+	return 1 + p.bonus_baculo_reencarnacao / REENCARNACAO_BONUS_BACULO;
+}
+
+// O playerloop recarrega o baculo com estes dois campos, que nao tem coluna
+// propria na tabela players.
+void magia_sincronizar_limites(player@ p) {
+	int maximo = magia_carga_maxima(p);
+	if(p.baculofangelical != maximo) p.baculofangelical = maximo;
+
+	int intervalo = int(magia_cfg_num("recarga_carga_ms", 3000));
+	if(intervalo < 250) intervalo = 250;
+	if(p.baculotiempo != intervalo) p.baculotiempo = intervalo;
+
+	if(p.nbaculo > maximo) p.nbaculo = maximo;
+	if(p.nbaculo < 0) p.nbaculo = 0;
+	if(p.elemental_energy < 0) p.elemental_energy = 0;
+}
+
+// Sentido do pacote do cliente (config.nvgt) para o "lado" de boladefogoloop():
+// 3 anda para x+, 2 para x-, 0 para y+ e 1 para y-.
+int magia_lado_do_cliente(int sentido) {
+	if(sentido == Left) return 2;
+	if(sentido == Forward) return 0;
+	if(sentido == Back) return 1;
+	return 3;
+}
+
+// ----------------------------------------------------------------------------
+// Tabelas, sementes e catalogo
+// ----------------------------------------------------------------------------
+
+bool magia_criar_tabelas() {
+	string tabela_feiticos = """
+		CREATE TABLE IF NOT EXISTS feiticos (
+			nome TEXT PRIMARY KEY,
+			nome_original TEXT DEFAULT '',
+			descricao TEXT DEFAULT '',
+			custo_mana REAL DEFAULT 0,
+			custo_carga INTEGER DEFAULT 0,
+			mana_minima REAL DEFAULT 0,
+			carga_minima INTEGER DEFAULT 0,
+			nivel_minimo INTEGER DEFAULT 0,
+			recarga_ms INTEGER DEFAULT 0,
+			alcance INTEGER DEFAULT 0,
+			dano_min REAL DEFAULT 0,
+			dano_max REAL DEFAULT 0,
+			dano_monstro_min REAL DEFAULT 0,
+			dano_monstro_max REAL DEFAULT 0,
+			duracao_s INTEGER DEFAULT 0,
+			som TEXT DEFAULT '',
+			som_impacto TEXT DEFAULT '',
+			ofensivo INTEGER DEFAULT 0,
+			ordem INTEGER DEFAULT 0,
+			ativo INTEGER DEFAULT 1
+		);
+	""";
+	if(bancoJogo.execute(tabela_feiticos) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela feiticos: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	string tabela_config = """
+		CREATE TABLE IF NOT EXISTS magia_config (
+			chave TEXT PRIMARY KEY,
+			valor REAL NOT NULL DEFAULT 0
+		);
+	""";
+	if(bancoJogo.execute(tabela_config) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela magia_config: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	string tabela_jogadores = """
+		CREATE TABLE IF NOT EXISTS magia_jogadores (
+			username TEXT PRIMARY KEY,
+			nivel_baculo INTEGER DEFAULT 1,
+			carga INTEGER DEFAULT 0,
+			mana REAL DEFAULT 0,
+			mana_inicial INTEGER DEFAULT 0,
+			atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+	if(bancoJogo.execute(tabela_jogadores) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela magia_jogadores: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	string tabela_aprendidos = """
+		CREATE TABLE IF NOT EXISTS magia_feiticos_jogador (
+			username TEXT NOT NULL,
+			feitico TEXT NOT NULL,
+			usos INTEGER DEFAULT 0,
+			recarga_restante_ms INTEGER DEFAULT 0,
+			aprendido_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (username, feitico)
+		);
+	""";
+	if(bancoJogo.execute(tabela_aprendidos) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela magia_feiticos_jogador: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	return true;
+}
+
+void magia_semear_cfg(string chave, double valor) {
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO magia_config (chave, valor) VALUES (?, ?);");
+	if(@stmt == null) return;
+	stmt.bind_text(1, chave);
+	stmt.bind_double(2, valor);
+	stmt.step();
+}
+
+void magia_semear_config() {
+	// player.bgt:108-109: baculofangelical=100, baculotiempo=3000.
+	magia_semear_cfg("carga_base", 100);
+	magia_semear_cfg("recarga_carga_ms", 3000);
+	// net.bgt:1094: abaixo de 10% o menu nem abre.
+	magia_semear_cfg("carga_minima_menu", 10);
+	// voids.bgt:630: energia que acompanhava o baculo.
+	magia_semear_cfg("mana_inicial", 3000);
+	// Energia que cada item "mana" devolve ao ser absorvido pelo baculo.
+	magia_semear_cfg("mana_por_item", 50);
+}
+
+void magia_carregar_config() {
+	magia_cfg.delete_all();
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT chave, valor FROM magia_config;");
+	if(@stmt == null) return;
+
+	while(stmt.step() == SQLITE_ROW) {
+		string chave = stmt.column_text(0);
+		double valor = stmt.column_double(1);
+		magia_cfg.set(chave, valor);
+	}
+}
+
+void magia_semear_feitico(int ordem, string nome, string nome_original, string descricao,
+                          double custo_mana, int custo_carga, double mana_minima, int carga_minima,
+                          int recarga_ms, int alcance, double dano_min, double dano_max,
+                          double dano_monstro_min, double dano_monstro_max, int duracao_s,
+                          string som, string som_impacto, bool ofensivo) {
+	string sql = """
+		INSERT OR IGNORE INTO feiticos (
+			nome, nome_original, descricao, custo_mana, custo_carga, mana_minima, carga_minima,
+			nivel_minimo, recarga_ms, alcance, dano_min, dano_max, dano_monstro_min, dano_monstro_max,
+			duracao_s, som, som_impacto, ofensivo, ordem, ativo
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("ERRO ao semear feitico " + nome + ": " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, nome);
+	stmt.bind_text(2, nome_original);
+	stmt.bind_text(3, descricao);
+	stmt.bind_double(4, custo_mana);
+	stmt.bind_int(5, custo_carga);
+	stmt.bind_double(6, mana_minima);
+	stmt.bind_int(7, carga_minima);
+	stmt.bind_int(8, recarga_ms);
+	stmt.bind_int(9, alcance);
+	stmt.bind_double(10, dano_min);
+	stmt.bind_double(11, dano_max);
+	stmt.bind_double(12, dano_monstro_min);
+	stmt.bind_double(13, dano_monstro_max);
+	stmt.bind_int(14, duracao_s);
+	stmt.bind_text(15, som);
+	stmt.bind_text(16, som_impacto);
+	stmt.bind_int(17, ofensivo ? 1 : 0);
+	stmt.bind_int(18, ordem);
+	stmt.step();
+}
+
+// Custos de net.bgt:1118-1131 (spells2) e condicoes de lista de net.bgt:1098-1112.
+// duracao_s so vale para luz, respiro e bencao: as demais duracoes (invisivel
+// 60 s, salto e levitacao 30 s) sao fixas no playerloop.
+// Sons que nao existem em cliente/sounds foram trocados: magicpnormal1 e
+// magictierra1 -> spellcast, magictrueno1 -> spell_thunder_start,
+// chuva_de_meteoros -> chuvameteoro, trovao6 -> trovão6.
+void magia_semear_feiticos() {
+	magia_semear_feitico(1, MAGIA_LUZ, "luz_de_proteccion",
+		"Uma luz imensa envolve o seu corpo e protege você das chamas por pouco tempo.",
+		1, 50, 1, 50, 0, 0, 0, 0, 0, 0, 30, "spellcast.ogg", "", false);
+	magia_semear_feitico(2, MAGIA_RESPIRO, "respiro_acuatico",
+		"Permite mergulhar em rios e mares sem medo de morrer afogado, mas não por muito tempo.",
+		1, 50, 1, 50, 0, 0, 0, 0, 0, 0, 30, "magia_bolhaar.ogg", "", false);
+	magia_semear_feitico(3, MAGIA_VENTO, "viento_protector",
+		"Uma bênção da deusa do ar esconde a sua imagem da presença dos demais.",
+		6, 75, 6, 75, 0, 0, 0, 0, 0, 0, 60, "spell_cloak_powerup.ogg", "", false);
+	magia_semear_feitico(4, MAGIA_LEVITACAO, "levitacion",
+		"Você se eleva alguns metros do chão e pode se deslocar também pelo ar.",
+		1, 100, 1, 100, 0, 0, 0, 0, 0, 0, 30, "spell_float_on.ogg", "", false);
+	magia_semear_feitico(5, MAGIA_SALTO, "salto_mortal",
+		"Você passa a saltar alto o bastante para atravessar qualquer obstáculo.",
+		1, 15, 2, 15, 0, 0, 0, 0, 0, 0, 30, "spell_superjump.ogg", "", false);
+	magia_semear_feitico(6, MAGIA_SALVACAO_PACTO, "salvacion_celestial",
+		"Você pede pela saúde de quem fez o pacto de sangue com você e o traz para o seu lado.",
+		100, 80, 100, 80, 0, 0, 0, 0, 0, 0, 0, "teleporter.ogg", "", false);
+	magia_semear_feitico(7, MAGIA_SALVACAO_AMOR, "salvacion_del_amor",
+		"Você pede pela saúde do seu cônjuge e o traz para o seu lado.",
+		100, 80, 100, 80, 0, 0, 0, 0, 0, 0, 0, "teleporter.ogg", "", false);
+	magia_semear_feitico(8, MAGIA_BENCAO, "bendicion_de_diamante",
+		"Um grande poder é absorvido pelo seu corpo e aumenta a experiência que você ganha por tempo limitado.",
+		2000, 80, 2000, 80, 0, 0, 0, 0, 0, 0, 600, "spellcast.ogg", "", false);
+	magia_semear_feitico(9, MAGIA_METEORO, "meteorito_luminoso",
+		"O seu báculo invoca uma chuva de meteoros capaz de arrasar todo ser vivo no caminho.",
+		200, 100, 150, 100, 600000, 0, 0, 0, 0, 0, 0, "chuvameteoro.ogg", "", true);
+	magia_semear_feitico(10, MAGIA_PUNHO, "puno_demoniaco",
+		"Você desfere um golpe mortal em quem estiver mais perto de você.",
+		15, 10, 6, 10, 0, 15, 100000, 400000, 4000, 8000, 0, "chute.ogg", "socoforte1.ogg", true);
+	magia_semear_feitico(11, MAGIA_TERREMOTO, "poder_subterraneo",
+		"Você convoca um terremoto que fere tudo o que estiver por perto. Consome uma alma terrestre.",
+		15, 10, 6, 10, 0, 0, 0, 0, 0, 0, 0, "spellcast.ogg", "", true);
+	magia_semear_feitico(12, MAGIA_CLARAO, "destello_celestial",
+		"O fogo celestial gera um raio de energia que desintegra quem estiver mais perto de você.",
+		1, 100, 1, 50, 0, 30, 30000, 40000, 2000, 4000, 0, "spell_thunder_start.ogg", "corpo_caindo.ogg", true);
+	magia_semear_feitico(13, MAGIA_RAIO, "rayo_de_venganza",
+		"A ira do deus das águas faz um grande raio cair sobre quem estiver perto de você.",
+		8, 40, 8, 40, 0, 100, 10000, 20000, 1000, 2000, 0, "", "trovão6.ogg|spell_thunder_hit.ogg", true);
+	magia_semear_feitico(14, MAGIA_BOLA, "bola_del_dragon",
+		"Você lança uma grande bola de fogo que queima tudo no caminho.",
+		10, 50, 10, 50, 0, 0, 0, 0, 0, 0, 0, "", "", true);
+}
+
+void magia_carregar_feiticos() {
+	magia_feiticos.resize(0);
+
+	string sql = """
+		SELECT nome, nome_original, descricao, custo_mana, custo_carga, mana_minima, carga_minima,
+		       nivel_minimo, recarga_ms, alcance, dano_min, dano_max, dano_monstro_min, dano_monstro_max,
+		       duracao_s, som, som_impacto, ofensivo, ordem
+		FROM feiticos WHERE ativo = 1 ORDER BY ordem, nome;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("ERRO ao ler a tabela feiticos: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	while(stmt.step() == SQLITE_ROW) {
+		magia_feitico@ f = magia_feitico();
+		f.nome = stmt.column_text(0);
+		f.nome_original = stmt.column_text(1);
+		f.descricao = stmt.column_text(2);
+		f.custo_mana = stmt.column_double(3);
+		f.custo_carga = stmt.column_int(4);
+		f.mana_minima = stmt.column_double(5);
+		f.carga_minima = stmt.column_int(6);
+		f.nivel_minimo = stmt.column_int(7);
+		f.recarga_ms = stmt.column_int(8);
+		f.alcance = stmt.column_int(9);
+		f.dano_min = stmt.column_double(10);
+		f.dano_max = stmt.column_double(11);
+		f.dano_monstro_min = stmt.column_double(12);
+		f.dano_monstro_max = stmt.column_double(13);
+		f.duracao_s = stmt.column_int(14);
+		f.som = stmt.column_text(15);
+		f.som_impacto = stmt.column_text(16);
+		f.ofensivo = stmt.column_int(17) != 0;
+		f.ordem = stmt.column_int(18);
+		if(f.nome == "") continue;
+		magia_feiticos.insert_last(f);
+	}
+
+	debug_log("MAGIA: " + magia_feiticos.length() + " feiticos carregados do banco");
+}
+
+void magia_descrever(string item, string descricao) {
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_descriptions (name, description) VALUES (?, ?);");
+	if(@stmt != null) {
+		stmt.bind_text(1, item);
+		stmt.bind_text(2, descricao);
+		stmt.step();
+	}
+
+	if(!item_descriptions.exists(item)) item_descriptions.set(item, descricao);
+}
+
+void magia_registrar_itens() {
+	int inseridos = 0;
+	if(ensure_item_in_catalog(MAGIA_ITEM_BACULO, "Báculo")) inseridos++;
+	if(ensure_item_in_catalog(MAGIA_ITEM_ALMA, "Alma terrestre")) inseridos++;
+	if(ensure_item_in_catalog(MAGIA_ITEM_MANA, "Mana")) inseridos++;
+
+	if(inseridos > 0) {
+		load_items_from_database();
+		debug_log("MAGIA: " + inseridos + " itens inseridos no catalogo");
+	}
+
+	sqlite3statement@ tabela = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='item_descriptions' LIMIT 1;");
+	if(@tabela == null || tabela.step() != SQLITE_ROW) return;
+
+	magia_descrever(MAGIA_ITEM_BACULO, "Um báculo de mago. Com ele na mão, a tecla W abre os feitiços e Shift+W informa a carga. Os feitiços gastam energia elemental e carga do báculo, que se recarrega sozinha.");
+	magia_descrever(MAGIA_ITEM_ALMA, "Uma alma terrestre. É consumida pelo feitiço poder subterrâneo para convocar um terremoto.");
+	magia_descrever(MAGIA_ITEM_MANA, "Uma porção de mana. O báculo a absorve e a transforma em energia elemental quando você abre os feitiços.");
+}
+
+// Roda uma unica vez por banco (magia_config.loja_semeada): depois disso o
+// catalogo e dos comandos da loja, e um item removido nao volta.
+void magia_semear_loja() {
+	if(magia_cfg_num("loja_semeada", 0) >= 1) return;
+
+	sqlite3statement@ tabela = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='loja_itens' LIMIT 1;");
+	if(@tabela == null || tabela.step() != SQLITE_ROW) return;
+
+	bool vincular = loja_contar_vinculos(IE_LOJA_VINCULO) > 0;
+
+	ie_loja_inserir(MAGIA_ITEM_BACULO, "reais", 5000000, "Um báculo de mago. Tecla W para abrir os feitiços.", 3020, vincular);
+	ie_loja_inserir(MAGIA_ITEM_ALMA, "reais", 1000000, "Consumida pelo feitiço poder subterrâneo para convocar um terremoto.", 3021, vincular);
+	ie_loja_inserir(MAGIA_ITEM_MANA, "reais", 50000, "O báculo a transforma em energia elemental.", 3022, vincular);
+
+	sqlite3statement@ marca = bancoJogo.prepare("INSERT OR REPLACE INTO magia_config (chave, valor) VALUES ('loja_semeada', 1);");
+	if(@marca != null) marca.step();
+	double um = 1.0;
+	magia_cfg.set("loja_semeada", um);
+
+	carregar_catalogo_loja(true);
+	debug_log("MAGIA: baculo, alma_terrestre e mana acrescentados ao catalogo da loja");
+}
+
+// Preguicosa: a primeira chamada (magia_loop, pacote ou login) cria e semeia
+// tudo. Enquanto o banco nao estiver aberto, tenta de novo a cada 5 s.
+bool magia_garantir() {
+	if(magia_pronta) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+	if(magia_tentou_iniciar && magia_t_iniciar.elapsed < MAGIA_NOVA_TENTATIVA_MS) return false;
+
+	magia_tentou_iniciar = true;
+	magia_t_iniciar.restart();
+
+	if(!magia_criar_tabelas()) return false;
+
+	magia_semear_config();
+	magia_carregar_config();
+	magia_semear_feiticos();
+	magia_carregar_feiticos();
+	magia_registrar_itens();
+	magia_semear_loja();
+
+	magia_t_loop.restart();
+	magia_t_varrer.restart();
+	magia_pronta = true;
+	debug_log("OK - Sistema de magia e baculo inicializado");
+	return true;
+}
+
+// Opcional: pode ser chamada no boot para criar as tabelas antes do primeiro tick.
+void init_magia() {
+	magia_garantir();
+}
+
+// Releitura a quente depois de editar feiticos/magia_config no banco.
+void magia_recarregar() {
+	if(!magia_garantir()) return;
+	magia_carregar_config();
+	magia_carregar_feiticos();
+}
+
+// ----------------------------------------------------------------------------
+// Estado por jogador
+// ----------------------------------------------------------------------------
+
+void magia_salvar_estado(player@ p, magia_estado@ st) {
+	if(p is null || st is null || !magia_pronta) return;
+
+	st.t_salvar.restart();
+	st.carga_salva = p.nbaculo;
+	st.mana_salva = p.elemental_energy;
+	st.nivel_salvo = magia_nivel_baculo(p);
+
+	string sql = """
+		INSERT OR REPLACE INTO magia_jogadores (username, nivel_baculo, carga, mana, mana_inicial, atualizado_em)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("ERRO ao salvar magia de " + p.charname + ": " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+	stmt.bind_int(2, st.nivel_salvo);
+	stmt.bind_int(3, p.nbaculo);
+	stmt.bind_double(4, p.elemental_energy);
+	stmt.bind_int(5, st.mana_inicial ? 1 : 0);
+	stmt.step();
+}
+
+void magia_salvar_aprendido(player@ p, magia_aprendido@ a) {
+	if(p is null || a is null || !magia_pronta) return;
+
+	string sql = """
+		INSERT OR REPLACE INTO magia_feiticos_jogador (username, feitico, usos, recarga_restante_ms, aprendido_em)
+		VALUES (?, ?, ?, ?, COALESCE(
+			(SELECT aprendido_em FROM magia_feiticos_jogador WHERE username = ? AND feitico = ?),
+			CURRENT_TIMESTAMP));
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("ERRO ao salvar feitico de " + p.charname + ": " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+	stmt.bind_text(2, a.feitico);
+	stmt.bind_int(3, a.usos);
+	stmt.bind_int(4, a.restante_ms());
+	stmt.bind_text(5, p.charname);
+	stmt.bind_text(6, a.feitico);
+	stmt.step();
+}
+
+magia_aprendido@ magia_obter_aprendido(magia_estado@ st, string feitico) {
+	magia_aprendido@ a;
+	if(st.aprendidos.get(feitico, @a) && a !is null) return a;
+	return null;
+}
+
+// Le do banco o estado do jogador que acabou de entrar.
+void magia_iniciar_sessao(player@ p, magia_estado@ st) {
+	@st.dono = p;
+	st.jogador = p.charname;
+	st.mana_inicial = false;
+	st.carga_salva = -1;
+	st.nivel_salvo = -1;
+	st.mana_salva = -1;
+	st.aprendidos.delete_all();
+	st.t_salvar.restart();
+
+	bool tem_linha = false;
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT nivel_baculo, carga, mana, mana_inicial FROM magia_jogadores WHERE username = ?;");
+	if(@stmt != null) {
+		stmt.bind_text(1, p.charname);
+		if(stmt.step() == SQLITE_ROW) {
+			tem_linha = true;
+			st.nivel_salvo = stmt.column_int(0);
+			p.nbaculo = stmt.column_int(1);
+			p.elemental_energy = stmt.column_double(2);
+			st.mana_inicial = stmt.column_int(3) != 0;
+			st.carga_salva = p.nbaculo;
+			st.mana_salva = p.elemental_energy;
+		}
+	}
+
+	sqlite3statement@ lista = bancoJogo.prepare("SELECT feitico, usos, recarga_restante_ms FROM magia_feiticos_jogador WHERE username = ?;");
+	if(@lista != null) {
+		lista.bind_text(1, p.charname);
+		while(lista.step() == SQLITE_ROW) {
+			magia_aprendido@ a = magia_aprendido();
+			a.feitico = lista.column_text(0);
+			a.usos = lista.column_int(1);
+			int restante = lista.column_int(2);
+			if(a.feitico == "") continue;
+			a.iniciar_recarga(restante);
+			st.aprendidos.set(a.feitico, @a);
+		}
+	}
+
+	magia_sincronizar_limites(p);
+
+	// O meteoro usava tiempometeoro/tmeteoro no BGT; a recarga gravada aqui
+	// manda, e os campos antigos apenas a acompanham.
+	magia_aprendido@ meteoro = magia_obter_aprendido(st, MAGIA_METEORO);
+	if(meteoro !is null && meteoro.restante_ms() > 0) {
+		p.tiempometeoro = 1;
+		p.achuva = true;
+	}
+
+	if(!tem_linha) magia_salvar_estado(p, st);
+}
+
+magia_estado@ magia_obter_estado(player@ p) {
+	if(p is null || p.charname == "") return null;
+	if(!magia_garantir()) return null;
+
+	magia_estado@ st;
+	if(magia_estados.get(p.charname, @st) && st !is null) {
+		if(st.dono is p) return st;
+		magia_iniciar_sessao(p, st);
+		return st;
+	}
+
+	@st = magia_estado();
+	magia_estados.set(p.charname, @st);
+	magia_iniciar_sessao(p, st);
+	return st;
+}
+
+// Chamada no login (load_player.nvgt): sempre rele o banco.
+void magia_ao_carregar_jogador(player@ p) {
+	if(p is null || p.charname == "") return;
+	if(!magia_garantir()) return;
+
+	magia_estado@ st;
+	if(magia_estados.get(p.charname, @st) && st !is null) {
+		magia_iniciar_sessao(p, st);
+		return;
+	}
+
+	@st = magia_estado();
+	magia_estados.set(p.charname, @st);
+	magia_iniciar_sessao(p, st);
+}
+
+// Solta o estado em memoria de quem ja saiu.
+void magia_varrer_estados() {
+	magia_t_varrer.restart();
+
+	string[]@ nomes = magia_estados.get_keys();
+	for(uint i = 0; i < nomes.length(); i++) {
+		magia_estado@ st;
+		if(!magia_estados.get(nomes[i], @st) || st is null) {
+			magia_estados.delete(nomes[i]);
+			continue;
+		}
+
+		int idx = get_player_index_from(nomes[i]);
+		if(idx < 0 || players[idx] !is st.dono) magia_estados.delete(nomes[i]);
+	}
+}
+
+// Chamada por changename() (legacy_compat.nvgt).
+void magia_renomear_jogador(string antigo, string novo) {
+	antigo = antigo.trim_whitespace();
+	novo = novo.trim_whitespace();
+	if(antigo == "" || novo == "" || antigo == novo) return;
+	if(!magia_garantir()) return;
+
+	sqlite3statement@ s1 = bancoJogo.prepare("UPDATE OR REPLACE magia_jogadores SET username = ? WHERE username = ?;");
+	if(@s1 != null) {
+		s1.bind_text(1, novo);
+		s1.bind_text(2, antigo);
+		s1.step();
+	}
+
+	sqlite3statement@ s2 = bancoJogo.prepare("UPDATE OR REPLACE magia_feiticos_jogador SET username = ? WHERE username = ?;");
+	if(@s2 != null) {
+		s2.bind_text(1, novo);
+		s2.bind_text(2, antigo);
+		s2.step();
+	}
+
+	magia_estado@ st;
+	if(magia_estados.get(antigo, @st) && st !is null) {
+		magia_estados.delete(antigo);
+		st.jogador = novo;
+		magia_estados.set(novo, @st);
+	}
+}
+
+// Quem tem o baculo recebe a energia inicial uma unica vez.
+void magia_dar_mana_inicial(player@ p, magia_estado@ st) {
+	if(st.mana_inicial) return;
+	if(p.inv_item_number(MAGIA_ITEM_BACULO) < 1) return;
+
+	double quantidade = magia_cfg_num("mana_inicial", 3000);
+	st.mana_inicial = true;
+	if(quantidade > 0) {
+		p.elemental_energy += quantidade;
+		send_reliable_text(p.peer_id, "msg2 ;O seu báculo desperta. Energia elemental recebida:; " + int(quantidade) + ".", 0);
+	}
+	magia_salvar_estado(p, st);
+}
+
+// Converte todo o item "mana" do inventario em energia elemental.
+void magia_absorver_mana(player@ p, magia_estado@ st) {
+	int quantidade = p.inv_item_number(MAGIA_ITEM_MANA);
+	if(quantidade < 1) return;
+
+	double por_item = magia_cfg_num("mana_por_item", 50);
+	if(por_item <= 0) return;
+
+	p.inv_add_item(MAGIA_ITEM_MANA, -quantidade, true);
+	save_player_inventory_to_db(p);
+
+	double ganho = double(quantidade) * por_item;
+	p.elemental_energy += ganho;
+	magia_salvar_estado(p, st);
+
+	send_reliable_text(p.peer_id, "msg2 ;O seu báculo absorveu a mana. Energia elemental recebida:; " + int(ganho) + ".", 0);
+}
+
+// ----------------------------------------------------------------------------
+// Condicoes
+// ----------------------------------------------------------------------------
+
+bool magia_mapa_desabilitado(player@ p) {
+	int mi = get_map_index_from(p.map);
+	if(mi < 0 || mi >= int(server_maps.length())) return true;
+	return server_maps[mi].is_disabled(MAGIA_ITEM_BACULO);
+}
+
+// Condicoes de quem empunha o baculo, comuns ao menu e ao lancamento.
+bool magia_pode_usar_baculo(player@ p, bool avisar) {
+	if(p.inv_item_number(MAGIA_ITEM_BACULO) < 1) return false;
+	if(p.health <= 0 || p.afk || p.watching != 0) return false;
+	if(p.paralisado || p.paralisado2) return false;
+	if(game_frozen || gamestopped) return false;
+
+	// use_spell() do BGT comecava por is_disabled("baculo", mapa).
+	if(magia_mapa_desabilitado(p)) {
+		if(avisar) magia_msg(p, "O báculo não funciona neste lugar.");
+		return false;
+	}
+	return true;
+}
+
+bool magia_zona_protegida(int x, int y, string mapa) {
+	if(get_safezone_at(x, y, mapa)) return true;
+	return is_game_disabled(x, y, mapa);
+}
+
+// Alvo de um feitico de dano. emequipe() ja cobre equipe, ausente, pacifico
+// e zona segura; o resto sao as condicoes de use_spell() e as do port.
+bool magia_jogador_e_alvo(player@ p, player@ alvo, int alcance) {
+	if(alvo is p) return false;
+	if(!alvo.dados_carregados || alvo.charname == "") return false;
+
+	double distancia = get_player_distance(p, alvo);
+	if(distancia < 0 || distancia > alcance) return false;
+
+	if(alvo.health <= 0 || alvo.watching != 0 || alvo.afk) return false;
+	if(alvo.pacifico != 0 || alvo.newbie || alvo.in_portal) return false;
+	if(alvo.in_arena != p.in_arena) return false;
+	if(emequipe(p.charname, alvo.charname)) return false;
+	if(is_game_disabled(alvo.x, alvo.y, alvo.map)) return false;
+	return true;
+}
+
+// Condicoes para o feitico aparecer no menu (net.bgt:1098-1112).
+bool magia_disponivel(player@ p, magia_estado@ st, magia_feitico@ f) {
+	if(p.elemental_energy < f.mana_minima) return false;
+	if(p.nbaculo < f.carga_minima) return false;
+	if(int(p.level) < f.nivel_minimo) return false;
+	if(f.ofensivo && p.pacifico != 0) return false;
+
+	if(f.nome == MAGIA_SALVACAO_PACTO && get_parceiro(p.charname, VINCULO_PACTO) == "") return false;
+	if(f.nome == MAGIA_SALVACAO_AMOR && get_parceiro(p.charname, VINCULO_CASAMENTO) == "") return false;
+	if(f.nome == MAGIA_TERREMOTO && p.inv_item_number(MAGIA_ITEM_ALMA) < 1) return false;
+	if(f.nome == MAGIA_METEORO && p.ameteoro != 0) return false;
+
+	magia_aprendido@ a = magia_obter_aprendido(st, f.nome);
+	if(a !is null && a.restante_ms() > 0) return false;
+
+	return true;
+}
+
+magia_aprendido@ magia_aprender(player@ p, magia_estado@ st, magia_feitico@ f, bool avisar) {
+	magia_aprendido@ a = magia_obter_aprendido(st, f.nome);
+	if(a !is null) return a;
+
+	@a = magia_aprendido();
+	a.feitico = f.nome;
+	st.aprendidos.set(f.nome, @a);
+	magia_salvar_aprendido(p, a);
+
+	if(avisar) send_reliable_text(p.peer_id, "msg2 ;O seu báculo revelou um novo feitiço:; ;" + f.nome + ";.", 0);
+	debug_log("MAGIA: " + p.charname + " aprendeu " + f.nome);
+	return a;
+}
+
+// ----------------------------------------------------------------------------
+// Pacotes "nv", "baculo" e "spellslist"
+// ----------------------------------------------------------------------------
+
+void magia_informar_carga(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p.inv_item_number(MAGIA_ITEM_BACULO) < 1) return;
+
+	magia_estado@ st = magia_obter_estado(p);
+	if(st is null) return;
+
+	magia_sincronizar_limites(p);
+	magia_dar_mana_inicial(p, st);
+
+	send_reliable_text(p.peer_id, "msg2 ;Carga do báculo:; " + p.nbaculo + "%. ;Carga máxima:; " + p.baculofangelical +
+		"%. ;Nível do báculo:; " + magia_nivel_baculo(p) + ". ;Energia elemental:; " + int(p.elemental_energy) + ".", 0);
+}
+
+// Linha do pacote spellslist: nome:custo_mana:custo_carga
+void magia_enviar_lista(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(!magia_pode_usar_baculo(p, true)) return;
+
+	magia_estado@ st = magia_obter_estado(p);
+	if(st is null) return;
+
+	magia_sincronizar_limites(p);
+	magia_dar_mana_inicial(p, st);
+	magia_absorver_mana(p, st);
+
+	if(p.nbaculo < int(magia_cfg_num("carga_minima_menu", 10))) {
+		send_reliable_text(p.peer_id, "msgnormal O seu báculo ainda está sendo recarregado.", 0);
+		return;
+	}
+
+	string[] linhas;
+	for(uint i = 0; i < magia_feiticos.length(); i++) {
+		magia_feitico@ f = magia_feiticos[i];
+		if(!magia_disponivel(p, st, f)) continue;
+
+		magia_aprender(p, st, f, true);
+		linhas.insert_last(f.nome + ":" + int(f.custo_mana) + ":" + f.custo_carga);
+	}
+
+	if(linhas.length() == 0) {
+		magia_msg(p, "Você não tem energia elemental ou carga suficiente para nenhum feitiço.");
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "spellslist " + join(linhas, "\r\n"), 0);
+}
+
+// ----------------------------------------------------------------------------
+// Efeitos (use_spell, player.bgt:625)
+// ----------------------------------------------------------------------------
+
+// Dano em area a jogadores e monstros. Devolve quantos alvos foram atingidos.
+int magia_dano_em_area(player@ p, magia_feitico@ f, string prefixo_lasthit) {
+	int atingidos = 0;
+	int mi = get_map_index_from(p.map);
+
+	if(pvp_enabled) {
+		for(uint j = 0; j < players.length(); j++) {
+			player@ alvo = players[j];
+			if(!magia_jogador_e_alvo(p, alvo, f.alcance)) continue;
+
+			magia_impacto_em(alvo.map, alvo.x, alvo.y, f.som_impacto);
+			if(mi >= 0 && mi < int(server_maps.length())) {
+				server_maps[mi].send_packet(0, "inithurt " + alvo.voice, alvo.x, alvo.y);
+			}
+
+			alvo.health -= magia_sortear(f.dano_min, f.dano_max);
+			alvo.lasthit = prefixo_lasthit + p.charname;
+			atingidos++;
+		}
+	}
+
+	// Mesmo caminho de check_npc_collisions() (bullet.nvgt): monstruo_registrar_dano
+	// ve a queda de vida no proximo ciclo e credita "golpeado" no chefe/dungeon.
+	if(f.dano_monstro_max > 0) {
+		for(uint i = 0; i < monstruos_global.length(); i++) {
+			monstruo@ m = monstruos_global[i];
+			if(m is null || m.map != p.map) continue;
+			if(m.vida <= 0 || m.morreu) continue;
+
+			int dx = m.x >= p.x ? m.x - p.x : p.x - m.x;
+			int dy = m.y >= p.y ? m.y - p.y : p.y - m.y;
+			if(dx + dy > f.alcance) continue;
+
+			int dano = magia_sortear(f.dano_monstro_min, f.dano_monstro_max);
+			if(dano <= 0) continue;
+
+			magia_impacto_em(m.map, m.x, m.y, f.som_impacto);
+			m.vida -= dano;
+			m.golpeado = p.charname;
+			atingidos++;
+		}
+	}
+
+	return atingidos;
+}
+
+// meteorito_luminoso: mata todo jogador desprotegido do servidor. Como no BGT,
+// quem lanca tambem morre se nao tiver bebido a pocao antimeteoros.
+int magia_chuva_de_meteoros(player@ p, magia_feitico@ f) {
+	int atingidos = 0;
+
+	p.tiempometeoro = 1;
+	p.achuva = true;
+	p.tmeteoro.restart();
+
+	for(uint i = 0; i < players.length(); i++) {
+		player@ alvo = players[i];
+		if(!alvo.dados_carregados || alvo.charname == "") continue;
+		if(alvo.health <= 0 || alvo.afk || alvo.watching != 0) continue;
+		if(alvo.pacifico != 0 || alvo.newbie) continue;
+		if(alvo.ameteoro != 0 || alvo.in_arena != 0 || alvo.in_portal) continue;
+		if(magia_zona_protegida(alvo.x, alvo.y, alvo.map)) continue;
+
+		alvo.health = -1;
+		alvo.lasthit = "meteoro_" + p.charname;
+		if(f.som != "" && f.som != "none") send_reliable_text(alvo.peer_id, "ps " + f.som, 0);
+		atingidos++;
+	}
+
+	return atingidos;
+}
+
+// salvacion_celestial / salvacion_del_amor: traz o parceiro para junto de quem lanca.
+void magia_trazer_parceiro(int player_index, int indice_parceiro, magia_feitico@ f, string fala) {
+	player@ p = players[player_index];
+	player@ alvo = players[indice_parceiro];
+
+	move_player_to_map(indice_parceiro, p.map, p.x, p.y);
+	alvo.map_name = p.map;
+	alvo.mapaatual = p.map;
+	if(p.map != VIAGEM_MAPA_ESPIRITUAL) alvo.mapavoltar = p.map;
+
+	magia_som_em(alvo.map, alvo.x, alvo.y, f.som);
+	if(gamestopped == false) send_reliable_text(alvo.peer_id, "startmoving", 0);
+	alvo.paralisado = false;
+	alvo.paralisado2 = false;
+
+	telllocal(player_index, fala);
+}
+
+// Devolve "" quando o parceiro pode ser trazido, ou o motivo da recusa.
+string magia_recusa_parceiro(player@ p, string parceiro, int &out indice_parceiro) {
+	indice_parceiro = -1;
+	if(parceiro == "") return "Você não tem com quem usar este feitiço.";
+
+	int idx = indice_jogador_por_nome(parceiro);
+	if(idx < 0 || idx >= int(players.length())) return "A pessoa que você quer salvar não está no jogo.";
+
+	player@ alvo = players[idx];
+	if(alvo is p) return "Você não tem com quem usar este feitiço.";
+	if(alvo.health <= 0 || alvo.watching != 0) return "A pessoa que você quer salvar não pode ser alcançada agora.";
+	if(alvo.in_arena != 0 || p.in_arena != 0) return "Este feitiço não funciona durante uma partida na arena.";
+	if(alvo.tempoprision > 0 || alvo.map == "prisão2") return "Nem a magia tira alguém da prisão.";
+	if(house_is_locked_for_player(alvo.charname, p.map)) return "Esta propriedade esta trancada.";
+
+	indice_parceiro = idx;
+	return "";
+}
+
+// ----------------------------------------------------------------------------
+// Pacote "spellcast <feitico> <sentido>"
+// ----------------------------------------------------------------------------
+
+void magia_falhar(player@ p) {
+	magia_som_em(p.map, p.x, p.y, "spellfail.ogg");
+}
+
+void magia_lancar(int player_index, string nome, int sentido) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(!magia_pode_usar_baculo(p, true)) return;
+
+	// net.bgt:1116: nenhum feitico sai no mapa inicial.
+	if(p.map == mapainicial) {
+		magia_msg(p, "O báculo não funciona neste lugar.");
+		return;
+	}
+
+	magia_estado@ st = magia_obter_estado(p);
+	if(st is null) return;
+
+	nome = nome.trim_whitespace().lower();
+	magia_feitico@ f = magia_buscar_feitico(nome);
+	if(f is null) return;
+
+	magia_sincronizar_limites(p);
+	magia_dar_mana_inicial(p, st);
+
+	// net.bgt:1136: sem energia ou sem carga, so o som de falha.
+	if(p.elemental_energy < f.custo_mana || p.nbaculo < f.custo_carga || int(p.level) < f.nivel_minimo) {
+		magia_falhar(p);
+		return;
+	}
+
+	magia_aprendido@ a = magia_aprender(p, st, f, false);
+	int restante = a.restante_ms();
+	if(restante > 0) {
+		magia_falhar(p);
+		send_reliable_text(p.peer_id, "msg2 ;Este feitiço ainda está se recuperando. Segundos restantes:; " + ((restante + 999) / 1000) + ".", 0);
+		return;
+	}
+
+	if(f.ofensivo) {
+		if(p.pacifico != 0) {
+			magia_falhar(p);
+			magia_msg(p, "Você está em modo pacífico e não pode lançar feitiços de ataque.");
+			return;
+		}
+		if(magia_zona_protegida(p.x, p.y, p.map)) {
+			magia_falhar(p);
+			magia_msg(p, "Feitiços de ataque não funcionam em zona segura.");
+			return;
+		}
+	}
+
+	int mi = get_map_index_from(p.map);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+
+	// Recusas que nao cobram nada.
+	int indice_parceiro = -1;
+	if(f.nome == MAGIA_VENTO && p.cloaked) {
+		magia_falhar(p);
+		magia_msg(p, "Você já está invisível.");
+		return;
+	}
+	if(f.nome == MAGIA_LEVITACAO && (p.floating || p.magiaactiva)) {
+		magia_falhar(p);
+		magia_msg(p, "Você já está flutuando.");
+		return;
+	}
+	if(f.nome == MAGIA_SALVACAO_PACTO || f.nome == MAGIA_SALVACAO_AMOR) {
+		string tipo = f.nome == MAGIA_SALVACAO_PACTO ? VINCULO_PACTO : VINCULO_CASAMENTO;
+		string recusa = magia_recusa_parceiro(p, get_parceiro(p.charname, tipo), indice_parceiro);
+		if(recusa != "") {
+			magia_falhar(p);
+			magia_msg(p, recusa);
+			return;
+		}
+	}
+	if(f.nome == MAGIA_TERREMOTO) {
+		if(p.inv_item_number(MAGIA_ITEM_ALMA) < 1) {
+			magia_falhar(p);
+			magia_msg(p, "Você precisa de uma alma terrestre para este feitiço.");
+			return;
+		}
+		if(server_maps[mi].earthquakes.length() > 0) {
+			magia_falhar(p);
+			magia_msg(p, "Já há um terremoto causando estragos neste momento!");
+			return;
+		}
+	}
+	if(f.nome == MAGIA_METEORO && !pvp_enabled) {
+		magia_falhar(p);
+		magia_msg(p, "O combate entre jogadores está desligado.");
+		return;
+	}
+
+	// Cobranca (net.bgt:1138-1140).
+	p.elemental_energy -= f.custo_mana;
+	if(p.elemental_energy < 0) p.elemental_energy = 0;
+	p.nbaculo -= f.custo_carga;
+	if(p.nbaculo < 0) p.nbaculo = 0;
+	p.tbaculo.restart();
+	p.lado = sentido;
+
+	bool tocar_som = true;
+
+	if(f.nome == MAGIA_VENTO) {
+		p.cloaked = true;
+		send_reliable_text(p.peer_id, "startcloak", 0);
+		p.cloakhiding = true;
+		send_reliable_text(0, "playerbeep " + p.charname + " 0", 0);
+		p.bipar = 0;
+		p.tminvs.restart();
+	}
+	else if(f.nome == MAGIA_METEORO) {
+		tocar_som = false;
+		int mortos = magia_chuva_de_meteoros(p, f);
+		debug_log("MAGIA: chuva de meteoros de " + p.charname + " atingiu " + mortos + " jogadores");
+	}
+	else if(f.nome == MAGIA_SALTO) {
+		send_reliable_text(p.peer_id, "superjumpon", 0);
+		p.tmpulo.restart();
+	}
+	else if(f.nome == MAGIA_SALVACAO_PACTO) {
+		tocar_som = false;
+		magia_trazer_parceiro(player_index, indice_parceiro, f, "Eu defenderei você com a minha própria vida.");
+	}
+	else if(f.nome == MAGIA_SALVACAO_AMOR) {
+		tocar_som = false;
+		magia_trazer_parceiro(player_index, indice_parceiro, f, "Venha até mim...");
+	}
+	else if(f.nome == MAGIA_RESPIRO) {
+		p.bolhaar = true;
+		p.bolhaseconds = uint(f.duracao_s > 0 ? f.duracao_s : 30);
+		p.bolhatimer.restart();
+		send_reliable_text(p.peer_id, "bolhadearon", 0);
+	}
+	else if(f.nome == MAGIA_LUZ) {
+		p.calor_reprimido = true;
+		p.calorseconds = uint(f.duracao_s > 0 ? f.duracao_s : 30);
+		p.calortimer.restart();
+	}
+	else if(f.nome == MAGIA_BENCAO) {
+		p.bendicion = true;
+		p.bendicionsegundos = f.duracao_s > 0 ? f.duracao_s : 600;
+		p.tmbendicion.restart();
+	}
+	else if(f.nome == MAGIA_CLARAO) {
+		int n = magia_dano_em_area(p, f, "rayo_");
+		if(n == 0) magia_msg(p, "O feitiço não encontrou nenhum alvo ao alcance.");
+	}
+	else if(f.nome == MAGIA_LEVITACAO) {
+		p.y += 5;
+		p.magiaactiva = true;
+		send_reliable_text(p.peer_id, "startfloat", 0);
+		send_reliable_text(p.peer_id, "move " + p.x + " " + p.y, 0);
+		p.tmflutuar.restart();
+	}
+	else if(f.nome == MAGIA_PUNHO) {
+		int n = magia_dano_em_area(p, f, "punho_");
+		if(n == 0) magia_msg(p, "O feitiço não encontrou nenhum alvo ao alcance.");
+	}
+	else if(f.nome == MAGIA_TERREMOTO) {
+		create_earthquake(p.charname, server_maps[mi].max_x, server_maps[mi].max_y, p.map);
+		p.inv_add_item(MAGIA_ITEM_ALMA, -1, true);
+		save_player_inventory_to_db(p);
+	}
+	else if(f.nome == MAGIA_BOLA) {
+		// colocar_boladefogo() do BGT (boladefogo.bgt:15).
+		boladefogo@ bola = boladefogo(p.charname, magia_lado_do_cliente(sentido), p.map, p.x, p.y);
+		server_maps[mi].boladefogos.insert_last(bola);
+	}
+	else if(f.nome == MAGIA_RAIO) {
+		int n = magia_dano_em_area(p, f, "trovão_");
+		if(n == 0) magia_msg(p, "O feitiço não encontrou nenhum alvo ao alcance.");
+	}
+
+	if(tocar_som) magia_som_em(p.map, p.x, p.y, f.som);
+
+	a.usos++;
+	a.iniciar_recarga(f.recarga_ms);
+	magia_salvar_aprendido(p, a);
+	magia_salvar_estado(p, st);
+
+	debug_log("MAGIA: " + p.charname + " lancou " + f.nome + " (energia " + int(p.elemental_energy) + ", carga " + p.nbaculo + ")");
+}
+
+// ----------------------------------------------------------------------------
+// Laco: mantem os limites do baculo e grava o que mudou.
+// ----------------------------------------------------------------------------
+
+void magia_tick_jogador(player@ p) {
+	magia_estado@ st = magia_obter_estado(p);
+	if(st is null) return;
+
+	magia_sincronizar_limites(p);
+
+	// Energia e nivel mudam pouco: gravam na hora. A carga muda a cada poucos
+	// segundos enquanto recarrega: grava no maximo a cada MAGIA_SALVAR_MS.
+	bool mudou_agora = (p.elemental_energy != st.mana_salva || magia_nivel_baculo(p) != st.nivel_salvo);
+	bool mudou_carga = (p.nbaculo != st.carga_salva);
+
+	if(mudou_agora) {
+		magia_salvar_estado(p, st);
+	}
+	else if(st.t_salvar.elapsed >= MAGIA_SALVAR_MS) {
+		if(mudou_carga) magia_salvar_estado(p, st);
+		else st.t_salvar.restart();
+
+		// Recargas de feitico em andamento sobrevivem ao relogin.
+		string[]@ nomes = st.aprendidos.get_keys();
+		for(uint i = 0; i < nomes.length(); i++) {
+			magia_aprendido@ a = magia_obter_aprendido(st, nomes[i]);
+			if(a is null || !a.em_recarga) continue;
+
+			bool acabou = a.restante_ms() <= 0;
+			magia_salvar_aprendido(p, a);
+			if(acabou && a.feitico == MAGIA_METEORO) {
+				p.tiempometeoro = 0;
+				p.achuva = false;
+			}
+		}
+	}
+}
+
+void magia_loop() {
+	if(!magia_garantir()) return;
+	if(magia_t_loop.elapsed < MAGIA_TICK_MS) return;
+	magia_t_loop.restart();
+
+	if(magia_t_varrer.elapsed >= MAGIA_VARRER_MS) magia_varrer_estados();
+
+	for(uint i = 0; i < players.length(); i++) {
+		player@ p = players[i];
+		if(p is null || !p.dados_carregados || p.charname == "") continue;
+		magia_tick_jogador(p);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Pacotes crus vindos do cliente
+//
+// Precisa ser chamado em process_player_command() ANTES de process_command().
+// Devolve false rapido para nao interceptar comandos alheios.
+// ----------------------------------------------------------------------------
+
+bool handle_magia_packet(uint64 peer_id, string command) {
+	if(command == "") return false;
+
+	bool e_carga = (command == "nv");
+	bool e_lista = (command == "baculo" || command == "spellslist");
+	bool e_lancar = (command == "spellcast" || command.find("spellcast ") == 0);
+	if(!e_carga && !e_lista && !e_lancar) return false;
+
+	int idx = indice_jogador_por_peer(peer_id);
+	if(idx < 0) return true;
+
+	if(e_carga) {
+		magia_informar_carga(idx);
+		return true;
+	}
+
+	if(e_lista) {
+		magia_enviar_lista(idx);
+		return true;
+	}
+
+	// spellcast <feitico> <sentido>
+	string[] partes = split_non_empty_tokens(command);
+	if(partes.length() < 2) return true;
+
+	int sentido = players[idx].lado;
+	if(partes.length() >= 3) {
+		int lido = int(string_to_number(partes[2]));
+		if(lido == Left || lido == Right || lido == Back || lido == Forward) sentido = lido;
+	}
+
+	magia_lancar(idx, partes[1], sentido);
+	return true;
+}
