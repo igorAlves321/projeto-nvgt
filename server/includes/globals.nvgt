@@ -143,7 +143,7 @@ void colocar_fogoqueimar(int x, int y, int duracao, string mapname) {
 }
 
 void write_to(string playername, string filename, string content) {
-    string filepath = "server/players/" + playername + "_" + filename;
+    string filepath = "players/" + playername + "_" + filename;
     file f;
     if (f.open(filepath, "w")) {
         f.write(content);
@@ -159,23 +159,29 @@ uint64 get_time_stamp() {
     return ticks();
 }
 
+file@ debug_log_arquivo;
+file@ debug_log_arquivo2;
+mutex@ debug_log_mutex;
+
 void debug_log(string message) {
     datetime dt;
-    string time_str = "[" + dt.format("%Y-%m-%d %H:%M:%S") + "] ";
+    string linha = "[" + dt.format("%Y-%m-%d %H:%M:%S") + "] " + message + "\n";
 
-    directory_create("debug");
-
-    file f;
-    if (f.open("debug/server_log.txt", "a")) {
-        f.write(time_str + message + "\n");
-        f.close();
+    if (debug_log_mutex is null) {
+        @debug_log_mutex = mutex();
+        directory_create("debug");
     }
 
-    file f2;
-    if (f2.open("log.md", "a")) {
-        f2.write(time_str + message + "\n");
-        f2.close();
+    debug_log_mutex.lock();
+    if (debug_log_arquivo is null) @debug_log_arquivo = file();
+    if (debug_log_arquivo.active || debug_log_arquivo.open("debug/server_log.txt", "a")) {
+        debug_log_arquivo.write(linha);
     }
+    if (debug_log_arquivo2 is null) @debug_log_arquivo2 = file();
+    if (debug_log_arquivo2.active || debug_log_arquivo2.open("log.md", "a")) {
+        debug_log_arquivo2.write(linha);
+    }
+    debug_log_mutex.unlock();
 }
 
 int string_to_number(string str) {

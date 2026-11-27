@@ -21,7 +21,10 @@ bool load_player_data_complete(player@ p) {
             xp_requerida, matou, reencarnacoes,
             stamina, fome, sanity, radiation,
             voice_id, idioma_chat,
-            guild_id, party_id
+            guild_id, party_id,
+            health, maxhealth,
+            avisanivel, avisaxp, avisareencarnacao,
+            bonus_vida_reencarnacao, bonus_baculo_reencarnacao
         FROM players
         WHERE username = ?;
     """;
@@ -105,8 +108,21 @@ bool load_player_data_complete(player@ p) {
         int guild_id = stmt.column_int(col++);
         int party_id = stmt.column_int(col++);
 
+        double saved_health = stmt.column_double(col++);
+        double saved_maxhealth = stmt.column_double(col++);
+        p.avisanivel = stmt.column_int(col++);
+        p.avisaxp = stmt.column_int(col++);
+        p.avisareencarnacao = stmt.column_int(col++);
+        p.bonus_vida_reencarnacao = stmt.column_int(col++);
+        p.bonus_baculo_reencarnacao = stmt.column_int(col++);
+
         p.health = p.hp;
         p.maxhealth = p.max_hp;
+        if(saved_maxhealth > 0) {
+            p.maxhealth = saved_maxhealth;
+            p.health = saved_health > 0 ? saved_health : saved_maxhealth;
+        }
+        aplicar_bonus_reencarnacao(p);
 
         debug_log("✓ Dados básicos carregados para " + p.charname);
 
@@ -904,6 +920,7 @@ void register_player_timers(player@ p) {
     debug_log("Registrando timers pessoais de " + p.charname);
 
     p.playtimer.restart();
+    p.playtime_save_timer.restart();
     p.safetimer.restart();
     p.pingtimer.restart();
     p.afksecondtimer.restart();

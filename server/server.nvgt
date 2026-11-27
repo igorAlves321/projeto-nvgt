@@ -391,7 +391,14 @@ void migrate_database() {
         {"arquivada_em", "TEXT", "NULL"},
         {"computer_id", "TEXT", "''"},
         {"must_change_password", "INTEGER", "0"},
-        {"password_changed_at", "TEXT", "NULL"}
+        {"password_changed_at", "TEXT", "NULL"},
+        {"health", "REAL", "-1"},
+        {"maxhealth", "REAL", "-1"},
+        {"avisanivel", "INTEGER", "1"},
+        {"avisaxp", "INTEGER", "1"},
+        {"avisareencarnacao", "INTEGER", "1"},
+        {"bonus_vida_reencarnacao", "INTEGER", "0"},
+        {"bonus_baculo_reencarnacao", "INTEGER", "0"}
     };
 
     int migrations_applied = 0;
@@ -462,6 +469,7 @@ void log_to_database_async(string level, string category, string message, int pl
 
 void save_player_to_database(player@ player, bool sincrono = false) {
     if(!database_initialized || player is null) return;
+    if(!player.dados_carregados) return;
 
     string save_name = player.charname;
     if(save_name == "") save_name = player.name;
@@ -469,17 +477,15 @@ void save_player_to_database(player@ player, bool sincrono = false) {
 
     string save_map = player.map != "" ? player.map : player.map_name;
 
-    if(sincrono) {
-        save_player_to_database_async(save_name, player.player_level, player.exp,
-                    player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
-                    player.race, save_map, player.x, player.y, player.z,
-                    player.admin_status, player.sexo);
-    } else {
-        async<void>(save_player_to_database_async, save_name, player.player_level, player.exp,
-                    player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
-                    player.race, save_map, player.x, player.y, player.z,
-                    player.admin_status, player.sexo);
-    }
+    player.playtime += player.playtime_save_timer.elapsed / 60000.0;
+    player.playtime_save_timer.restart();
+
+    salvar_progressao(player);
+
+    save_player_to_database_async(save_name, player.player_level, player.exp,
+                player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
+                player.race, save_map, player.x, player.y, player.z,
+                player.admin_status, player.sexo);
 
     save_player_stats_to_db(player, save_name);
     save_player_inventory_to_db(player);
@@ -497,7 +503,8 @@ void save_player_stats_to_db(player@ p, string save_name) {
             bounty_on_head = ?, bounty_value = ?, bounty_owner = ?,
             title = ?, rank = ?,
             stamina = ?, fome = ?, sanity = ?, radiation = ?,
-            voice_id = ?, idioma_chat = ?
+            voice_id = ?, idioma_chat = ?,
+            health = ?, maxhealth = ?
         WHERE username = ?;
     """;
 
@@ -514,7 +521,7 @@ void save_player_stats_to_db(player@ p, string save_name) {
     stmt.bind_int(5, p.greais);
     stmt.bind_int(6, p.kills);
     stmt.bind_int(7, p.deaths);
-    stmt.bind_int(8, int(p.playtime));
+    stmt.bind_double(8, p.playtime);
     stmt.bind_int(9, p.matou);
     stmt.bind_int(10, p.arena_wins);
     stmt.bind_int(11, p.arena_kills);
@@ -529,7 +536,9 @@ void save_player_stats_to_db(player@ p, string save_name) {
     stmt.bind_int(20, p.radiation);
     stmt.bind_text(21, p.voice_id);
     stmt.bind_text(22, p.idiomachat);
-    stmt.bind_text(23, save_name);
+    stmt.bind_double(23, p.health);
+    stmt.bind_double(24, p.maxhealth - double(p.bonus_vida_reencarnacao));
+    stmt.bind_text(25, save_name);
 
     if(stmt.step() != SQLITE_DONE) {
         debug_log("ERRO ao salvar estatisticas do jogador no banco: " + bancoJogo.get_last_error_text());
@@ -727,16 +736,19 @@ void auto_save_all_players() {
     }
 
     async_save_running = true;
-    async<void>(auto_save_all_players_async);
+    auto_save_all_players_async();
 }
 
 void auto_save_all_players_async() {
     debug_log("Iniciando auto-save de todos os jogadores");
 
     for(uint i = 0; i < players.length(); i++) {
-        if(players[i].is_logged_in) {
+        if(players[i] is null || !players[i].is_logged_in) continue;
+        try {
             save_player_to_database(players[i]);
-            wait(10);
+        }
+        catch {
+            debug_log("ERRO no auto-save de '" + players[i].charname + "': " + get_exception_info());
         }
     }
 
@@ -784,6 +796,7 @@ void remove_player(uint64 peer_id) {
     for(uint i = 0; i < players.length(); i++) {
         if(players[i].peer_id == peer_id) {
             clear_all_buffs(players[i]);
+            save_player_to_database(players[i], true);
             int mapindex = players[i].mapindex;
             string charname = players[i].charname;
 
@@ -2131,7 +2144,6 @@ void server_handle_network_event_const(const network_event@ event) {
         string player_name = "";
         if(player !is null) {
             player_name = player.name;
-            save_player_to_database(player);
             log_to_database("INFO", "PLAYER", "Desconectou", 0, player.name);
         }
         if(player !is null) pet_dono_desconectou(player.charname);
