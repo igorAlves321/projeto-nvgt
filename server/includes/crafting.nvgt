@@ -183,7 +183,150 @@ class crafting {
 
 crafting crafting_system;
 
-void init_crafting_system() {
+void create_crafting_table() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string create_recipes = """
+		CREATE TABLE IF NOT EXISTS crafting_recipes (
+			result_item TEXT PRIMARY KEY,
+			ingredients TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			result_quantity INTEGER DEFAULT 1
+		);
+	""";
+
+	if(bancoJogo.execute(create_recipes) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela crafting_recipes: " + bancoJogo.get_last_error_text());
+	}
+}
+
+int count_crafting_recipes_in_database() {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM crafting_recipes;");
+	if(@stmt == null) return 0;
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+bool save_crafting_recipe_to_database(string result_item, string ingredients, string description, int result_quantity) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	result_item = result_item.trim_whitespace();
+	ingredients = ingredients.trim_whitespace();
+	if(result_item == "" || ingredients == "") return false;
+	if(result_quantity <= 0) result_quantity = 1;
+
+	string query = "INSERT OR IGNORE INTO crafting_recipes (result_item, ingredients, description, result_quantity) VALUES (?, ?, ?, ?);";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar insercao de receita: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, result_item);
+	stmt.bind_text(2, ingredients);
+	stmt.bind_text(3, description);
+	stmt.bind_int(4, result_quantity);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+void import_legacy_crafting_file() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(!file_exists("crafting_recipes.dat")) return;
+
+	file f;
+	if(!f.open("crafting_recipes.dat", "rb")) return;
+	string content = f.read();
+	f.close();
+
+	string[] lines = content.replace("\r\n", "\n").split("\n");
+	int imported = 0;
+
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = lines[i].trim_whitespace();
+		if(line == "" || line.find("//") == 0) continue;
+
+		string[] parts = line.split("|");
+		if(parts.length() < 3) continue;
+
+		int quantity = (parts.length() >= 4) ? int(string_to_number(parts[3])) : 1;
+		if(save_crafting_recipe_to_database(parts[0], parts[1], parts[2], quantity)) imported++;
+	}
+
+	debug_log("CRAFTING MIGRACAO: " + imported + " receitas importadas de crafting_recipes.dat");
+
+	file_copy("crafting_recipes.dat", "crafting_recipes.dat.migrado", true);
+	file_delete("crafting_recipes.dat");
+}
+
+void seed_default_crafting_recipes() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(count_crafting_recipes_in_database() > 0) return;
+
 	crafting_system.recipes.delete_all();
 	crafting_system.load_default_recipes();
+
+	string[]@ keys = crafting_system.recipes.get_keys();
+	int seeded = 0;
+	for(uint i = 0; i < keys.length(); i++) {
+		string ingredients_str = "";
+		string description = "";
+		int result_quantity = 1;
+		if(!crafting_system.get_recipe_data(keys[i], ingredients_str, description, result_quantity)) continue;
+		if(save_crafting_recipe_to_database(keys[i], ingredients_str, description, result_quantity)) seeded++;
+	}
+	crafting_system.recipes.delete_all();
+
+	debug_log("CRAFTING: " + seeded + " receitas padrao inseridas no banco de dados");
+}
+
+void load_crafting_recipes_from_database() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("CRAFTING: banco de dados não inicializado, receitas não carregadas");
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT result_item, ingredients, description, result_quantity FROM crafting_recipes ORDER BY result_item;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar query de receitas: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	crafting_system.recipes.delete_all();
+
+	string[] item_names;
+	while(stmt.step() == SQLITE_ROW) {
+		string result_item = stmt.column_text(0);
+		string ingredients_str = stmt.column_text(1);
+		if(result_item == "") continue;
+
+		crafting_system.add_recipe(result_item, ingredients_str, stmt.column_text(2), stmt.column_int(3));
+
+		item_names.insert_last(result_item);
+		string[] ingredients = ingredients_str.split(",");
+		for(uint i = 0; i < ingredients.length(); i++) {
+			string[] item_data = ingredients[i].split(":");
+			if(item_data.length() < 2) continue;
+			item_names.insert_last(item_data[0].trim_whitespace());
+		}
+	}
+
+	int inserted_items = 0;
+	for(uint i = 0; i < item_names.length(); i++) {
+		if(ensure_item_in_catalog(item_names[i])) inserted_items++;
+	}
+	if(inserted_items > 0) load_items_from_database();
+
+	debug_log("CRAFTING: Carregadas " + crafting_system.recipes.get_size() + " receitas do banco de dados");
+}
+
+void init_crafting_system() {
+	crafting_system.recipes.delete_all();
+
+	create_crafting_table();
+	import_legacy_crafting_file();
+	seed_default_crafting_recipes();
+	load_crafting_recipes_from_database();
 }

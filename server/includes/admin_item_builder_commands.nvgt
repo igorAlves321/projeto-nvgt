@@ -518,14 +518,7 @@ void cmd_create_weapon_tool(int player_index, string data) {
     }
     try {
     create_items_tables();
-
-    if(!file_exists("weapons_list.db")) {
-        file f;
-        f.open("weapons_list.db", "w");
-        f.write("// weapons_list.db - Banco de Dados de Armas\r\n");
-        f.write("// Formato: name=ammo=sound_shoot=sound_impact=sound_draw=sound_reload=damage=distance=ammo_total=ammo_cantity=speed=speed_burst=speed_loading=require_ammo=enable_burst=is_dropable=sound_impact_on_corpse=sound_unload=sound_mode1=sound_mode2=ammo_cantity_descount=sound_shoot_dist=degradation_point\r\n\r\n");
-        f.close();
-    }
+    create_weapons_table();
 
     if(!item_builder_is_safe_payload(data, 8192)) {
         send_admin_error(player_index, "create_weapon_tool", "Payload invalido (tamanho ou quebra de linha).");
@@ -556,20 +549,16 @@ void cmd_create_weapon_tool(int player_index, string data) {
     if(!item_builder_parse_int_field(player_index, "create_weapon_tool", "damage", parts[6], 1, 100000, damage)) return;
     if(!item_builder_parse_int_field(player_index, "create_weapon_tool", "distance", parts[7], 1, 100000, distance)) return;
 
-    file check;
-    check.open("weapons_list.db", "r");
-    string existing = check.read();
-    check.close();
-
-    if(existing.find(weapon_name + "=") >= 0) {
+    if(weapon_exists_in_database(weapon_name)) {
         send_admin_error(player_index, "create_weapon_tool", "Arma ja existe no banco de dados: " + weapon_name);
         return;
     }
 
-    file f;
-    f.open("weapons_list.db", "a");
-    f.write(data + "\r\n");
-    f.close();
+    weapon@ new_weapon = weapon_from_line(data);
+    if(@new_weapon == null || !save_weapon_to_database(new_weapon)) {
+        send_admin_error(player_index, "create_weapon_tool", "Erro ao gravar arma no banco de dados: " + weapon_name);
+        return;
+    }
 
     weapons_list.resize(0);
     load_weapons();
@@ -812,7 +801,7 @@ void cmd_delete_item_tool(int player_index, string item_name) {
 
     load_items_from_database();
     send_reliable_text(players[player_index].peer_id, "msg2 Item removido do catalogo: " + item_name, 0);
-    send_reliable_text(players[player_index].peer_id, "msg2 Nota: se for arma legado, ela ainda pode existir no weapons_list.db.", 0);
+    send_reliable_text(players[player_index].peer_id, "msg2 Nota: se for arma, ela continua cadastrada na tabela weapons do banco de dados.", 0);
     debug_log("ITEM BUILDER: " + players[player_index].charname + " removeu item " + item_name);
     }
     catch {

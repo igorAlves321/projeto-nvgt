@@ -71,6 +71,7 @@ const string DATABASE_FILE = "server/database/evm.db";
 #include "includes/map_legacy_data.nvgt"
 #include "includes/platforms.nvgt"
 #include "includes/portals.nvgt"
+#include "includes/teleportador.nvgt"
 #include "includes/vehicles.nvgt"
 #include "includes/safezones.nvgt"
 #include "includes/tempban.nvgt"
@@ -192,6 +193,7 @@ bool init_database() {
 
     criar_tabelas_loja();
     criar_tabelas_ataque_aereo();
+    criar_tabelas_teleportador();
     migrar_items_for_sale_legado();
     carregar_catalogo_loja(true);
 
@@ -423,14 +425,21 @@ void migrate_database() {
 }
 
 void populate_initial_inventory() {
-    bancoJogo.execute("DELETE FROM initial_inventory;");
+    int total = -1;
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM initial_inventory;");
+    if(@stmt != null && stmt.step() == SQLITE_ROW) total = stmt.column_int(0);
+    @stmt = null;
 
-    debug_log("Populando tabela initial_inventory com itens padrão...");
+    if(total == 0) {
+        debug_log("Populando tabela initial_inventory com itens padrão...");
 
-    bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('faca', 1);");
-    bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('reais', 200);");
+        bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('faca', 1);");
+        bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('reais', 200);");
 
-    debug_log("[OK] Inventario inicial configurado: 1 faca, 200 reais");
+        debug_log("[OK] Inventario inicial configurado: 1 faca, 200 reais");
+    }
+
+    bancoJogo.execute("INSERT OR IGNORE INTO initial_inventory VALUES ('teleportador', 1);");
 }
 
 void log_to_database(string level, string category, string message, int player_id = -1, string additional_data = "") {
@@ -1211,6 +1220,21 @@ void process_player_command(uint64 peer_id, string command) {
             return;
         }
 
+        if(cmd == "teleportador_lista") {
+            teleportador_enviar_lista(player_index);
+            return;
+        }
+
+        if(cmd == "teleportador_ir") {
+            int destino_id = 0;
+            if(parts.length() != 2 || !try_parse_int_token(parts[1], destino_id)) {
+                reject_invalid_network_packet(peer_id, "process_player_command:teleportador_ir_id", command);
+                return;
+            }
+            teleportador_ir(player_index, destino_id);
+            return;
+        }
+
         if(cmd == "usetele" && parts.length() == 4) {
             int destination_x = 0;
             int destination_y = 0;
@@ -1553,6 +1577,7 @@ void process_player_command(uint64 peer_id, string command) {
             }
 
             if(item_name.find("caixa_de_presente_") == 0) { abrir_presente(player_index, item_name); return; }
+            if(item_name == TELEPORTADOR_ITEM) { teleportador_enviar_lista(player_index); return; }
             use_item(player_index, item_name);
             return;
         }
@@ -2277,6 +2302,8 @@ void main() {
         }
         return;
     }
+
+    init_teleportador();
 
     show_window("Servidor IG - Porta " + SERVER_PORT + " - " + MAX_PLAYERS + " slots");
 

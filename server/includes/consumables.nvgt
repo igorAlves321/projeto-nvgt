@@ -82,7 +82,7 @@ class active_buff {
 dictionary consumables;
 active_buff@[] active_buffs;
 
-void init_consumables_system() {
+void build_default_consumables() {
 	consumable_effect@ pocao_vida = consumable_effect(
 		"pocao_vida", "health", 50, 0, "", "drink.ogg",
 		"Você bebeu uma poção de vida! +50 HP"
@@ -260,6 +260,155 @@ void init_consumables_system() {
 		100.0, 0.0, 100.0, 0.0, 0.0
 	);
 	consumables.set("elixir_supremo", @elixir_supremo);
+}
+
+void create_consumables_table() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string create_consumables = """
+		CREATE TABLE IF NOT EXISTS consumables (
+			item_name TEXT PRIMARY KEY,
+			effect_type TEXT NOT NULL DEFAULT '',
+			value INTEGER DEFAULT 0,
+			duration_ms INTEGER DEFAULT 0,
+			buff_name TEXT DEFAULT '',
+			sound TEXT DEFAULT '',
+			message TEXT DEFAULT '',
+			teleport_map TEXT DEFAULT '',
+			teleport_x INTEGER DEFAULT 0,
+			teleport_y INTEGER DEFAULT 0,
+			items_to_give TEXT DEFAULT '',
+			thirst_reduce REAL DEFAULT 0,
+			thirst_fill REAL DEFAULT 0,
+			hunger_reduce REAL DEFAULT 0,
+			hunger_fill REAL DEFAULT 0,
+			degradation REAL DEFAULT 0
+		);
+	""";
+
+	if(bancoJogo.execute(create_consumables) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela consumables: " + bancoJogo.get_last_error_text());
+	}
+}
+
+int count_consumables_in_database() {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM consumables;");
+	if(@stmt == null) return 0;
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+bool save_consumable_to_database(consumable_effect@ effect) {
+	if(!database_initialized || bancoJogo is null) return false;
+	if(@effect == null || effect.item_name == "") return false;
+
+	string query = """
+		INSERT OR IGNORE INTO consumables (
+			item_name, effect_type, value, duration_ms, buff_name, sound, message,
+			teleport_map, teleport_x, teleport_y, items_to_give,
+			thirst_reduce, thirst_fill, hunger_reduce, hunger_fill, degradation
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar insercao de consumível: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, effect.item_name);
+	stmt.bind_text(2, effect.effect_type);
+	stmt.bind_int(3, effect.value);
+	stmt.bind_int(4, effect.duration_ms);
+	stmt.bind_text(5, effect.buff_name);
+	stmt.bind_text(6, effect.sound);
+	stmt.bind_text(7, effect.message);
+	stmt.bind_text(8, effect.teleport_map);
+	stmt.bind_int(9, effect.teleport_x);
+	stmt.bind_int(10, effect.teleport_y);
+	stmt.bind_text(11, effect.items_to_give);
+	stmt.bind_double(12, effect.thirst_reduce);
+	stmt.bind_double(13, effect.thirst_fill);
+	stmt.bind_double(14, effect.hunger_reduce);
+	stmt.bind_double(15, effect.hunger_fill);
+	stmt.bind_double(16, effect.degradation);
+
+	return stmt.step() == SQLITE_DONE;
+}
+
+void seed_default_consumables() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(count_consumables_in_database() > 0) return;
+
+	consumables.delete_all();
+	build_default_consumables();
+
+	string[]@ keys = consumables.get_keys();
+	int seeded = 0;
+	for(uint i = 0; i < keys.length(); i++) {
+		consumable_effect@ effect;
+		consumables.get(keys[i], @effect);
+		if(save_consumable_to_database(effect)) seeded++;
+	}
+	consumables.delete_all();
+
+	debug_log("CONSUMABLES: " + seeded + " consumíveis padrão inseridos no banco de dados");
+}
+
+void load_consumables_from_database() {
+	consumables.delete_all();
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	string query = """
+		SELECT item_name, effect_type, value, duration_ms, buff_name, sound, message,
+		       teleport_map, teleport_x, teleport_y, items_to_give,
+		       thirst_reduce, thirst_fill, hunger_reduce, hunger_fill, degradation
+		FROM consumables
+		ORDER BY item_name;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar query de consumíveis: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	int inserted_items = 0;
+	while(stmt.step() == SQLITE_ROW) {
+		string item_name = stmt.column_text(0);
+		if(item_name == "") continue;
+
+		consumable_effect@ effect = consumable_effect(
+			item_name, stmt.column_text(1), stmt.column_int(2), stmt.column_int(3),
+			stmt.column_text(4), stmt.column_text(5), stmt.column_text(6),
+			stmt.column_text(7), stmt.column_int(8), stmt.column_int(9), stmt.column_text(10),
+			stmt.column_double(11), stmt.column_double(12), stmt.column_double(13),
+			stmt.column_double(14), stmt.column_double(15)
+		);
+		consumables.set(item_name, @effect);
+	}
+
+	string[]@ keys = consumables.get_keys();
+	for(uint i = 0; i < keys.length(); i++) {
+		if(ensure_item_in_catalog(keys[i])) inserted_items++;
+	}
+	if(inserted_items > 0) load_items_from_database();
+}
+
+void init_consumables_system() {
+	if(!database_initialized || bancoJogo is null) {
+		consumables.delete_all();
+		debug_log("CONSUMABLES: banco de dados não inicializado, nenhum consumível carregado");
+		return;
+	}
+
+	create_consumables_table();
+	seed_default_consumables();
+	load_consumables_from_database();
 
 	debug_log("CONSUMABLES: Sistema inicializado com " + consumables.get_size() + " itens consumíveis");
 }
@@ -590,7 +739,16 @@ string list_active_buffs(int player_index) {
 }
 
 void add_consumable(string item_name, string effect_type, int value, int duration = 0, string buff = "", string sound = "", string msg = "") {
-	consumables.set(item_name, consumable_effect(item_name, effect_type, value, duration, buff, sound, msg));
+	consumable_effect@ effect = consumable_effect(item_name, effect_type, value, duration, buff, sound, msg);
+	if(database_initialized && bancoJogo !is null) {
+		sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM consumables WHERE item_name = ?;");
+		if(@stmt != null) {
+			stmt.bind_text(1, item_name);
+			stmt.step();
+		}
+		save_consumable_to_database(effect);
+	}
+	consumables.set(item_name, @effect);
 	debug_log("CONSUMABLES: Adicionado novo consumível: " + item_name);
 }
 

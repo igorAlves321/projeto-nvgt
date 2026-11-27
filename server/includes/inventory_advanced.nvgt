@@ -2,9 +2,7 @@
 dictionary item_weights;
 dictionary item_sizes;
 
-void init_item_data() {
-	debug_log("Inicializando dados de itens (peso e tamanho)...");
-
+void build_default_item_data() {
 	item_weights.set("5.56mm", 0.01);
 	item_weights.set("7.62mm", 0.02);
 	item_weights.set("12gauge", 0.03);
@@ -59,6 +57,83 @@ void init_item_data() {
 
 	item_weights.set("reais", 0.001);
 	item_sizes.set("reais", 1);
+}
+
+void create_item_weights_table() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string create_weights = """
+		CREATE TABLE IF NOT EXISTS item_weights (
+			name TEXT PRIMARY KEY,
+			weight REAL DEFAULT 0.5,
+			size INTEGER DEFAULT 1
+		);
+	""";
+
+	if(bancoJogo.execute(create_weights) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela item_weights: " + bancoJogo.get_last_error_text());
+	}
+}
+
+void seed_default_item_data() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	sqlite3statement@ count_stmt = bancoJogo.prepare("SELECT COUNT(*) FROM item_weights;");
+	if(@count_stmt == null) return;
+	if(count_stmt.step() == SQLITE_ROW && count_stmt.column_int(0) > 0) return;
+
+	item_weights.delete_all();
+	item_sizes.delete_all();
+	build_default_item_data();
+
+	string[]@ keys = item_weights.get_keys();
+	int seeded = 0;
+	for(uint i = 0; i < keys.length(); i++) {
+		double weight = 0.5;
+		int size = 1;
+		item_weights.get(keys[i], weight);
+		if(item_sizes.exists(keys[i])) item_sizes.get(keys[i], size);
+
+		sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_weights (name, weight, size) VALUES (?, ?, ?);");
+		if(@stmt == null) continue;
+		stmt.bind_text(1, keys[i]);
+		stmt.bind_double(2, weight);
+		stmt.bind_int(3, size);
+		if(stmt.step() == SQLITE_DONE) seeded++;
+	}
+
+	debug_log("Dados de itens padrao inseridos no banco de dados: " + seeded + " itens");
+}
+
+void load_item_data_from_database() {
+	item_weights.delete_all();
+	item_sizes.delete_all();
+
+	if(!database_initialized || bancoJogo is null) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT name, weight, size FROM item_weights ORDER BY name;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar query de pesos de itens: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	while(stmt.step() == SQLITE_ROW) {
+		string name = stmt.column_text(0);
+		double weight = stmt.column_double(1);
+		int64 size = stmt.column_int(2);
+		if(name == "") continue;
+
+		item_weights.set(name, weight);
+		item_sizes.set(name, size);
+	}
+}
+
+void init_item_data() {
+	debug_log("Inicializando dados de itens (peso e tamanho)...");
+
+	create_item_weights_table();
+	seed_default_item_data();
+	load_item_data_from_database();
 
 	debug_log("Dados de itens inicializados: " + item_weights.get_size() + " itens configurados");
 }

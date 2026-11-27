@@ -370,40 +370,42 @@ bool item_exists_in_database(string name) {
 
 void import_legacy_weapons_catalog() {
     if(!database_initialized) return;
-    if(!file_exists("weapons_list.db")) return;
 
-    file f;
-    if(!f.open("weapons_list.db", "r")) {
-        debug_log("AVISO: NÃ£o foi possÃ­vel abrir weapons_list.db para migracao de catalogo.");
-        return;
+    init_weapons_database();
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT name, ammo, sound_shoot, damage, distance FROM weapons ORDER BY id;");
+    if(@stmt == null) return;
+
+    string[] weapon_names;
+    string[] ammo_names;
+    string[] shoot_sounds;
+    int[] damages;
+    int[] distances;
+    while(stmt.step() == SQLITE_ROW) {
+        weapon_names.insert_last(stmt.column_text(0));
+        ammo_names.insert_last(stmt.column_text(1));
+        shoot_sounds.insert_last(stmt.column_text(2));
+        damages.insert_last(int(stmt.column_double(3)));
+        distances.insert_last(int(stmt.column_double(4)));
     }
 
-    string content = f.read();
-    f.close();
-
-    string[] lines = content.split("\r\n");
     int imported = 0;
 
-    for(uint i = 0; i < lines.length(); i++) {
-        string line = lines[i].trim_whitespace();
-        if(line == "" || line[0] == '/' || line.find("=") < 0) continue;
-
-        string[] parts = line.split("=");
-        if(parts.length() < 8) continue;
-
-        string weapon_name = parts[0].trim_whitespace();
+    for(uint i = 0; i < weapon_names.length(); i++) {
+        string weapon_name = weapon_names[i];
         if(weapon_name == "") continue;
         if(item_exists_in_database(weapon_name)) continue;
 
-        string ammo_name = parts[1].trim_whitespace();
-        string shoot_sound = parts[2].trim_whitespace();
-        int damage = string_to_number(parts[6]);
-        int distance = string_to_number(parts[7]);
+        int damage = damages[i];
+        int distance = distances[i];
         if(damage < 1) damage = 1;
         if(distance < 1) distance = 1;
 
         string display_name = string_replace(weapon_name, "_", " ", true);
-        string description = "Arma de fogo importada do legado. Municao: " + ammo_name + ". Alcance: " + distance + ".";
+        string description = "Arma de fogo. Municao: " + ammo_names[i] + ". Alcance: " + distance + ".";
+        if(ammo_names[i] == "" || ammo_names[i] == "none" || ammo_names[i] == "nada") {
+            description = "Arma corpo a corpo. Alcance: " + distance + ".";
+        }
         int value = damage * 8;
         if(value < 20) value = 20;
 
@@ -412,14 +414,58 @@ void import_legacy_weapons_catalog() {
             damage, 0, 0, 0,
             false, 1, 2.0, value,
             "common", 0.0, false, true, true,
-            shoot_sound, shoot_sound
+            shoot_sounds[i], shoot_sounds[i]
         )) {
             imported++;
         }
     }
 
     if(imported > 0) {
-        debug_log("Catalogo legado de armas importado para SQLite: " + imported + " novas armas.");
+        debug_log("Catalogo de armas sincronizado com a tabela items: " + imported + " novas armas.");
+    }
+}
+
+bool ensure_item_in_catalog(string name, string msg = "") {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    name = name.trim_whitespace();
+    if(name == "") return false;
+    if(items_by_name.exists(name)) return false;
+    if(item_exists_in_database(name)) return false;
+
+    if(msg == "") msg = string_replace(name, "_", " ", true);
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO items (name, msg) VALUES (?, ?);");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar insercao de item no catalogo: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_text(1, name);
+    stmt.bind_text(2, msg);
+    return stmt.step() == SQLITE_DONE;
+}
+
+void seed_referenced_items() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    string[] names = {"portal_de_luz", "cristal_de_luz", "naptalm", "runa_de_portal",
+                      "po_de_energia", "pocao_vida", "diamante", "reais", "faca"};
+    int inserted = 0;
+    for(uint i = 0; i < names.length(); i++) {
+        if(ensure_item_in_catalog(names[i])) inserted++;
+    }
+
+    sqlite3statement@ table_stmt = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='loja_itens' LIMIT 1;");
+    if(@table_stmt != null && table_stmt.step() == SQLITE_ROW) {
+        string store_sql = "INSERT OR IGNORE INTO items (name, msg) SELECT item, CASE WHEN descricao IS NULL OR descricao = '' THEN item ELSE descricao END FROM loja_itens WHERE item IS NOT NULL AND item != '';";
+        if(bancoJogo.execute(store_sql) != SQLITE_OK) {
+            debug_log("ERRO ao sincronizar itens da loja com a tabela items: " + bancoJogo.get_last_error_text());
+        }
+    }
+
+    if(inserted > 0) {
+        debug_log("Itens referenciados pelo jogo inseridos no catalogo: " + inserted);
     }
 }
 
@@ -705,7 +751,11 @@ void init_items_system() {
 
     import_legacy_weapons_catalog();
 
+    seed_referenced_items();
+
     load_items_from_database();
+
+    seed_sorteio_premios_padrao();
 
     migrate_legacy_world_items_to_drops();
 

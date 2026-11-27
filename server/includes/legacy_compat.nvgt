@@ -315,7 +315,7 @@ bool item_give(int player_index, string item_name, int quantity) {
 dictionary location_descriptions;
 dictionary item_descriptions;
 
-void init_descriptions() {
+void build_default_descriptions() {
     item_descriptions.set("soco", "Seus punhos. Dano básico corpo a corpo.");
     item_descriptions.set("pistola", "Arma de fogo leve. Alcance médio, dano moderado.");
     item_descriptions.set("m4a1", "Rifle de assalto militar. Alta cadência de tiro.");
@@ -336,6 +336,65 @@ void init_descriptions() {
     item_descriptions.set("ferro", "Barra de ferro. Material de construção.");
     item_descriptions.set("madeira", "Tábua de madeira. Material básico.");
     item_descriptions.set("ouro", "Lingote de ouro. Material valioso.");
+}
+
+void seed_default_descriptions() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    sqlite3statement@ count_stmt = bancoJogo.prepare("SELECT COUNT(*) FROM item_descriptions;");
+    if(@count_stmt == null) return;
+    if(count_stmt.step() == SQLITE_ROW && count_stmt.column_int(0) > 0) return;
+
+    item_descriptions.delete_all();
+    build_default_descriptions();
+
+    string[]@ keys = item_descriptions.get_keys();
+    for(uint i = 0; i < keys.length(); i++) {
+        string desc = "";
+        item_descriptions.get(keys[i], desc);
+
+        sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_descriptions (name, description) VALUES (?, ?);");
+        if(@stmt == null) continue;
+        stmt.bind_text(1, keys[i]);
+        stmt.bind_text(2, desc);
+        stmt.step();
+    }
+}
+
+void load_descriptions_from_database() {
+    item_descriptions.delete_all();
+
+    if(!database_initialized || bancoJogo is null) return;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT name, description FROM item_descriptions ORDER BY name;");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar query de descrições de itens: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    while(stmt.step() == SQLITE_ROW) {
+        string name = stmt.column_text(0);
+        string desc = stmt.column_text(1);
+        if(name == "") continue;
+        item_descriptions.set(name, desc);
+    }
+}
+
+void init_descriptions() {
+    if(database_initialized && bancoJogo !is null) {
+        string create_descriptions = """
+            CREATE TABLE IF NOT EXISTS item_descriptions (
+                name TEXT PRIMARY KEY,
+                description TEXT DEFAULT ''
+            );
+        """;
+        if(bancoJogo.execute(create_descriptions) != SQLITE_OK) {
+            debug_log("ERRO ao criar tabela item_descriptions: " + bancoJogo.get_last_error_text());
+        }
+    }
+
+    seed_default_descriptions();
+    load_descriptions_from_database();
     debug_log("Sistema de descrições inicializado com " + item_descriptions.get_size() + " itens");
 }
 

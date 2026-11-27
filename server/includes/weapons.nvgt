@@ -108,47 +108,244 @@ class weapon {
 
 weapon@[] weapons_list;
 
-void load_weapons() {
-	debug_log("Carregando armas de weapons_list.db...");
+const string WEAPONS_COLUMNS = "name, ammo, sound_shoot, sound_impact, sound_draw, sound_reload, damage, distance, ammo_total, ammo_cantity, speed, speed_burst, speed_loading, require_ammo, enable_burst, is_dropable, sound_impact_on_corpse, sound_unload, sound_mode1, sound_mode2, ammo_cantity_descount, sound_shoot_dist, degradation_point";
 
-	file f;
-	if(!f.open("weapons_list.db", "rb")) {
-		debug_log("ERRO: Não foi possível abrir weapons_list.db");
-		return;
+void create_weapons_table() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	string create_weapons = """
+		CREATE TABLE IF NOT EXISTS weapons (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL,
+			ammo TEXT DEFAULT '',
+			sound_shoot TEXT DEFAULT '',
+			sound_impact TEXT DEFAULT '',
+			sound_draw TEXT DEFAULT '',
+			sound_reload TEXT DEFAULT '',
+			damage REAL DEFAULT 50,
+			distance REAL DEFAULT 500,
+			ammo_total REAL DEFAULT 100,
+			ammo_cantity REAL DEFAULT 30,
+			speed REAL DEFAULT 1000,
+			speed_burst REAL DEFAULT 100,
+			speed_loading REAL DEFAULT 2000,
+			require_ammo INTEGER DEFAULT 1,
+			enable_burst INTEGER DEFAULT 0,
+			is_dropable INTEGER DEFAULT 1,
+			sound_impact_on_corpse TEXT DEFAULT '',
+			sound_unload TEXT DEFAULT '',
+			sound_mode1 TEXT DEFAULT '',
+			sound_mode2 TEXT DEFAULT '',
+			ammo_cantity_descount REAL DEFAULT 1,
+			sound_shoot_dist TEXT DEFAULT '',
+			degradation_point REAL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(create_weapons) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela weapons: " + bancoJogo.get_last_error_text());
+	}
+}
+
+int count_weapons_in_database() {
+	if(!database_initialized || bancoJogo is null) return 0;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM weapons;");
+	if(@stmt == null) return 0;
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+	return 0;
+}
+
+bool weapon_exists_in_database(string weapon_name) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT id FROM weapons WHERE name = ? LIMIT 1;");
+	if(@stmt == null) return false;
+	stmt.bind_text(1, weapon_name);
+	return stmt.step() == SQLITE_ROW;
+}
+
+bool save_weapon_to_database(weapon@ w) {
+	if(!database_initialized || bancoJogo is null) return false;
+	if(@w == null || w.name == "") return false;
+	if(weapon_exists_in_database(w.name)) return false;
+
+	string query = "INSERT OR IGNORE INTO weapons (" + WEAPONS_COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar insercao de arma: " + bancoJogo.get_last_error_text());
+		return false;
 	}
 
+	stmt.bind_text(1, w.name);
+	stmt.bind_text(2, w.ammo);
+	stmt.bind_text(3, w.sound_shoot);
+	stmt.bind_text(4, w.sound_impact);
+	stmt.bind_text(5, w.sound_draw);
+	stmt.bind_text(6, w.sound_reload);
+	stmt.bind_double(7, w.damage);
+	stmt.bind_double(8, w.distance);
+	stmt.bind_double(9, w.ammo_total);
+	stmt.bind_double(10, w.ammo_cantity);
+	stmt.bind_double(11, w.speed);
+	stmt.bind_double(12, w.speed_burst);
+	stmt.bind_double(13, w.speed_loading);
+	stmt.bind_int(14, w.require_ammo);
+	stmt.bind_int(15, w.enable_burst);
+	stmt.bind_int(16, w.is_dropable);
+	stmt.bind_text(17, w.sound_impact_on_corpse);
+	stmt.bind_text(18, w.sound_unload);
+	stmt.bind_text(19, w.sound_mode1);
+	stmt.bind_text(20, w.sound_mode2);
+	stmt.bind_double(21, w.ammo_cantity_descount);
+	stmt.bind_text(22, w.sound_shoot_dist);
+	stmt.bind_double(23, w.degradation_point);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ERRO ao inserir arma " + w.name + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+weapon@ weapon_from_line(string line) {
+	line = line.trim_whitespace();
+	if(line == "" || line.find("//") == 0) return null;
+
+	string[] parts = line.split("=");
+	if(parts.length() < 23) return null;
+
+	parts[0] = parts[0].trim_whitespace();
+	parts[1] = parts[1].trim_whitespace();
+	if(parts[0] == "") return null;
+
+	weapon@ w = weapon(parts);
+	return w;
+}
+
+int save_weapon_lines_to_database(string[]@ lines) {
+	int saved = 0;
+	for(uint i = 0; i < lines.length(); i++) {
+		weapon@ w = weapon_from_line(lines[i]);
+		if(@w == null) continue;
+		if(save_weapon_to_database(w)) saved++;
+	}
+	return saved;
+}
+
+void import_legacy_weapons_file(string filename) {
+	if(!database_initialized || bancoJogo is null) return;
+	if(!file_exists(filename)) return;
+
+	file f;
+	if(!f.open(filename, "rb")) {
+		debug_log("WEAPONS: não foi possível abrir " + filename + " para migração");
+		return;
+	}
 	string content = f.read();
 	f.close();
 
-	if(content == "") {
-		debug_log("AVISO: weapons_list.db está vazio");
+	string[] lines = content.replace("\r\n", "\n").split("\n");
+	int imported = save_weapon_lines_to_database(lines);
+
+	debug_log("WEAPONS MIGRACAO: " + imported + " armas importadas de " + filename);
+
+	file_copy(filename, filename + ".migrado", true);
+	file_delete(filename);
+}
+
+void seed_default_weapons() {
+	if(!database_initialized || bancoJogo is null) return;
+	if(count_weapons_in_database() > 0) return;
+
+	string[] lines = {
+		"glock17=9mm=glock17=rico1,rico2,rico3,rico4=glock17draw=glock17reload=45=500=150=17=800=0=2000=1=0=1=body1,body2,body3,body4=glock17empty=0=0=1=glock17dist=1",
+		"desert_eagle=.50ae=deserteagle=rico1,rico2,rico3,rico4=deserteagledraw=deserteaglereload=80=600=70=7=1200=0=2500=1=0=1=body1,body2,body3,body4=deserteagleempty=0=0=1=deserteagledist=1.5",
+		"mp5=9mm=mp5=rico1,rico2,rico3,rico4=mp5draw=mp5reload=35=400=900=30=100=80=2000=1=1=1=body1,body2,body3,body4=mp5empty=mp5auto=mp5semi=1=mp5dist=0.8",
+		"uzi=9mm=uzi=rico1,rico2,rico3,rico4=uzidraw=uzireload=30=350=600=32=120=60=1800=1=1=1=body1,body2,body3,body4=uziempty=uziauto=uzisemi=1=uzidist=0.7",
+		"m8a7=7.62mm=m8a7=rico1,rico2,rico3,rico4=m8a7draw=m8a7reload=100=1000=200=30=120=100=2500=1=1=0=body1,body2,body3,body4,body5,body6,body7=m8a7empty=rajadaativada=rajadadesativada=1=m8a7dist=1.2",
+		"ak47=7.62mm=ak47=rico1,rico2,rico3,rico4=ak47draw=ak47reload=95=950=300=30=130=110=2600=1=1=0=body1,body2,body3,body4,body5=ak47empty=ak47auto=ak47semi=1=ak47dist=1.3",
+		"remington=12gauge=remington=rico1,rico2,rico3=remingtondraw=remingtonreload=120=300=50=8=1500=0=3000=1=0=1=body1,body2,body3,body4,body5,body6=remingtonempty=0=0=5=remingtondist=2",
+		"spas12=12gauge=spas12=rico1,rico2,rico3=spas12draw=spas12reload=140=350=40=8=1200=0=2800=1=0=1=body1,body2,body3,body4,body5,body6,body7=spas12empty=0=0=6=spas12dist=2.5",
+		"awp=.338=awp=rico1,rico2,rico3,rico4=awpdraw=awpreload=250=2000=50=10=2000=0=3500=1=0=0=body1,body2,body3,body4,body5,body6,body7,body8=awpempty=0=0=1=awpdist=3",
+		"barrett=.50bmg=barrett=rico1,rico2,rico3,rico4=barrettdraw=barrettreload=300=2500=40=10=2500=0=4000=1=0=0=body1,body2,body3,body4,body5,body6,body7,body8,body9=barrettempty=0=0=1=barrettdist=3.5",
+		"bazuca=rocket=bazuca=rico1,rico2,rico3=bazucadraw=bazucareload=500=1500=10=1=5000=0=5000=1=0=1=body1,body2,body3,body4,body5,body6,body7,body8,body9,body10=bazucaempty=0=0=1=bazucadist=5",
+		"granada=granada=granada=rico1,rico2,rico3=granadadraw=granadadraw=300=800=20=1=3000=0=2000=1=0=1=body1,body2,body3,body4,body5=granadaempty=0=0=1=granadadist=4",
+		"faca=none=faca=rico1,rico2=facadraw=0=50=50=0=0=500=0=0=0=0=1=body1,body2,body3=0=0=0=1=0=0.5",
+		"arco=flecha=arco=rico1,rico2,rico3=arcodraw=arcoreload=70=800=100=1=1500=0=2000=1=0=1=body1,body2,body3,body4=arcoempty=0=0=1=arcodist=1",
+		"pistola_laser=energia=pistolalaser=laser1,laser2,laser3=pistolalaserdraw=pistolalaserreload=60=700=200=50=600=0=1500=1=0=1=laser_body1,laser_body2=pistolalaserempty=0=0=2=pistolalaserdist=1",
+		"rifle_plasma=plasma=rifleplasma=plasma1,plasma2,plasma3,plasma4=rifleplasmdraw=rifleplasmreload=150=1200=150=40=100=90=2200=1=1=0=plasma_body1,plasma_body2,plasma_body3=rifleplasmempty=plasmaauto=plasmasemi=3=rifleplasmdist=2"
+	};
+
+	int seeded = save_weapon_lines_to_database(lines);
+	debug_log("WEAPONS: " + seeded + " armas padrão inseridas no banco de dados");
+}
+
+void init_weapons_database() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	create_weapons_table();
+	import_legacy_weapons_file("weapons_list.db");
+	import_legacy_weapons_file("weapons.db");
+	seed_default_weapons();
+}
+
+void load_weapons() {
+	debug_log("Carregando armas do banco de dados...");
+
+	weapons_list.resize(0);
+
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: load_weapons - banco de dados não inicializado");
 		return;
 	}
 
-	string[] lines = content.split("\r\n");
+	init_weapons_database();
 
-	debug_log("WEAPONS: Processando " + lines.length() + " linhas...");
-
-	int loaded_count = 0;
-
-	for(uint i = 0; i < lines.length(); i++) {
-		string line = lines[i];
-
-		if(line == "" || line.find("//") == 0) continue;
-
-		string[] parts = line.split("=");
-
-		if(parts.length() < 23) {
-			debug_log("WEAPONS: Linha " + i + " ignorada - apenas " + parts.length() + " partes (esperado 23)");
-			continue;
-		}
-
-		weapon@ new_weapon = weapon(parts);
-		weapons_list.insert_last(new_weapon);
-		loaded_count++;
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT " + WEAPONS_COLUMNS + " FROM weapons ORDER BY id;");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar query de armas: " + bancoJogo.get_last_error_text());
+		return;
 	}
 
-	debug_log("WEAPONS: " + loaded_count + " armas carregadas com sucesso!");
+	while(stmt.step() == SQLITE_ROW) {
+		weapon@ w = weapon();
+		w.name = stmt.column_text(0);
+		w.ammo = stmt.column_text(1);
+		w.sound_shoot = stmt.column_text(2);
+		w.sound_impact = stmt.column_text(3);
+		w.sound_draw = stmt.column_text(4);
+		w.sound_reload = stmt.column_text(5);
+		w.damage = stmt.column_double(6);
+		w.distance = stmt.column_double(7);
+		w.ammo_total = stmt.column_double(8);
+		w.ammo_cantity = stmt.column_double(9);
+		w.speed = stmt.column_double(10);
+		w.speed_burst = stmt.column_double(11);
+		w.speed_loading = stmt.column_double(12);
+		w.require_ammo = stmt.column_int(13);
+		w.enable_burst = stmt.column_int(14);
+		w.is_dropable = stmt.column_int(15);
+		w.sound_impact_on_corpse = stmt.column_text(16);
+		w.sound_unload = stmt.column_text(17);
+		w.sound_mode1 = stmt.column_text(18);
+		w.sound_mode2 = stmt.column_text(19);
+		w.ammo_cantity_descount = stmt.column_double(20);
+		w.sound_shoot_dist = stmt.column_text(21);
+		w.degradation_point = stmt.column_double(22);
+
+		if(w.sound_impact != "") {
+			w.sounds_impact = w.sound_impact.split(",");
+		}
+		if(w.sound_impact_on_corpse != "") {
+			w.sounds_impact_on_corpse = w.sound_impact_on_corpse.split(",");
+		}
+
+		weapons_list.insert_last(w);
+	}
+
+	debug_log("WEAPONS: " + weapons_list.length() + " armas carregadas do banco de dados");
 }
 
 weapon@ get_weapon_by_name(string weapon_name) {

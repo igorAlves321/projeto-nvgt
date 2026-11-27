@@ -1,0 +1,399 @@
+
+const string TELEPORTADOR_ITEM = "teleportador";
+const int TELEPORTADOR_COOLDOWN_MS = 10000;
+const int TELEPORTADOR_CHEGADA_X = 1;
+const int TELEPORTADOR_CHEGADA_Y = 0;
+const int TELEPORTADOR_NOME_MAX = 40;
+const string TELEPORTADOR_SOM = "ma199.ogg";
+
+void teleportador_registrar_item() {
+	if(!database_initialized || bancoJogo is null) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO items (name, msg) VALUES (?, ?);");
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, TELEPORTADOR_ITEM);
+	stmt.bind_text(2, "Teleportador");
+	stmt.step();
+}
+
+void criar_tabelas_teleportador() {
+	if(!database_initialized || bancoJogo is null) {
+		debug_log("ERRO: criar_tabelas_teleportador - Banco não inicializado");
+		return;
+	}
+
+	string create_destinos = """
+		CREATE TABLE IF NOT EXISTS teleporte_destinos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			nome TEXT UNIQUE NOT NULL,
+			mapa TEXT NOT NULL,
+			x INTEGER,
+			y INTEGER,
+			ordem INTEGER DEFAULT 0,
+			ativo INTEGER DEFAULT 1
+		);
+	""";
+
+	if(bancoJogo.execute(create_destinos) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela teleporte_destinos: " + bancoJogo.get_last_error_text());
+	}
+
+	teleportador_registrar_item();
+}
+
+int teleportador_contar_destinos() {
+	if(!database_initialized || bancoJogo is null) return -1;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM teleporte_destinos;");
+	if(@stmt == null) return -1;
+
+	if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+
+	return -1;
+}
+
+bool teleportador_inserir_destino(string nome, string mapa, int x, int y) {
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string query = """
+		INSERT INTO teleporte_destinos (nome, mapa, x, y, ordem, ativo)
+		VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(ordem), 0) + 1 FROM teleporte_destinos), 1);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar teleportador_inserir_destino: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, nome);
+	stmt.bind_text(2, mapa);
+	stmt.bind_int(3, x);
+	stmt.bind_int(4, y);
+
+	return (stmt.step() == SQLITE_DONE);
+}
+
+string teleportador_limpar_nome(string nome) {
+	nome = nome.replace("=", " ");
+	nome = nome.replace("\r", " ");
+	nome = nome.replace("\n", " ");
+	nome = nome.replace(";", " ");
+	nome = nome.replace("|", " ");
+	return nome.trim_whitespace();
+}
+
+void init_teleportador() {
+	criar_tabelas_teleportador();
+
+	int total = teleportador_contar_destinos();
+	if(total != 0) {
+		debug_log("TELEPORTADOR: " + total + " destinos registrados");
+		return;
+	}
+
+	int semeados = 0;
+	for(uint i = 0; i < server_maps.length(); i++) {
+		string mapa = server_maps[i].name;
+		string nome = teleportador_limpar_nome(mapa.replace("_", " "));
+		if(nome == "" || mapa == "") continue;
+
+		if(teleportador_inserir_destino(nome, mapa, TELEPORTADOR_CHEGADA_X, TELEPORTADOR_CHEGADA_Y)) semeados++;
+	}
+
+	debug_log("TELEPORTADOR: tabela vazia, " + semeados + " destinos semeados a partir dos mapas carregados");
+}
+
+void garantir_teleportador(player@ p) {
+	if(@p == null) return;
+	if(p.inv_item_number(TELEPORTADOR_ITEM) >= 1) return;
+
+	p.inv_add_item(TELEPORTADOR_ITEM, 1, false);
+	save_player_inventory_to_db(p);
+	debug_log("TELEPORTADOR: item entregue a " + p.charname);
+}
+
+string teleportador_montar_lista() {
+	string lista = "";
+	if(!database_initialized || bancoJogo is null) return lista;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, nome, mapa FROM teleporte_destinos WHERE ativo = 1 ORDER BY ordem, nome;");
+	if(@stmt == null) return lista;
+
+	while(stmt.step() == SQLITE_ROW) {
+		int id = stmt.column_int(0);
+		string nome = teleportador_limpar_nome(stmt.column_text(1));
+		string mapa = stmt.column_text(2);
+
+		if(nome == "" || get_map_index_from(mapa) < 0) continue;
+
+		if(lista != "") lista += "\r\n";
+		lista += id + "=" + nome;
+	}
+
+	return lista;
+}
+
+string teleportador_montar_lista_portal() {
+	string lista = "";
+	if(!database_initialized || bancoJogo is null) return lista;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT nome, mapa, x, y FROM teleporte_destinos WHERE ativo = 1 ORDER BY ordem, nome;");
+	if(@stmt == null) return lista;
+
+	while(stmt.step() == SQLITE_ROW) {
+		string nome = teleportador_limpar_nome(stmt.column_text(0));
+		string mapa = stmt.column_text(1);
+		int x = stmt.column_int(2);
+		int y = stmt.column_int(3);
+
+		if(nome == "" || get_map_index_from(mapa) < 0) continue;
+
+		if(lista != "") lista += "\r\n";
+		lista += nome + "=" + mapa + "=" + x + "=" + y;
+	}
+
+	return lista;
+}
+
+void teleportador_enviar_lista(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	if(players[player_index].inv_item_number(TELEPORTADOR_ITEM) < 1) {
+		send_reliable_text(players[player_index].peer_id, "msg2 ;Você precisa de um teleportador para fazer isso.;", 0);
+		return;
+	}
+
+	send_reliable_text(players[player_index].peer_id, "teleportador_destinos " + teleportador_montar_lista(), 0);
+}
+
+void teleportador_ir(int player_index, int destino_id) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(p.inv_item_number(TELEPORTADOR_ITEM) < 1) {
+		send_reliable_text(p.peer_id, "msg2 ;Você precisa de um teleportador para fazer isso.;", 0);
+		return;
+	}
+
+	if(p.afk || p.paralisado || p.paralisado2 || p.health <= 0 || game_frozen) {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode usar o teleportador agora.;", 0);
+		return;
+	}
+
+	if(p.in_arena != 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode usar o teleportador dentro da arena.;", 0);
+		return;
+	}
+
+	int mapa_atual = get_map_index_from(p.map);
+	if(mapa_atual >= 0 && server_maps[mapa_atual].is_disabled(TELEPORTADOR_ITEM)) {
+		send_reliable_text(p.peer_id, "msg2 ;O teleportador está desativado neste mapa.;", 0);
+		return;
+	}
+
+	if(p.teleportadortimer.elapsed < TELEPORTADOR_COOLDOWN_MS) {
+		send_reliable_text(p.peer_id, "msg2 ;Aguarde alguns segundos para usar o teleportador novamente.;", 0);
+		return;
+	}
+
+	if(!database_initialized || bancoJogo is null) {
+		send_reliable_text(p.peer_id, "msg2 ;Destino de teleporte invalido.;", 0);
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT nome, mapa, x, y FROM teleporte_destinos WHERE id = ? AND ativo = 1;");
+	if(@stmt == null) {
+		send_reliable_text(p.peer_id, "msg2 ;Destino de teleporte invalido.;", 0);
+		return;
+	}
+
+	stmt.bind_int(1, destino_id);
+
+	if(stmt.step() != SQLITE_ROW) {
+		send_reliable_text(p.peer_id, "msg2 ;Destino de teleporte invalido.;", 0);
+		return;
+	}
+
+	string nome = teleportador_limpar_nome(stmt.column_text(0));
+	string mapa = stmt.column_text(1);
+	int dest_x = stmt.column_int(2);
+	int dest_y = stmt.column_int(3);
+
+	int mapa_destino = get_map_index_from(mapa);
+	if(mapa_destino < 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Este destino não está disponível no momento.;", 0);
+		return;
+	}
+
+	if(house_is_locked_for_player(p.charname, mapa)) {
+		send_reliable_text(p.peer_id, "msg2 ;Esta propriedade esta trancada.;", 0);
+		return;
+	}
+
+	p.teleportadortimer.restart();
+
+	send_reliable_text(p.peer_id, "play " + TELEPORTADOR_SOM, 0);
+	move_player_to_map(player_index, mapa, dest_x, dest_y);
+	p.map_name = mapa;
+	p.mapaatual = mapa;
+
+	send_reliable_text(p.peer_id, "msg2 ;Você foi teleportado para " + nome + ".;", 0);
+	debug_log("TELEPORTADOR: " + p.charname + " -> " + mapa + " (" + dest_x + "," + dest_y + ")");
+}
+
+bool teleportador_destino_existe(int destino_id, string &out nome) {
+	nome = "";
+	if(!database_initialized || bancoJogo is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT nome FROM teleporte_destinos WHERE id = ?;");
+	if(@stmt == null) return false;
+
+	stmt.bind_int(1, destino_id);
+
+	if(stmt.step() != SQLITE_ROW) return false;
+
+	nome = stmt.column_text(0);
+	return true;
+}
+
+void cmd_teleadd(int index, string[] parsed) {
+	if(index < 0 || index >= int(players.length())) return;
+
+	if(parsed.length() < 2) {
+		send_reliable_text(players[index].peer_id, "msgnormal Uso: /teleadd <nome do destino>", 0);
+		return;
+	}
+
+	string nome = "";
+	for(uint i = 1; i < parsed.length(); i++) {
+		if(nome != "") nome += " ";
+		nome += parsed[i];
+	}
+
+	if(nome != teleportador_limpar_nome(nome) || nome == "" || int(nome.length()) > TELEPORTADOR_NOME_MAX) {
+		send_reliable_text(players[index].peer_id, "msgnormal Nome inválido. Use até " + TELEPORTADOR_NOME_MAX + " caracteres, sem os sinais = ; |", 0);
+		return;
+	}
+
+	string mapa = players[index].map;
+	if(get_map_index_from(mapa) < 0) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao obter o mapa atual.", 0);
+		return;
+	}
+
+	int x = players[index].x;
+	int y = players[index].y;
+
+	if(!teleportador_inserir_destino(nome, mapa, x, y)) {
+		send_reliable_text(players[index].peer_id, "msgnormal Não foi possível adicionar. Já existe um destino com este nome?", 0);
+		return;
+	}
+
+	send_reliable_text(players[index].peer_id, "msgnormal Destino '" + nome + "' adicionado em " + mapa + " (" + x + ", " + y + ").", 0);
+	debug_log("ADMIN: " + players[index].charname + " adicionou destino de teleporte '" + nome + "' em " + mapa + " (" + x + "," + y + ")");
+}
+
+void cmd_teledel(int index, string[] parsed) {
+	if(index < 0 || index >= int(players.length())) return;
+
+	int destino_id = 0;
+	if(parsed.length() < 2 || !try_parse_int_token(parsed[1], destino_id)) {
+		send_reliable_text(players[index].peer_id, "msgnormal Uso: /teledel <id> (veja os ids com /telelist)", 0);
+		return;
+	}
+
+	string nome;
+	if(!teleportador_destino_existe(destino_id, nome)) {
+		send_reliable_text(players[index].peer_id, "msgnormal Destino " + destino_id + " não encontrado.", 0);
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("DELETE FROM teleporte_destinos WHERE id = ?;");
+	if(@stmt == null) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao remover o destino. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	stmt.bind_int(1, destino_id);
+
+	if(stmt.step() != SQLITE_DONE) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao remover o destino. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	send_reliable_text(players[index].peer_id, "msgnormal Destino '" + nome + "' removido.", 0);
+	debug_log("ADMIN: " + players[index].charname + " removeu destino de teleporte " + destino_id + " (" + nome + ")");
+}
+
+void cmd_telelist(int index, string[] parsed) {
+	if(index < 0 || index >= int(players.length())) return;
+	if(!database_initialized || bancoJogo is null) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, nome, mapa, x, y, ativo FROM teleporte_destinos ORDER BY ordem, nome;");
+	if(@stmt == null) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao listar destinos. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	string[] linhas;
+	while(stmt.step() == SQLITE_ROW) {
+		int id = stmt.column_int(0);
+		string nome = stmt.column_text(1);
+		string mapa = stmt.column_text(2);
+		int x = stmt.column_int(3);
+		int y = stmt.column_int(4);
+		bool ativo = (stmt.column_int(5) == 1);
+
+		string linha = id + ": " + nome + " - " + mapa + " (" + x + ", " + y + ")";
+		if(!ativo) linha += " [DESATIVADO]";
+		if(get_map_index_from(mapa) < 0) linha += " [MAPA NÃO CARREGADO]";
+		linhas.insert_last(linha);
+	}
+
+	if(linhas.length() == 0) {
+		send_reliable_text(players[index].peer_id, "msgnormal Nenhum destino de teleporte registrado.", 0);
+		return;
+	}
+
+	send_reliable_text(players[index].peer_id, "msgnormal === DESTINOS DO TELEPORTADOR (" + linhas.length() + ") ===", 0);
+	for(uint i = 0; i < linhas.length(); i++) {
+		send_reliable_text(players[index].peer_id, "msgnormal " + linhas[i], 0);
+	}
+}
+
+void cmd_teleativar(int index, string[] parsed) {
+	if(index < 0 || index >= int(players.length())) return;
+
+	int destino_id = 0;
+	string estado = parsed.length() >= 3 ? parsed[2].lower() : "";
+	if(parsed.length() < 3 || !try_parse_int_token(parsed[1], destino_id) || (estado != "on" && estado != "off")) {
+		send_reliable_text(players[index].peer_id, "msgnormal Uso: /teleativar <id> <on|off>", 0);
+		return;
+	}
+
+	string nome;
+	if(!teleportador_destino_existe(destino_id, nome)) {
+		send_reliable_text(players[index].peer_id, "msgnormal Destino " + destino_id + " não encontrado.", 0);
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE teleporte_destinos SET ativo = ? WHERE id = ?;");
+	if(@stmt == null) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao atualizar o destino. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	stmt.bind_int(1, estado == "on" ? 1 : 0);
+	stmt.bind_int(2, destino_id);
+
+	if(stmt.step() != SQLITE_DONE) {
+		send_reliable_text(players[index].peer_id, "msgnormal Erro ao atualizar o destino. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	send_reliable_text(players[index].peer_id, "msgnormal Destino '" + nome + "' " + (estado == "on" ? "ativado" : "desativado") + ".", 0);
+	debug_log("ADMIN: " + players[index].charname + " alterou destino de teleporte " + destino_id + " para " + estado);
+}
