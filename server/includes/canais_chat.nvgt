@@ -399,6 +399,48 @@ void canal_validar_jogador(player@ p) {
 	debug_log("CANAIS: " + p.charname + " estava no canal inválido '" + atual + "' e foi movido para " + CANAL_PADRAO);
 }
 
+// "idiomachat <nome>" sem barra: o cliente manda sozinho, ao entrar no jogo, o
+// canal que tem salvo nas preferências (herdado do BGT, net.bgt:874). É uma
+// sincronização, não uma troca pedida pelo jogador, por isso não avisa o canal
+// nem responde nada quando dá certo. Se o cliente pedir um canal que não existe
+// (ou restrito), fica valendo o do servidor e o cliente é corrigido por setconfig.
+void canal_sincronizar_preferencia(int player_index, string canal) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	canal = canal.trim_whitespace();
+
+	// Sem catálogo (falha de banco) mantém o comportamento antigo: aceita o
+	// que o cliente mandar, desde que seja um nome técnico bem formado.
+	if(canais_cache.length() == 0) {
+		if(canal_nome_valido(canal) && p.idiomachat != canal) {
+			p.idiomachat = canal;
+			save_player_to_database(p);
+		}
+		return;
+	}
+
+	canal_chat@ c = get_canal(canal);
+	bool pode = (c !is null && c.ativo && (!c.apenas_admin || check_is_admin(p.charname)));
+
+	if(pode) {
+		if(p.idiomachat != c.nome) {
+			debug_log("CANAIS: " + p.charname + " sincronizou o canal '" + p.idiomachat + "' -> '" + c.nome + "'");
+			p.idiomachat = c.nome;
+			save_player_to_database(p);
+		}
+		// O cliente mandou o nome com outra caixa: devolve o canônico.
+		if(canal != c.nome) send_configs_to_client(p);
+		return;
+	}
+
+	debug_log("CANAIS: " + p.charname + " pediu o canal inválido '" + canal + "' no login; mantendo '" + p.idiomachat + "'");
+	canal_validar_jogador(p);
+	send_configs_to_client(p);
+}
+
 // --------------------------------------------------------------------------
 // Administração do catálogo
 // --------------------------------------------------------------------------
@@ -694,5 +736,59 @@ bool handle_canais_packet(uint64 peer_id, string command) {
 		return true;
 	}
 
-	return false;
+	// Preferência salva no cliente, enviada sozinha ao entrar no jogo.
+	if(command.find("idiomachat ") == 0) {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		canal_sincronizar_preferencia(idx, command.substr(11));
+		return true;
+	}
+
+	// Daqui para baixo só comandos digitados ("/canal pt"). Chegam por
+	// process_chat_message(), que repassa tudo que começa com barra.
+	if(command.find("/") != 0) return false;
+
+	string[] partes = command.split(" ");
+	string verbo = partes[0].lower();
+	string resto = "";
+	if(command.length() > partes[0].length()) {
+		resto = command.substr(partes[0].length()).trim_whitespace();
+	}
+
+	bool e_lista = (verbo == "/canais" || verbo == "/chats");
+	bool e_troca = (verbo == "/canal" || verbo == "/idiomachat");
+	bool e_criar = (verbo == "/addcanal" || verbo == "/add_chat_channel");
+	bool e_remover = (verbo == "/delcanal");
+	bool e_reenviar = (verbo == "/sendcanais" || verbo == "/send_channels");
+	if(!e_lista && !e_troca && !e_criar && !e_remover && !e_reenviar) return false;
+
+	int idx = indice_jogador_por_peer(peer_id);
+	if(idx < 0) return true;
+
+	if(e_lista) {
+		cmd_canais(idx);
+	}
+	else if(e_troca) {
+		cmd_canal(idx, resto);
+	}
+	else if(e_criar) {
+		// "/addcanal <nome> [rótulo com espaços]"; sem rótulo, usa o próprio nome.
+		string nome = resto;
+		string rotulo = resto;
+		int espaco = resto.find(" ");
+		if(espaco > 0) {
+			nome = resto.substr(0, espaco);
+			rotulo = resto.substr(espaco + 1).trim_whitespace();
+			if(rotulo == "") rotulo = nome;
+		}
+		cmd_addcanal(idx, nome, rotulo);
+	}
+	else if(e_remover) {
+		cmd_delcanal(idx, resto);
+	}
+	else {
+		cmd_sendcanais(idx, resto);
+	}
+
+	return true;
 }
