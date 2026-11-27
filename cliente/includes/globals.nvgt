@@ -223,7 +223,7 @@ void exitgame() {
 	speak(pu.get_value("Saindo do jogo..."));
 	writeprefs();
 	if(connected) {
-		game_net.send(net_peer_id, "close", 0, true);
+		send_reliable(net_peer_id, "close", 0);
 	}
 	exittimer.restart();
 	connected = false;
@@ -262,14 +262,14 @@ class lancha_class {
 		if(nalancha != 1) return;
 
 		if(saindo == 1 || key_pressed(KEY_ESCAPE)) {
-			if(is_connected) game_net.send(server_peer_id, "lancha d", 0, true);
+			if(is_connected) send_reliable(server_peer_id, "lancha d", 0);
 			sair();
 			return;
 		}
 
-		if(key_pressed(KEY_UP) && is_connected) game_net.send(server_peer_id, "lancha l", 0, true);
-		if(key_pressed(KEY_DOWN) && is_connected) game_net.send(server_peer_id, "lancha d", 0, true);
-		if(key_pressed(KEY_S) && is_connected) game_net.send(server_peer_id, "lancha s", 0, true);
+		if(key_pressed(KEY_UP) && is_connected) send_reliable(server_peer_id, "lancha l", 0);
+		if(key_pressed(KEY_DOWN) && is_connected) send_reliable(server_peer_id, "lancha d", 0);
+		if(key_pressed(KEY_S) && is_connected) send_reliable(server_peer_id, "lancha s", 0);
 	}
 };
 lancha_class game_lan;
@@ -293,6 +293,9 @@ class tracker_class { int x, y; };
 tracker_class tracker;
 
 void open_sound_device(int device_id = -1) {
+	int device = device_id - 1;
+	if(device < 0 || device >= int(sound_output_devices.length())) return;
+	sound_output_device = device;
 }
 
 void dlg(string text) {
@@ -366,12 +369,11 @@ void writeprefs() {
 	pf.close();
 }
 
-void dlgplay(string filename, bool flag = false, int volume = 0) {
+void dlgplay(string filename, bool flag = false, int fadespeed = 30) {
 	if(filename == "") return;
 	string full_path = get_sound_path(filename);
 	sound s;
 	if(!s.load(full_path)) return;
-	if(volume > 0) s.volume = volume;
 	s.play();
 	if(!flag) return;
 	while(s.playing) {
