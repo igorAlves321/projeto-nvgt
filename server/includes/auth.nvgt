@@ -105,10 +105,12 @@ void handle_login(uint64 peer_id, string username, string password_input, double
     }
 
     bool password_valid = false;
+    bool senha_legada = false;
     if(stored_salt != "" && stored_salt.length() > 0) {
         string calculated_hash = hash_password_with_salt(password_input, stored_salt);
         string legacy_hash = stored_salt + "::" + password_input;
         password_valid = (calculated_hash == stored_hash || legacy_hash == stored_hash);
+        senha_legada = (calculated_hash != stored_hash && legacy_hash == stored_hash);
     } else {
         password_valid = (password_input == stored_hash);
     }
@@ -125,7 +127,7 @@ void handle_login(uint64 peer_id, string username, string password_input, double
         send_reliable_text(peer_id, "msgnormal Sua conta estava arquivada por inatividade e foi restaurada.", 0);
     }
 
-    if(stored_salt == "" || stored_salt.length() == 0) {
+    if(senha_legada || stored_salt == "" || stored_salt.length() == 0) {
         if(migrate_account_to_salt(username, password_input)) {
             debug_log("Conta " + username + " migrada automaticamente para sistema com salt");
             log_to_database("INFO", "AUTH", "Conta migrada para sistema com salt", 0, username);
@@ -174,7 +176,7 @@ void handle_login(uint64 peer_id, string username, string password_input, double
     if(existing !is null) {
         debug_log("Sessao anterior detectada para " + username + ", desconectando...");
         send_reliable_text(existing.peer_id, "terminate relogin", 0);
-        force_disconnect_and_cleanup(existing.peer_id, true);
+        force_disconnect_and_cleanup(existing.peer_id, true, true);
     }
 
     if(!spawn_player_session(peer_id, username, client_version, computer_id)) {
@@ -191,7 +193,7 @@ void handle_login(uint64 peer_id, string username, string password_input, double
 
     if(!load_player_complete(p)) {
         send_reliable_text(peer_id, "Erro: Falha ao carregar seus dados. Tente novamente.", 0);
-        force_disconnect_and_cleanup(peer_id, true);
+        force_disconnect_and_cleanup(peer_id, true, true);
         return;
     }
 

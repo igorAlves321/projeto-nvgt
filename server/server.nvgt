@@ -460,20 +460,80 @@ void log_to_database_async(string level, string category, string message, int pl
     }
 }
 
-void save_player_to_database(player@ player) {
+void save_player_to_database(player@ player, bool sincrono = false) {
     if(!database_initialized || player is null) return;
 
     string save_name = player.charname;
     if(save_name == "") save_name = player.name;
     if(save_name == "") return;
 
-    async<void>(save_player_to_database_async, save_name, player.player_level, player.exp,
-                player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
-                player.race, player.map_name, player.x, player.y, player.z,
-                player.admin_status, player.sexo);
+    string save_map = player.map != "" ? player.map : player.map_name;
 
+    if(sincrono) {
+        save_player_to_database_async(save_name, player.player_level, player.exp,
+                    player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
+                    player.race, save_map, player.x, player.y, player.z,
+                    player.admin_status, player.sexo);
+    } else {
+        async<void>(save_player_to_database_async, save_name, player.player_level, player.exp,
+                    player.gold, player.hp, player.max_hp, player.mp, player.max_mp,
+                    player.race, save_map, player.x, player.y, player.z,
+                    player.admin_status, player.sexo);
+    }
+
+    save_player_stats_to_db(player, save_name);
     save_player_inventory_to_db(player);
     save_player_equipment_to_db(player);
+}
+
+void save_player_stats_to_db(player@ p, string save_name) {
+    if(!database_initialized || p is null || save_name == "") return;
+
+    string query = """
+        UPDATE players SET
+            stryx = ?, creditos = ?, saldo = ?, gcoins = ?, greais = ?,
+            kills = ?, deaths = ?, play_time = ?, matou = ?,
+            arena_wins = ?, arena_kills = ?,
+            bounty_on_head = ?, bounty_value = ?, bounty_owner = ?,
+            title = ?, rank = ?,
+            stamina = ?, fome = ?, sanity = ?, radiation = ?,
+            voice_id = ?, idioma_chat = ?
+        WHERE username = ?;
+    """;
+
+    sqlite3statement@ stmt = bancoJogo.prepare(query);
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar save_player_stats_to_db: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    stmt.bind_double(1, p.stryx);
+    stmt.bind_double(2, p.creditos);
+    stmt.bind_double(3, p.saldo);
+    stmt.bind_int(4, p.gcoins);
+    stmt.bind_int(5, p.greais);
+    stmt.bind_int(6, p.kills);
+    stmt.bind_int(7, p.deaths);
+    stmt.bind_int(8, int(p.playtime));
+    stmt.bind_int(9, p.matou);
+    stmt.bind_int(10, p.arena_wins);
+    stmt.bind_int(11, p.arena_kills);
+    stmt.bind_int(12, p.bounty_on_head);
+    stmt.bind_int(13, p.bounty_value);
+    stmt.bind_text(14, p.bounty_owner);
+    stmt.bind_text(15, p.title);
+    stmt.bind_int(16, p.rank);
+    stmt.bind_int(17, p.stamina);
+    stmt.bind_int(18, p.fome);
+    stmt.bind_double(19, p.sanity);
+    stmt.bind_int(20, p.radiation);
+    stmt.bind_text(21, p.voice_id);
+    stmt.bind_text(22, p.idiomachat);
+    stmt.bind_text(23, save_name);
+
+    if(stmt.step() != SQLITE_DONE) {
+        debug_log("ERRO ao salvar estatisticas do jogador no banco: " + bancoJogo.get_last_error_text());
+    }
 }
 
 void save_player_to_database_async(string name, int level, int exp, int gold,
@@ -826,8 +886,18 @@ bool try_parse_float_token(const string&in token, double &out value) {
     return true;
 }
 
+string redact_packet_for_log(const string&in packet) {
+    string lowered = packet.lower();
+    string[] sensiveis = {"xt55", "h33j", "mudarsenha", "changepassword", "trocarsenha"};
+    for(uint i = 0; i < sensiveis.length(); i++) {
+        int pos = lowered.find(sensiveis[i]);
+        if(pos >= 0) return packet.substr(0, pos + int(sensiveis[i].length())) + " [OMITIDO]";
+    }
+    return packet;
+}
+
 void reject_invalid_network_packet(uint64 peer_id, const string&in context, const string&in payload, bool disconnect_peer = false) {
-    string safe_payload = payload;
+    string safe_payload = redact_packet_for_log(payload);
     if(safe_payload.length() > MAX_NETWORK_LOG_PACKET_CHARS) {
         safe_payload = safe_payload.substr(0, MAX_NETWORK_LOG_PACKET_CHARS) + "... [TRUNCADO]";
     }
@@ -1292,6 +1362,71 @@ void process_player_command(uint64 peer_id, string command) {
         if(cmd == "draw" && parts.length() >= 2) {
             string sound_file = parts[1];
             broadcast_to_map(player.map_name, "play " + sound_file + " " + player.x + " " + player.y, peer_id);
+            return;
+        }
+
+        if(cmd == "morreu" || cmd == "terminouafogando" || cmd == "congelou") {
+            if(player.health <= 0 || player.watching != 0 || player.map == "portal_espiritual") return;
+
+            string zona_morte = get_zone_at(player.x, player.y, player.map);
+            string causa_morte = "";
+            if(cmd == "morreu") {
+                if(player.ndeath == 1 && player.death_reason == "hazard:quicksand") causa_morte = "A areia movediça";
+            }
+            else if(cmd == "terminouafogando") {
+                if(zona_morte == "Rio" || zona_morte == "Parte funda do lago.") causa_morte = "O afogamento";
+            }
+            else if(zona_morte == "Refrigerador.") {
+                causa_morte = "O frio do refrigerador";
+            }
+
+            if(causa_morte == "") {
+                debug_log("Morte reportada pelo cliente ignorada (" + cmd + "): " + player.charname + " em " + player.map + " " + player.x + "," + player.y);
+                return;
+            }
+
+            if(cmd == "congelou" && player.inv_item_exists("perna_quebrada")) {
+                player.inv_add_item("perna_quebrada", -player.inv_item_number("perna_quebrada"));
+            }
+            player.deaths += 1;
+            player.lasthit = causa_morte;
+            player.health = 0;
+            send_reliable_text(peer_id, "morreu", 0);
+            return;
+        }
+
+        if(cmd == "enterrar" && parts.length() >= 2) {
+            if(player.afk || player.paralisado || player.paralisado2 || gamestopped) return;
+
+            string corpo = parts[1];
+            if(corpo.find("corpo_de_") != 0) {
+                reject_invalid_network_packet(peer_id, "process_player_command:enterrar_item", command);
+                return;
+            }
+
+            int quantidade_corpos = player.inv_item_number(corpo);
+            if(quantidade_corpos <= 0) return;
+
+            int mgerems_ganhos = random(10, 100) * quantidade_corpos;
+            player.inv_add_item(corpo, -quantidade_corpos);
+            player.inv_add_item("mgerems", mgerems_ganhos);
+            send_reliable_text(peer_id, "msg2 Você enterra; " + quantidade_corpos + " ;" + corpo + ";. ;Ótimo trabalho!; +" + mgerems_ganhos + " mgerems.", 0);
+            return;
+        }
+
+        if(cmd == "list_crafts") {
+            string[] receitas = crafting_system.recipes.get_keys();
+            string[] linhas_crafts;
+            linhas_crafts.insert_last("Estas são as construções disponíveis atualmente.");
+            for(uint i = 0; i < receitas.length(); i++) {
+                string ingredientes = "";
+                string descricao = "";
+                int quantidade_resultado = 1;
+                if(crafting_system.get_recipe_data(receitas[i], ingredientes, descricao, quantidade_resultado)) {
+                    linhas_crafts.insert_last(receitas[i] + " x" + quantidade_resultado + ": " + ingredientes);
+                }
+            }
+            send_reliable_text(peer_id, "menuleitura " + linear(linhas_crafts), 0);
             return;
         }
 
@@ -2010,7 +2145,7 @@ void server_handle_network_event_const(const network_event@ event) {
             if(!check_client_rate_limit(event.peer_id)) {
                 debug_log("[FLOOD] FLOOD detectado de peer " + event.peer_id + " - kickando!");
                 send_reliable_text(event.peer_id, "say Você foi desconectado por enviar pacotes demais.", 0);
-                force_disconnect_and_cleanup(event.peer_id, true);
+                force_disconnect_and_cleanup(event.peer_id, true, true);
                 return;
             }
 
@@ -2029,7 +2164,7 @@ void server_handle_network_event_const(const network_event@ event) {
                 reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:unsafe_text", decrypted, true);
                 return;
             }
-            debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + decrypted);
+            debug_log("Comando recebido de " + event.peer_id + " (canal " + event.channel + "): " + redact_packet_for_log(decrypted));
 
             player@ p = get_player_by_peer(event.peer_id);
             if(p !is null) {
@@ -2077,11 +2212,11 @@ void server_handle_network_event_const(const network_event@ event) {
                 string email = parts[3];
                 int gender = 0;
                 if(parts[1].length() > 32 || parts[2].length() > 256 || parts[3].length() > 128) {
-                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_field_len", decrypted, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_field_len", cmd, true);
                     return;
                 }
                 if(!try_parse_int_token(parts[4], gender)) {
-                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_gender", decrypted, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:xt55_gender", cmd, true);
                     return;
                 }
                 handle_create_account(event.peer_id, username, password_hash, email, gender);
@@ -2093,11 +2228,11 @@ void server_handle_network_event_const(const network_event@ event) {
                 string password_hash = parts[2];
                 double version = 0.0;
                 if(parts[1].length() > 32 || parts[2].length() > 256 || parts[4].length() > 128) {
-                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_field_len", decrypted, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_field_len", cmd, true);
                     return;
                 }
                 if(!try_parse_float_token(parts[3], version)) {
-                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_version", decrypted, true);
+                    reject_invalid_network_packet(event.peer_id, "server_handle_network_event_const:h33j_version", cmd, true);
                     return;
                 }
                 string computer_id = parts[4];
@@ -2203,6 +2338,20 @@ void main() {
 
         portals_loop();
 
+        for(uint i = 0; i < server_maps.length(); i++) {
+            if(server_maps[i] is null || server_maps[i].paused == 2) continue;
+            try {
+                server_maps[i].maploop();
+            }
+            catch {
+                server_maps[i].paused = 2;
+                debug_log(
+                    "ERRO em maploop do mapa '" + server_maps[i].name + "' (loop do mapa desativado): " +
+                    get_exception_info() + " (" + get_exception_file() + ":" + get_exception_line() + ")"
+                );
+            }
+        }
+
         vehicles_loop();
 
         trading_loop();
@@ -2276,20 +2425,25 @@ void main() {
 
     debug_log("=== DESLIGANDO SERVIDOR ===");
 
-    auto_save_all_players_async();
+    for(uint i = 0; i < players.length(); i++) {
+        if(players[i].is_logged_in) save_player_to_database(players[i], true);
+    }
+    debug_log("Jogadores salvos");
 
     save_tempbans();
     debug_log("Banimentos temporários salvos");
 
-    perform_database_backup_async();
-
     cleanup_expired_items();
 
+    perform_database_backup_async();
+
+    log_to_database_async("INFO", "SYSTEM", "Servidor desligado", -1, "uptime:" + server_uptime.elapsed);
+
     if(database_initialized) {
+        database_initialized = false;
         bancoJogo.close();
         debug_log("Banco de dados fechado");
     }
 
-    log_to_database("INFO", "SYSTEM", "Servidor desligado", -1, "uptime:" + server_uptime.elapsed);
     debug_log("Servidor desligado após " + (server_uptime.elapsed / 1000) + " segundos");
 }
