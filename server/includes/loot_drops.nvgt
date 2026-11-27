@@ -525,6 +525,8 @@ void dispatch_drop_json(player@ p, string json_message) {
 string drop_from_player_inventory(player@ p, string item_name, int quantity) {
     if(@p == null) return "";
 
+    if(recusar_item_intransferivel(p, item_name)) return "";
+
     if(!p.inv.exists(item_name)) return "";
 
     int current = 0;
@@ -570,4 +572,137 @@ string get_drop_statistics() {
 void init_drop_system() {
     gc_timer.restart();
     debug_log("[OK] Sistema de Drops inicializado");
+}
+
+// ---------------------------------------------------------------------
+// Loot de chefes e dungeons
+// Os catalogos vivem no SQLite (boss_loot em bosses.nvgt, dungeon_loot em
+// dungeons.nvgt). Aqui ficam o sorteio, a entrega e as utilidades comuns.
+// ---------------------------------------------------------------------
+
+const string LOOT_ORIGEM_CONCLUSAO = "conclusao";
+const string LOOT_ORIGEM_CHEFE = "chefe";
+
+class loot_premio {
+    string item_name;
+    int qty_min;
+    int qty_max;
+    double chance;
+
+    loot_premio() {
+        item_name = "";
+        qty_min = 1;
+        qty_max = 1;
+        chance = 1.0;
+    }
+}
+
+// Le uma linha de "SELECT item_name, qty_min, qty_max, chance ...".
+loot_premio@ loot_ler_premio(sqlite3statement@ stmt) {
+    loot_premio@ premio = loot_premio();
+    premio.item_name = stmt.column_text(0);
+    premio.qty_min = stmt.column_int(1);
+    premio.qty_max = stmt.column_int(2);
+    premio.chance = stmt.column_double(3);
+    if(premio.qty_min < 1) premio.qty_min = 1;
+    if(premio.qty_max < premio.qty_min) premio.qty_max = premio.qty_min;
+    return premio;
+}
+
+int loot_contar_linhas(const string&in tabela) {
+    if(!database_initialized || bancoJogo is null) return -1;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT COUNT(*) FROM " + tabela + ";");
+    if(@stmt == null) return -1;
+    if(stmt.step() == SQLITE_ROW) return stmt.column_int(0);
+    return -1;
+}
+
+// Garante que todo item_name da tabela de loot exista no catalogo de itens e
+// recarrega o cache quando algo novo entra.
+void loot_sincronizar_catalogo_itens(const string&in tabela) {
+    if(!database_initialized || bancoJogo is null) return;
+
+    int antes = loot_contar_linhas("items");
+
+    string sql = "INSERT OR IGNORE INTO items (name, msg) SELECT DISTINCT item_name, REPLACE(item_name, '_', ' ') FROM " + tabela + " WHERE item_name IS NOT NULL AND item_name != '';";
+    if(bancoJogo.execute(sql) != SQLITE_OK) {
+        debug_log("ERRO ao sincronizar itens de " + tabela + " com o catalogo: " + bancoJogo.get_last_error_text());
+        return;
+    }
+
+    int depois = loot_contar_linhas("items");
+    if(depois != antes || int(items_by_name.get_size()) != depois) {
+        load_items_from_database();
+    }
+}
+
+string loot_nome_exibicao(string item_name) {
+    return item_name.replace("_", " ");
+}
+
+// Devolve a quantidade sorteada, ou 0 quando o premio nao saiu.
+int loot_sortear_quantidade(loot_premio@ premio) {
+    if(premio is null || premio.item_name == "") return 0;
+
+    if(premio.chance < 1.0) {
+        double sorteio = random(0, 9999) / 10000.0;
+        if(sorteio >= premio.chance) return 0;
+    }
+
+    if(premio.qty_max <= premio.qty_min) return premio.qty_min;
+    return random(premio.qty_min, premio.qty_max);
+}
+
+// Sorteia e entrega os premios: adiciona ao inventario, avisa o cliente e
+// salva. Devolve as linhas "- item xN" do que foi entregue.
+string loot_entregar_premios(player@ p, loot_premio@[] premios) {
+    string resumo = "";
+    if(@p == null) return resumo;
+
+    bool entregou = false;
+    for(uint i = 0; i < premios.length(); i++) {
+        int quantidade = loot_sortear_quantidade(premios[i]);
+        if(quantidade <= 0) continue;
+
+        string item_name = premios[i].item_name;
+        if(get_item_by_name(item_name) is null && !item_exists_in_database(item_name)) {
+            debug_log("LOOT: item '" + item_name + "' nao existe no catalogo, premio ignorado");
+            continue;
+        }
+
+        p.inv_add_item(item_name, quantidade, true);
+        entregou = true;
+        resumo += "- " + loot_nome_exibicao(item_name) + " x" + quantidade + "\n";
+        debug_log("LOOT: " + p.charname + " recebeu " + quantidade + "x " + item_name);
+    }
+
+    if(entregou) save_player_inventory_to_db(p);
+    return resumo;
+}
+
+// Lista os premios possiveis para os comandos de informacao.
+string loot_descrever_premios(loot_premio@[] premios) {
+    string texto = "";
+    for(uint i = 0; i < premios.length(); i++) {
+        texto += "- " + loot_nome_exibicao(premios[i].item_name);
+        if(premios[i].qty_max > premios[i].qty_min) {
+            texto += " x" + premios[i].qty_min + "-" + premios[i].qty_max;
+        } else if(premios[i].qty_min > 1) {
+            texto += " x" + premios[i].qty_min;
+        }
+        if(premios[i].chance >= 1.0) {
+            texto += " (GARANTIDO)";
+        } else {
+            texto += " (" + int(premios[i].chance * 100 + 0.5) + "% chance)";
+        }
+        texto += "\n";
+    }
+    return texto;
+}
+
+void loot_enviar_mensagem(player@ p, string mensagem) {
+    if(@p == null) return;
+    string m = mensagem.replace("\n", "; ");
+    send_reliable_text(p.peer_id, "msg2 ;" + m + ";", 0);
 }

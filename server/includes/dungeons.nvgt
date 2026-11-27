@@ -35,7 +35,6 @@ class dungeon_boss_encounter {
     int boss_hp;
     int boss_damage;
     string[] abilities;
-    dictionary loot;
     int guaranteed_gold;
     int guaranteed_xp;
 
@@ -72,7 +71,6 @@ class dungeon_definition {
 
     int base_gold_reward;
     int base_xp_reward;
-    dictionary completion_items;
 
     dungeon_wave@[] waves;
 
@@ -314,6 +312,12 @@ class dungeon_instance {
             broadcast("Bonus de velocidade! +50% recompensas!");
         }
 
+        loot_premio@[] premios_conclusao = dungeon_loot_carregar(definition.id, LOOT_ORIGEM_CONCLUSAO);
+        loot_premio@[] premios_chefe;
+        if (definition.final_boss !is null) {
+            premios_chefe = dungeon_loot_carregar(definition.id, LOOT_ORIGEM_CHEFE);
+        }
+
         for (uint i = 0; i < participants.length(); i++) {
             int pidx = get_player_index_from(participants[i].player_name);
             if (pidx < 0) continue;
@@ -326,32 +330,20 @@ class dungeon_instance {
             msg += "Gold: " + gold + "\n";
             msg += "XP: " + xp + "\n";
 
-            string[] items = definition.completion_items.get_keys();
-            if (items.length() > 0) {
-                msg += "\nITENS:\n";
-                for (uint j = 0; j < items.length(); j++) {
-                    int qty;
-                    definition.completion_items.get(items[j], qty);
-                    msg += "- " + items[j] + " x" + qty + "\n";
-                    if(qty > 0) add_item_with_sync(players[pidx], items[j], qty);
-                }
+            string itens = loot_entregar_premios(players[pidx], premios_conclusao);
+            if (itens != "") {
+                msg += "\nITENS:\n" + itens;
             }
 
             if (definition.final_boss !is null) {
+                players[pidx].gold += definition.final_boss.guaranteed_gold;
+                players[pidx].saldo = players[pidx].gold;
+                if (definition.final_boss.guaranteed_xp > 0) ganhaxp(pidx, definition.final_boss.guaranteed_xp, 0);
+
                 msg += "\nLOOT DO BOSS:\n";
                 msg += "Gold: " + definition.final_boss.guaranteed_gold + "\n";
                 msg += "XP: " + definition.final_boss.guaranteed_xp + "\n";
-
-                string[] boss_items = definition.final_boss.loot.get_keys();
-                for (uint j = 0; j < boss_items.length(); j++) {
-                    float chance;
-                    definition.final_boss.loot.get(boss_items[j], chance);
-
-                    float roll = random(0, 100) / 100.0;
-                    if (roll <= chance) {
-                        msg += "- " + boss_items[j] + " (DROPPED!)\n";
-                    }
-                }
+                msg += loot_entregar_premios(players[pidx], premios_chefe);
             }
 
             dungeon_send_to_player(pidx, msg);
@@ -390,7 +382,117 @@ void init_dungeons_system() {
     player_daily_entries.delete_all();
 
     create_default_dungeons();
+    init_dungeon_loot();
     load_dungeons_data();
+}
+
+// ---------------------------------------------------------------------
+// Loot das dungeons no SQLite (tabela dungeon_loot). origem = 'conclusao'
+// (itens de quem completa) ou 'chefe' (drops do boss final). O codigo so faz
+// a carga inicial com a tabela vazia; em runtime os premios sao lidos do banco.
+// ---------------------------------------------------------------------
+
+void criar_tabela_dungeon_loot() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: criar_tabela_dungeon_loot - Banco não inicializado");
+        return;
+    }
+
+    string create_dungeon_loot = """
+        CREATE TABLE IF NOT EXISTS dungeon_loot (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dungeon_id INTEGER NOT NULL,
+            origem TEXT NOT NULL DEFAULT 'conclusao',
+            item_name TEXT NOT NULL,
+            qty_min INTEGER DEFAULT 1,
+            qty_max INTEGER DEFAULT 1,
+            chance REAL DEFAULT 1.0,
+            UNIQUE(dungeon_id, origem, item_name)
+        );
+    """;
+
+    if(bancoJogo.execute(create_dungeon_loot) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela dungeon_loot: " + bancoJogo.get_last_error_text());
+    }
+}
+
+bool dungeon_loot_inserir(int dungeon_id, string origem, string item_name, string exibicao, int qty_min, int qty_max, double chance) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    ensure_item_in_catalog(item_name, exibicao);
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO dungeon_loot (dungeon_id, origem, item_name, qty_min, qty_max, chance) VALUES (?, ?, ?, ?, ?, ?);");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar dungeon_loot_inserir: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_int(1, dungeon_id);
+    stmt.bind_text(2, origem);
+    stmt.bind_text(3, item_name);
+    stmt.bind_int(4, qty_min);
+    stmt.bind_int(5, qty_max);
+    stmt.bind_double(6, chance);
+
+    return (stmt.step() == SQLITE_DONE);
+}
+
+int seed_dungeon_loot() {
+    int semeados = 0;
+
+    // Caverna dos Goblins
+    if(dungeon_loot_inserir(1, LOOT_ORIGEM_CONCLUSAO, "pocao_vida", "Poção de vida", 3, 3, 1.0)) semeados++;
+    if(dungeon_loot_inserir(1, LOOT_ORIGEM_CHEFE, "espada_de_ferro", "Espada de ferro", 1, 1, 0.3)) semeados++;
+    if(dungeon_loot_inserir(1, LOOT_ORIGEM_CHEFE, "colete", "Colete", 1, 1, 0.15)) semeados++;
+
+    // Fortaleza dos Mortos-Vivos
+    if(dungeon_loot_inserir(2, LOOT_ORIGEM_CONCLUSAO, "pocao_vida_maior", "Poção de vida maior", 5, 5, 1.0)) semeados++;
+    if(dungeon_loot_inserir(2, LOOT_ORIGEM_CONCLUSAO, "mana", "Mana", 5, 5, 1.0)) semeados++;
+    if(dungeon_loot_inserir(2, LOOT_ORIGEM_CHEFE, "cajado_do_lich", "Cajado do Lich", 1, 1, 0.2)) semeados++;
+    if(dungeon_loot_inserir(2, LOOT_ORIGEM_CHEFE, "orbe_das_sombras", "Orbe das Sombras", 1, 1, 0.15)) semeados++;
+    if(dungeon_loot_inserir(2, LOOT_ORIGEM_CHEFE, "manto_espectral", "Manto Espectral", 1, 1, 0.25)) semeados++;
+
+    // Templo do Fogo Eterno
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CONCLUSAO, "pocao_vida_total", "Poção de vida total", 10, 10, 1.0)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CONCLUSAO, "mana", "Mana", 10, 10, 1.0)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CONCLUSAO, "fragmento_de_fogo", "Fragmento de Fogo", 1, 1, 1.0)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CHEFE, "espada_lendaria", "Espada lendária", 1, 1, 0.1)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CHEFE, "armadura_de_chamas", "Armadura de Chamas", 1, 1, 0.15)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CHEFE, "anel_do_fogo_eterno", "Anel do Fogo Eterno", 1, 1, 0.2)) semeados++;
+    if(dungeon_loot_inserir(3, LOOT_ORIGEM_CHEFE, "elmo_igneo", "Elmo Ígneo", 1, 1, 0.25)) semeados++;
+
+    return semeados;
+}
+
+void init_dungeon_loot() {
+    criar_tabela_dungeon_loot();
+
+    int total = loot_contar_linhas("dungeon_loot");
+    if(total == 0) {
+        int semeados = seed_dungeon_loot();
+        debug_log("DUNGEONS: tabela dungeon_loot vazia, " + semeados + " premios semeados");
+    } else {
+        debug_log("DUNGEONS: " + total + " premios registrados em dungeon_loot");
+    }
+
+    loot_sincronizar_catalogo_itens("dungeon_loot");
+}
+
+loot_premio@[] dungeon_loot_carregar(int dungeon_id, string origem) {
+    loot_premio@[] premios;
+    if(!database_initialized || bancoJogo is null) return premios;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT item_name, qty_min, qty_max, chance FROM dungeon_loot WHERE dungeon_id = ? AND origem = ? ORDER BY chance DESC, id;");
+    if(@stmt == null) return premios;
+
+    stmt.bind_int(1, dungeon_id);
+    stmt.bind_text(2, origem);
+
+    while(stmt.step() == SQLITE_ROW) {
+        premios.insert_last(loot_ler_premio(stmt));
+    }
+
+    return premios;
 }
 
 void create_default_dungeons() {
@@ -440,15 +542,12 @@ void create_default_dungeons() {
         boss.abilities = {"Grito de Guerra", "Invocar Goblins"};
         boss.guaranteed_gold = 300;
         boss.guaranteed_xp = 800;
-        boss.loot.set("Espada Goblin", 0.3);
-        boss.loot.set("Armadura de Couro Reforcado", 0.15);
         @d.final_boss = boss;
 
         dungeon_checkpoint@ cp = dungeon_checkpoint();
         cp.wave_number = 2;
         d.checkpoints.insert_last(cp);
 
-        d.completion_items.set("Pocao de Vida", 3);
 
         add_dungeon(d);
     }
@@ -485,17 +584,12 @@ void create_default_dungeons() {
         boss.abilities = {"Explosao Sombria", "Drenar Vida", "Invocar Esqueletos"};
         boss.guaranteed_gold = 1000;
         boss.guaranteed_xp = 2500;
-        boss.loot.set("Cajado do Lich", 0.2);
-        boss.loot.set("Orbe das Sombras", 0.15);
-        boss.loot.set("Manto Espectral", 0.25);
         @d.final_boss = boss;
 
         dungeon_checkpoint@ cp1 = dungeon_checkpoint();
         cp1.wave_number = 3;
         d.checkpoints.insert_last(cp1);
 
-        d.completion_items.set("Pocao de Vida Superior", 5);
-        d.completion_items.set("Pocao de Mana", 5);
 
         add_dungeon(d);
     }
@@ -532,10 +626,6 @@ void create_default_dungeons() {
         boss.abilities = {"Meteoro", "Circulo de Fogo", "Invocar Elementais", "Explosao Ignea"};
         boss.guaranteed_gold = 2500;
         boss.guaranteed_xp = 5000;
-        boss.loot.set("Espada Flamejante Lendaria", 0.1);
-        boss.loot.set("Armadura de Chamas", 0.15);
-        boss.loot.set("Anel do Fogo Eterno", 0.2);
-        boss.loot.set("Elmo Igneo", 0.25);
         @d.final_boss = boss;
 
         dungeon_checkpoint@ cp1 = dungeon_checkpoint();
@@ -546,9 +636,6 @@ void create_default_dungeons() {
         cp2.wave_number = 5;
         d.checkpoints.insert_last(cp2);
 
-        d.completion_items.set("Pocao de Vida Suprema", 10);
-        d.completion_items.set("Pocao de Mana Suprema", 10);
-        d.completion_items.set("Fragmento de Fogo", 1);
 
         add_dungeon(d);
     }
@@ -650,14 +737,10 @@ void cmd_dungeoninfo(int client_index, string[] args) {
     msg += "Gold: " + d.get_gold_reward() + "\n";
     msg += "XP: " + d.get_xp_reward() + "\n";
 
-    if (d.completion_items.get_keys().length() > 0) {
-        msg += "\nItens garantidos:\n";
-        string[] items = d.completion_items.get_keys();
-        for (uint i = 0; i < items.length(); i++) {
-            int qty;
-            d.completion_items.get(items[i], qty);
-            msg += "- " + items[i] + " x" + qty + "\n";
-        }
+    loot_premio@[] premios_conclusao = dungeon_loot_carregar(d.id, LOOT_ORIGEM_CONCLUSAO);
+    if (premios_conclusao.length() > 0) {
+        msg += "\nItens da conclusao:\n";
+        msg += loot_descrever_premios(premios_conclusao);
     }
 
     msg += "\nWaves: " + d.waves.length() + "\n";
@@ -666,6 +749,12 @@ void cmd_dungeoninfo(int client_index, string[] args) {
         msg += "\nBOSS FINAL:\n";
         msg += d.final_boss.boss_name + " (Nivel " + d.final_boss.boss_level + ")\n";
         msg += "HP: " + d.final_boss.boss_hp + "\n";
+
+        loot_premio@[] premios_chefe = dungeon_loot_carregar(d.id, LOOT_ORIGEM_CHEFE);
+        if (premios_chefe.length() > 0) {
+            msg += "Loot do boss:\n";
+            msg += loot_descrever_premios(premios_chefe);
+        }
     }
 
     dungeon_send_to_player(client_index, msg);

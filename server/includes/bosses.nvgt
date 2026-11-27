@@ -40,19 +40,6 @@ class boss_ability {
     }
 }
 
-class boss_loot_entry {
-    string item_name;
-    int quantity;
-    float drop_chance;
-    bool guaranteed;
-
-    boss_loot_entry() {
-        quantity = 1;
-        drop_chance = 0.1;
-        guaranteed = false;
-    }
-}
-
 class boss_participant {
     string player_name;
     int damage_dealt;
@@ -92,7 +79,6 @@ class boss {
     int required_level;
     int max_participants;
 
-    boss_loot_entry@[] loot_table;
     int guaranteed_gold_min;
     int guaranteed_gold_max;
     int guaranteed_xp;
@@ -222,33 +208,32 @@ class boss {
 
         if (total_damage == 0) return;
 
+        loot_premio@[] premios = boss_loot_carregar(id);
+
         for (uint i = 0; i < participants.length(); i++) {
+            int pidx = get_player_index_from(participants[i].player_name);
+            if (pidx < 0) continue;
+
             float contribution = float(participants[i].damage_dealt) / float(total_damage);
 
             int gold_reward = int((guaranteed_gold_min + guaranteed_gold_max) / 2 * contribution);
 
             int xp_reward = int(guaranteed_xp * contribution);
 
+            players[pidx].gold += gold_reward;
+            players[pidx].saldo = players[pidx].gold;
+            if (xp_reward > 0) ganhaxp(pidx, xp_reward, 0);
+
             string msg = "Recompensas por derrotar " + name + ":\n";
             msg += "Gold: " + gold_reward + "\n";
             msg += "XP: " + xp_reward + "\n";
 
-            for (uint j = 0; j < loot_table.length(); j++) {
-                bool should_drop = loot_table[j].guaranteed;
-                if (!should_drop) {
-                    float roll = random(0, 100) / 100.0;
-                    should_drop = (roll <= loot_table[j].drop_chance);
-                }
-
-                if (should_drop) {
-                    msg += "Item: " + loot_table[j].item_name;
-                    if (loot_table[j].quantity > 1) {
-                        msg += " x" + loot_table[j].quantity;
-                    }
-                    msg += "\n";
-                }
+            string itens = loot_entregar_premios(players[pidx], premios);
+            if (itens != "") {
+                msg += "ITENS:\n" + itens;
             }
 
+            loot_enviar_mensagem(players[pidx], msg);
         }
     }
 
@@ -299,7 +284,106 @@ void init_bosses_system() {
 
     create_default_bosses();
 
+    init_boss_loot();
+
     load_bosses_data();
+}
+
+// ---------------------------------------------------------------------
+// Loot dos chefes no SQLite (tabela boss_loot). O codigo so faz a carga
+// inicial com a tabela vazia; em runtime os premios sao lidos do banco.
+// ---------------------------------------------------------------------
+
+void criar_tabela_boss_loot() {
+    if(!database_initialized || bancoJogo is null) {
+        debug_log("ERRO: criar_tabela_boss_loot - Banco não inicializado");
+        return;
+    }
+
+    string create_boss_loot = """
+        CREATE TABLE IF NOT EXISTS boss_loot (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            boss_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            qty_min INTEGER DEFAULT 1,
+            qty_max INTEGER DEFAULT 1,
+            chance REAL DEFAULT 1.0,
+            UNIQUE(boss_id, item_name)
+        );
+    """;
+
+    if(bancoJogo.execute(create_boss_loot) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela boss_loot: " + bancoJogo.get_last_error_text());
+    }
+}
+
+bool boss_loot_inserir(int boss_id, string item_name, string exibicao, int qty_min, int qty_max, double chance) {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    ensure_item_in_catalog(item_name, exibicao);
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO boss_loot (boss_id, item_name, qty_min, qty_max, chance) VALUES (?, ?, ?, ?, ?);");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar boss_loot_inserir: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_int(1, boss_id);
+    stmt.bind_text(2, item_name);
+    stmt.bind_int(3, qty_min);
+    stmt.bind_int(4, qty_max);
+    stmt.bind_double(5, chance);
+
+    return (stmt.step() == SQLITE_DONE);
+}
+
+int seed_boss_loot() {
+    int semeados = 0;
+
+    // Rei Rato Gigante
+    if(boss_loot_inserir(1, "corpo_de_rato", "Corpo de rato", 1, 1, 1.0)) semeados++;
+    if(boss_loot_inserir(1, "coroa_do_rei_rato", "Coroa do Rei Rato", 1, 1, 0.2)) semeados++;
+
+    // Lobo Alpha
+    if(boss_loot_inserir(2, "corpo_de_lobo", "Corpo de lobo", 2, 2, 1.0)) semeados++;
+    if(boss_loot_inserir(2, "espada_de_presa", "Espada de Presa", 1, 1, 0.15)) semeados++;
+
+    // Golem de Pedra Antigo
+    if(boss_loot_inserir(3, "nucleo_de_golem", "Núcleo de Golem", 1, 1, 1.0)) semeados++;
+    if(boss_loot_inserir(3, "armadura_de_ferro", "Armadura de ferro", 1, 1, 0.25)) semeados++;
+    if(boss_loot_inserir(3, "martelo_ancestral", "Martelo Ancestral", 1, 1, 0.1)) semeados++;
+
+    return semeados;
+}
+
+void init_boss_loot() {
+    criar_tabela_boss_loot();
+
+    int total = loot_contar_linhas("boss_loot");
+    if(total == 0) {
+        int semeados = seed_boss_loot();
+        debug_log("BOSSES: tabela boss_loot vazia, " + semeados + " premios semeados");
+    } else {
+        debug_log("BOSSES: " + total + " premios registrados em boss_loot");
+    }
+
+    loot_sincronizar_catalogo_itens("boss_loot");
+}
+
+loot_premio@[] boss_loot_carregar(int boss_id) {
+    loot_premio@[] premios;
+    if(!database_initialized || bancoJogo is null) return premios;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT item_name, qty_min, qty_max, chance FROM boss_loot WHERE boss_id = ? ORDER BY chance DESC, id;");
+    if(@stmt == null) return premios;
+
+    stmt.bind_int(1, boss_id);
+
+    while(stmt.step() == SQLITE_ROW) {
+        premios.insert_last(loot_ler_premio(stmt));
+    }
+
+    return premios;
 }
 
 void create_default_bosses() {
@@ -337,19 +421,6 @@ void create_default_bosses() {
         ab2.radius = 10;
         ab2.cooldown = 30;
         b.abilities.insert_last(ab2);
-
-        boss_loot_entry@ loot1 = boss_loot_entry();
-        loot1.item_name = "Pele de Rato Gigante";
-        loot1.quantity = 1;
-        loot1.drop_chance = 1.0;
-        loot1.guaranteed = true;
-        b.loot_table.insert_last(loot1);
-
-        boss_loot_entry@ loot2 = boss_loot_entry();
-        loot2.item_name = "Coroa do Rei Rato";
-        loot2.quantity = 1;
-        loot2.drop_chance = 0.2;
-        b.loot_table.insert_last(loot2);
 
         add_boss(b);
     }
@@ -396,19 +467,6 @@ void create_default_bosses() {
         ab3.duration = 10;
         ab3.cooldown = 30;
         b.abilities.insert_last(ab3);
-
-        boss_loot_entry@ loot1 = boss_loot_entry();
-        loot1.item_name = "Pele de Lobo Alpha";
-        loot1.quantity = 2;
-        loot1.drop_chance = 1.0;
-        loot1.guaranteed = true;
-        b.loot_table.insert_last(loot1);
-
-        boss_loot_entry@ loot2 = boss_loot_entry();
-        loot2.item_name = "Espada de Presa";
-        loot2.quantity = 1;
-        loot2.drop_chance = 0.15;
-        b.loot_table.insert_last(loot2);
 
         add_boss(b);
     }
@@ -462,25 +520,6 @@ void create_default_bosses() {
         ab4.summon_count = 4;
         ab4.cooldown = 70;
         b.abilities.insert_last(ab4);
-
-        boss_loot_entry@ loot1 = boss_loot_entry();
-        loot1.item_name = "Núcleo de Golem";
-        loot1.quantity = 1;
-        loot1.drop_chance = 1.0;
-        loot1.guaranteed = true;
-        b.loot_table.insert_last(loot1);
-
-        boss_loot_entry@ loot2 = boss_loot_entry();
-        loot2.item_name = "Armadura de Pedra";
-        loot2.quantity = 1;
-        loot2.drop_chance = 0.25;
-        b.loot_table.insert_last(loot2);
-
-        boss_loot_entry@ loot3 = boss_loot_entry();
-        loot3.item_name = "Martelo Ancestral";
-        loot3.quantity = 1;
-        loot3.drop_chance = 0.1;
-        b.loot_table.insert_last(loot3);
 
         add_boss(b);
     }
@@ -573,22 +612,12 @@ void cmd_bossinfo(int client_index, string[] args) {
         msg += "\n";
     }
 
-    if (b.loot_table.length() > 0) {
+    loot_premio@[] premios = boss_loot_carregar(b.id);
+    if (premios.length() > 0) {
         msg += "💎 POSSÍVEL LOOT:\n";
         msg += "- Gold: " + b.guaranteed_gold_min + " - " + b.guaranteed_gold_max + "\n";
         msg += "- XP: " + b.guaranteed_xp + "\n";
-        for (uint i = 0; i < b.loot_table.length(); i++) {
-            msg += "- " + b.loot_table[i].item_name;
-            if (b.loot_table[i].quantity > 1) {
-                msg += " x" + b.loot_table[i].quantity;
-            }
-            if (b.loot_table[i].guaranteed) {
-                msg += " (GARANTIDO)";
-            } else {
-                msg += " (" + int(b.loot_table[i].drop_chance * 100) + "% chance)";
-            }
-            msg += "\n";
-        }
+        msg += loot_descrever_premios(premios);
     }
 
 }
