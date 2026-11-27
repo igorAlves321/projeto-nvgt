@@ -344,32 +344,47 @@ void servicesmenu() {
 }
 
 void chatmenu() {
-	speak(pu.get_value("Funcionalidade desativada no momento."));
-	return;
+	// idiomaschat vem do pacote "channels": uma linha "rotulo=nome" por canal.
+	// O servidor valida a troca, grava e devolve "setconfig" com o canal novo.
+	const string prefixo = "canal:";
 
 	setupmenu();
-	game_menu.add_item(pu.get_value("Chat global"), "global");
-	game_menu.add_item(pu.get_value("Chat regional"), "regional");
-	game_menu.add_item(pu.get_value("Chat de equipe"), "team");
+	int total = 0;
+	for(uint i = 0; i < idiomaschat.length(); i++) {
+		string linha = idiomaschat[i].trim_whitespace();
+		int sep = linha.find("=");
+		if(sep < 1 || sep >= int(linha.length()) - 1) continue;
+
+		string rotulo = linha.substr(0, sep).trim_whitespace();
+		string nome = linha.substr(sep + 1).trim_whitespace();
+		if(rotulo == "" || nome == "") continue;
+
+		string texto = pu.get_value(rotulo);
+		if(nome == idiomachat) texto = "* " + texto;
+		game_menu.add_item(texto, prefixo + nome);
+		total++;
+	}
+
+	if(total == 0) {
+		speak(pu.get_value("Não há canais de chat disponíveis no momento."));
+		return;
+	}
+
 	game_menu.add_item(pu.get_value("Voltar"), "back");
+	game_menu.intro_text = pu.get_value("Menu de canais de chat. Escolha um canal e pressione enter.");
 
-	game_menu.intro_text = pu.get_value("Escolha o canal de chat.");
 	int mres = game_menu.run();
+	if(mres < 0) return;
+
 	string selected_id = game_menu.get_item_id(mres);
+	if(selected_id == "back" || selected_id.length() <= prefixo.length()) return;
+	if(selected_id.substr(0, prefixo.length()) != prefixo) return;
 
-	if(mres < 0 || selected_id == "back") return;
-
-	if(selected_id == "global") {
-		send_reliable(net_peer_id, "/setchannel global", 1);
-		speak(pu.get_value("Chat global selecionado"));
-	}
-	else if(selected_id == "regional") {
-		send_reliable(net_peer_id, "/setchannel regional", 1);
-		speak(pu.get_value("Chat regional selecionado"));
-	}
-	else if(selected_id == "team") {
-		send_reliable(net_peer_id, "/setchannel team", 1);
-		speak(pu.get_value("Chat de equipe selecionado"));
+	string novo_canal = selected_id.substr(prefixo.length());
+	if(novo_canal == idiomachat) {
+		speak(pu.get_value("Você já está neste canal."));
+		return;
 	}
 
+	send_reliable(net_peer_id, "canais_sel " + novo_canal, 0);
 }

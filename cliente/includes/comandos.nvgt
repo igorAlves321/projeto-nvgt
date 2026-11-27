@@ -584,9 +584,16 @@ void tprincipais(){
 			debug_log("📋 F5 - Solicitando lista de jogadores online");
 			send_reliable(peer_id, "getplayers", 0);
 		}
-		if(key_pressed(KEY_F6)) {
-			debug_log("⌨️ F6 pressionado - funcionalidade desativada");
-			speak(pu.get_value("Funcionalidade desativada no momento."));
+		if(key_pressed(KEY_F6) && !ausente) {
+			debug_log("⌨️ F6 pressionado - pedindo lista de canais de chat");
+			canais_menu_pendente = true;
+			canais_menu_pronto = false;
+			canais_menu_timer.restart();
+			send_reliable(peer_id, "get_channels", 0);
+		}
+		if(canais_menu_pronto) {
+			canais_menu_pronto = false;
+			chatmenu();
 		}
 		if(key_pressed(KEY_O) && !ausente) {
 			if(playertrack == "") {
@@ -719,18 +726,50 @@ string pegar_mensagem(){
 	return string_decrypt(event.message, NETWORK_ENCRYPTION_KEY);
 }
 
+const int ANTICHEAT_INTERVALO_PASTA = 5000;
+const int ANTICHEAT_SCAN_JANELA = 60000;
+const int ANTICHEAT_SCAN_LIMITE = 3;
+int anticheat_scan_hits = 0;
+timer anticheat_scan_timer;
+
+void anticheat_encerrar(string motivo){
+	debug_log("ANTICHEAT: " + motivo + " - encerrando o cliente");
+	if(connected) send_reliable(net_peer_id, "close", 0);
+	speak(pu.get_value("Programa de trapaça detectado. O jogo será fechado."), true);
+	writeprefs();
+	wait(3000);
+	exit();
+}
+
+// Chamada a cada volta do loop do jogo, logo depois do wait(): as duas flags do
+// motor são recalculadas dentro do wait() e a de memória é zerada na volta
+// seguinte, então não dá para testá-las só de tempos em tempos. O custo por
+// volta é o de ler duas flags; só a consulta ao disco fica no timer.
 void verificando(){
-	if(memory_scan_detected.test()||speed_hack_detected.test())exit();
-	if(tverificar.elapsed>=5000){
-		tverificar.restart();
-		bool achou=false;
-		if(directory_exists(DIRECTORY_TEMP+"\\Cheat Engine")){
-			achou=true;
+	if(speed_hack_detected.test()){
+		anticheat_encerrar("speed hack");
+		return;
+	}
+
+	// Uma leitura isolada da memória do processo também acontece com antivírus,
+	// então só vale como trapaça quando se repete dentro da janela.
+	if(memory_scan_detected.test()){
+		if(anticheat_scan_hits==0||anticheat_scan_timer.elapsed>ANTICHEAT_SCAN_JANELA){
+			anticheat_scan_hits=0;
+			anticheat_scan_timer.restart();
 		}
-		if(achou==true&&!s1.playing){
-			chutad();
-			wait(200);
-			exit();
+		anticheat_scan_hits++;
+		debug_log("ANTICHEAT: leitura externa de memória detectada (" + anticheat_scan_hits + "/" + ANTICHEAT_SCAN_LIMITE + ")");
+		if(anticheat_scan_hits>=ANTICHEAT_SCAN_LIMITE){
+			anticheat_encerrar("varredura de memória repetida");
+			return;
+		}
+	}
+
+	if(tverificar.elapsed>=ANTICHEAT_INTERVALO_PASTA){
+		tverificar.restart();
+		if(directory_exists(DIRECTORY_TEMP+"\\Cheat Engine")){
+			anticheat_encerrar("pasta temporária do Cheat Engine");
 		}
 	}
 }
