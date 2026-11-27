@@ -15,6 +15,7 @@ class player {
 	dictionary degradation;
 	db inv;
 	int aitem = 1;
+	int avisaserver = 1;
 	crafting c;
 	var_management@ v_m;
 	int in_arena = 0;
@@ -543,23 +544,12 @@ class player {
 		}
 		return false;
 	}
+	// Lista de ignorados persistida no sqlite (pacotes_social.nvgt), sem muted.usr.
 	void add_muted(string name) {
-		muted += "\r\n" + name;
-		write_to(charname, "muted.usr", muted);
+		social_adicionar_ignorado(this, name);
 	}
 	bool remove_muted(string name) {
-		string[] m = muted.split("\r\n");
-		string newmuted;
-		bool succeeded = false;
-		for (uint i = 0; i < m.length(); i++) {
-			if (m[i] != name)
-				newmuted += "\r\n" + m[i];
-			else
-				succeeded = true;
-		}
-		muted = newmuted;
-		write_to(charname, "muted.usr", muted);
-		return succeeded;
+		return social_remover_ignorado(this, name);
 	}
 	void add_playerfire(string enemy) {
 		playerfire pf(enemy);
@@ -586,37 +576,12 @@ class player {
 			}
 		}
 	}
+	// Desgaste persistido no sqlite (pacotes_itens.nvgt), sem degradation.ini.
 	void load_degradation() {
-		bool needs_create = false;
-		if(!file_exists("players/" + this.charname + "/degradation.ini")) {
-			needs_create = true;
-		}
-		file f;
-		if(f.open("players/" + this.charname + "/degradation.ini", "rb")) {
-			string data = f.read();
-			f.close();
-			dictionary@ temp = deserialize(data);
-			if (@temp != null) {
-				degradation = temp;
-			}
-		}
-		if(degradation.is_empty() || needs_create) {
-			string[]@ keys = inv.get_keys();
-			if (@keys != null) {
-				for (uint i = 0; i < keys.length(); i++) {
-					if (!degradation.exists(keys[i])) {
-						degradation.set(keys[i], 100.0);
-					}
-				}
-			}
-		}
+		pitens_carregar_degradacao(this);
 	}
 	void save_degradation() {
-		file f;
-		if(f.open("players/" + this.charname + "/degradation.ini", "wb")) {
-			f.write(degradation.serialize());
-			f.close();
-		}
+		pitens_salvar_degradacao(this);
 	}
 	void manage_degradation(string name, double quantity, bool set = false) {
 		if(degradation.exists(name)) {
@@ -627,16 +592,7 @@ class player {
 				if(degradation_value <= 0) degradation_value = 0;
 				if(degradation_value >= 100) {
 					if(this.inv_item_number(name) > 0) {
-						this.inv_add_item(name, -1);
-						bool is_weapon = is_item_weapon(name);
-						bool is_clothing = is_item_clothing(name);
-						if (is_weapon) {
-							this.inv_add_item("base_pulverizada", 1);
-							send_reliable_text(this.peer_id, "msg Sua arma " + name + " quebrou e virou po!", 3);
-						} else if (is_clothing) {
-							remove_clothing_by_name(name);
-							send_reliable_text(this.peer_id, "msg Sua roupa " + name + " se desgastou completamente!", 3);
-						}
+						pitens_quebrar_item(this, name);
 					}
 					degradation_value = 0;
 				}
@@ -733,11 +689,10 @@ class player {
 		send_reliable_text(this.peer_id, "msg2 Voce subiu para o nivel " + this.level + "!", 0);
 		send_reliable_text(this.peer_id, "ps level2.ogg", 0);
 	}
+	// O silencio tem um estado so, gravado no sqlite (pacotes_social.nvgt), sem
+	// silencio.usr. Aqui fica apenas a copia em memoria.
 	void silence_player(int minutes) {
-		this.silenciado = 1;
-		this.temposilencio = minutes;
-		this.tsilencio.restart();
-		file_write("players/" + this.charname + "/silencio.usr", "1");
+		social_silenciar(this.charname, minutes, "sistema");
 		send_reliable_text(this.peer_id, "msg2 Voce foi silenciado por " + minutes + " minutos.", 0);
 	}
 	void unsilence_player() {
@@ -745,7 +700,6 @@ class player {
 		this.temposilencio = 0;
 		this.tsilencio.force(0);
 		this.tsilencio.pause();
-		file_delete("players/" + this.charname + "/silencio.usr");
 		send_reliable_text(this.peer_id, "msg2 Voce foi dessilenciado. Tome cuidado!", 0);
 	}
 	void jail_player(int minutes, string reason = "") {
@@ -1330,29 +1284,11 @@ class player {
 			}
 			if(string_contains(this.map, "isla_privada_de_", 1) > -1) {
 				string data = string_replace(this.map, "isla_privada_de_", "", true);
-				int index2 = get_player_index_from(data);
-				if(index2 > -1) {
-					if(players[index2].payment == 0) {
-						send_reliable_text(this.peer_id, "msg2 ;la reja de entrada a esta isla tiene una barrera magica la cual al intentar atravezarla con tu mano hace que se graben algunas letras en tu retina: Clausurada temporalmente por falta de pago.;", 0);
-						changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 110);
-					}
-				}
-				else if(index2 < 0) {
-					int pay;
-					if(!file_exists("players/" + data + "/configs.ini")) return;
-					else {
-						file f;
-						f.open("players/" + data + "/configs.ini", "rb");
-						dictionary@ sd = deserialize(f.read());
-						f.close();
-						if(sd.exists("payment")) {
-							sd.get("payment", pay);
-						}
-						if(pay == 0) {
-							send_reliable_text(this.peer_id, "msg2 ;la reja de entrada a esta isla tiene una barrera magica la cual al intentar atravezarla con tu mano hace que se graben algunas letras en tu retina: Clausurada temporalmente por falta de pago.;", 0);
-							changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 110);
-						}
-					}
+				// Pagamento da ilha vem da tabela ilhas_privadas (pacotes_economia.nvgt),
+				// valendo igual para dono online ou offline.
+				if(ilha_bloqueada(data)) {
+					send_reliable_text(this.peer_id, "msg2 ;A grade de entrada desta ilha tem uma barreira mágica que, ao ser atravessada pela sua mão, grava algumas letras na sua retina: Fechada temporariamente por falta de pagamento.;", 0);
+					changemap("planeta_aquaphil", get_player_index_from(this.charname), 1, 110);
 				}
 			}
 			if(this.amethyst == 1 && this.tamethyst.elapsed >= 1000) {

@@ -66,6 +66,15 @@ class monstruo {
 	int ladoandar = 2;
 	bool agressivo = true;
 
+	// Vinculos com chefes de mundo (bosses.nvgt) e dungeons (dungeons.nvgt).
+	// vida_registrada guarda a vida vista no ultimo ciclo: a diferenca e o
+	// dano sofrido, qualquer que seja a origem (bala, bomba, reflexo).
+	int boss_id = 0;
+	int dungeon_instance_id = 0;
+	bool dungeon_chefe = false;
+	bool anunciar_morte = true;
+	int vida_registrada = -1;
+
 	monstruo(int nx, int ny, string nmap, string ntipo) {
 		x = nx;
 		y = ny;
@@ -78,6 +87,7 @@ class monstruo {
 		nasceu = true;
 
 		setup_by_type(ntipo);
+		vida_registrada = vida;
 	}
 
 	void setup_by_type(string type) {
@@ -296,7 +306,7 @@ class monstruo {
 
 		string golp = (asesino != "") ? asesino : golpeado;
 
-		if(golp != "") {
+		if(golp != "" && anunciar_morte) {
 			send_reliable_text(0, "msg2 " + golp + "; ;matou um; ;" + tipo + ";!", 3);
 		}
 
@@ -382,10 +392,65 @@ void spawn_monstruo(int x, int y, string map, string tipo) {
 	monstruos_global.insert_last(m);
 }
 
+// Monstro com atributos proprios, sem recompensa nem respawn automaticos.
+// Usado pelos chefes de mundo e pelas ondas/chefes de dungeon, que cuidam das
+// proprias recompensas.
+monstruo@ spawn_monstruo_especial(int x, int y, string mapa, string tipo, int vida, int dano_min, int dano_max) {
+	monstruo@ m = monstruo(x, y, mapa, tipo);
+	if(vida < 1) vida = 1;
+	if(dano_min < 0) dano_min = 0;
+	if(dano_max < dano_min) dano_max = dano_min;
+	m.vida = vida;
+	m.vida_max = vida;
+	m.vida_registrada = vida;
+	m.dano_min = dano_min;
+	m.dano_max = dano_max;
+	m.xp_reward = 0;
+	m.gold_reward_min = 0;
+	m.gold_reward_max = 0;
+	m.itemsadar = "";
+	m.spawn_chance = 0;
+	m.enablerespawn = false;
+	monstruos_global.insert_last(m);
+	return m;
+}
+
+// Repassa aos sistemas de chefe e de dungeon o dano sofrido desde o ultimo
+// ciclo. O autor e o ultimo jogador que acertou o monstro.
+void monstruo_registrar_dano(monstruo@ m) {
+	if(m is null) return;
+	if(m.vida_registrada < 0) {
+		m.vida_registrada = m.vida;
+		return;
+	}
+	if(m.vida == m.vida_registrada) return;
+
+	int dano = m.vida_registrada - m.vida;
+	m.vida_registrada = m.vida;
+	if(dano <= 0) return;
+	if(m.boss_id <= 0 && m.dungeon_instance_id <= 0) return;
+
+	string autor = (m.golpeado != "") ? m.golpeado : m.asesino;
+	if(m.boss_id > 0) boss_registrar_dano_entidade(m.boss_id, autor, dano, m.vida);
+	if(m.dungeon_instance_id > 0) dungeon_registrar_dano(m.dungeon_instance_id, autor, dano);
+}
+
+// Chamado uma unica vez quando o monstro sai do mundo por ter ficado sem vida.
+void monstruo_notificar_morte(monstruo@ m) {
+	if(m is null) return;
+	if(m.boss_id > 0) boss_entidade_morreu(m.boss_id);
+	if(m.dungeon_instance_id > 0) dungeon_monstro_morreu(m.dungeon_instance_id, m.tipo, m.dungeon_chefe);
+}
+
 void monstruo_global_loop() {
 	for(uint i = 0; i < monstruos_global.length(); i++) {
-		if(monstruos_global[i].vida <= 0 && !monstruos_global[i].morreu) {
-			monstruos_global[i].die();
+		monstruo_registrar_dano(monstruos_global[i]);
+
+		// Quem chega aqui com morreu ja marcado (bomba nuclear, /killboss,
+		// limpeza de dungeon) sai do mundo sem repetir as recompensas de die().
+		if(monstruos_global[i].vida <= 0) {
+			if(!monstruos_global[i].morreu) monstruos_global[i].die();
+			monstruo_notificar_morte(monstruos_global[i]);
 
 			if(monstruos_global[i].enablerespawn) {
 				monstruo_data md(
@@ -406,6 +471,7 @@ void monstruo_global_loop() {
 			}
 
 			monstruos_global.remove_at(i);
+			i--;
 			continue;
 		}
 
@@ -426,6 +492,7 @@ void monstruo_global_loop() {
 			);
 
 			monstruos_data.remove_at(i);
+			i--;
 		}
 	}
 }

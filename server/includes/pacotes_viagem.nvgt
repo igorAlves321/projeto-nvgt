@@ -1,0 +1,619 @@
+// ==========================================================================
+// Pacotes de viagem e de chefes que o cliente envia e o servidor não tratava.
+//
+// Porta do BGT original:
+//   - "enter"            (net.bgt:1080 -> enter(), re_server_test.bgt:1801)
+//     Passagens do mapa ativadas pelo Enter: cpm, tp, ptm, pm, pm2 e newymap.
+//   - "/s"               (net.bgt:2034) sair do portal espiritual.
+//   - "arena"            (net.bgt:2252) ligação para 3812742 no celular.
+//   - "jump" / "land"    (net.bgt:1210-1249) aviso ao mapa, dano de queda e
+//     paraquedas. Chamados pelos dois blocos de server.nvgt.
+//
+// Pacotes que só existem no port:
+//   - "tp:<mapa>:<x>:<y>" o cliente manda sozinho ao pisar numa passagem
+//     (cliente/includes/map.nvgt, travel_point_loop). O BGT não tinha esse
+//     pacote: lá toda passagem dependia do Enter. O destino que vem no pacote
+//     NUNCA é usado; ele só vale como pedido para ativar a passagem "tp" em
+//     que o servidor vê o jogador.
+//   - "s" / "sn" são os avisos de zona segura do cliente (safeloop). O BGT
+//     os ignorava (a zona segura é calculada no servidor); aqui são apenas
+//     aceitos para não caírem em "Comando não reconhecido".
+//
+// Comandos de chefe (bosses.nvgt): /bosses, /bossinfo <id> e, só para
+// administradores, /spawnboss <id>, /killboss <id> e /setarena.
+//
+// Formato das passagens no arquivo de mapa (o mesmo do BGT e do menu de
+// construção do cliente): tipo:minx:maxx:miny:maxy:destx:desty:mapa:...
+// Os objetos travel_point/timed_portal de map_elements.nvgt guardam esses
+// quatro números, na ordem do arquivo, nos campos zone_x1, zone_y1, zone_x2
+// e zone_y2; por isso a faixa de x é (zone_x1, zone_y1) e a de y é
+// (zone_x2, zone_y2).
+// ==========================================================================
+
+const string VIAGEM_MAPA_ESPIRITUAL = "portal_espiritual";
+
+// Intervalo mínimo entre duas passagens (maptraveltimer do BGT).
+const int VIAGEM_INTERVALO_MS = 3000;
+const int VIAGEM_INTERVALO_ITEM_MS = 700;
+// Janela em que o INTERACT que acompanha o Enter é ignorado.
+const int VIAGEM_JANELA_INTERACT_MS = 1000;
+const int VIAGEM_ESPERA_MAXIMA_MS = 600000;
+// Teto para a altura de queda informada pelo cliente.
+const int VIAGEM_QUEDA_MAXIMA = 5000;
+
+// Viagem com tempo (cpm): o jogador fica parado até o relógio vencer.
+class viagem_pendente {
+	string nome = "";
+	string mapa_origem = "";
+	string mapa = "";
+	int x = 0;
+	int y = 0;
+	string som = "";
+	string fala = "";
+	int espera_ms = 0;
+	timer relogio;
+}
+
+viagem_pendente@[] viagens_pendentes;
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+bool viagem_zona_contem(int x_a, int x_b, int y_a, int y_b, int x, int y) {
+	int minx = x_a <= x_b ? x_a : x_b;
+	int maxx = x_a <= x_b ? x_b : x_a;
+	int miny = y_a <= y_b ? y_a : y_b;
+	int maxy = y_a <= y_b ? y_b : y_a;
+	return (x >= minx && x <= maxx && y >= miny && y <= maxy);
+}
+
+// Marcadores que os textos de mapa do BGT usam.
+string viagem_texto(string fala, player@ p) {
+	if(@p == null) return fala;
+	fala = fala.replace("*g*", p.sexo2);
+	fala = fala.replace("*nick*", p.charname);
+	return fala;
+}
+
+// Os mapas guardam o som sem extensão; "" e "none" significam sem som.
+string viagem_som(string nome) {
+	nome = nome.trim_whitespace();
+	if(nome == "" || nome == "none") return "";
+	if(!nome.ends_with(".ogg")) nome += ".ogg";
+	return nome;
+}
+
+void viagem_tocar_som(player@ p, string som) {
+	if(@p == null) return;
+	som = viagem_som(som);
+	if(som == "") return;
+
+	int mapindex = get_map_index_from(p.map);
+	if(mapindex < 0) return;
+	server_maps[mapindex].send_packet(0, "play " + som, p.x, p.y);
+}
+
+int viagem_indice_pendente(string nome) {
+	for(uint i = 0; i < viagens_pendentes.length(); i++) {
+		if(viagens_pendentes[i].nome == nome) return int(i);
+	}
+	return -1;
+}
+
+void viagem_cancelar_pendente(string nome) {
+	int indice = viagem_indice_pendente(nome);
+	if(indice >= 0) viagens_pendentes.remove_at(indice);
+}
+
+// Usado por process_map_interaction() (map_runtime.nvgt).
+bool viagem_acabou_de_viajar(player@ p) {
+	if(@p == null) return false;
+	if(viagem_indice_pendente(p.charname) >= 0) return true;
+	return p.maptraveltimer.elapsed < VIAGEM_JANELA_INTERACT_MS;
+}
+
+// Mesma condição do BGT: paralisado nunca passa; fora do modo espectador
+// vale o intervalo entre passagens.
+bool viagem_bloqueada(player@ p, int intervalo_ms) {
+	if(p.paralisado || p.paralisado2) return true;
+	if(p.afk || p.health <= 0 || game_frozen) return true;
+	if(p.watching == 0 && p.maptraveltimer.elapsed < intervalo_ms) return true;
+	return false;
+}
+
+// Destino das saídas que apontam para o portal espiritual: o último mapa
+// comum em que o jogador esteve.
+string viagem_mapa_de_volta(player@ p) {
+	string destino = p.mapavoltar;
+	if(destino == "" || destino == VIAGEM_MAPA_ESPIRITUAL || get_map_index_from(destino) < 0) {
+		destino = mapainicial;
+	}
+	return destino;
+}
+
+// Leva o jogador ao destino pelas mesmas funções do teleportador e devolve
+// false, já avisando, quando a viagem não pode acontecer.
+bool viagem_executar(int player_index, string mapa, int x, int y, string som, string fala) {
+	if(player_index < 0 || player_index >= int(players.length())) return false;
+
+	player@ p = players[player_index];
+
+	if(p.in_arena != 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode sair da arena durante a partida.;", 0);
+		return false;
+	}
+
+	if(get_map_index_from(mapa) < 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Este destino não está disponível no momento.;", 0);
+		return false;
+	}
+
+	if(house_is_locked_for_player(p.charname, mapa)) {
+		send_reliable_text(p.peer_id, "msg2 ;Esta propriedade esta trancada.;", 0);
+		return false;
+	}
+
+	viagem_cancelar_pendente(p.charname);
+
+	p.maptraveltimer.restart();
+	p.tcongelar.restart();
+	p.jaandou = 0;
+	p.javoou = 0;
+
+	move_player_to_map(player_index, mapa, x, y);
+	p.map_name = mapa;
+	p.mapaatual = mapa;
+
+	// Como no changemap do BGT: lembra o último mapa fora do portal espiritual.
+	if(mapa != VIAGEM_MAPA_ESPIRITUAL) p.mapavoltar = mapa;
+
+	viagem_tocar_som(p, som);
+	if(fala != "") send_reliable_text(p.peer_id, "msg2 " + fala, 0);
+
+	debug_log("VIAGEM: " + p.charname + " -> " + mapa + " (" + x + "," + y + ")");
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// Passagens
+// --------------------------------------------------------------------------
+
+// cpm: avisa, prende o jogador e agenda a troca de mapa.
+void viagem_iniciar_temporizada(int player_index, timed_portal@ tp) {
+	player@ p = players[player_index];
+
+	if(viagem_indice_pendente(p.charname) >= 0) return;
+
+	if(p.in_arena != 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode sair da arena durante a partida.;", 0);
+		return;
+	}
+
+	if(get_map_index_from(tp.dest_map) < 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Este destino não está disponível no momento.;", 0);
+		return;
+	}
+
+	if(house_is_locked_for_player(p.charname, tp.dest_map)) {
+		send_reliable_text(p.peer_id, "msg2 ;Esta propriedade esta trancada.;", 0);
+		return;
+	}
+
+	viagem_pendente@ v = viagem_pendente();
+	v.nome = p.charname;
+	v.mapa_origem = p.map;
+	v.mapa = tp.dest_map;
+	v.x = tp.dest_x;
+	v.y = tp.dest_y;
+	// No arquivo, o campo 9 (lido como "color") é o som da partida e o campo
+	// 12 (lido como "effect") é o som da chegada.
+	v.som = tp.effect;
+	v.fala = viagem_texto(tp.arrival_msg, p);
+	v.espera_ms = tp.travel_time;
+	if(v.espera_ms < 0) v.espera_ms = 0;
+	if(v.espera_ms > VIAGEM_ESPERA_MAXIMA_MS) v.espera_ms = VIAGEM_ESPERA_MAXIMA_MS;
+	v.relogio.restart();
+	viagens_pendentes.insert_last(v);
+
+	p.maptraveltimer.restart();
+	p.tcongelar.restart();
+
+	send_reliable_text(p.peer_id, "stopmoving", 0);
+	viagem_tocar_som(p, tp.color);
+	string fala = viagem_texto(tp.travel_msg, p);
+	if(fala != "") send_reliable_text(p.peer_id, "msg2 " + fala, 0);
+}
+
+// tp / travelpoint / portamapa.
+void viagem_usar_ponto(int player_index, travel_point@ tp, bool falar_texto) {
+	player@ p = players[player_index];
+
+	string mapa = tp.dest_map;
+	int x = tp.dest_x;
+	int y = tp.dest_y;
+
+	// No BGT, uma passagem "para o portal espiritual" é a saída dele.
+	if(mapa.find(VIAGEM_MAPA_ESPIRITUAL) >= 0) {
+		mapa = viagem_mapa_de_volta(p);
+		x = 1;
+		y = 0;
+	}
+
+	string fala = falar_texto ? viagem_texto(tp.message, p) : "";
+	viagem_executar(player_index, mapa, x, y, "", fala);
+}
+
+// ptm, pm, pm2 e newymap não viram objeto completo em map_parser_methods.nvgt
+// (faltam som, item e quantidades), então são lidos direto das linhas do mapa,
+// como o enter() do BGT fazia. Devolve true quando alguma linha tratou o Enter.
+bool viagem_usar_linha(int player_index, string[]@ parsed) {
+	player@ p = players[player_index];
+	string tipo = parsed[0];
+
+	if(tipo != "ptm" && tipo != "pm" && tipo != "pm2" && tipo != "newymap") return false;
+	if(parsed.length() < 9) return false;
+
+	int minx = 0, maxx = 0, miny = 0, maxy = 0, newx = 0, newy = 0;
+	if(!map_try_parse_int_token(parsed[1], minx) || !map_try_parse_int_token(parsed[2], maxx)) return false;
+	if(!map_try_parse_int_token(parsed[3], miny) || !map_try_parse_int_token(parsed[4], maxy)) return false;
+	if(!map_try_parse_int_token(parsed[5], newx) || !map_try_parse_int_token(parsed[6], newy)) return false;
+	if(!viagem_zona_contem(minx, maxx, miny, maxy, p.x, p.y)) return false;
+
+	string newmap = parsed[7];
+
+	if(tipo == "newymap") {
+		string fala = viagem_texto(parsed[8], p);
+		if(newmap == "default") {
+			viagem_executar(player_index, viagem_mapa_de_volta(p), newx, newy, "", fala);
+			return true;
+		}
+		if(newmap == p.mapavoltar) {
+			viagem_executar(player_index, newmap, newx, newy, "", fala);
+			return true;
+		}
+		return false;
+	}
+
+	if(tipo == "ptm") {
+		// ptm:...:mapa:fala[:som]
+		if(viagem_bloqueada(p, VIAGEM_INTERVALO_MS)) return true;
+		string som_ptm = parsed.length() > 9 ? parsed[9] : "";
+		viagem_executar(player_index, newmap, newx, newy, som_ptm, viagem_texto(parsed[8], p));
+		return true;
+	}
+
+	if(tipo == "pm") {
+		// pm:...:mapa:fala:som:item:quantidade[:limite]
+		if(parsed.length() < 12) return false;
+		if(viagem_bloqueada(p, VIAGEM_INTERVALO_ITEM_MS)) return true;
+
+		string item = parsed[10];
+		int quantidade = 0;
+		int limite = 0;
+		map_try_parse_int_token(parsed[11], quantidade);
+		if(parsed.length() > 12) map_try_parse_int_token(parsed[12], limite);
+
+		// Quem já tem o limite do item não passa (nem recebe de novo).
+		if(limite > 0 && p.inv_item_number(item) >= limite) {
+			p.maptraveltimer.restart();
+			return true;
+		}
+
+		if(!viagem_executar(player_index, newmap, newx, newy, parsed[9], viagem_texto(parsed[8], p))) return true;
+
+		if(quantidade > 0) {
+			if(item == "celestiums") gc(p.charname, quantidade);
+			else p.inv_add_item(item, quantidade, true);
+		}
+		return true;
+	}
+
+	// pm2:...:mapa:som:item_exigido:qtd_exigida:texto_recusa:item_dado:qtd_dada:texto_passagem[:variaveis]
+	if(parsed.length() < 15) return false;
+	if(viagem_bloqueada(p, VIAGEM_INTERVALO_MS)) return true;
+
+	string som = parsed[8];
+	string item_exigido = parsed[9];
+	int qtd_exigida = 0;
+	map_try_parse_int_token(parsed[10], qtd_exigida);
+	string texto_recusa = viagem_texto(parsed[11], p);
+	string item_dado = parsed[12];
+	int qtd_dada = 0;
+	map_try_parse_int_token(parsed[13], qtd_dada);
+	string texto_passagem = viagem_texto(parsed[14], p);
+	string variaveis = parsed.length() > 15 ? parsed[15] : "";
+
+	p.maptraveltimer.restart();
+
+	bool passa_item = (item_exigido == "none" || p.inv_item_number(item_exigido) >= qtd_exigida);
+
+	// Condições/alterações de variável: "var|nome|operador|valor|e_numero,...".
+	bool passa_variavel = (variaveis == "");
+	if(variaveis != "") {
+		string[] blocos = variaveis.split(",");
+		for(uint b = 0; b < blocos.length(); b++) {
+			string[] dados = blocos[b].split("|");
+			if(dados.length() < 5 || dados[0] != "var") continue;
+			if(p.v_m is null) {
+				passa_variavel = false;
+				continue;
+			}
+			bool e_numero = (dados[4] == "true" || dados[4] == "1");
+			passa_variavel = p.v_m.manage(dados[1], dados[2], dados[3], e_numero);
+		}
+	}
+
+	if(!passa_item || !passa_variavel) {
+		if(texto_recusa != "") send_reliable_text(p.peer_id, "msg2 " + texto_recusa, 0);
+		return true;
+	}
+
+	if(!viagem_executar(player_index, newmap, newx, newy, som, texto_passagem)) return true;
+
+	if(qtd_dada != 0) {
+		if(item_dado == "celestiums") gc(p.charname, qtd_dada);
+		else p.inv_add_item(item_dado, qtd_dada, true);
+	}
+	// Como no BGT, um 17o campo na linha mantem o item exigido com o jogador.
+	if(parsed.length() <= 16 && item_exigido != "none" && qtd_exigida > 0) p.inv_add_item(item_exigido, -qtd_exigida, true);
+
+	return true;
+}
+
+// Procura, no mapa em que o servidor vê o jogador, a passagem sob os pés dele.
+// so_pontos = true restringe às passagens simples (pedido automático "tp:").
+void viagem_ativar_passagem(int player_index, bool so_pontos) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	int mapindex = get_map_index_from(p.map);
+	if(mapindex < 0) {
+		if(!so_pontos) send_reliable_text(p.peer_id, "msg2 ;Este mapa tem alguma falha ou não existe. Avise a administração.;", 0);
+		return;
+	}
+
+	map@ atual = server_maps[mapindex];
+
+	if(!so_pontos) {
+		for(uint i = 0; i < atual.timed_portals.length(); i++) {
+			timed_portal@ tp = atual.timed_portals[i];
+			if(tp is null) continue;
+			if(!viagem_zona_contem(tp.zone_x1, tp.zone_y1, tp.zone_x2, tp.zone_y2, p.x, p.y)) continue;
+
+			if(viagem_bloqueada(p, VIAGEM_INTERVALO_MS)) return;
+			viagem_iniciar_temporizada(player_index, tp);
+			return;
+		}
+	}
+
+	for(uint i = 0; i < atual.travel_points.length(); i++) {
+		travel_point@ tp = atual.travel_points[i];
+		if(tp is null) continue;
+		if(!viagem_zona_contem(tp.zone_x1, tp.zone_y1, tp.zone_x2, tp.zone_y2, p.x, p.y)) continue;
+
+		if(viagem_bloqueada(p, VIAGEM_INTERVALO_MS)) return;
+		// No pedido automático o cliente já falou a mensagem da passagem.
+		viagem_usar_ponto(player_index, tp, !so_pontos);
+		return;
+	}
+
+	if(so_pontos) return;
+
+	// A viagem troca o jogador de mapa: percorre uma cópia das linhas.
+	string[] linhas = atual.mapdata;
+	for(uint i = 0; i < linhas.length(); i++) {
+		string linha = linhas[i].trim_whitespace();
+		if(linha == "") continue;
+
+		string[] parsed = linha.split(":");
+		if(parsed.length() < 9) continue;
+		if(viagem_usar_linha(player_index, parsed)) return;
+	}
+}
+
+// Chamado por portals_loop() (portals.nvgt), que já roda no laço principal.
+void viagem_loop() {
+	for(int i = int(viagens_pendentes.length()) - 1; i >= 0; i--) {
+		viagem_pendente@ v = viagens_pendentes[i];
+
+		int player_index = get_player_index_from(v.nome);
+		if(player_index < 0) {
+			viagens_pendentes.remove_at(i);
+			continue;
+		}
+
+		player@ p = players[player_index];
+
+		// Morreu ou foi levado para outro mapa enquanto esperava.
+		if(p.map != v.mapa_origem || p.health <= 0) {
+			viagens_pendentes.remove_at(i);
+			if(gamestopped == false) send_reliable_text(p.peer_id, "startmoving", 0);
+			continue;
+		}
+
+		if(v.relogio.elapsed < v.espera_ms) continue;
+
+		string mapa = v.mapa;
+		int x = v.x;
+		int y = v.y;
+		string som = v.som;
+		string fala = v.fala;
+		viagens_pendentes.remove_at(i);
+
+		if(gamestopped == false) send_reliable_text(p.peer_id, "startmoving", 0);
+		viagem_executar(player_index, mapa, x, y, som, fala);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Portal espiritual
+// --------------------------------------------------------------------------
+
+void viagem_sair_portal_espiritual(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	if(p.map != VIAGEM_MAPA_ESPIRITUAL) return;
+
+	string destino = viagem_mapa_de_volta(p);
+	if(destino == VIAGEM_MAPA_ESPIRITUAL || get_map_index_from(destino) < 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Este destino não está disponível no momento.;", 0);
+		return;
+	}
+
+	viagem_cancelar_pendente(p.charname);
+	p.maptraveltimer.restart();
+
+	move_player_to_map(player_index, destino, 1, 0);
+	p.map_name = destino;
+	p.mapaatual = destino;
+	p.mapavoltar = destino;
+
+	debug_log("VIAGEM: " + p.charname + " saiu do portal espiritual para " + destino);
+}
+
+// --------------------------------------------------------------------------
+// Pulo e pouso (blocos "jump" e "land" de server.nvgt)
+// --------------------------------------------------------------------------
+
+void viagem_avisar_mapa(player@ origem, string mapa, string pacote) {
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].map != mapa) continue;
+		if(players[i].peer_id == origem.peer_id) continue;
+		send_reliable_text(players[i].peer_id, pacote, 0);
+	}
+}
+
+// "jumping <nome> <x> <y> <mapa>": cliente/includes/net.nvgt toca jump.ogg.
+void viagem_tratar_pulo(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+	p.jumping = 1;
+
+	if(p.cloakhiding || p.invs != 0) return;
+	if(is_game_disabled(p.x, p.y, p.map)) return;
+
+	viagem_avisar_mapa(p, p.map, "jumping " + p.charname + " " + p.x + " " + p.y + " " + p.map);
+}
+
+// "land <nome> <x> <y> <mapa> <altura>". tem_altura indica se o cliente mandou
+// a altura da queda; só nesse caso há dano e consumo do paraquedas.
+void viagem_tratar_pouso(int player_index, int altura, bool tem_altura) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(altura < 0) altura = 0;
+	if(altura > VIAGEM_QUEDA_MAXIMA) altura = VIAGEM_QUEDA_MAXIMA;
+
+	// O aviso sai do ponto do pouso, mesmo que a queda mate o jogador e o
+	// leve para outro mapa.
+	string mapa = p.map;
+	int x = p.x;
+	int y = p.y;
+	bool visivel = (p.invs == 0 && !p.cloakhiding && !is_game_disabled(x, y, mapa));
+
+	if(tem_altura) aplicar_dano_de_queda(player_index, altura);
+
+	p.jumping = 0;
+
+	if(visivel) {
+		viagem_avisar_mapa(p, mapa, "land " + p.charname + " " + x + " " + y + " " + mapa + " " + altura);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Pacotes crus vindos do cliente
+//
+// Precisa ser chamado em process_player_command() ANTES de process_command().
+// Devolve false rápido para não interceptar comandos alheios.
+// --------------------------------------------------------------------------
+
+bool handle_viagem_packet(uint64 peer_id, string command) {
+	if(command == "") return false;
+
+	if(command == "enter") {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		viagem_ativar_passagem(idx, false);
+		return true;
+	}
+
+	// Avisos de zona segura do cliente: nada a fazer no servidor.
+	if(command == "s" || command == "sn") return true;
+
+	// Pedido automático do cliente ao pisar numa passagem.
+	if(command.find("tp:") == 0) {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		viagem_ativar_passagem(idx, true);
+		return true;
+	}
+
+	if(command == "arena") {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		arena_pedir_entrada(idx);
+		return true;
+	}
+
+	// Daqui para baixo só comandos digitados ("/bosses"). Chegam por
+	// process_chat_message(), que repassa tudo que começa com barra.
+	if(command.find("/") != 0) return false;
+
+	string[] partes = split_non_empty_tokens(command);
+	if(partes.length() == 0) return false;
+	string verbo = partes[0].lower();
+
+	bool e_sair = (verbo == "/s");
+	bool e_lista = (verbo == "/bosses");
+	bool e_info = (verbo == "/bossinfo");
+	bool e_spawn = (verbo == "/spawnboss");
+	bool e_matar = (verbo == "/killboss");
+	bool e_arena = (verbo == "/setarena");
+	if(!e_sair && !e_lista && !e_info && !e_spawn && !e_matar && !e_arena) return false;
+
+	int idx = indice_jogador_por_peer(peer_id);
+	if(idx < 0) return true;
+
+	if(e_sair) {
+		viagem_sair_portal_espiritual(idx);
+		return true;
+	}
+
+	string[] args;
+	for(uint i = 1; i < partes.length(); i++) {
+		args.insert_last(partes[i]);
+	}
+
+	if(e_lista) {
+		cmd_bosses(idx, args);
+		return true;
+	}
+
+	if(e_info) {
+		cmd_bossinfo(idx, args);
+		return true;
+	}
+
+	// Os três restantes mexem no mundo: só dev ou admin.
+	if(!check_is_admin(players[idx].charname)) {
+		send_reliable_text(players[idx].peer_id, "msg2 ;Você não tem permissão para usar este comando.;", 0);
+		return true;
+	}
+
+	if(e_spawn) {
+		cmd_spawnboss(idx, args);
+	}
+	else if(e_matar) {
+		cmd_killboss(idx, args);
+	}
+	else {
+		cmd_setarena(idx, args);
+	}
+
+	return true;
+}

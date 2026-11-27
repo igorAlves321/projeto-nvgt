@@ -1,0 +1,619 @@
+// ==========================================================================
+// Pacotes de itens enviados pelo cliente que não tinham tratamento no servidor.
+//
+// Porta do BGT original:
+//   - give <jogador> <item> <qtd>      (net.bgt:1207 -> give(), voids.bgt:231)
+//   - retirar <item>                   (net.bgt:316  -> retirar(), re_server_test.bgt:1737)
+//   - desc <item>                      (net.bgt:2078)
+//   - sortinv <item> <deslocamento>    (net.bgt:324  -> player.sort_inv, player.bgt:828)
+//   - list_degrades                    (net.bgt:2189)
+//   - times                            (net.bgt:531)
+//   - /vestir /tirar /roupas /verroupas e o CRUD do catálogo de roupas
+//     (funções em clothing_commands.nvgt, que não tinham chamador)
+//
+// Persistência (sqlite, tabela player_item_state, uma linha por jogador):
+//   - degradacao: desgaste de armas/roupas/itens (era players/<nome>/degradation.ini)
+//   - ordem_inv:  ordem do inventário escolhida com sortinv. O 'dictionary' do
+//     NVGT não guarda ordem de inserção (o inv do BGT guardava), então a ordem
+//     fica numa lista separada e é aplicada quando o inventário é enviado.
+//
+// handle_itens_packet() precisa ser chamado em process_player_command(), junto
+// de handle_canais_packet().
+// ==========================================================================
+
+const string PITENS_SEPARADOR = "\n";
+
+bool pitens_tabela_pronta = false;
+
+// chave do jogador -> último texto de desgaste gravado. Também serve de marca
+// de "desgaste já carregado": sem ela nada é gravado (evita apagar o banco
+// com o dicionário vazio de uma sessão que ainda não terminou de carregar).
+dictionary pitens_degradacao_salva;
+
+// chave do jogador -> ordem do inventário (nomes separados por PITENS_SEPARADOR).
+dictionary pitens_ordem_cache;
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+string pitens_chave(string username) {
+	return username.trim_whitespace().lower();
+}
+
+void pitens_msg(player@ p, string texto) {
+	if(@p == null) return;
+	send_reliable_text(p.peer_id, "msg2 " + texto, 0);
+}
+
+bool pitens_garantir_tabela() {
+	if(!database_initialized || bancoJogo is null) return false;
+	if(pitens_tabela_pronta) return true;
+
+	string criar = """
+		CREATE TABLE IF NOT EXISTS player_item_state (
+			username TEXT PRIMARY KEY,
+			degradacao TEXT DEFAULT '',
+			ordem_inv TEXT DEFAULT ''
+		);
+	""";
+
+	if(bancoJogo.execute(criar) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela player_item_state: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	pitens_tabela_pronta = true;
+	return true;
+}
+
+// Opcional: a tabela também é criada sob demanda no primeiro uso.
+void init_pacotes_itens() {
+	if(pitens_garantir_tabela()) {
+		debug_log("OK - Tabela player_item_state criada/verificada");
+	}
+}
+
+string pitens_ler_coluna(string chave, string coluna) {
+	if(chave == "" || !pitens_garantir_tabela()) return "";
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT " + coluna + " FROM player_item_state WHERE username = ?;");
+	if(@stmt == null) return "";
+
+	stmt.bind_text(1, chave);
+	if(stmt.step() != SQLITE_ROW) return "";
+
+	return stmt.column_text(0);
+}
+
+bool pitens_gravar_coluna(string chave, string coluna, string valor) {
+	if(chave == "" || !pitens_garantir_tabela()) return false;
+
+	sqlite3statement@ ins = bancoJogo.prepare("INSERT OR IGNORE INTO player_item_state (username) VALUES (?);");
+	if(@ins == null) return false;
+	ins.bind_text(1, chave);
+	ins.step();
+
+	sqlite3statement@ up = bancoJogo.prepare("UPDATE player_item_state SET " + coluna + " = ? WHERE username = ?;");
+	if(@up == null) {
+		debug_log("ERRO ao preparar gravacao de player_item_state." + coluna + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	up.bind_text(1, valor);
+	up.bind_text(2, chave);
+
+	if(up.step() != SQLITE_DONE) {
+		debug_log("ERRO ao gravar player_item_state." + coluna + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	return true;
+}
+
+// Manda ao cliente a quantidade final de um item ("inv item=0" apaga).
+void pitens_sincronizar_item(player@ p, string item) {
+	if(@p == null) return;
+	send_reliable_text(p.peer_id, "inv " + item + "=" + p.inv_item_number(item) + "\r\n", 0);
+}
+
+void pitens_tocar_som(player@ p, string arquivo) {
+	if(@p == null || arquivo == "") return;
+
+	int mapindex = get_map_index_from(p.map);
+	if(mapindex < 0) mapindex = p.mapindex;
+	if(mapindex < 0 || mapindex >= int(server_maps.length())) return;
+
+	server_maps[mapindex].send_packet(0, "play " + arquivo, p.x, p.y);
+}
+
+// --------------------------------------------------------------------------
+// Desgaste (degradation) no sqlite
+// --------------------------------------------------------------------------
+
+string pitens_serializar_degradacao(player@ p) {
+	if(@p == null) return "";
+
+	string[] chaves = p.degradation.get_keys();
+	chaves.sort_ascending();
+
+	string texto = "";
+	for(uint i = 0; i < chaves.length(); i++) {
+		if(chaves[i] == "" || chaves[i].find("=") >= 0 || chaves[i].find(PITENS_SEPARADOR) >= 0) continue;
+
+		double valor = 0;
+		p.degradation.get(chaves[i], valor);
+
+		if(texto != "") texto += PITENS_SEPARADOR;
+		texto += chaves[i] + "=" + valor;
+	}
+	return texto;
+}
+
+// Como no BGT (player.bgt:292-301): toda arma, roupa e item com desgaste tem
+// uma chave, começando em 0. manage_degradation() só age sobre chaves existentes.
+void pitens_semear_degradacao(player@ p) {
+	if(@p == null) return;
+
+	for(uint i = 0; i < weapons_list.length(); i++) {
+		string nome = weapons_list[i].name;
+		if(nome != "" && !p.degradation.exists(nome)) p.degradation.set(nome, 0.0);
+	}
+
+	for(uint i = 0; i < catalogo_roupas.length(); i++) {
+		string nome = catalogo_roupas[i].nome;
+		if(nome != "" && !p.degradation.exists(nome)) p.degradation.set(nome, 0.0);
+	}
+
+	string[]@ consumiveis = consumables.get_keys();
+	for(uint i = 0; i < consumiveis.length(); i++) {
+		consumable_effect@ efeito;
+		consumables.get(consumiveis[i], @efeito);
+		if(@efeito == null) continue;
+		if(efeito.degradation <= 0 || efeito.degradation >= 100) continue;
+		if(!p.degradation.exists(consumiveis[i])) p.degradation.set(consumiveis[i], 0.0);
+	}
+}
+
+void pitens_carregar_degradacao(player@ p) {
+	if(@p == null) return;
+
+	string chave = pitens_chave(p.charname);
+	if(chave == "") return;
+
+	p.degradation.delete_all();
+
+	string texto = pitens_ler_coluna(chave, "degradacao");
+	string[] linhas = texto.split(PITENS_SEPARADOR);
+	for(uint i = 0; i < linhas.length(); i++) {
+		int sep = linhas[i].find("=");
+		if(sep <= 0) continue;
+
+		string nome = linhas[i].substr(0, sep);
+		double valor = parse_float(linhas[i].substr(sep + 1).trim_whitespace());
+		if(valor < 0 || valor >= 100) valor = 0;
+
+		p.degradation.set(nome, valor);
+	}
+
+	pitens_semear_degradacao(p);
+	pitens_degradacao_salva.set(chave, pitens_serializar_degradacao(p));
+}
+
+void pitens_salvar_degradacao(player@ p) {
+	if(@p == null) return;
+
+	string chave = pitens_chave(p.charname);
+	if(chave == "") return;
+	if(!pitens_degradacao_salva.exists(chave)) return;
+
+	string texto = pitens_serializar_degradacao(p);
+	if(texto == "") return;
+
+	string anterior = "";
+	pitens_degradacao_salva.get(chave, anterior);
+	if(texto == anterior) return;
+
+	if(pitens_gravar_coluna(chave, "degradacao", texto)) {
+		pitens_degradacao_salva.set(chave, texto);
+	}
+}
+
+// Chamado por player.manage_degradation() quando o desgaste chega a 100.
+void pitens_quebrar_item(player@ p, string nome) {
+	if(@p == null) return;
+	if(p.inv_item_number(nome) <= 0) return;
+
+	p.inv_add_item(nome, -1, false);
+	pitens_sincronizar_item(p, nome);
+
+	if(get_weapon_by_name(nome) !is null) {
+		p.inv_add_item("base_pulverizada", 1, false);
+		pitens_sincronizar_item(p, "base_pulverizada");
+		send_reliable_text(p.peer_id, "msg2 ;Sua arma; ;" + nome + "; ;quebrou e virou pó!;", 0);
+	}
+	else if(indice_roupa(nome) >= 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Sua roupa; ;" + nome + "; ;se desgastou completamente!;", 0);
+	}
+
+	if(p.inv_item_number(nome) <= 0) {
+		int idx = get_player_index_from(p.charname);
+		if(idx >= 0 && esta_vestindo(idx, nome)) tirar_roupa(idx, nome, false);
+	}
+
+	save_player_inventory_to_db(p);
+}
+
+// --------------------------------------------------------------------------
+// Ordem do inventário
+// --------------------------------------------------------------------------
+
+string pitens_ordem_do_jogador(string chave) {
+	if(chave == "") return "";
+
+	string ordem = "";
+	if(pitens_ordem_cache.get(chave, ordem)) return ordem;
+
+	ordem = pitens_ler_coluna(chave, "ordem_inv");
+	pitens_ordem_cache.set(chave, ordem);
+	return ordem;
+}
+
+// Itens com quantidade > 0: primeiro os da ordem gravada, depois os demais.
+string[] pitens_inv_em_ordem(player@ p) {
+	string[] resultado;
+	if(@p == null) return resultado;
+
+	string ordem = pitens_ordem_do_jogador(pitens_chave(p.charname));
+	if(ordem != "") {
+		string[] nomes = ordem.split(PITENS_SEPARADOR);
+		for(uint i = 0; i < nomes.length(); i++) {
+			if(nomes[i] == "") continue;
+			if(p.inv_item_number(nomes[i]) <= 0) continue;
+			if(resultado.find(nomes[i]) >= 0) continue;
+			resultado.insert_last(nomes[i]);
+		}
+	}
+
+	string[] chaves = p.inv.get_keys();
+	for(uint i = 0; i < chaves.length(); i++) {
+		if(p.inv_item_number(chaves[i]) <= 0) continue;
+		if(resultado.find(chaves[i]) >= 0) continue;
+		resultado.insert_last(chaves[i]);
+	}
+
+	return resultado;
+}
+
+void pitens_enviar_inventario(player@ p) {
+	if(@p == null) return;
+
+	string[] nomes = pitens_inv_em_ordem(p);
+	string pacote = "setinv ";
+	for(uint i = 0; i < nomes.length(); i++) {
+		pacote += nomes[i] + "=" + p.inv_item_number(nomes[i]) + "\r\n";
+	}
+	send_reliable_text(p.peer_id, pacote, 0);
+}
+
+void pitens_ordenar_inventario(player@ p, string item, int deslocamento) {
+	if(@p == null) return;
+	if(deslocamento == 0) return;
+	if(p.inv_item_number(item) <= 0) return;
+
+	string[] nomes = pitens_inv_em_ordem(p);
+	int atual = nomes.find(item);
+	if(atual < 0) return;
+
+	int destino = atual + deslocamento;
+	if(destino < 0) destino = 0;
+	if(destino > int(nomes.length()) - 1) destino = int(nomes.length()) - 1;
+	if(destino == atual) return;
+
+	nomes.remove_at(uint(atual));
+	nomes.insert_at(uint(destino), item);
+
+	string chave = pitens_chave(p.charname);
+	string ordem = join(nomes, PITENS_SEPARADOR);
+	pitens_ordem_cache.set(chave, ordem);
+	pitens_gravar_coluna(chave, "ordem_inv", ordem);
+
+	pitens_enviar_inventario(p);
+}
+
+// --------------------------------------------------------------------------
+// Login: desgaste e roupas vestidas
+// Chamado no fim de load_player_complete() (load_player.nvgt).
+// --------------------------------------------------------------------------
+
+void pitens_ao_carregar_jogador(player@ p) {
+	if(@p == null) return;
+
+	// O desgaste vem antes das roupas: carregar_roupas_do_jogador() só cria a
+	// chave de desgaste da peça quando ela ainda não existe.
+	p.load_degradation();
+
+	int idx = get_player_index_from(p.charname);
+	if(idx < 0) return;
+
+	migrar_flags_legadas_para_roupas(p.charname);
+	carregar_roupas_do_jogador(idx);
+}
+
+// --------------------------------------------------------------------------
+// give <jogador> <item> <qtd>
+// --------------------------------------------------------------------------
+
+void pitens_dar_item(int idx, string alvo_nome, string item, string qtd_texto) {
+	if(idx < 0 || idx >= int(players.length())) return;
+
+	player@ p = players[idx];
+	if(p.afk || p.paralisado || p.paralisado2 || game_frozen) return;
+
+	int alvo_idx = get_player_index_from(alvo_nome);
+	if(alvo_idx < 0 || alvo_idx == idx || !players[alvo_idx].is_logged_in) {
+		pitens_msg(p, ";Jogador não encontrado.;");
+		return;
+	}
+
+	player@ alvo = players[alvo_idx];
+
+	if(p.naoitens == 1) {
+		pitens_msg(p, ";Você não pode dar itens.;");
+		return;
+	}
+
+	// BGT: administradores não entregam itens pelo inventário; a equipe é avisada.
+	if(check_is_admin_index(idx)) {
+		eadm(p.charname + " está tentando dar itens para " + alvo.charname + ".", "noud.ogg");
+		return;
+	}
+
+	if(recusar_item_intransferivel(p, item)) return;
+
+	int quantidade = 0;
+	if(!try_parse_int_token(qtd_texto, quantidade)) quantidade = 0;
+
+	if(quantidade <= 0 || quantidade > p.inv_item_number(item)) {
+		pitens_msg(p, ";Você não tem essa quantidade deste item.;");
+		return;
+	}
+
+	p.inv_add_item(item, -quantidade, false);
+	alvo.inv_add_item(item, quantidade, false);
+
+	pitens_sincronizar_item(p, item);
+	pitens_sincronizar_item(alvo, item);
+
+	// Como no BGT: quem deu a última unidade de uma peça vestida fica sem ela.
+	if(p.inv_item_number(item) <= 0 && esta_vestindo(idx, item)) {
+		tirar_roupa(idx, item, false);
+	}
+
+	save_player_inventory_to_db(p);
+	save_player_inventory_to_db(alvo);
+
+	send_reliable_text(alvo.peer_id, "msg2 " + p.charname + " ;lhe deu; " + quantidade + " ;" + item + ";", 0);
+	send_reliable_text(p.peer_id, "msg2 ;Você deu; " + quantidade + " ;" + item + "; ;para; " + alvo.charname, 0);
+	pitens_tocar_som(alvo, "gift.ogg");
+
+	log_action(p.charname, "give", "Deu " + quantidade + "x " + item + " para " + alvo.charname,
+	           p.map, p.x, p.y, 0, "", alvo.charname, item);
+	debug_log("ITENS: " + p.charname + " deu " + quantidade + "x " + item + " para " + alvo.charname);
+}
+
+// --------------------------------------------------------------------------
+// desc <item>
+// --------------------------------------------------------------------------
+
+void pitens_descrever_item(player@ p, string item) {
+	if(@p == null || item == "") return;
+
+	string texto = "";
+	if(!item_descriptions.get(item, texto)) texto = "";
+
+	if(texto == "") {
+		GameItem@ gi = get_item_by_name(item);
+		if(@gi != null) texto = gi.description;
+	}
+
+	if(texto == "") {
+		pitens_msg(p, ";Nenhuma descrição disponível para esse item.;");
+		return;
+	}
+
+	texto = texto.replace("*g*", p.sexo2);
+	texto = texto.replace("*nick*", p.charname);
+	pitens_msg(p, texto);
+}
+
+// --------------------------------------------------------------------------
+// list_degrades
+// --------------------------------------------------------------------------
+
+void pitens_listar_desgaste(player@ p) {
+	if(@p == null) return;
+
+	string[] linhas;
+	linhas.insert_last(";Este é o nível atual de desgaste das suas armas.;");
+
+	string[] chaves = p.degradation.get_keys();
+	chaves.sort_ascending();
+
+	for(uint i = 0; i < chaves.length(); i++) {
+		if(p.inv_item_number(chaves[i]) <= 0) continue;
+		if(get_weapon_index(chaves[i]) < 0) continue;
+
+		linhas.insert_last(";" + chaves[i] + ";, " + p.get_degradation(chaves[i]) + "%");
+	}
+
+	if(linhas.length() == 1) {
+		pitens_msg(p, ";Você não possui nenhuma arma para verificar o desgaste.;");
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "menuleitura " + linear(linhas), 0);
+}
+
+// --------------------------------------------------------------------------
+// times
+// --------------------------------------------------------------------------
+
+string pitens_nome_do_efeito(string buff) {
+	if(buff == "antimina") return "da poção antiminas";
+	if(buff == "speed_boost") return "da poção de velocidade";
+	if(buff == "damage_boost") return "da poção de força";
+	if(buff == "invisible") return "da poção de invisibilidade";
+	if(buff == "energy_boost") return "do energético";
+	if(buff == "drunk") return "da embriaguez";
+	if(buff == "all_boost") return "do elixir supremo";
+	return "de " + buff;
+}
+
+void pitens_linha_de_tempo(string[]@ linhas, string efeito, double restante_ms) {
+	if(restante_ms < 1000) return;
+	linhas.insert_last(";O tempo que resta para o efeito " + efeito + " terminar é:; " + ms_to_readable_time(restante_ms));
+}
+
+void pitens_listar_tempos(player@ p) {
+	if(@p == null) return;
+
+	string[] linhas;
+	bool buff_antimina = false;
+
+	for(uint i = 0; i < active_buffs.length(); i++) {
+		if(active_buffs[i].player_name != p.charname) continue;
+		if(active_buffs[i].buff_name == "antimina") buff_antimina = true;
+
+		double restante = double(active_buffs[i].duration_ms) - double(active_buffs[i].duration_timer.elapsed);
+		pitens_linha_de_tempo(linhas, pitens_nome_do_efeito(active_buffs[i].buff_name), restante);
+	}
+
+	if(p.caverna == 1) pitens_linha_de_tempo(linhas, "da bebida luminosa", 7200000.0 - double(p.caverna_time) * 1000.0);
+	if(p.trueno == 1) pitens_linha_de_tempo(linhas, "da poção do trovão", 600000.0 - double(p.tmveloz2.elapsed));
+	if(p.ameteoro == 1) pitens_linha_de_tempo(linhas, "da poção antimeteoros", 600000.0 - double(p.tameteoro.elapsed));
+	if(p.antimina == 1 && !buff_antimina) pitens_linha_de_tempo(linhas, "da poção antiminas", 300000.0 - double(p.tantimina.elapsed));
+	if(p.protegido == 1) pitens_linha_de_tempo(linhas, "da poção protetora", 60000.0 - double(p.tprotegido.elapsed));
+	if(p.amethyst == 1) pitens_linha_de_tempo(linhas, "da poção de ametista", 900000.0 - double(p.amethyst_time) * 1000.0);
+
+	if(linhas.length() == 0) {
+		pitens_msg(p, ";Não há nenhuma poção ou bebida fazendo efeito em você.;");
+		return;
+	}
+
+	linhas.insert_at(0, ";Menu de tempos mágicos.;");
+	send_reliable_text(p.peer_id, "menuleitura " + linear(linhas), 0);
+}
+
+// --------------------------------------------------------------------------
+// Pacotes crus vindos do cliente
+//
+// Precisa ser chamado em process_player_command() ANTES do despacho de
+// comandos de barra. Devolve false rápido para não interceptar comandos alheios.
+// --------------------------------------------------------------------------
+
+bool handle_itens_packet(uint64 peer_id, string command) {
+	if(command == "") return false;
+
+	if(command == "list_degrades") {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		pitens_listar_desgaste(players[idx]);
+		return true;
+	}
+
+	if(command == "times") {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		pitens_listar_tempos(players[idx]);
+		return true;
+	}
+
+	// "give <jogador> <item> <qtd>" (cliente/client.nvgt, give()).
+	if(command.find("give ") == 0) {
+		string[] partes = split_non_empty_tokens(command);
+		if(partes.length() < 4) return true;
+
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+
+		uint ultimo = partes.length() - 1;
+		string item = partes[2];
+		for(uint i = 3; i < ultimo; i++) item += " " + partes[i];
+
+		pitens_dar_item(idx, partes[1], item, partes[ultimo]);
+		return true;
+	}
+
+	// "retirar <item>": o cliente manda para qualquer item do inventário
+	// (Alt+Espaço); como no BGT, só as roupas reagem.
+	if(command.find("retirar ") == 0) {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+
+		string item = command.substr(8).trim_whitespace();
+		if(item == "") return true;
+		if(indice_roupa(item) < 0 && !esta_vestindo(idx, item)) return true;
+
+		cmd_tirar(idx, item);
+		return true;
+	}
+
+	if(command.find("desc ") == 0) {
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+		pitens_descrever_item(players[idx], command.substr(5).trim_whitespace());
+		return true;
+	}
+
+	// "sortinv <item> <deslocamento>" (cliente/includes/inv.nvgt, sort_inv()).
+	if(command.find("sortinv ") == 0) {
+		string[] partes = split_non_empty_tokens(command);
+		if(partes.length() < 3) return true;
+
+		int idx = indice_jogador_por_peer(peer_id);
+		if(idx < 0) return true;
+
+		uint ultimo = partes.length() - 1;
+		string item = partes[1];
+		for(uint i = 2; i < ultimo; i++) item += " " + partes[i];
+
+		int deslocamento = 0;
+		if(!try_parse_int_token(partes[ultimo], deslocamento)) return true;
+
+		pitens_ordenar_inventario(players[idx], item, deslocamento);
+		return true;
+	}
+
+	// Daqui para baixo só comandos digitados ("/vestir colete_militar").
+	if(command.find("/") != 0) return false;
+
+	string[] tokens = command.split(" ");
+	string verbo = tokens[0].lower();
+	string resto = "";
+	if(command.length() > tokens[0].length()) {
+		resto = command.substr(tokens[0].length()).trim_whitespace();
+	}
+
+	bool e_vestir = (verbo == "/vestir");
+	bool e_tirar = (verbo == "/tirar");
+	bool e_roupas = (verbo == "/roupas");
+	bool e_verroupas = (verbo == "/verroupas");
+	bool e_novaroupa = (verbo == "/novaroupa");
+	bool e_deletarroupa = (verbo == "/deletarroupa");
+	bool e_listarroupas = (verbo == "/listarroupas");
+	if(!e_vestir && !e_tirar && !e_roupas && !e_verroupas && !e_novaroupa && !e_deletarroupa && !e_listarroupas) return false;
+
+	int idx = indice_jogador_por_peer(peer_id);
+	if(idx < 0) return true;
+
+	if(e_vestir) cmd_vestir(idx, resto);
+	else if(e_tirar) cmd_tirar(idx, resto);
+	else if(e_roupas) cmd_roupas(idx);
+	else if(e_verroupas) cmd_verroupas(idx);
+	else if(e_novaroupa) cmd_novaroupa(idx, resto);
+	else if(e_deletarroupa) cmd_deletarroupa(idx, resto);
+	else cmd_listarroupas(idx);
+
+	return true;
+}

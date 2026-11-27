@@ -443,6 +443,9 @@ string build_player_equipment_json(player@ p) {
 void save_player_equipment_to_db(player@ p) {
     if(@p == null || !database_initialized || bancoJogo is null) return;
 
+    // Desgaste dos itens vai junto com o save do jogador (pacotes_itens.nvgt).
+    p.save_degradation();
+
     string equipment_json = build_player_equipment_json(p);
     string query = "UPDATE players SET equipment = ? WHERE username = ?;";
     sqlite3statement@ stmt = bancoJogo.prepare(query);
@@ -817,7 +820,8 @@ void send_players(player@ p, bool to_others = true) {
 }
 
 void send_inventory_to_client(player@ p) {
-    string[] keys = p.inv.get_keys();
+    // Ordem escolhida pelo jogador com sortinv (pacotes_itens.nvgt).
+    string[] keys = pitens_inv_em_ordem(p);
 
     if(keys.length() == 0) {
         debug_log("   Inventário vazio para " + p.charname);
@@ -957,6 +961,13 @@ bool load_player_complete(player@ p) {
     load_player_marriage(p);
 
     sync_player_state_to_client(p);
+
+    // Equipe, ignorados, silencio e preferencias de aviso (pacotes_social.nvgt).
+    social_jogador_conectou(p);
+
+    // Desgaste e roupas vestidas (pacotes_itens.nvgt). Fica depois do sync:
+    // send_equipment_to_client() recalcula a protecao pelas flags legadas.
+    pitens_ao_carregar_jogador(p);
 
     register_player_timers(p);
 

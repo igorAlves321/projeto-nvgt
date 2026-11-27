@@ -120,8 +120,13 @@ void cmd_silenciar(int player_index, string target_name, int minutes = 10) {
 		return;
 	}
 
-	players[target].is_muted = true;
-	players[target].mute_end_time = ticks() + (minutes * 60 * 1000);
+	// Estado único do silêncio (pacotes_social.nvgt): grava em 'silencios',
+	// marca players[target].silenciado e é o que todo o chat consulta.
+	target_name = players[target].charname;
+	if(!social_silenciar(target_name, minutes, players[player_index].charname)) {
+		send_admin_error(player_index, "silenciar", "Não foi possível silenciar o jogador.");
+		return;
+	}
 	send_reliable_text(players[target].peer_id, "msg2 Você foi silenciado por " + minutes + " minutos.", 0);
 	send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi silenciado por " + minutes + " minutos.", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " silenciou " + target_name + " por " + minutes + " min");
@@ -137,16 +142,17 @@ void cmd_unsilenciar(int player_index, string target_name) {
 		return;
 	}
 
-	int target = get_player_index_from(target_name);
-	if(target == -1) {
-		send_admin_error(player_index, "unsilenciar", "Jogador não encontrado!");
+	// O alvo pode estar offline: o silêncio fica gravado em 'silencios'.
+	int target = social_indice_online(target_name);
+	if(target >= 0) target_name = players[target].charname;
+
+	if(!social_dessilenciar(target_name)) {
+		send_admin_error(player_index, "unsilenciar", target_name + " não está silenciado.");
 		return;
 	}
 
-	players[target].is_muted = false;
-	players[target].mute_end_time = 0;
-	send_reliable_text(players[target].peer_id, "msg2 Seu silencio foi removido.", 0);
-	send_reliable_text(players[player_index].peer_id, "msg2 SilAncio de " + target_name + " removido.", 0);
+	if(target >= 0) send_reliable_text(players[target].peer_id, "msg2 Seu silêncio foi removido.", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 Silêncio de " + target_name + " removido.", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " removeu silencio de " + target_name);
 }
 

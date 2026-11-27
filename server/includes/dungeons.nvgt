@@ -144,6 +144,17 @@ class dungeon_instance {
     int completion_time_seconds;
     bool bonus_objective_completed;
 
+    // Ponto onde as ondas nascem: a posicao do lider quando a dungeon comeca.
+    string mapa_spawn = "";
+    int spawn_x = 0;
+    int spawn_y = 0;
+    // Intervalo entre o fim de uma onda e o inicio da seguinte.
+    bool proxima_onda_pendente = false;
+    int proxima_onda = 0;
+    timer proxima_onda_timer;
+    bool chefe_vivo = false;
+    bool monstros_limpos = false;
+
     dungeon_instance() {
         instance_id = 0;
         state = INSTANCE_WAITING;
@@ -204,11 +215,43 @@ class dungeon_instance {
     }
 
     void start() {
+        // As ondas nascem em volta do lider (ou do primeiro participante online).
+        int ancora = get_player_index_from(party_leader);
+        for (uint i = 0; i < participants.length() && ancora < 0; i++) {
+            ancora = get_player_index_from(participants[i].player_name);
+        }
+        if (ancora < 0 || get_map_index_from(players[ancora].map) < 0) {
+            fail("Nenhum participante presente.");
+            return;
+        }
+
+        mapa_spawn = players[ancora].map;
+        spawn_x = players[ancora].x;
+        spawn_y = players[ancora].y;
+
         state = INSTANCE_ACTIVE;
         current_wave = 1;
         start_time.restart();
         broadcast("Dungeon iniciada! Prepare-se!");
         start_wave(1);
+    }
+
+    // Cria um inimigo real (monstruo) ligado a esta instancia. O dano e a morte
+    // dele voltam para ca por dungeon_registrar_dano / dungeon_monstro_morreu.
+    void spawn_inimigo(string tipo, int vida, int dano_min, int dano_max, bool chefe) {
+        int mi = get_map_index_from(mapa_spawn);
+        if (mi < 0) return;
+
+        int afastamento = random(DUNGEON_SPAWN_DIST_MIN, DUNGEON_SPAWN_DIST_MAX);
+        int ex = (random(0, 1) == 0) ? spawn_x - afastamento : spawn_x + afastamento;
+        if (ex < 0) ex = spawn_x + afastamento;
+        if (server_maps[mi].max_x > 0 && ex > server_maps[mi].max_x) ex = spawn_x - afastamento;
+        if (ex < 0) ex = 0;
+
+        monstruo@ m = spawn_monstruo_especial(ex, spawn_y, mapa_spawn, tipo, vida, dano_min, dano_max);
+        m.dungeon_instance_id = instance_id;
+        m.dungeon_chefe = chefe;
+        m.anunciar_morte = false;
     }
 
     void start_wave(int wave_num) {
@@ -233,17 +276,31 @@ class dungeon_instance {
             string enemy_type = wave.enemies[i];
             int count = wave.enemy_counts[i];
             int level = wave.enemy_levels[i];
+            if (level < 1) level = 1;
 
-            broadcast("Spawnando " + count + "x " + enemy_type + " (Nivel " + level + ")");
+            broadcast("Apareceram " + count + "x " + enemy_type + " (Nivel " + level + ")");
+
+            for (int n = 0; n < count; n++) {
+                spawn_inimigo(enemy_type, level * DUNGEON_VIDA_POR_NIVEL,
+                    level * DUNGEON_DANO_MIN_POR_NIVEL, level * DUNGEON_DANO_MAX_POR_NIVEL, false);
+            }
+        }
+
+        if (enemies_remaining <= 0) {
+            wave_completed();
         }
     }
 
     void enemy_killed(string enemy_type) {
+        if (state != INSTANCE_ACTIVE) return;
+
         enemies_remaining--;
         total_enemies_killed++;
 
         if (enemies_remaining <= 0) {
             wave_completed();
+        } else {
+            broadcast(enemy_type + " derrotado. Restam " + enemies_remaining + ".");
         }
     }
 
@@ -258,10 +315,38 @@ class dungeon_instance {
         }
 
         if (current_wave < int(definition.waves.length())) {
-            broadcast("Proxima wave em 10 segundos...");
+            int espera = definition.waves[current_wave].delay_seconds;
+            if (espera < 1) espera = 1;
+            broadcast("Proxima wave em " + espera + " segundos...");
+            proxima_onda = current_wave + 1;
+            proxima_onda_pendente = true;
+            proxima_onda_timer.restart();
         } else {
             spawn_final_boss();
         }
+    }
+
+    // Chamado por dungeons_loop(): dispara a onda agendada em wave_completed().
+    void atualizar_ondas() {
+        if (state != INSTANCE_ACTIVE || !proxima_onda_pendente) return;
+        if (proxima_onda < 1 || proxima_onda > int(definition.waves.length())) {
+            proxima_onda_pendente = false;
+            return;
+        }
+
+        int espera = definition.waves[proxima_onda - 1].delay_seconds;
+        if (espera < 1) espera = 1;
+        if (proxima_onda_timer.elapsed < espera * 1000) return;
+
+        proxima_onda_pendente = false;
+        start_wave(proxima_onda);
+    }
+
+    bool algum_participante_online() {
+        for (uint i = 0; i < participants.length(); i++) {
+            if (get_player_index_from(participants[i].player_name) > -1) return true;
+        }
+        return false;
     }
 
     void activate_checkpoint(dungeon_checkpoint@ cp) {
@@ -280,14 +365,21 @@ class dungeon_instance {
         broadcast("Nivel: " + definition.final_boss.boss_level);
         broadcast("HP: " + definition.final_boss.boss_hp);
 
+        chefe_vivo = true;
+        spawn_inimigo(definition.final_boss.boss_name, definition.final_boss.boss_hp,
+            definition.final_boss.boss_damage * DUNGEON_CHEFE_DANO_FATOR_MIN,
+            definition.final_boss.boss_damage * DUNGEON_CHEFE_DANO_FATOR_MAX, true);
     }
 
     void boss_defeated() {
+        if (state != INSTANCE_ACTIVE || !chefe_vivo) return;
+        chefe_vivo = false;
         broadcast("Boss derrotado!");
         complete();
     }
 
     void complete() {
+        if (state != INSTANCE_ACTIVE) return;
         state = INSTANCE_COMPLETED;
         completion_time_seconds = start_time.elapsed / 1000;
 
@@ -299,6 +391,8 @@ class dungeon_instance {
 
     void fail(string reason) {
         state = INSTANCE_FAILED;
+        proxima_onda_pendente = false;
+        chefe_vivo = false;
         broadcast("DUNGEON FALHOU: " + reason);
     }
 
@@ -374,6 +468,55 @@ dungeon_instance@[] active_instances;
 int next_instance_id = 1;
 
 dictionary player_daily_entries;
+
+// Atributos dos inimigos das ondas, por nivel, na escala dos monstros comuns.
+const int DUNGEON_VIDA_POR_NIVEL = 500;
+const int DUNGEON_DANO_MIN_POR_NIVEL = 40;
+const int DUNGEON_DANO_MAX_POR_NIVEL = 80;
+const int DUNGEON_CHEFE_DANO_FATOR_MIN = 5;
+const int DUNGEON_CHEFE_DANO_FATOR_MAX = 10;
+const int DUNGEON_SPAWN_DIST_MIN = 4;
+const int DUNGEON_SPAWN_DIST_MAX = 12;
+
+// ---------------------------------------------------------------------
+// Ligacao com o combate. Os inimigos das ondas e o chefe final sao monstruos
+// de monstruos_global marcados com dungeon_instance_id; monstruo_global_loop()
+// chama as duas funcoes abaixo quando sofrem dano e quando morrem.
+// ---------------------------------------------------------------------
+
+void dungeon_registrar_dano(int instance_id, string autor, int dano) {
+    if (autor == "" || dano <= 0) return;
+    dungeon_instance@ inst = get_instance(instance_id);
+    if (inst is null) return;
+
+    for (uint i = 0; i < inst.participants.length(); i++) {
+        if (inst.participants[i].player_name == autor) {
+            inst.participants[i].damage_dealt += dano;
+            return;
+        }
+    }
+}
+
+void dungeon_monstro_morreu(int instance_id, string tipo, bool chefe) {
+    dungeon_instance@ inst = get_instance(instance_id);
+    if (inst is null) return;
+
+    if (chefe) inst.boss_defeated();
+    else inst.enemy_killed(tipo);
+}
+
+// Tira do mundo o que sobrou de uma instancia encerrada. Nao remove do array
+// (quem remove e monstruo_global_loop): desliga o vinculo e zera a vida.
+void dungeon_limpar_monstros(int instance_id) {
+    if (instance_id <= 0) return;
+    for (uint i = 0; i < monstruos_global.length(); i++) {
+        if (monstruos_global[i].dungeon_instance_id != instance_id) continue;
+        monstruos_global[i].dungeon_instance_id = 0;
+        monstruos_global[i].vida = 0;
+        monstruos_global[i].vida_registrada = 0;
+        monstruos_global[i].morreu = true;
+    }
+}
 
 void init_dungeons_system() {
     dungeon_templates.resize(0);
@@ -894,12 +1037,23 @@ void dungeons_loop() {
     for (int i = int(active_instances.length()) - 1; i >= 0; i--) {
         dungeon_instance@ inst = active_instances[i];
 
-        if (inst.check_timeout()) {
-            continue;
+        inst.check_timeout();
+
+        if (inst.state == INSTANCE_ACTIVE) {
+            if (!inst.algum_participante_online()) {
+                inst.fail("Nenhum participante presente.");
+            } else {
+                inst.atualizar_ondas();
+            }
         }
 
-        if (inst.state == INSTANCE_COMPLETED || inst.state == INSTANCE_FAILED) {
-            if (inst.start_time.elapsed >= 5 * 60 * 1000) {
+        if (inst.state == INSTANCE_COMPLETED || inst.state == INSTANCE_FAILED || inst.state == INSTANCE_EXPIRED) {
+            if (!inst.monstros_limpos) {
+                inst.monstros_limpos = true;
+                dungeon_limpar_monstros(inst.instance_id);
+            }
+
+            if (inst.state == INSTANCE_EXPIRED || inst.start_time.elapsed >= 5 * 60 * 1000) {
                 active_instances.remove_at(i);
             }
         }

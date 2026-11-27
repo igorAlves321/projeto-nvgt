@@ -79,6 +79,13 @@ class arena {
 
 arena@[] arenas;
 
+// De onde cada lutador veio (nome -> mapa / x / y), para devolve-lo depois.
+dictionary arena_retorno_mapa;
+dictionary arena_retorno_x;
+dictionary arena_retorno_y;
+
+const int ARENA_ESPALHAMENTO = 10;
+
 void create_arena(string map_name, int x, int y, int max_players = 10, int duration = 300000) {
 	arena a(map_name, x, y, max_players, duration);
 	arenas.insert_last(a);
@@ -105,15 +112,34 @@ bool add_player_to_arena(int arena_index, int player_index) {
 		}
 	}
 
+	int mapa_arena = get_map_index_from(arenas[arena_index].map_name);
+	if(mapa_arena < 0) {
+		send_reliable_text(players[player_index].peer_id,
+			"msg2 ;A arena não está disponível no momento.;", 0);
+		return false;
+	}
+
 	arenas[arena_index].players_in_arena.insert_last(players[player_index].charname);
+
+	// Guarda de onde o jogador veio para devolve-lo ao fim da partida.
+	string nome = players[player_index].charname;
+	arena_retorno_mapa.set(nome, players[player_index].map);
+	arena_retorno_x.set(nome, players[player_index].x);
+	arena_retorno_y.set(nome, players[player_index].y);
+
+	// Os lutadores nao nascem todos no mesmo ponto.
+	int chegada_x = arenas[arena_index].x_spawn + random(-ARENA_ESPALHAMENTO, ARENA_ESPALHAMENTO);
+	if(chegada_x < 0) chegada_x = 0;
+	if(server_maps[mapa_arena].max_x > 0 && chegada_x > server_maps[mapa_arena].max_x) chegada_x = server_maps[mapa_arena].max_x;
 
 	players[player_index].in_arena = 1;
 	players[player_index].maparena = arenas[arena_index].map_name;
-	players[player_index].xarena = arenas[arena_index].x_spawn;
+	players[player_index].xarena = chegada_x;
 	players[player_index].yarena = arenas[arena_index].y_spawn;
 
-	players[player_index].teleport(arenas[arena_index].x_spawn,
-		arenas[arena_index].y_spawn, arenas[arena_index].map_name);
+	move_player_to_map(player_index, arenas[arena_index].map_name, chegada_x, arenas[arena_index].y_spawn);
+	players[player_index].map_name = arenas[arena_index].map_name;
+	players[player_index].mapaatual = arenas[arena_index].map_name;
 
 	send_reliable_text(players[player_index].peer_id,
 		"msg2 Você entrou na arena! Aguarde o início da partida.", 0);
@@ -137,12 +163,38 @@ bool remove_player_from_arena(int arena_index, int player_index) {
 		}
 	}
 
+	string mapa_da_arena = arenas[arena_index].map_name;
+
 	players[player_index].in_arena = 0;
 	players[player_index].maparena = "";
+	players[player_index].xarena = 0;
+	players[player_index].yarena = 0;
 
-	if(players[player_index].xarena > 0 && players[player_index].yarena > 0) {
-		players[player_index].teleport(players[player_index].xarena,
-			players[player_index].yarena, players[player_index].mapavoltar);
+	string nome = players[player_index].charname;
+	string volta_mapa = "";
+	int volta_x = 1;
+	int volta_y = 0;
+	if(arena_retorno_mapa.exists(nome)) {
+		arena_retorno_mapa.get(nome, volta_mapa);
+		arena_retorno_x.get(nome, volta_x);
+		arena_retorno_y.get(nome, volta_y);
+		arena_retorno_mapa.delete(nome);
+		arena_retorno_x.delete(nome);
+		arena_retorno_y.delete(nome);
+	}
+
+	// Quem morreu na arena ja e levado embora pelo fluxo de morte; so os vivos
+	// que ainda estao no mapa da arena voltam para onde estavam.
+	if(players[player_index].health > 0 && players[player_index].map == mapa_da_arena) {
+		if(volta_mapa == "" || get_map_index_from(volta_mapa) < 0) {
+			volta_mapa = mapainicial;
+			volta_x = 1;
+			volta_y = 0;
+		}
+
+		move_player_to_map(player_index, volta_mapa, volta_x, volta_y);
+		players[player_index].map_name = volta_mapa;
+		players[player_index].mapaatual = volta_mapa;
 	}
 
 	return true;
@@ -181,8 +233,10 @@ void end_arena_match(int arena_index) {
 
 	give_arena_rewards(arena_index);
 
-	for(uint i = 0; i < arenas[arena_index].players_in_arena.length(); i++) {
-		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
+	// remove_player_from_arena() mexe em players_in_arena: percorre uma copia.
+	string[] lutadores = arenas[arena_index].players_in_arena;
+	for(uint i = 0; i < lutadores.length(); i++) {
+		int player_idx = get_player_index_from(lutadores[i]);
 		if(player_idx > -1) {
 			remove_player_from_arena(arena_index, player_idx);
 			send_reliable_text(players[player_idx].peer_id,
@@ -191,13 +245,31 @@ void end_arena_match(int arena_index) {
 	}
 
 	arenas[arena_index].players_in_arena.resize(0);
+
+	// Com a arena livre, quem ficou esperando na fila entra.
+	try_create_match();
+}
+
+// Tira da partida quem desconectou ou ja saiu da arena por outro caminho.
+void arena_remover_ausentes(int arena_index) {
+	if(arena_index < 0 || arena_index >= int(arenas.length())) return;
+
+	for(int i = int(arenas[arena_index].players_in_arena.length()) - 1; i >= 0; i--) {
+		int player_idx = get_player_index_from(arenas[arena_index].players_in_arena[i]);
+		if(player_idx < 0 || players[player_idx].in_arena == 0) {
+			arenas[arena_index].players_in_arena.remove_at(i);
+		}
+	}
 }
 
 void arena_loop() {
 	for(uint i = 0; i < arenas.length(); i++) {
 		if(arenas[i].match_started) {
+			arena_remover_ausentes(i);
+
 			if(arenas[i].match_timer.elapsed >= arenas[i].match_duration) {
 				end_arena_match(i);
+				continue;
 			}
 
 			if(arenas[i].players_in_arena.length() <= 1) {
@@ -264,18 +336,34 @@ void remove_from_matchmaking(int player_index) {
 void try_create_match() {
 	if(matchmaking_queue.length() < 2) return;
 
-	int arena_index = -1;
-	for(uint i = 0; i < arenas.length(); i++) {
-		if(!arenas[i].match_started && arenas[i].players_in_arena.length() == 0) {
-			arena_index = i;
-			break;
-		}
+	// Quem desconectou enquanto esperava sai da fila.
+	for(int i = int(matchmaking_queue.length()) - 1; i >= 0; i--) {
+		if(get_player_index_from(matchmaking_queue[i]) < 0) matchmaking_queue.remove_at(i);
 	}
+	if(matchmaking_queue.length() < 2) return;
 
+	// O local da arena vem da tabela arena_config (gravada por /setarena).
+	string cfg_mapa = "";
+	int cfg_x = 0;
+	int cfg_y = 0;
+	int cfg_max = 10;
+	int cfg_duracao = 300000;
+	if(!arena_carregar_config(cfg_mapa, cfg_x, cfg_y, cfg_max, cfg_duracao)) return;
+
+	int arena_index = get_arena_index(cfg_mapa);
 	if(arena_index == -1) {
-		create_arena("arena_pvp", 0, 0, 10, 300000);
+		create_arena(cfg_mapa, cfg_x, cfg_y, cfg_max, cfg_duracao);
 		arena_index = int(arenas.length()) - 1;
 	}
+
+	// Uma partida por vez no mesmo local: a fila espera a atual terminar.
+	if(arenas[arena_index].match_started || arenas[arena_index].players_in_arena.length() > 0) return;
+
+	arenas[arena_index].x_spawn = cfg_x;
+	arenas[arena_index].y_spawn = cfg_y;
+	arenas[arena_index].max_players = cfg_max;
+	arenas[arena_index].match_duration = cfg_duracao;
+	arenas[arena_index].reset_scores();
 
 	int players_to_add = (int(matchmaking_queue.length()) < arenas[arena_index].max_players)
 	                     ? int(matchmaking_queue.length())
@@ -292,6 +380,169 @@ void try_create_match() {
 	if(int(arenas[arena_index].players_in_arena.length()) >= arenas[arena_index].min_players) {
 		start_arena_match(arena_index);
 	}
+	else {
+		// Nao sobrou gente suficiente: devolve quem ja tinha entrado.
+		string[] lutadores = arenas[arena_index].players_in_arena;
+		for(uint i = 0; i < lutadores.length(); i++) {
+			int player_idx = get_player_index_from(lutadores[i]);
+			if(player_idx > -1) remove_player_from_arena(arena_index, player_idx);
+		}
+		arenas[arena_index].players_in_arena.resize(0);
+	}
+}
+
+bool arena_esta_na_fila(string player_name) {
+	for(uint i = 0; i < matchmaking_queue.length(); i++) {
+		if(matchmaking_queue[i] == player_name) return true;
+	}
+	return false;
+}
+
+// ---------------------------------------------------------------------------
+// Local da arena no SQLite (tabela arena_config, uma linha so). A tabela e
+// criada no primeiro uso, entao nao depende de chamada de init.
+// ---------------------------------------------------------------------------
+
+bool arena_tabela_pronta = false;
+
+bool arena_garantir_tabela() {
+	if(arena_tabela_pronta) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string create_arena_config = """
+		CREATE TABLE IF NOT EXISTS arena_config (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			mapa TEXT NOT NULL,
+			x INTEGER DEFAULT 0,
+			y INTEGER DEFAULT 0,
+			max_jogadores INTEGER DEFAULT 10,
+			duracao_ms INTEGER DEFAULT 300000
+		);
+	""";
+
+	if(bancoJogo.execute(create_arena_config) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela arena_config: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	arena_tabela_pronta = true;
+	return true;
+}
+
+// Devolve false quando nao ha local gravado ou o mapa dele nao esta carregado.
+bool arena_carregar_config(string &out mapa, int &out x, int &out y, int &out max_jogadores, int &out duracao_ms) {
+	mapa = "";
+	x = 0;
+	y = 0;
+	max_jogadores = 10;
+	duracao_ms = 300000;
+
+	if(!arena_garantir_tabela()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT mapa, x, y, max_jogadores, duracao_ms FROM arena_config WHERE id = 1;");
+	if(@stmt == null) return false;
+	if(stmt.step() != SQLITE_ROW) return false;
+
+	mapa = stmt.column_text(0);
+	x = stmt.column_int(1);
+	y = stmt.column_int(2);
+	max_jogadores = stmt.column_int(3);
+	duracao_ms = stmt.column_int(4);
+
+	if(max_jogadores < 2) max_jogadores = 2;
+	if(duracao_ms < 30000) duracao_ms = 30000;
+
+	return (mapa != "" && get_map_index_from(mapa) >= 0);
+}
+
+bool arena_salvar_config(string mapa, int x, int y, int max_jogadores, int duracao_ms) {
+	if(!arena_garantir_tabela()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR REPLACE INTO arena_config (id, mapa, x, y, max_jogadores, duracao_ms) VALUES (1, ?, ?, ?, ?, ?);");
+	if(@stmt == null) {
+		debug_log("ERRO ao preparar arena_salvar_config: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, mapa);
+	stmt.bind_int(2, x);
+	stmt.bind_int(3, y);
+	stmt.bind_int(4, max_jogadores);
+	stmt.bind_int(5, duracao_ms);
+
+	return (stmt.step() == SQLITE_DONE);
+}
+
+// Pacote "arena" (ligacao para 3812742 no celular, net.bgt:2252): entra na
+// fila de combate; um segundo pedido tira o jogador da fila.
+void arena_pedir_entrada(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(p.in_arena != 0) {
+		send_reliable_text(p.peer_id, "msg2 ;Você já está na arena.;", 0);
+		return;
+	}
+
+	if(arena_esta_na_fila(p.charname)) {
+		remove_from_matchmaking(player_index);
+		return;
+	}
+
+	if(p.afk || p.paralisado || p.paralisado2 || p.health <= 0 || p.watching != 0 || game_frozen) {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode entrar na arena agora.;", 0);
+		return;
+	}
+
+	if(p.map == "portal_espiritual") {
+		send_reliable_text(p.peer_id, "msg2 ;Você não pode entrar na arena agora.;", 0);
+		return;
+	}
+
+	string cfg_mapa = "";
+	int cfg_x = 0;
+	int cfg_y = 0;
+	int cfg_max = 10;
+	int cfg_duracao = 300000;
+	if(!arena_carregar_config(cfg_mapa, cfg_x, cfg_y, cfg_max, cfg_duracao)) {
+		send_reliable_text(p.peer_id, "msg2 ;A arena não está disponível no momento.;", 0);
+		return;
+	}
+
+	add_to_matchmaking(player_index);
+}
+
+// /setarena [max_jogadores] [minutos]: grava a posicao atual do administrador
+// como local da arena.
+void cmd_setarena(int player_index, string[] args) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = players[player_index];
+
+	if(get_map_index_from(p.map) < 0) {
+		send_reliable_text(p.peer_id, "msgnormal Erro ao obter o mapa atual.", 0);
+		return;
+	}
+
+	int max_jogadores = 10;
+	int minutos = 5;
+	if(args.length() >= 1 && (!try_parse_int_token(args[0], max_jogadores) || max_jogadores < 2 || max_jogadores > 50)) {
+		send_reliable_text(p.peer_id, "msgnormal Uso: /setarena [max_jogadores 2-50] [minutos 1-60]", 0);
+		return;
+	}
+	if(args.length() >= 2 && (!try_parse_int_token(args[1], minutos) || minutos < 1 || minutos > 60)) {
+		send_reliable_text(p.peer_id, "msgnormal Uso: /setarena [max_jogadores 2-50] [minutos 1-60]", 0);
+		return;
+	}
+
+	if(!arena_salvar_config(p.map, p.x, p.y, max_jogadores, minutos * 60000)) {
+		send_reliable_text(p.peer_id, "msgnormal Erro ao gravar o local da arena. Verifique o log do servidor.", 0);
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "msgnormal Arena definida em " + p.map + " (" + p.x + ", " + p.y + "), até " + max_jogadores + " jogadores, " + minutos + " minutos por partida.", 0);
+	debug_log("ADMIN: " + p.charname + " definiu a arena em " + p.map + " (" + p.x + "," + p.y + ")");
 }
 
 void give_arena_rewards(int arena_index) {

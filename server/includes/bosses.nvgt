@@ -86,6 +86,14 @@ class boss {
     int[] phase_thresholds;
     int current_phase;
 
+    // Ataque sem o bonus de furia, restaurado a cada spawn.
+    int ataque_base = 0;
+    // Quem ja foi avisado de que nao tem nivel para este combate.
+    dictionary avisados_nivel;
+    // Ligado quando ha um local valido salvo em boss_estado: o chefe nasce
+    // sozinho assim que o mapa estiver carregado.
+    bool spawn_automatico = false;
+
     boss() {
         id = 0;
         level = 1;
@@ -147,8 +155,23 @@ class boss {
 
         if (new_target != current_target && new_target != "") {
             current_target = new_target;
-            broadcast_to_participants("O boss mudou de alvo para " + new_target + "!");
+            broadcast_to_participants(name + " mudou de alvo para " + new_target + "!");
+
+            // A entidade no mapa passa a perseguir quem tem mais ameaca.
+            monstruo@ m = boss_entidade(id);
+            int alvo = get_player_index_from(new_target);
+            if (m !is null && alvo > -1) {
+                m.p_index = alvo;
+                m.update_player.restart();
+            }
         }
+    }
+
+    bool is_participant(string player_name) {
+        for (uint i = 0; i < participants.length(); i++) {
+            if (participants[i].player_name == player_name) return true;
+        }
+        return false;
     }
 
     void add_participant(string player_name) {
@@ -173,26 +196,55 @@ class boss {
 
     void broadcast_to_participants(string message) {
         for (uint i = 0; i < participants.length(); i++) {
+            int pidx = get_player_index_from(participants[i].player_name);
+            if (pidx < 0) continue;
+            loot_enviar_mensagem(players[pidx], message);
         }
     }
 
-    void spawn() {
+    // Coloca o chefe no mundo como um monstro atacavel em (map, x, y).
+    // Devolve false, sem mudar o estado, quando o mapa nao esta carregado.
+    bool spawn() {
+        if (get_map_index_from(this.map) < 0) return false;
+
+        boss_remover_entidade(id);
+
+        if (ataque_base <= 0) ataque_base = attack_power;
+        attack_power = ataque_base;
+
         current_hp = max_hp;
         state = BOSS_ALIVE;
         current_phase = 0;
         threat_table.delete_all();
+        avisados_nivel.delete_all();
         participants.resize(0);
         current_target = "";
 
+        monstruo@ m = spawn_monstruo_especial(int(this.x), int(this.y), this.map, this.name, max_hp,
+            attack_power * BOSS_DANO_FATOR_MIN, attack_power * BOSS_DANO_FATOR_MAX);
+        m.boss_id = id;
+        m.distanciaataques = 3;
+        m.tiempoparaatacar = 1500;
+
+        send_reliable_text(0, "msg2 ;O chefe; " + name + " ;apareceu em; " + this.map + ";!", 3);
+        debug_log("BOSSES: " + name + " nasceu em " + this.map + " (" + int(this.x) + "," + int(this.y) + ")");
+        return true;
     }
 
     void die() {
+        if (state == BOSS_DEAD || state == BOSS_SLEEPING) return;
+
         state = BOSS_DEAD;
+        current_hp = 0;
         respawn_timer.restart();
+
+        boss_remover_entidade(id);
 
         distribute_loot();
 
         broadcast_to_participants("Você derrotou " + name + "!");
+        send_reliable_text(0, "msg2 ;O chefe; " + name + " ;foi derrotado;!", 3);
+        debug_log("BOSSES: " + name + " derrotado com " + participants.length() + " participante(s)");
 
         threat_table.delete_all();
         current_target = "";
@@ -246,30 +298,30 @@ class boss {
 
         ability.last_use.restart();
 
-        broadcast_to_participants(" " + name + " usa " + ability.name + "!");
+        broadcast_to_participants(name + " usa " + ability.name + "!");
 
         switch (ability.type) {
             case ABILITY_AOE_DAMAGE:
-                broadcast_to_participants("💥 Dano em área! " + ability.damage + " de dano!");
+                broadcast_to_participants("Dano em área! " + ability.damage + " de dano!");
                 break;
             case ABILITY_SUMMON:
-                broadcast_to_participants("👹 " + name + " invocou " + ability.summon_count + " " + ability.summon_type + "!");
+                broadcast_to_participants(name + " invocou " + ability.summon_count + " " + ability.summon_type + "!");
                 break;
             case ABILITY_HEAL:
                 current_hp = min(current_hp + ability.damage, max_hp);
-                broadcast_to_participants("💚 " + name + " se curou em " + ability.damage + " HP!");
+                broadcast_to_participants(name + " se curou em " + ability.damage + " de vida!");
                 break;
             case ABILITY_STUN:
-                broadcast_to_participants("😵 Todos foram atordoados por " + ability.duration + " segundos!");
+                broadcast_to_participants("Todos foram atordoados por " + ability.duration + " segundos!");
                 break;
             case ABILITY_DOT:
-                broadcast_to_participants("☠️ Dano contínuo aplicado! " + ability.damage + " de dano por " + ability.duration + "s!");
+                broadcast_to_participants("Dano contínuo aplicado! " + ability.damage + " de dano por " + ability.duration + " segundos!");
                 break;
             case ABILITY_BUFF_SELF:
-                broadcast_to_participants("💪 " + name + " ficou mais forte!");
+                broadcast_to_participants(name + " ficou mais forte!");
                 break;
             case ABILITY_DEBUFF_PLAYERS:
-                broadcast_to_participants("🔻 Seus atributos foram reduzidos!");
+                broadcast_to_participants("Seus atributos foram reduzidos!");
                 break;
         }
     }
@@ -277,6 +329,117 @@ class boss {
 
 boss@[] world_bosses;
 dictionary boss_by_id;
+
+// O ataque do chefe vira dano por golpe na mesma escala dos monstros comuns.
+const int BOSS_DANO_FATOR_MIN = 5;
+const int BOSS_DANO_FATOR_MAX = 10;
+
+// ---------------------------------------------------------------------
+// Ligacao com o combate. Cada chefe vivo e um monstruo de monstruos_global
+// marcado com boss_id; monstruo_global_loop() chama boss_registrar_dano_entidade
+// quando ele sofre dano e boss_entidade_morreu quando ele morre.
+// ---------------------------------------------------------------------
+
+monstruo@ boss_entidade(int boss_id) {
+    if (boss_id <= 0) return null;
+    for (uint i = 0; i < monstruos_global.length(); i++) {
+        if (monstruos_global[i].boss_id == boss_id && monstruos_global[i].vida > 0) return monstruos_global[i];
+    }
+    return null;
+}
+
+// Nao remove do array (quem remove e monstruo_global_loop): so desliga o
+// vinculo e deixa o monstro sem vida para sair no proximo ciclo.
+void boss_remover_entidade(int boss_id) {
+    if (boss_id <= 0) return;
+    for (uint i = 0; i < monstruos_global.length(); i++) {
+        if (monstruos_global[i].boss_id != boss_id) continue;
+        monstruos_global[i].boss_id = 0;
+        monstruos_global[i].vida = 0;
+        monstruos_global[i].vida_registrada = 0;
+        monstruos_global[i].morreu = true;
+    }
+}
+
+void boss_registrar_dano_entidade(int boss_id, string autor, int dano, int vida_restante) {
+    boss@ b = get_boss(boss_id);
+    if (b is null) return;
+    if (b.state == BOSS_DEAD || b.state == BOSS_SLEEPING) return;
+
+    b.current_hp = vida_restante > 0 ? vida_restante : 0;
+
+    if (b.state == BOSS_ALIVE) {
+        b.state = BOSS_FIGHTING;
+        b.fight_start_time.restart();
+    }
+
+    int pidx = get_player_index_from(autor);
+    if (pidx < 0) return;
+
+    if (!b.is_participant(autor)) {
+        if (players[pidx].level < b.required_level) {
+            if (!b.avisados_nivel.exists(autor)) {
+                b.avisados_nivel.set(autor, 1);
+                loot_enviar_mensagem(players[pidx], "Você precisa do nível " + b.required_level + " para receber recompensas de " + b.name + ".");
+            }
+            return;
+        }
+        if (int(b.participants.length()) >= b.max_participants) return;
+
+        b.add_participant(autor);
+        loot_enviar_mensagem(players[pidx], "Você entrou no combate contra " + b.name + "!");
+    }
+
+    b.record_damage(autor, dano);
+    b.add_threat(autor, dano);
+}
+
+void boss_entidade_morreu(int boss_id) {
+    boss@ b = get_boss(boss_id);
+    if (b is null) return;
+    b.die();
+}
+
+// ---------------------------------------------------------------------
+// Local de cada chefe no SQLite (tabela boss_estado). /spawnboss grava o
+// ponto escolhido pelo administrador; na partida seguinte o chefe volta a
+// nascer ali.
+// ---------------------------------------------------------------------
+
+void criar_tabela_boss_estado() {
+    if(!database_initialized || bancoJogo is null) return;
+
+    string create_boss_estado = """
+        CREATE TABLE IF NOT EXISTS boss_estado (
+            boss_id INTEGER PRIMARY KEY,
+            mapa TEXT NOT NULL,
+            x INTEGER DEFAULT 0,
+            y INTEGER DEFAULT 0
+        );
+    """;
+
+    if(bancoJogo.execute(create_boss_estado) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela boss_estado: " + bancoJogo.get_last_error_text());
+    }
+}
+
+bool boss_salvar_local(boss@ b) {
+    if(b is null) return false;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR REPLACE INTO boss_estado (boss_id, mapa, x, y) VALUES (?, ?, ?, ?);");
+    if(@stmt == null) {
+        debug_log("ERRO ao preparar boss_salvar_local: " + bancoJogo.get_last_error_text());
+        return false;
+    }
+
+    stmt.bind_int(1, b.id);
+    stmt.bind_text(2, b.map);
+    stmt.bind_int(3, int(b.x));
+    stmt.bind_int(4, int(b.y));
+
+    return (stmt.step() == SQLITE_DONE);
+}
 
 void init_bosses_system() {
     world_bosses.resize(0);
@@ -538,12 +701,18 @@ boss@ get_boss(int id) {
     return null;
 }
 
+void boss_responder(int client_index, string mensagem) {
+    if (client_index < 0 || client_index >= int(players.length())) return;
+    loot_enviar_mensagem(players[client_index], mensagem);
+}
+
 void cmd_bosses(int client_index, string[] args) {
     if (world_bosses.length() == 0) {
+        boss_responder(client_index, "Nenhum chefe registrado.");
         return;
     }
 
-    string msg = "=== BOSSES DO MUNDO ===\n\n";
+    string msg = "=== CHEFES DO MUNDO ===\n";
 
     for (uint i = 0; i < world_bosses.length(); i++) {
         boss@ b = world_bosses[i];
@@ -553,35 +722,38 @@ void cmd_bosses(int client_index, string[] args) {
 
         switch (b.state) {
             case BOSS_SLEEPING:
-                msg += "Status: 💤 Aguardando spawn\n";
+                msg += "Status: Aguardando spawn\n";
                 break;
             case BOSS_ALIVE:
-                msg += "Status:  Vivo (" + b.get_hp_percent() + "% HP)\n";
+                msg += "Status: Vivo (" + b.get_hp_percent() + "% de vida)\n";
                 break;
             case BOSS_FIGHTING:
-                msg += "Status: ⚔️ Em combate (" + b.get_hp_percent() + "% HP)\n";
+                msg += "Status: Em combate (" + b.get_hp_percent() + "% de vida)\n";
                 msg += "Participantes: " + b.participants.length() + "\n";
                 break;
             case BOSS_ENRAGED:
-                msg += "Status: 😡 ENRAIVECIDO (" + b.get_hp_percent() + "% HP)\n";
+                msg += "Status: Enfurecido (" + b.get_hp_percent() + "% de vida)\n";
+                msg += "Participantes: " + b.participants.length() + "\n";
                 break;
             case BOSS_DEAD: {
-                int remaining = (b.respawn_delay_minutes * 60) - (b.respawn_timer.elapsed / 1000);
-                msg += "Status: ☠️ Morto (respawn em " + (remaining / 60) + "m)\n";
+                int remaining = (b.respawn_delay_minutes * 60) - int(b.respawn_timer.elapsed / 1000);
+                if (remaining < 0) remaining = 0;
+                msg += "Status: Morto (respawn em " + (remaining / 60) + " minutos)\n";
                 break;
             }
         }
 
         msg += "Nível requerido: " + b.required_level + "\n";
-        msg += "---\n";
     }
 
-    msg += "\nUse /bossinfo <id> para mais detalhes.";
+    msg += "Use /bossinfo <id> para mais detalhes.";
 
+    boss_responder(client_index, msg);
 }
 
 void cmd_bossinfo(int client_index, string[] args) {
     if (args.length() < 1) {
+        boss_responder(client_index, "Uso: /bossinfo <id>");
         return;
     }
 
@@ -589,42 +761,47 @@ void cmd_bossinfo(int client_index, string[] args) {
     boss@ b = get_boss(id);
 
     if (b is null) {
+        boss_responder(client_index, "Chefe não encontrado.");
         return;
     }
 
-    string msg = "=== " + b.name + " ===\n\n";
-    msg += b.description + "\n\n";
+    string msg = "=== " + b.name + " ===\n";
+    msg += b.description + "\n";
     msg += "Nível: " + b.level + "\n";
-    msg += "HP: " + b.current_hp + " / " + b.max_hp + "\n";
+    msg += "Vida: " + b.current_hp + " / " + b.max_hp + "\n";
     msg += "Ataque: " + b.attack_power + "\n";
     msg += "Defesa: " + b.defense + "\n";
     msg += "Localização: " + b.map + "\n";
     msg += "Nível mínimo: " + b.required_level + "\n";
-    msg += "Tempo de enrage: " + b.enrage_timer_minutes + " minutos\n";
-    msg += "Tempo de respawn: " + b.respawn_delay_minutes + " minutos\n\n";
+    msg += "Tempo até a fúria: " + b.enrage_timer_minutes + " minutos\n";
+    msg += "Tempo de respawn: " + b.respawn_delay_minutes + " minutos\n";
 
     if (b.abilities.length() > 0) {
-        msg += "🎯 HABILIDADES:\n";
+        msg += "HABILIDADES:\n";
         for (uint i = 0; i < b.abilities.length(); i++) {
-            msg += "- " + b.abilities[i].name + " (CD: " + b.abilities[i].cooldown + "s)\n";
-            msg += "  " + b.abilities[i].description + "\n";
+            msg += "- " + b.abilities[i].name + " (recarga de " + b.abilities[i].cooldown + " segundos)\n";
+            if (b.abilities[i].description != "") msg += "  " + b.abilities[i].description + "\n";
         }
-        msg += "\n";
     }
+
+    msg += "RECOMPENSAS:\n";
+    msg += "- Gold: " + b.guaranteed_gold_min + " - " + b.guaranteed_gold_max + "\n";
+    msg += "- XP: " + b.guaranteed_xp + "\n";
 
     loot_premio@[] premios = boss_loot_carregar(b.id);
     if (premios.length() > 0) {
-        msg += "💎 POSSÍVEL LOOT:\n";
-        msg += "- Gold: " + b.guaranteed_gold_min + " - " + b.guaranteed_gold_max + "\n";
-        msg += "- XP: " + b.guaranteed_xp + "\n";
         msg += loot_descrever_premios(premios);
     }
 
+    boss_responder(client_index, msg);
 }
 
+// Faz o chefe nascer onde o administrador esta e grava o local.
 void cmd_spawnboss(int client_index, string[] args) {
+    if (client_index < 0 || client_index >= int(players.length())) return;
 
     if (args.length() < 1) {
+        boss_responder(client_index, "Uso: /spawnboss <id>");
         return;
     }
 
@@ -632,19 +809,40 @@ void cmd_spawnboss(int client_index, string[] args) {
     boss@ b = get_boss(id);
 
     if (b is null) {
+        boss_responder(client_index, "Chefe não encontrado.");
         return;
     }
 
     if (b.state != BOSS_SLEEPING && b.state != BOSS_DEAD) {
+        boss_responder(client_index, b.name + " já está vivo em " + b.map + ".");
         return;
     }
 
-    b.spawn();
+    if (get_map_index_from(players[client_index].map) < 0) {
+        boss_responder(client_index, "Erro ao obter o mapa atual.");
+        return;
+    }
+
+    b.map = players[client_index].map;
+    b.x = players[client_index].x;
+    b.y = players[client_index].y;
+
+    if (!b.spawn()) {
+        boss_responder(client_index, "Não foi possível fazer o chefe nascer aqui.");
+        return;
+    }
+
+    boss_salvar_local(b);
+
+    boss_responder(client_index, b.name + " nasceu em " + b.map + " (" + int(b.x) + ", " + int(b.y) + ").");
+    debug_log("ADMIN: " + players[client_index].charname + " fez nascer o chefe " + b.id + " (" + b.name + ") em " + b.map);
 }
 
 void cmd_killboss(int client_index, string[] args) {
+    if (client_index < 0 || client_index >= int(players.length())) return;
 
     if (args.length() < 1) {
+        boss_responder(client_index, "Uso: /killboss <id>");
         return;
     }
 
@@ -652,51 +850,102 @@ void cmd_killboss(int client_index, string[] args) {
     boss@ b = get_boss(id);
 
     if (b is null) {
+        boss_responder(client_index, "Chefe não encontrado.");
         return;
     }
 
-    if (b.state == BOSS_DEAD) {
+    if (b.state == BOSS_DEAD || b.state == BOSS_SLEEPING) {
+        boss_responder(client_index, b.name + " não está vivo.");
         return;
     }
 
     b.die();
+
+    boss_responder(client_index, b.name + " foi morto. As recompensas foram entregues aos participantes.");
+    debug_log("ADMIN: " + players[client_index].charname + " matou o chefe " + b.id + " (" + b.name + ")");
 }
 
 void bosses_loop() {
     for (uint i = 0; i < world_bosses.length(); i++) {
         boss@ b = world_bosses[i];
 
-        if (b.state == BOSS_DEAD) {
-            if (b.respawn_timer.elapsed >= b.respawn_delay_minutes * 60 * 1000) {
+        if (b.state == BOSS_SLEEPING) {
+            if (b.spawn_automatico) {
+                b.spawn_automatico = false;
                 b.spawn();
             }
+            continue;
+        }
+
+        if (b.state == BOSS_DEAD) {
+            if (b.respawn_timer.elapsed >= b.respawn_delay_minutes * 60 * 1000) {
+                // Sem o mapa carregado o chefe volta a aguardar um /spawnboss.
+                if (!b.spawn()) b.state = BOSS_SLEEPING;
+            }
+            continue;
+        }
+
+        monstruo@ m = boss_entidade(b.id);
+        if (m is null) {
+            // A entidade saiu do mundo sem passar pela morte.
+            b.state = BOSS_SLEEPING;
+            continue;
         }
 
         if (b.state == BOSS_FIGHTING) {
             if (b.fight_start_time.elapsed >= b.enrage_timer_minutes * 60 * 1000) {
-                if (b.state != BOSS_ENRAGED) {
-                    b.state = BOSS_ENRAGED;
-                    b.attack_power = int(b.attack_power * 1.5);
-                    b.broadcast_to_participants(" " + b.name + " ENTROU EM FÚRIA! ");
-                }
+                b.state = BOSS_ENRAGED;
+                b.attack_power = int(b.attack_power * 1.5);
+                m.dano_min = b.attack_power * BOSS_DANO_FATOR_MIN;
+                m.dano_max = b.attack_power * BOSS_DANO_FATOR_MAX;
+                b.broadcast_to_participants(b.name + " ENTROU EM FÚRIA!");
             }
         }
 
         if (b.state == BOSS_FIGHTING || b.state == BOSS_ENRAGED) {
             if (b.abilities.length() > 0 && random(0, 100) < 10) {
-                int ability_index = random(0, b.abilities.length() - 1);
+                int ability_index = random(0, int(b.abilities.length()) - 1);
                 b.use_ability(ability_index);
+
+                // A cura da habilidade vale tambem para a entidade no mapa.
+                if (b.current_hp > m.vida) {
+                    m.vida = b.current_hp;
+                    m.vida_registrada = m.vida;
+                }
             }
 
             if (b.check_phase_transition()) {
-                b.broadcast_to_participants("⚡ " + b.name + " entrou na Fase " + b.current_phase + "!");
+                b.broadcast_to_participants(b.name + " entrou na Fase " + b.current_phase + "!");
             }
         }
     }
 }
 
 void save_bosses_data() {
+    for (uint i = 0; i < world_bosses.length(); i++) {
+        if (get_map_index_from(world_bosses[i].map) < 0) continue;
+        boss_salvar_local(world_bosses[i]);
+    }
 }
 
 void load_bosses_data() {
+    criar_tabela_boss_estado();
+    if(!database_initialized || bancoJogo is null) return;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT boss_id, mapa, x, y FROM boss_estado;");
+    if(@stmt == null) return;
+
+    int carregados = 0;
+    while(stmt.step() == SQLITE_ROW) {
+        boss@ b = get_boss(stmt.column_int(0));
+        if (b is null) continue;
+
+        b.map = stmt.column_text(1);
+        b.x = stmt.column_int(2);
+        b.y = stmt.column_int(3);
+        b.spawn_automatico = true;
+        carregados++;
+    }
+
+    if (carregados > 0) debug_log("BOSSES: " + carregados + " local(is) de chefe carregado(s) de boss_estado");
 }

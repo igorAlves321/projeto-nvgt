@@ -1,0 +1,1421 @@
+// ==========================================================================
+// Pacotes sociais.
+//
+// Porta do BGT original (servidor reino test/includes/net.bgt e voids.bgt):
+//   - equipe:   /eqr /eqs /eqpd /dqr /eql /eqls      (net.bgt:1340 e 1502)
+//   - ignorar:  /ign /deign /igns                    (net.bgt:1840)
+//   - silêncio: estado único usado por /silenciar, /mute e pelo chat
+//   - avisos:   /aserver /arank /aitem /apm /aequipo /alv (net.bgt:1855)
+//   - status:   /setstatus e /status <jogador>       (net.bgt:1816)
+//   - /where (voids.bgt:2390) e /regras (net.bgt:2025)
+//
+// Tudo que era arquivo em players/<nome>/ (nomesequipe em configs, muted.usr,
+// silencio.usr, status.usr) virou tabela sqlite. Os campos do player continuam
+// sendo a cópia em memória: nomesequipe, muted, silenciado, seestatus, dpm,
+// dequipo, aitem, arank, avisaserver.
+//
+// Quem chama:
+//   - execute_command() em commands.nvgt -> social_executar_comando()
+//   - load_player_complete() em load_player.nvgt -> social_jogador_conectou()
+// ==========================================================================
+
+const int SOCIAL_MAX_EQUIPE = 50;
+const int SOCIAL_MAX_IGNORADOS = 200;
+const int SOCIAL_MAX_STATUS = 1024;
+
+bool social_tabelas_prontas = false;
+
+// Silêncio aplicado por um administrador. A linha em 'silencios' guarda o
+// instante de expiração; em memória fica só quanto falta, contado por timer.
+class social_silencio {
+	timer relogio;
+	double duracao_ms = 0;
+	string por = "";
+}
+
+// chave: nome do jogador em minúsculas -> social_silencio@
+dictionary social_silencios;
+
+// --------------------------------------------------------------------------
+// Helpers gerais
+// --------------------------------------------------------------------------
+
+void social_msg(int index, string texto) {
+	if(index < 0 || index >= int(players.length())) return;
+	send_reliable_text(players[index].peer_id, "msg2 " + texto, 0);
+}
+
+void social_som(int index, string som) {
+	if(index < 0 || index >= int(players.length())) return;
+	send_reliable_text(players[index].peer_id, "ps " + som, 0);
+}
+
+// Índice do jogador online, sem diferenciar maiúsculas de minúsculas.
+int social_indice_online(string nome) {
+	string alvo = nome.trim_whitespace().lower();
+	if(alvo == "") return -1;
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].charname.lower() == alvo) return int(i);
+	}
+	return -1;
+}
+
+bool social_e_staff(int index) {
+	if(index < 0 || index >= int(players.length())) return false;
+	string nome = players[index].charname;
+	if(players[index].rank >= 5) return true;
+	return check_is_admin(nome) || has_role(nome, "mod") || has_role(nome, "moderator");
+}
+
+// Junta os argumentos ignorando os vazios que sobram de espaços duplos.
+string social_juntar_args(string[] args, uint inicio = 0) {
+	string saida = "";
+	for(uint i = inicio; i < args.length(); i++) {
+		if(args[i] == "") continue;
+		if(saida != "") saida += " ";
+		saida += args[i];
+	}
+	return saida;
+}
+
+string social_primeiro_arg(string[] args) {
+	for(uint i = 0; i < args.length(); i++) {
+		if(args[i] != "") return args[i];
+	}
+	return "";
+}
+
+// --------------------------------------------------------------------------
+// Tabelas
+// --------------------------------------------------------------------------
+
+bool social_garantir_tabelas() {
+	if(social_tabelas_prontas) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	bool ok = true;
+
+	string tabela_equipe = """
+		CREATE TABLE IF NOT EXISTS equipe_membros (
+			dono TEXT NOT NULL COLLATE NOCASE,
+			membro TEXT NOT NULL COLLATE NOCASE,
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (dono, membro)
+		);
+	""";
+	if(bancoJogo.execute(tabela_equipe) != SQLITE_OK) ok = false;
+
+	string tabela_ignorados = """
+		CREATE TABLE IF NOT EXISTS jogadores_ignorados (
+			dono TEXT NOT NULL COLLATE NOCASE,
+			ignorado TEXT NOT NULL COLLATE NOCASE,
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (dono, ignorado)
+		);
+	""";
+	if(bancoJogo.execute(tabela_ignorados) != SQLITE_OK) ok = false;
+
+	string tabela_silencios = """
+		CREATE TABLE IF NOT EXISTS silencios (
+			username TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
+			expira_em INTEGER NOT NULL,
+			silenciado_por TEXT DEFAULT '',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+	if(bancoJogo.execute(tabela_silencios) != SQLITE_OK) ok = false;
+
+	string tabela_prefs = """
+		CREATE TABLE IF NOT EXISTS preferencias_sociais (
+			username TEXT NOT NULL COLLATE NOCASE PRIMARY KEY,
+			avisaserver INTEGER DEFAULT 1,
+			aitem INTEGER DEFAULT 1,
+			arank INTEGER DEFAULT 0,
+			dpm INTEGER DEFAULT 0,
+			dequipo INTEGER DEFAULT 0,
+			status_texto TEXT DEFAULT ''
+		);
+	""";
+	if(bancoJogo.execute(tabela_prefs) != SQLITE_OK) ok = false;
+
+	if(!ok) {
+		debug_log("SOCIAL: erro ao criar tabelas: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_equipe_membros_membro ON equipe_membros(membro);");
+	bancoJogo.execute("DELETE FROM silencios WHERE expira_em <= CAST(strftime('%s','now') AS INTEGER);");
+
+	social_tabelas_prontas = true;
+	debug_log("OK - Tabelas sociais criadas/verificadas (equipe_membros, jogadores_ignorados, silencios, preferencias_sociais)");
+	return true;
+}
+
+// Opcional: as tabelas também são criadas sozinhas no primeiro uso.
+void init_pacotes_social() {
+	social_garantir_tabelas();
+}
+
+bool social_db_exec1(string query, string p1) {
+	if(!social_garantir_tabelas()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SOCIAL: erro ao preparar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, p1);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SOCIAL: erro ao executar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+bool social_db_exec2(string query, string p1, string p2) {
+	if(!social_garantir_tabelas()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SOCIAL: erro ao preparar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, p1);
+	stmt.bind_text(2, p2);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SOCIAL: erro ao executar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+// Primeira coluna de cada linha de uma query com um único parâmetro de texto.
+string[] social_db_lista(string query, string p1) {
+	string[] saida;
+	if(!social_garantir_tabelas()) return saida;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SOCIAL: erro ao preparar consulta: " + bancoJogo.get_last_error_text());
+		return saida;
+	}
+
+	stmt.bind_text(1, p1);
+
+	while(stmt.step() == SQLITE_ROW) {
+		string valor = stmt.column_text(0);
+		if(valor != "") saida.insert_last(valor);
+	}
+	return saida;
+}
+
+// Nome exatamente como está cadastrado (online primeiro, depois a tabela
+// players). Devolve "" quando a conta não existe.
+string social_nome_canonico(string nome) {
+	nome = nome.trim_whitespace();
+	if(nome == "") return "";
+
+	int online = social_indice_online(nome);
+	if(online >= 0) return players[online].charname;
+
+	if(!database_initialized || bancoJogo is null) return "";
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT username FROM players WHERE username = ? COLLATE NOCASE LIMIT 1;");
+	if(@stmt == null) return "";
+
+	stmt.bind_text(1, nome);
+
+	if(stmt.step() == SQLITE_ROW) return stmt.column_text(0);
+	return "";
+}
+
+// --------------------------------------------------------------------------
+// Equipe
+//
+// Como no BGT, a equipe é uma lista por dono: nomesequipe[0] é o próprio
+// jogador e o resto são os que ele adicionou com /eqr.
+// --------------------------------------------------------------------------
+
+int social_pos_equipe(player@ p, string nome) {
+	if(p is null) return -1;
+	string alvo = nome.lower();
+	for(uint i = 0; i < p.nomesequipe.length(); i++) {
+		if(p.nomesequipe[i].lower() == alvo) return int(i);
+	}
+	return -1;
+}
+
+void social_garantir_dono_na_equipe(player@ p) {
+	if(p is null) return;
+	if(p.nomesequipe.length() == 0) {
+		p.nomesequipe.insert_last(p.charname);
+		return;
+	}
+	if(p.nomesequipe[0] != p.charname) {
+		int pos = social_pos_equipe(p, p.charname);
+		if(pos >= 0) p.nomesequipe.remove_at(pos);
+		p.nomesequipe.insert_at(0, p.charname);
+	}
+}
+
+// Pacotes tratados em cliente/includes/net/channel_handlers.nvgt (canal 6).
+void social_enviar_equipe(player@ p) {
+	if(p is null) return;
+	send_reliable_text(p.peer_id, "clear_team_members", 6);
+	for(uint i = 0; i < p.nomesequipe.length(); i++) {
+		if(p.nomesequipe[i].lower() == p.charname.lower()) continue;
+		send_reliable_text(p.peer_id, "add_team_member " + p.nomesequipe[i], 6);
+	}
+}
+
+void social_carregar_equipe(player@ p) {
+	if(p is null) return;
+
+	string[] membros = social_db_lista("SELECT membro FROM equipe_membros WHERE dono = ? ORDER BY criado_em, membro;", p.charname);
+
+	p.nomesequipe.resize(0);
+	p.nomesequipe.insert_last(p.charname);
+	for(uint i = 0; i < membros.length(); i++) {
+		if(membros[i].lower() == p.charname.lower()) continue;
+		p.nomesequipe.insert_last(membros[i]);
+	}
+}
+
+// /eqr <jogador> - adiciona à sua equipe.
+void social_cmd_eqr(int index, string alvo_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo_nome = alvo_nome.trim_whitespace();
+	if(alvo_nome == "") {
+		social_msg(index, "Uso: /eqr <jogador>");
+		return;
+	}
+
+	if(alvo_nome.lower() == p.charname.lower()) {
+		social_msg(index, "Mas você sempre vai fazer parte de sua equipe!");
+		return;
+	}
+
+	if(p.map == "arena" || p.map == "helicóptero_de_guerra") {
+		social_msg(index, "Você não pode mexer na equipe neste mapa.");
+		return;
+	}
+
+	int a = social_indice_online(alvo_nome);
+	if(a >= 0 && players[a].invs == 1 && !social_e_staff(index)) a = -1;
+	if(a < 0) {
+		social_msg(index, "Jogador não encontrado.");
+		return;
+	}
+
+	player@ alvo = @players[a];
+
+	if(alvo.has_muted(p.charname)) {
+		social_msg(index, "Você não pode fazer isto.");
+		return;
+	}
+
+	social_garantir_dono_na_equipe(p);
+
+	if(social_pos_equipe(p, alvo.charname) >= 0) {
+		social_msg(index, alvo.charname + " já está em sua equipe!");
+		return;
+	}
+
+	if(int(p.nomesequipe.length()) > SOCIAL_MAX_EQUIPE) {
+		social_msg(index, "Sua equipe já está cheia (" + SOCIAL_MAX_EQUIPE + " jogadores).");
+		return;
+	}
+
+	p.nomesequipe.insert_last(alvo.charname);
+	social_db_exec2("INSERT OR IGNORE INTO equipe_membros (dono, membro) VALUES (?, ?);", p.charname, alvo.charname);
+
+	send_reliable_text(p.peer_id, "add_team_member " + alvo.charname, 6);
+	social_som(index, "notify_bigbang.ogg");
+	social_msg(index, alvo.charname + " adicionado em sua equipe!");
+
+	social_msg(a, "Você agora está na equipe de " + p.charname + "!");
+	social_som(a, "notify_bigbang.ogg");
+
+	debug_log("EQUIPE: " + p.charname + " adicionou " + alvo.charname);
+}
+
+// /dqr <jogador> - remove da sua equipe.
+void social_cmd_dqr(int index, string alvo_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo_nome = alvo_nome.trim_whitespace();
+	if(alvo_nome == "") {
+		social_msg(index, "Uso: /dqr <jogador>");
+		return;
+	}
+
+	if(alvo_nome.lower() == p.charname.lower()) {
+		social_msg(index, "Mas você sempre vai fazer parte de sua equipe!");
+		return;
+	}
+
+	int pos = social_pos_equipe(p, alvo_nome);
+	if(pos < 0) {
+		social_msg(index, alvo_nome + " não está em sua equipe!");
+		return;
+	}
+
+	string removido = p.nomesequipe[pos];
+	p.nomesequipe.remove_at(pos);
+	social_db_exec2("DELETE FROM equipe_membros WHERE dono = ? AND membro = ?;", p.charname, removido);
+
+	send_reliable_text(p.peer_id, "remove_team_member " + removido, 6);
+	social_msg(index, removido + " removido de sua equipe!");
+
+	int a = social_indice_online(removido);
+	if(a >= 0) {
+		social_msg(a, p.charname + " te removeu da equipe!");
+		social_som(a, "notify_died.ogg");
+	}
+
+	debug_log("EQUIPE: " + p.charname + " removeu " + removido);
+}
+
+// /eqs <jogador> - sai da equipe de outro jogador.
+void social_cmd_eqs(int index, string dono_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	dono_nome = dono_nome.trim_whitespace();
+	if(dono_nome == "") {
+		social_msg(index, "Uso: /eqs <jogador>. Use /eqls para ver quem tem você na equipe.");
+		return;
+	}
+
+	if(dono_nome.lower() == p.charname.lower()) {
+		social_msg(index, "Para desfazer a sua própria equipe use /eqpd.");
+		return;
+	}
+
+	int d = social_indice_online(dono_nome);
+
+	if(d >= 0) {
+		player@ dono = @players[d];
+		int pos = social_pos_equipe(dono, p.charname);
+		if(pos < 0) {
+			social_msg(index, "Você não está na equipe de " + dono.charname + ".");
+			return;
+		}
+
+		dono.nomesequipe.remove_at(pos);
+		social_db_exec2("DELETE FROM equipe_membros WHERE dono = ? AND membro = ?;", dono.charname, p.charname);
+
+		send_reliable_text(dono.peer_id, "remove_team_member " + p.charname, 6);
+		social_msg(d, p.charname + " saiu da sua equipe!");
+		social_som(d, "notify_died.ogg");
+		social_msg(index, "Você saiu da equipe de " + dono.charname + ".");
+
+		debug_log("EQUIPE: " + p.charname + " saiu da equipe de " + dono.charname);
+		return;
+	}
+
+	// Dono offline: a equipe dele só existe no banco.
+	string[] donos = social_db_lista("SELECT dono FROM equipe_membros WHERE membro = ? ORDER BY dono;", p.charname);
+	string encontrado = "";
+	for(uint i = 0; i < donos.length(); i++) {
+		if(donos[i].lower() == dono_nome.lower()) {
+			encontrado = donos[i];
+			break;
+		}
+	}
+
+	if(encontrado == "") {
+		social_msg(index, "Você não está na equipe de " + dono_nome + ".");
+		return;
+	}
+
+	social_db_exec2("DELETE FROM equipe_membros WHERE dono = ? AND membro = ?;", encontrado, p.charname);
+	social_msg(index, "Você saiu da equipe de " + encontrado + ".");
+	debug_log("EQUIPE: " + p.charname + " saiu da equipe de " + encontrado + " (offline)");
+}
+
+// /eqpd - desfaz a própria equipe.
+void social_cmd_eqpd(int index) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	bool tinha = false;
+	for(uint i = 0; i < p.nomesequipe.length(); i++) {
+		if(p.nomesequipe[i].lower() == p.charname.lower()) continue;
+		tinha = true;
+		int z = social_indice_online(p.nomesequipe[i]);
+		if(z >= 0) social_msg(z, p.charname + " desfez sua equipe!");
+	}
+
+	p.nomesequipe.resize(0);
+	p.nomesequipe.insert_last(p.charname);
+	social_db_exec1("DELETE FROM equipe_membros WHERE dono = ?;", p.charname);
+
+	send_reliable_text(p.peer_id, "clear_team_members", 6);
+
+	if(tinha) social_msg(index, "Você desfez sua equipe.");
+	else social_msg(index, "Ninguém em sua equipe.");
+}
+
+// /eql - lista a própria equipe.
+void social_cmd_eql(int index) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	string[] nomes;
+	for(uint i = 0; i < p.nomesequipe.length(); i++) {
+		if(p.nomesequipe[i].lower() == p.charname.lower()) continue;
+		string linha = p.nomesequipe[i];
+		if(social_indice_online(linha) < 0) linha += " (offline)";
+		nomes.insert_last(linha);
+	}
+
+	if(nomes.length() == 0) {
+		social_msg(index, "Ninguém na sua equipe!");
+		return;
+	}
+
+	if(nomes.length() == 1) {
+		social_msg(index, "Apenas " + nomes[0] + " em sua equipe!");
+		return;
+	}
+
+	string texto = "";
+	for(uint i = 0; i < nomes.length(); i++) {
+		if(i == nomes.length() - 1) texto += " e ";
+		else if(i > 0) texto += ", ";
+		texto += nomes[i];
+	}
+	social_msg(index, texto + " em sua equipe.");
+}
+
+// /eqls - quem tem você na equipe.
+void social_cmd_eqls(int index) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	string[] donos;
+
+	if(social_garantir_tabelas()) {
+		donos = social_db_lista("SELECT dono FROM equipe_membros WHERE membro = ? ORDER BY dono;", p.charname);
+	} else {
+		// Sem banco: pelo menos quem está online, como no BGT.
+		for(uint i = 0; i < players.length(); i++) {
+			if(int(i) == index) continue;
+			if(social_pos_equipe(players[i], p.charname) >= 0) donos.insert_last(players[i].charname);
+		}
+	}
+
+	string[] validos;
+	for(uint i = 0; i < donos.length(); i++) {
+		if(donos[i].lower() == p.charname.lower()) continue;
+		validos.insert_last(donos[i]);
+	}
+
+	if(validos.length() == 0) {
+		social_msg(index, "Você não está na equipe de ninguém.");
+		return;
+	}
+
+	social_msg(index, "Estas são as pessoas que têm você na equipe: " + join(validos, ", ") + ".");
+}
+
+// --------------------------------------------------------------------------
+// Ignorados
+//
+// player.muted continua sendo a lista em memória (nomes separados por \r\n),
+// que é o que player.has_muted() consulta em todo o chat.
+// --------------------------------------------------------------------------
+
+string[] social_lista_ignorados(player@ p) {
+	string[] lista;
+	if(p is null) return lista;
+
+	string[] bruto = p.muted.split("\r\n");
+	for(uint i = 0; i < bruto.length(); i++) {
+		string nome = bruto[i].trim_whitespace();
+		if(nome != "") lista.insert_last(nome);
+	}
+	return lista;
+}
+
+// Núcleo usado por /ign e por player.add_muted(). Não fala nada.
+bool social_adicionar_ignorado(player@ p, string nome) {
+	if(p is null) return false;
+
+	nome = nome.trim_whitespace();
+	if(nome == "") return false;
+	if(nome.lower() == p.charname.lower()) return false;
+
+	string[] lista = social_lista_ignorados(p);
+	for(uint i = 0; i < lista.length(); i++) {
+		if(lista[i].lower() == nome.lower()) return false;
+	}
+	if(int(lista.length()) >= SOCIAL_MAX_IGNORADOS) return false;
+
+	lista.insert_last(nome);
+	p.muted = join(lista, "\r\n");
+
+	social_db_exec2("INSERT OR IGNORE INTO jogadores_ignorados (dono, ignorado) VALUES (?, ?);", p.charname, nome);
+	return true;
+}
+
+// Núcleo usado por /deign e por player.remove_muted(). Não fala nada.
+bool social_remover_ignorado(player@ p, string nome) {
+	if(p is null) return false;
+
+	nome = nome.trim_whitespace();
+	if(nome == "") return false;
+
+	string[] lista = social_lista_ignorados(p);
+	string[] nova;
+	bool achou = false;
+	for(uint i = 0; i < lista.length(); i++) {
+		if(lista[i].lower() == nome.lower()) achou = true;
+		else nova.insert_last(lista[i]);
+	}
+	if(!achou) return false;
+
+	p.muted = join(nova, "\r\n");
+
+	social_db_exec2("DELETE FROM jogadores_ignorados WHERE dono = ? AND ignorado = ?;", p.charname, nome);
+	return true;
+}
+
+void social_carregar_ignorados(player@ p) {
+	if(p is null) return;
+	if(!social_garantir_tabelas()) return;
+
+	string[] lista = social_db_lista("SELECT ignorado FROM jogadores_ignorados WHERE dono = ? ORDER BY ignorado;", p.charname);
+	p.muted = join(lista, "\r\n");
+}
+
+// PM deixada para quem está offline: respeita a lista de ignorados e o /apm
+// gravados no banco, já que o player do destinatário não está em memória.
+bool social_offline_aceita_pm(string alvo, string remetente) {
+	if(!social_garantir_tabelas()) return true;
+
+	sqlite3statement@ ign = bancoJogo.prepare("SELECT 1 FROM jogadores_ignorados WHERE dono = ? AND ignorado = ? LIMIT 1;");
+	if(@ign != null) {
+		ign.bind_text(1, alvo);
+		ign.bind_text(2, remetente);
+		if(ign.step() == SQLITE_ROW) return false;
+	}
+
+	sqlite3statement@ pref = bancoJogo.prepare("SELECT dpm FROM preferencias_sociais WHERE username = ?;");
+	if(@pref != null) {
+		pref.bind_text(1, alvo);
+		if(pref.step() == SQLITE_ROW && pref.column_int(0) == 1) return false;
+	}
+
+	return true;
+}
+
+// /ign <jogador>
+void social_cmd_ign(int index, string alvo_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo_nome = alvo_nome.trim_whitespace();
+	if(alvo_nome == "") {
+		social_msg(index, "Uso: /ign <jogador>");
+		return;
+	}
+
+	if(alvo_nome.lower() == p.charname.lower()) {
+		social_msg(index, "Com você???");
+		return;
+	}
+
+	string canonico = social_nome_canonico(alvo_nome);
+	if(canonico == "") {
+		social_msg(index, "Jogador não encontrado.");
+		return;
+	}
+
+	string[] lista = social_lista_ignorados(p);
+	for(uint i = 0; i < lista.length(); i++) {
+		if(lista[i].lower() == canonico.lower()) {
+			social_msg(index, "Você já está ignorando " + canonico + ".");
+			return;
+		}
+	}
+
+	if(int(lista.length()) >= SOCIAL_MAX_IGNORADOS) {
+		social_msg(index, "Sua lista de ignorados está cheia. Use /deign <jogador> para liberar espaço.");
+		return;
+	}
+
+	if(!social_adicionar_ignorado(p, canonico)) {
+		social_msg(index, "Não foi possível ignorar " + canonico + ".");
+		return;
+	}
+
+	// Quem é ignorado deixa de ter o jogador na equipe: o chat de equipe
+	// seria a porta dos fundos para continuar falando com ele.
+	int a = social_indice_online(canonico);
+	if(a >= 0) {
+		int pos = social_pos_equipe(players[a], p.charname);
+		if(pos > 0) {
+			players[a].nomesequipe.remove_at(pos);
+			send_reliable_text(players[a].peer_id, "remove_team_member " + p.charname, 6);
+		}
+	}
+	social_db_exec2("DELETE FROM equipe_membros WHERE dono = ? AND membro = ?;", canonico, p.charname);
+
+	social_msg(index, "Pronto. Você não vai mais receber mensagens de " + canonico + ".");
+	debug_log("IGNORAR: " + p.charname + " ignorou " + canonico);
+}
+
+// /deign <jogador>
+void social_cmd_deign(int index, string alvo_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo_nome = alvo_nome.trim_whitespace();
+	if(alvo_nome == "") {
+		social_msg(index, "Uso: /deign <jogador>");
+		return;
+	}
+
+	if(!social_remover_ignorado(p, alvo_nome)) {
+		social_msg(index, alvo_nome + " não está na sua lista de ignorados.");
+		return;
+	}
+
+	social_msg(index, "Pronto. Você voltou a receber mensagens de " + alvo_nome + ".");
+	debug_log("IGNORAR: " + p.charname + " deixou de ignorar " + alvo_nome);
+}
+
+// /igns
+void social_cmd_igns(int index) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	string[] lista = social_lista_ignorados(p);
+	if(lista.length() == 0) {
+		social_msg(index, "Você não está ignorando ninguém.");
+		return;
+	}
+
+	social_msg(index, "Jogadores ignorados (" + lista.length() + "): " + join(lista, ", ") + ".");
+}
+
+// --------------------------------------------------------------------------
+// Silêncio
+//
+// Estado único: a tabela 'silencios' (persistência) + social_silencios (tempo
+// restante em memória). player.silenciado é espelhado para o código que ainda
+// lê o campo direto (player.can_send_message(), casamentos, etc).
+// --------------------------------------------------------------------------
+
+social_silencio@ social_obter_silencio(string nome) {
+	string chave = nome.lower();
+	if(!social_silencios.exists(chave)) return null;
+
+	social_silencio@ s;
+	social_silencios.get(chave, @s);
+	return s;
+}
+
+void social_espelhar_silencio(int index, bool ativo, double restante_ms) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	if(ativo) {
+		// silenciadotiempo é int: o laço de player.nvgt solta o jogador
+		// quando o timer passa dele, então nunca pode ficar zerado.
+		double limite = restante_ms;
+		if(limite > 2000000000.0) limite = 2000000000.0;
+		if(limite < 1000.0) limite = 1000.0;
+
+		p.silenciado = 1;
+		p.silenciadotiempo = int(limite);
+		p.silenciadotimer.restart();
+		p.temposilencio = int(limite / 60000.0) + 1;
+		p.tsilencio.restart();
+		p.is_muted = true;
+	} else {
+		p.silenciado = 0;
+		p.silenciadotiempo = 0;
+		p.temposilencio = 0;
+		p.is_muted = false;
+		p.mute_end_time = 0;
+	}
+}
+
+void social_apagar_silencio(string nome) {
+	string chave = nome.lower();
+	if(social_silencios.exists(chave)) social_silencios.delete(chave);
+	social_db_exec1("DELETE FROM silencios WHERE username = ?;", nome);
+}
+
+// Minutos que faltam (arredondado para cima); 0 quando não há silêncio de admin.
+int social_silencio_minutos_restantes(string nome) {
+	social_silencio@ s = social_obter_silencio(nome);
+	if(s is null) return 0;
+
+	double restante = s.duracao_ms - s.relogio.elapsed;
+	if(restante <= 0) return 0;
+	return int(restante / 60000.0) + 1;
+}
+
+// Única pergunta que o chat faz. Também cuida da expiração.
+bool social_silenciado(int index) {
+	if(index < 0 || index >= int(players.length())) return false;
+	player@ p = @players[index];
+	if(p is null) return false;
+
+	social_silencio@ s = social_obter_silencio(p.charname);
+	if(s is null) return p.silenciado == 1;
+
+	if(s.relogio.elapsed >= s.duracao_ms) {
+		bool estava = (p.silenciado == 1);
+		social_apagar_silencio(p.charname);
+		social_espelhar_silencio(index, false, 0);
+		if(estava) social_msg(index, "Seu silêncio terminou. Tome cuidado!");
+		return false;
+	}
+
+	if(p.silenciado != 1) social_espelhar_silencio(index, true, s.duracao_ms - s.relogio.elapsed);
+	return true;
+}
+
+bool social_silenciado_nome(string nome) {
+	int index = social_indice_online(nome);
+	if(index >= 0) return social_silenciado(index);
+
+	social_silencio@ s = social_obter_silencio(nome);
+	if(s is null) return false;
+	return s.relogio.elapsed < s.duracao_ms;
+}
+
+// Se estiver silenciado avisa o jogador e devolve true (a fala deve ser barrada).
+bool social_barrar_fala(int index) {
+	if(!social_silenciado(index)) return false;
+
+	int minutos = social_silencio_minutos_restantes(players[index].charname);
+	if(minutos > 0) {
+		social_msg(index, "Você está silenciado e não pode falar. Faltam " + minutos + (minutos == 1 ? " minuto." : " minutos."));
+	} else {
+		social_msg(index, "Por alguma razão, algo te impede de falar...");
+	}
+	return true;
+}
+
+// Aplica (ou renova) o silêncio. Funciona com o alvo offline.
+bool social_silenciar(string alvo, int minutos, string por) {
+	alvo = alvo.trim_whitespace();
+	if(alvo == "" || minutos < 1) return false;
+
+	if(social_garantir_tabelas()) {
+		sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR REPLACE INTO silencios (username, expira_em, silenciado_por) VALUES (?, CAST(strftime('%s','now') AS INTEGER) + ?, ?);");
+		if(@stmt != null) {
+			stmt.bind_text(1, alvo);
+			stmt.bind_int(2, minutos * 60);
+			stmt.bind_text(3, por);
+			if(stmt.step() != SQLITE_DONE) {
+				debug_log("SOCIAL: erro ao gravar silêncio de " + alvo + ": " + bancoJogo.get_last_error_text());
+			}
+		} else {
+			debug_log("SOCIAL: erro ao preparar silêncio: " + bancoJogo.get_last_error_text());
+		}
+	}
+
+	social_silencio s;
+	s.duracao_ms = double(minutos) * 60000.0;
+	s.por = por;
+	s.relogio.restart();
+	social_silencios.set(alvo.lower(), @s);
+
+	int index = social_indice_online(alvo);
+	if(index >= 0) social_espelhar_silencio(index, true, s.duracao_ms);
+
+	debug_log("SILENCIO: " + alvo + " silenciado por " + minutos + " min (" + por + ")");
+	return true;
+}
+
+// Devolve true se havia silêncio para remover.
+bool social_dessilenciar(string alvo) {
+	alvo = alvo.trim_whitespace();
+	if(alvo == "") return false;
+
+	bool havia = (social_obter_silencio(alvo) !is null);
+
+	int index = social_indice_online(alvo);
+	if(index >= 0 && players[index].silenciado == 1) havia = true;
+
+	if(!havia && social_garantir_tabelas()) {
+		string[] linhas = social_db_lista("SELECT username FROM silencios WHERE username = ?;", alvo);
+		if(linhas.length() > 0) havia = true;
+	}
+
+	social_apagar_silencio(alvo);
+	if(index >= 0) social_espelhar_silencio(index, false, 0);
+
+	if(havia) debug_log("SILENCIO: silêncio de " + alvo + " removido");
+	return havia;
+}
+
+void social_carregar_silencio(player@ p) {
+	if(p is null) return;
+
+	string chave = p.charname.lower();
+	if(social_silencios.exists(chave)) social_silencios.delete(chave);
+
+	if(!social_garantir_tabelas()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT expira_em - CAST(strftime('%s','now') AS INTEGER), silenciado_por FROM silencios WHERE username = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, p.charname);
+
+	if(stmt.step() != SQLITE_ROW) return;
+
+	int restante_seg = stmt.column_int(0);
+	string por = stmt.column_text(1);
+
+	if(restante_seg <= 0) {
+		social_db_exec1("DELETE FROM silencios WHERE username = ?;", p.charname);
+		return;
+	}
+
+	social_silencio s;
+	s.duracao_ms = double(restante_seg) * 1000.0;
+	s.por = por;
+	s.relogio.restart();
+	social_silencios.set(chave, @s);
+
+	int index = get_player_index_from(p.charname);
+	if(index >= 0) social_espelhar_silencio(index, true, s.duracao_ms);
+
+	int minutos = restante_seg / 60 + 1;
+	send_reliable_text(p.peer_id, "msg2 Você continua silenciado. Faltam " + minutos + (minutos == 1 ? " minuto." : " minutos."), 0);
+}
+
+// --------------------------------------------------------------------------
+// Preferências de aviso e status
+// --------------------------------------------------------------------------
+
+void social_salvar_prefs(player@ p) {
+	if(p is null) return;
+	if(!social_garantir_tabelas()) return;
+
+	string query = """
+		INSERT OR REPLACE INTO preferencias_sociais
+			(username, avisaserver, aitem, arank, dpm, dequipo, status_texto)
+		VALUES (?, ?, ?, ?, ?, ?, ?);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("SOCIAL: erro ao preparar gravação de preferências: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+	stmt.bind_int(2, p.avisaserver);
+	stmt.bind_int(3, p.aitem);
+	stmt.bind_int(4, p.arank);
+	stmt.bind_int(5, p.dpm);
+	stmt.bind_int(6, p.dequipo);
+	stmt.bind_text(7, p.seestatus);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("SOCIAL: erro ao gravar preferências de " + p.charname + ": " + bancoJogo.get_last_error_text());
+	}
+}
+
+void social_carregar_prefs(player@ p) {
+	if(p is null) return;
+	if(!social_garantir_tabelas()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT avisaserver, aitem, arank, dpm, dequipo, status_texto FROM preferencias_sociais WHERE username = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, p.charname);
+
+	if(stmt.step() != SQLITE_ROW) return;
+
+	p.avisaserver = stmt.column_int(0);
+	p.aitem = stmt.column_int(1);
+	p.arank = stmt.column_int(2);
+	p.dpm = stmt.column_int(3);
+	p.dequipo = stmt.column_int(4);
+	p.seestatus = stmt.column_text(5);
+}
+
+// Para quem dispara avisos automáticos do servidor (re_server_test.bgt:971).
+bool social_recebe_avisos_servidor(int index) {
+	if(index < 0 || index >= int(players.length())) return false;
+	return players[index].avisaserver == 1;
+}
+
+// /aserver /arank /aitem /apm /aequipo /alv
+void social_cmd_alternar_aviso(int index, string qual) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	if(qual == "aserver") {
+		p.avisaserver = (p.avisaserver == 1) ? 0 : 1;
+		social_msg(index, p.avisaserver == 1 ? "Avisos do servidor ativados!" : "Avisos do servidor desativados!");
+	}
+	else if(qual == "arank") {
+		// No BGT arank==0 significa avisos ligados.
+		p.arank = (p.arank == 0) ? 1 : 0;
+		social_msg(index, p.arank == 0 ? "Avisos de mudança de rank ativados." : "Avisos de mudança de rank desativados.");
+	}
+	else if(qual == "aitem") {
+		p.aitem = (p.aitem == 1) ? 0 : 1;
+		social_msg(index, p.aitem == 1 ? "Avisos de itens ativados." : "Avisos de itens desativados.");
+	}
+	else if(qual == "apm") {
+		p.dpm = (p.dpm == 1) ? 0 : 1;
+		social_msg(index, p.dpm == 0 ? "Mensagens privadas ativadas." : "Mensagens privadas desativadas.");
+	}
+	else if(qual == "aequipo") {
+		p.dequipo = (p.dequipo == 1) ? 0 : 1;
+		social_msg(index, p.dequipo == 0 ? "Chat de equipe ativado." : "Chat de equipe desativado.");
+	}
+	else if(qual == "alv") {
+		// Este fica junto dos outros campos de progressão (leveling.nvgt).
+		p.avisanivel = (p.avisanivel == 1) ? 0 : 1;
+		salvar_progressao(p);
+		social_msg(index, p.avisanivel == 1 ? "Avisos de níveis obtidos ativados!" : "Avisos de níveis obtidos desativados!");
+		return;
+	}
+	else {
+		return;
+	}
+
+	social_salvar_prefs(p);
+}
+
+// /setstatus <texto>
+void social_cmd_setstatus(int index, string texto) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	texto = texto.replace("\r\n", "  ").replace("\n", " ").replace("\r", " ");
+	texto = texto.replace("|", " ").replace(bell, " ").replace(bell2, " ");
+	texto = texto.trim_whitespace();
+
+	if(texto == "") {
+		social_msg(index, "Uso: /setstatus <texto>. Para apagar o status use /setstatus limpar.");
+		return;
+	}
+
+	if(int(texto.length()) > SOCIAL_MAX_STATUS) {
+		social_msg(index, "Status muito longo. O limite é de " + SOCIAL_MAX_STATUS + " caracteres.");
+		return;
+	}
+
+	if(social_barrar_fala(index)) return;
+
+	string comando = texto.lower();
+	if(comando == "limpar" || comando == "apagar" || comando == "clear") {
+		p.seestatus = "";
+		social_salvar_prefs(p);
+		social_msg(index, "Status apagado.");
+		return;
+	}
+
+	p.seestatus = filter_message(texto);
+	social_salvar_prefs(p);
+	social_msg(index, "Status atualizado.");
+}
+
+// /status [jogador]
+void social_cmd_status(int index, string alvo_nome) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo_nome = alvo_nome.trim_whitespace();
+
+	if(alvo_nome == "" || alvo_nome.lower() == p.charname.lower()) {
+		if(p.seestatus == "") social_msg(index, "Você não tem status. Use /setstatus <texto> para definir um.");
+		else social_msg(index, "Seu status: " + p.seestatus);
+		return;
+	}
+
+	int a = social_indice_online(alvo_nome);
+	if(a >= 0) {
+		if(players[a].seestatus == "") social_msg(index, "Este jogador não tem status!");
+		else social_msg(index, "Status de " + players[a].charname + ": " + players[a].seestatus);
+		return;
+	}
+
+	if(!social_garantir_tabelas()) {
+		social_msg(index, "Este jogador não tem status!");
+		return;
+	}
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT username, status_texto FROM preferencias_sociais WHERE username = ?;");
+	if(@stmt == null) {
+		social_msg(index, "Este jogador não tem status!");
+		return;
+	}
+
+	stmt.bind_text(1, alvo_nome);
+
+	if(stmt.step() == SQLITE_ROW) {
+		string nome = stmt.column_text(0);
+		string texto = stmt.column_text(1);
+		if(texto != "") {
+			social_msg(index, "Status de " + nome + ": " + texto);
+			return;
+		}
+	}
+
+	social_msg(index, "Este jogador não tem status!");
+}
+
+// --------------------------------------------------------------------------
+// /where e /regras
+// --------------------------------------------------------------------------
+
+// /where <mapa|jogador> (só equipe do servidor)
+void social_cmd_where(int index, string alvo) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	alvo = alvo.trim_whitespace();
+	if(alvo == "") {
+		social_msg(index, "Uso: /where <mapa|jogador>");
+		return;
+	}
+
+	int a = social_indice_online(alvo);
+	if(a >= 0) {
+		social_msg(index, players[a].charname + " está no mapa " + players[a].map + ", coordenadas " + players[a].x + ", " + players[a].y + ".");
+		return;
+	}
+
+	string[] linhas;
+	linhas.insert_last("Estes são os jogadores que estão no mapa " + alvo + ".");
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].map.lower() != alvo.lower()) continue;
+		linhas.insert_last(players[i].charname + " está nesse mapa, coordenadas " + players[i].x + ", " + players[i].y);
+	}
+
+	if(linhas.length() == 1) {
+		social_msg(index, "Nenhum jogador online com esse nome e ninguém no mapa " + alvo + ".");
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "menuleitura " + join(linhas, "\r\n"), 0);
+}
+
+bool social_utf8_valido(const string&in texto) {
+	uint i = 0;
+	uint total = texto.length();
+	while(i < total) {
+		uint8 c = character_to_ascii(texto.substr(i, 1));
+		uint extras = 0;
+		if(c < 128) extras = 0;
+		else if(c >= 194 && c <= 223) extras = 1;
+		else if(c >= 224 && c <= 239) extras = 2;
+		else if(c >= 240 && c <= 244) extras = 3;
+		else return false;
+
+		if(i + extras >= total && extras > 0) return false;
+		for(uint j = 1; j <= extras; j++) {
+			uint8 seguinte = character_to_ascii(texto.substr(i + j, 1));
+			if(seguinte < 128 || seguinte > 191) return false;
+		}
+		i += extras + 1;
+	}
+	return true;
+}
+
+// Os arquivos de regras vieram do BGT em ISO-8859-1; o cliente espera UTF-8.
+string social_latin1_para_utf8(const string&in texto) {
+	string saida = "";
+	for(uint i = 0; i < texto.length(); i++) {
+		string ch = texto.substr(i, 1);
+		uint8 c = character_to_ascii(ch);
+		if(c < 128) {
+			saida += ch;
+		} else {
+			saida += ascii_to_character(192 + (c >> 6));
+			saida += ascii_to_character(128 + (c & 63));
+		}
+	}
+	return saida;
+}
+
+// /regras (pt), /reglas (es), /rules (pelo canal de chat do jogador)
+void social_cmd_regras(int index, string idioma) {
+	if(index < 0 || index >= int(players.length())) return;
+	player@ p = @players[index];
+	if(p is null) return;
+
+	if(idioma == "") {
+		idioma = "pt";
+		if(p.idiomachat == "es") idioma = "es";
+		else if(p.idiomachat == "fr") idioma = "fr";
+	}
+	if(idioma != "pt" && idioma != "es" && idioma != "fr") idioma = "pt";
+
+	string caminho = "regras" + idioma + ".nvgt";
+	if(!file_exists(caminho)) caminho = "regraspt.nvgt";
+
+	if(!file_exists(caminho)) {
+		social_msg(index, "As regras do jogo não estão disponíveis no momento.");
+		return;
+	}
+
+	file f;
+	if(!f.open(caminho, "rb")) {
+		social_msg(index, "As regras do jogo não estão disponíveis no momento.");
+		return;
+	}
+	string conteudo = f.read();
+	f.close();
+
+	if(!social_utf8_valido(conteudo)) conteudo = social_latin1_para_utf8(conteudo);
+
+	string[] bruto = conteudo.replace("\r", "").split("\n");
+	string[] linhas;
+	linhas.insert_last("Estas são as regras do jogo." + bell + "null");
+	for(uint i = 0; i < bruto.length(); i++) {
+		string linha = bruto[i].trim_whitespace();
+		if(linha != "") linhas.insert_last(linha);
+	}
+
+	if(linhas.length() == 1) {
+		social_msg(index, "As regras do jogo não estão disponíveis no momento.");
+		return;
+	}
+
+	send_reliable_text(p.peer_id, "menuleitura5 " + join(linhas, "\r\n"), 0);
+	if(p.lregras == 0) p.lregras = 1;
+}
+
+// --------------------------------------------------------------------------
+// Login e troca de nome
+// --------------------------------------------------------------------------
+
+// Chamado em load_player_complete() (load_player.nvgt), depois do sync.
+void social_jogador_conectou(player@ p) {
+	if(p is null) return;
+
+	social_carregar_prefs(p);
+	social_carregar_ignorados(p);
+	social_carregar_equipe(p);
+	social_enviar_equipe(p);
+	social_carregar_silencio(p);
+
+	debug_log("SOCIAL: " + p.charname + " carregado (equipe=" + (p.nomesequipe.length() - 1) + ", ignorados=" + social_lista_ignorados(p).length() + ")");
+}
+
+// Para o sistema de apelidos: mantém as tabelas sociais apontando para o
+// nome novo. As listas em memória de quem está online são corrigidas aqui
+// também (nomesequipe já é tratado em legacy_compat.nvgt).
+void social_renomear_jogador(string antigo, string novo) {
+	antigo = antigo.trim_whitespace();
+	novo = novo.trim_whitespace();
+	if(antigo == "" || novo == "" || antigo == novo) return;
+	if(!social_garantir_tabelas()) return;
+
+	social_db_exec2("UPDATE OR REPLACE equipe_membros SET dono = ? WHERE dono = ?;", novo, antigo);
+	social_db_exec2("UPDATE OR REPLACE equipe_membros SET membro = ? WHERE membro = ?;", novo, antigo);
+	social_db_exec2("UPDATE OR REPLACE jogadores_ignorados SET dono = ? WHERE dono = ?;", novo, antigo);
+	social_db_exec2("UPDATE OR REPLACE jogadores_ignorados SET ignorado = ? WHERE ignorado = ?;", novo, antigo);
+	social_db_exec2("UPDATE OR REPLACE silencios SET username = ? WHERE username = ?;", novo, antigo);
+	social_db_exec2("UPDATE OR REPLACE preferencias_sociais SET username = ? WHERE username = ?;", novo, antigo);
+
+	string chave_antiga = antigo.lower();
+	if(social_silencios.exists(chave_antiga)) {
+		social_silencio@ s;
+		social_silencios.get(chave_antiga, @s);
+		social_silencios.delete(chave_antiga);
+		if(s !is null) social_silencios.set(novo.lower(), @s);
+	}
+
+	for(uint i = 0; i < players.length(); i++) {
+		string[] lista = social_lista_ignorados(players[i]);
+		bool mudou = false;
+		for(uint j = 0; j < lista.length(); j++) {
+			if(lista[j].lower() == antigo.lower()) {
+				lista[j] = novo;
+				mudou = true;
+			}
+		}
+		if(mudou) players[i].muted = join(lista, "\r\n");
+	}
+}
+
+// --------------------------------------------------------------------------
+// Despacho dos comandos de barra (chamado por execute_command)
+// --------------------------------------------------------------------------
+
+// Comandos cujo efeito é falar com outros jogadores: ficam barrados enquanto
+// o jogador estiver silenciado.
+bool social_comando_de_fala(string command) {
+	string[] fala = {
+		"pm", "r", "say", "shout", "ooc", "me", "global", "local", "trade",
+		"falarnomapa", "casal", "pactochat", "guildchat", "partychat", "broadcast"
+	};
+	return fala.find(command) >= 0;
+}
+
+// "/createguild <nome> [tag]": o cliente manda nome e tag separados por
+// espaço, então a última palavra só é tag se tiver até 5 caracteres.
+void social_cmd_createguild(int index, string[] args) {
+	string[] partes;
+	for(uint i = 0; i < args.length(); i++) {
+		if(args[i] != "") partes.insert_last(args[i]);
+	}
+
+	if(partes.length() == 0) {
+		social_msg(index, "Uso: /createguild <nome> [tag]");
+		return;
+	}
+
+	string tag = "";
+	if(partes.length() >= 2 && partes[partes.length() - 1].length() <= 5) {
+		tag = partes[partes.length() - 1];
+		partes.remove_at(partes.length() - 1);
+	}
+
+	string nome = join(partes, " ");
+	if(nome.find("|") >= 0 || nome.find(";") >= 0 || tag.find("|") >= 0 || tag.find(";") >= 0) {
+		social_msg(index, "[ERRO] Nome ou tag com caracteres inválidos.");
+		return;
+	}
+
+	cmd_createguild(index, nome, tag);
+}
+
+// Devolve true quando o comando é deste módulo (já tratado).
+bool social_executar_comando(player@ jogador, int index, string command, string[] args) {
+	if(jogador is null) return false;
+	if(index < 0 || index >= int(players.length())) return false;
+
+	string primeiro = social_primeiro_arg(args);
+
+	// Equipe
+	if(command == "eqr") { social_cmd_eqr(index, primeiro); return true; }
+	if(command == "dqr") { social_cmd_dqr(index, primeiro); return true; }
+	if(command == "eqs") { social_cmd_eqs(index, primeiro); return true; }
+	if(command == "eqpd") { social_cmd_eqpd(index); return true; }
+	if(command == "eql") { social_cmd_eql(index); return true; }
+	if(command == "eqls") { social_cmd_eqls(index); return true; }
+
+	// Ignorados
+	if(command == "ign") { social_cmd_ign(index, primeiro); return true; }
+	if(command == "deign") { social_cmd_deign(index, primeiro); return true; }
+	if(command == "igns") { social_cmd_igns(index); return true; }
+
+	// Avisos
+	if(command == "aserver" || command == "arank" || command == "aitem" || command == "apm" || command == "aequipo") {
+		social_cmd_alternar_aviso(index, command);
+		return true;
+	}
+	if(command == "nnivel") { social_cmd_alternar_aviso(index, "alv"); return true; }
+	if(command == "nxp") { cmd_nxp(jogador, args); return true; }
+	if(command == "nreencarnacao") { cmd_nreencarnacao(jogador, args); return true; }
+	if(command == "nivel") { cmd_nivel(jogador, args); return true; }
+	if(command == "reencarnacoes") { cmd_reencarnacoes(jogador, args); return true; }
+
+	// Status
+	if(command == "setstatus") { social_cmd_setstatus(index, social_juntar_args(args)); return true; }
+	if(command == "status") { social_cmd_status(index, primeiro); return true; }
+
+	// Consulta
+	if(command == "where") { social_cmd_where(index, primeiro); return true; }
+	if(command == "regras") { social_cmd_regras(index, "pt"); return true; }
+	if(command == "reglas") { social_cmd_regras(index, "es"); return true; }
+	if(command == "rules") { social_cmd_regras(index, ""); return true; }
+
+	// Party (mesma lógica dos pacotes PARTY:... de network_handlers.nvgt)
+	if(command == "createparty") { cmd_createparty(index); return true; }
+	if(command == "invite") {
+		if(primeiro == "") {
+			social_msg(index, "Uso: /invite <jogador>");
+			return true;
+		}
+		// O menu do cliente convida direto, sem passo de "criar grupo".
+		if(!is_in_party(players[index].charname)) cmd_createparty(index);
+		cmd_invite(index, primeiro);
+		return true;
+	}
+	if(command == "joinparty") { cmd_joinparty(index); return true; }
+	if(command == "leaveparty") { cmd_leaveparty(index); return true; }
+	if(command == "partyinfo") { cmd_partyinfo(index); return true; }
+	if(command == "kickparty") {
+		if(primeiro == "") social_msg(index, "Uso: /kickparty <jogador>");
+		else cmd_kickparty(index, primeiro);
+		return true;
+	}
+	if(command == "disbandparty") { cmd_disbandparty(index); return true; }
+	if(command == "partychat") {
+		string texto = social_juntar_args(args);
+		if(texto == "") social_msg(index, "Uso: /partychat <mensagem>");
+		else cmd_partychat(index, texto);
+		return true;
+	}
+
+	// Guilda (mesma lógica dos pacotes GUILD:... de network_handlers.nvgt)
+	if(command == "createguild") { social_cmd_createguild(index, args); return true; }
+	if(command == "inviteguild") {
+		if(primeiro == "") social_msg(index, "Uso: /inviteguild <jogador>");
+		else cmd_inviteguild(index, primeiro);
+		return true;
+	}
+	if(command == "joinguild") { cmd_joinguild(index); return true; }
+	if(command == "leaveguild") { cmd_leaveguild(index); return true; }
+	if(command == "guildinfo") { cmd_guildinfo(index); return true; }
+	if(command == "kickguild") {
+		if(primeiro == "") social_msg(index, "Uso: /kickguild <jogador>");
+		else cmd_kickguild(index, primeiro);
+		return true;
+	}
+	if(command == "disbandguild") { cmd_disbandguild(index); return true; }
+	if(command == "promoteguild") {
+		if(primeiro == "") social_msg(index, "Uso: /promoteguild <jogador>");
+		else cmd_promoteguild(index, primeiro);
+		return true;
+	}
+	if(command == "demoteguild") {
+		if(primeiro == "") social_msg(index, "Uso: /demoteguild <jogador>");
+		else cmd_demoteguild(index, primeiro);
+		return true;
+	}
+	if(command == "donateguild") {
+		int valor = 0;
+		if(primeiro == "" || !try_parse_int_token(primeiro, valor) || valor <= 0) social_msg(index, "Uso: /donateguild <valor>");
+		else cmd_donateguild(index, valor);
+		return true;
+	}
+	if(command == "guildchat") {
+		string texto = social_juntar_args(args);
+		if(texto == "") social_msg(index, "Uso: /guildchat <mensagem>");
+		else cmd_guildchat(index, texto);
+		return true;
+	}
+
+	return false;
+}

@@ -434,7 +434,27 @@ void cmd_guildchat(int player_index, string message) {
 		return;
 	}
 
-	g.broadcast_message(players[player_index].charname + ": " + message);
+	if(social_barrar_fala(player_index)) return;
+
+	// Mesma lista de guild.broadcast_message(), mas pulando quem ignorou o
+	// remetente.
+	string remetente = players[player_index].charname;
+	string[] destinos;
+	destinos.insert_last(g.leader);
+	for(uint i = 0; i < g.officers.length(); i++) destinos.insert_last(g.officers[i]);
+	for(uint i = 0; i < g.members.length(); i++) destinos.insert_last(g.members[i]);
+
+	string[] enviados;
+	string texto = filter_message(message);
+	for(uint i = 0; i < destinos.length(); i++) {
+		if(enviados.find(destinos[i]) >= 0) continue;
+		enviados.insert_last(destinos[i]);
+
+		int idx = get_player_index_from(destinos[i]);
+		if(idx < 0) continue;
+		if(idx != player_index && players[idx].has_muted(remetente)) continue;
+		send_reliable_text(players[idx].peer_id, "msg2 [Guild] " + remetente + ": " + texto, 0);
+	}
 }
 
 void cmd_guildinfo(int player_index) {

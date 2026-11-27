@@ -1,0 +1,690 @@
+// ==========================================================================
+// Pacotes crus (sem barra) de economia e do celular.
+//
+// Porta do BGT original (servidor reino test/includes/net.bgt):
+//   - transferencia <moeda> <qtd> <jogador>   (net.bgt:678)
+//   - pay_island                              (net.bgt:2274)
+//   - stryx / creditos                        (net.bgt:902, celestiums/esmeraldas)
+//   - comida <opcao>                          (net.bgt:804)
+//   - nave                                    (net.bgt:796)
+//   - reencarn / sanity / monster / checkstats (net.bgt:899, 550, 558, 561)
+//   - store e pc sem barra (so existiam no cliente do port)
+//
+// Quem envia: cliente/includes/menus/phone_menu.nvgt e
+// cliente/includes/comandos.nvgt.
+//
+// Moedas: "reais" e "euro" sao itens do inventario (mesma fonte usada por
+// reaisparaeuro/europarareais em server.nvgt). "stryx" e "creditos" sao
+// campos do jogador (players.stryx / players.creditos).
+//
+// Ilha privada: o BGT guardava payment/payed/have_island no configs.ini do
+// jogador. Aqui tudo fica na tabela sqlite 'ilhas_privadas'; nenhum arquivo.
+// ==========================================================================
+
+const string ILHA_PREFIXO_MAPA = "isla_privada_de_";
+
+// Aluguel semanal da ilha, pago aos sabados em reais (no BGT eram 500 perla_ndired).
+const string ILHA_ALUGUEL_ITEM = "reais";
+const int ILHA_ALUGUEL_VALOR = 500;
+const string ILHA_DIA_DE_PAGAMENTO = "Saturday";
+
+const int ILHA_CICLO_INTERVALO_MS = 30000;
+
+// Loja aberta pelo servico de entrega de comida do celular.
+const string ECON_LOJA_COMIDA = "comidas";
+
+// Mapa onde vive o monstro lendario (vermonstruo() do BGT).
+const string ECON_MAPA_MONSTRO = "isla_abandonada";
+
+const int ECON_TRANSFERENCIA_MAX = 2000000000;
+
+class ilha_registro {
+	string dono = "";
+	int have_island = 0;
+	int payment = 1;
+	int payed = 0;
+	string ciclo = "";
+}
+
+// Cache em memoria: a checagem de bloqueio roda a cada tick do playerloop.
+ilha_registro@[] ilhas_cache;
+bool ilha_tabela_ok = false;
+string ilha_ciclo_aplicado = "";
+timer ilha_ciclo_timer;
+
+// --------------------------------------------------------------------------
+// Helpers gerais
+// --------------------------------------------------------------------------
+
+void econ_msg(int player_index, string mensagem) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+	send_reliable_text(players[player_index].peer_id, "msg2 " + mensagem, 0);
+}
+
+// Aceita apenas inteiros positivos que cabem em int (o cliente manda int()).
+bool econ_ler_quantidade(string token, int &out valor) {
+	valor = 0;
+	string t = token.trim_whitespace();
+	if(t == "" || t.length() > 9) return false;
+
+	int lido = 0;
+	if(!try_parse_int_token(t, lido)) return false;
+	if(lido <= 0) return false;
+
+	valor = lido;
+	return true;
+}
+
+// Procura o jogador online pelo nome exato e, se nao achar, sem diferenciar
+// maiusculas (o nome vem digitado no formulario do celular).
+int econ_indice_online(string nome) {
+	nome = nome.trim_whitespace();
+	if(nome == "") return -1;
+
+	int exato = get_player_index_from(nome);
+	if(exato >= 0) return exato;
+
+	string alvo = nome.lower();
+	for(uint i = 0; i < players.length(); i++) {
+		if(players[i].charname.lower() == alvo || players[i].name.lower() == alvo) return int(i);
+	}
+	return -1;
+}
+
+// --------------------------------------------------------------------------
+// Ilha privada: persistencia
+// --------------------------------------------------------------------------
+
+string ilha_chave(string dono) {
+	return dono.trim_whitespace().lower();
+}
+
+string ilha_hoje() {
+	return "" + DATE_YEAR + "-" + DATE_MONTH + "-" + DATE_DAY;
+}
+
+bool ilha_e_dia_de_pagamento() {
+	return DATE_WEEKDAY_NAME == ILHA_DIA_DE_PAGAMENTO;
+}
+
+bool ilha_garantir_tabela() {
+	if(ilha_tabela_ok) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string criar = """
+		CREATE TABLE IF NOT EXISTS ilhas_privadas (
+			dono TEXT PRIMARY KEY,
+			have_island INTEGER DEFAULT 1,
+			payment INTEGER DEFAULT 1,
+			payed INTEGER DEFAULT 0,
+			ciclo TEXT DEFAULT '',
+			atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(criar) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela ilhas_privadas: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	ilha_tabela_ok = true;
+	debug_log("OK - Tabela ilhas_privadas criada/verificada");
+	return true;
+}
+
+// Opcional: a tabela tambem e criada sozinha no primeiro uso.
+void init_pacotes_economia() {
+	ilha_garantir_tabela();
+}
+
+bool ilha_salvar(ilha_registro@ r) {
+	if(r is null || r.dono == "") return false;
+	if(!ilha_garantir_tabela()) return false;
+
+	string query = """
+		INSERT OR REPLACE INTO ilhas_privadas (dono, have_island, payment, payed, ciclo, atualizado_em)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ILHA: erro ao preparar gravacao: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, r.dono);
+	stmt.bind_int(2, r.have_island);
+	stmt.bind_int(3, r.payment);
+	stmt.bind_int(4, r.payed);
+	stmt.bind_text(5, r.ciclo);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ILHA: erro ao gravar ilha de '" + r.dono + "': " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	return true;
+}
+
+ilha_registro@ ilha_buscar_no_cache(string chave) {
+	for(uint i = 0; i < ilhas_cache.length(); i++) {
+		if(ilhas_cache[i] is null) continue;
+		if(ilhas_cache[i].dono == chave) return ilhas_cache[i];
+	}
+	return null;
+}
+
+// Devolve o registro da ilha do dono, ou null se ele nao tem ilha.
+// Uma ilha cujo mapa ja existe mas ainda nao tem linha na tabela (ilhas
+// anteriores a esta tabela) e registrada como paga no ciclo atual.
+ilha_registro@ ilha_obter(string dono) {
+	string chave = ilha_chave(dono);
+	if(chave == "") return null;
+
+	ilha_registro@ em_cache = ilha_buscar_no_cache(chave);
+	if(em_cache !is null) return em_cache;
+
+	if(!ilha_garantir_tabela()) return null;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT have_island, payment, payed, ciclo FROM ilhas_privadas WHERE dono = ?;");
+	if(@stmt == null) {
+		debug_log("ILHA: erro ao preparar consulta: " + bancoJogo.get_last_error_text());
+		return null;
+	}
+
+	stmt.bind_text(1, chave);
+
+	if(stmt.step() == SQLITE_ROW) {
+		ilha_registro@ lido = ilha_registro();
+		lido.dono = chave;
+		lido.have_island = stmt.column_int(0);
+		lido.payment = stmt.column_int(1);
+		lido.payed = stmt.column_int(2);
+		lido.ciclo = stmt.column_text(3);
+		ilhas_cache.insert_last(@lido);
+		return lido;
+	}
+
+	if(get_map_index_from(ILHA_PREFIXO_MAPA + dono.trim_whitespace()) < 0) return null;
+
+	ilha_registro@ novo = ilha_registro();
+	novo.dono = chave;
+	novo.have_island = 1;
+	novo.payment = 1;
+	novo.payed = 0;
+	novo.ciclo = ilha_e_dia_de_pagamento() ? ilha_hoje() : "";
+	ilha_salvar(novo);
+	ilhas_cache.insert_last(@novo);
+	debug_log("ILHA: ilha de '" + chave + "' registrada na tabela ilhas_privadas");
+	return novo;
+}
+
+// Para quem portar a compra de ilha (spawn_island do BGT, voids.bgt:704):
+// marca a posse e ja deixa o primeiro ciclo pago.
+bool ilha_registrar_posse(string dono) {
+	string chave = ilha_chave(dono);
+	if(chave == "") return false;
+	if(!ilha_garantir_tabela()) return false;
+
+	ilha_registro@ r = ilha_buscar_no_cache(chave);
+	if(r is null) {
+		@r = ilha_registro();
+		r.dono = chave;
+		ilhas_cache.insert_last(@r);
+	}
+
+	r.have_island = 1;
+	r.payment = 1;
+	r.payed = 0;
+	r.ciclo = ilha_e_dia_de_pagamento() ? ilha_hoje() : "";
+	return ilha_salvar(r);
+}
+
+bool ilha_jogador_tem_ilha(string dono) {
+	ilha_registro@ r = ilha_obter(dono);
+	return (r !is null && r.have_island == 1);
+}
+
+// Para a troca de apelido: leva o registro da ilha para o nome novo.
+void ilha_renomear_dono(string antigo, string novo) {
+	string chave_antiga = ilha_chave(antigo);
+	string chave_nova = ilha_chave(novo);
+	if(chave_antiga == "" || chave_nova == "" || chave_antiga == chave_nova) return;
+	if(!ilha_garantir_tabela()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE OR REPLACE ilhas_privadas SET dono = ? WHERE dono = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, chave_nova);
+	stmt.bind_text(2, chave_antiga);
+	stmt.step();
+
+	ilhas_cache.resize(0);
+}
+
+void ilha_avisar_cobranca(player@ p) {
+	if(p is null) return;
+	send_reliable_text(p.peer_id, "ps2 notify8.ogg 130", 0);
+	send_reliable_text(p.peer_id, "msg2 ;Alerta! O aluguel da sua ilha privada vence hoje. Pague pelo celular antes da meia-noite ou a entrada será bloqueada.;", 0);
+}
+
+// Copia o estado da ilha para os campos do jogador e avisa se ha aluguel
+// vencendo. Pode ser chamada no login (opcional).
+void ilha_sincronizar_jogador(player@ p) {
+	if(p is null || p.charname == "") return;
+
+	ilha_registro@ r = ilha_obter(p.charname);
+	if(r is null || r.have_island != 1) return;
+
+	p.payment = r.payment;
+	p.payed = r.payed;
+
+	if(r.payment == 0 && ilha_e_dia_de_pagamento()) ilha_avisar_cobranca(p);
+}
+
+// Abre o ciclo semanal: no dia de pagamento todas as ilhas voltam a dever
+// (re_server_test.bgt:881). Roda no maximo uma vez por dia; a coluna 'ciclo'
+// impede que um reinicio do servidor cobre de novo quem ja pagou.
+void ilha_verificar_ciclo() {
+	ilha_ciclo_timer.restart();
+
+	if(!ilha_e_dia_de_pagamento()) return;
+
+	string hoje = ilha_hoje();
+	if(ilha_ciclo_aplicado == hoje) return;
+	if(!ilha_garantir_tabela()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE ilhas_privadas SET payment = 0, payed = 0, ciclo = ?, atualizado_em = CURRENT_TIMESTAMP WHERE have_island = 1 AND ciclo != ?;");
+	if(@stmt == null) {
+		debug_log("ILHA: erro ao preparar abertura de ciclo: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, hoje);
+	stmt.bind_text(2, hoje);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("ILHA: erro ao abrir ciclo de cobranca: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	ilha_ciclo_aplicado = hoje;
+	ilhas_cache.resize(0);
+	debug_log("ILHA: ciclo de cobranca " + hoje + " aberto");
+
+	for(uint i = 0; i < players.length(); i++) {
+		if(!players[i].is_logged_in) continue;
+		ilha_sincronizar_jogador(players[i]);
+	}
+}
+
+// Usada pelo playerloop (player.nvgt): true quando a ilha do dono esta
+// fechada por falta de pagamento. No proprio dia de pagamento a ilha segue
+// aberta (as 24 horas de prazo anunciadas pelo BGT).
+bool ilha_bloqueada(string dono) {
+	if(ilha_ciclo_timer.elapsed >= ILHA_CICLO_INTERVALO_MS) ilha_verificar_ciclo();
+
+	ilha_registro@ r = ilha_obter(dono);
+	if(r is null || r.have_island != 1) return false;
+	if(r.payment != 0) return false;
+	if(ilha_e_dia_de_pagamento()) return false;
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// transferencia <moeda> <qtd> <jogador>
+// --------------------------------------------------------------------------
+
+void econ_cmd_transferencia(int player_index, string resto) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	string[] partes = split_non_empty_tokens(resto);
+	if(partes.length() < 3) {
+		econ_msg(player_index, ";Informe a moeda, a quantidade e o jogador.;");
+		return;
+	}
+
+	string moeda = partes[0].lower();
+	if(moeda == "stryx") {
+		econ_msg(player_index, ";A transferência de Stryx não está disponível.;");
+		return;
+	}
+	if(moeda != "reais" && moeda != "euro") {
+		econ_msg(player_index, ";Moeda inválida para transferência.;");
+		return;
+	}
+
+	int quantidade = 0;
+	if(!econ_ler_quantidade(partes[1], quantidade)) {
+		econ_msg(player_index, ";Por favor, escreva um valor válido...;");
+		return;
+	}
+
+	string nome_alvo = partes[2];
+	int alvo_index = econ_indice_online(nome_alvo);
+
+	if(alvo_index < 0) {
+		if(player_exists_in_database(nome_alvo)) {
+			econ_msg(player_index, ";Este jogador não está online no momento.;");
+		} else {
+			econ_msg(player_index, ";Este jogador não existe.;");
+		}
+		return;
+	}
+
+	if(alvo_index == player_index) {
+		econ_msg(player_index, ";Você não pode transferir para si mesmo.;");
+		return;
+	}
+
+	player@ alvo = @players[alvo_index];
+	if(alvo is null || !alvo.is_logged_in || !alvo.dados_carregados) {
+		econ_msg(player_index, ";Este jogador não está online no momento.;");
+		return;
+	}
+
+	if(!p.dados_carregados) {
+		econ_msg(player_index, ";Não foi possível concluir a transferência. Tente novamente.;");
+		return;
+	}
+
+	if(p.inv_item_number(moeda) < quantidade) {
+		econ_msg(player_index, ";Você não tem saldo suficiente para esta transferência.;");
+		return;
+	}
+
+	if(alvo.inv_item_number(moeda) > ECON_TRANSFERENCIA_MAX - quantidade) {
+		econ_msg(player_index, ";Este jogador não pode receber este valor.;");
+		return;
+	}
+
+	p.inv_add_item(moeda, -quantidade, true);
+	alvo.inv_add_item(moeda, quantidade, true);
+
+	if(database_initialized && bancoJogo !is null) {
+		save_player_inventory_to_db(p);
+		save_player_inventory_to_db(alvo);
+	}
+
+	econ_msg(player_index, ";Transferência realizada com sucesso.;");
+	send_reliable_text(alvo.peer_id, "msg2 ;Você recebeu uma transferência de " + moeda + " de; " + p.charname + "! ;Valor:; " + quantidade + ".", 0);
+	send_reliable_text(alvo.peer_id, "ps notify8.ogg", 0);
+
+	log_to_database("INFO", "ECONOMY", "transferencia: " + quantidade + " " + moeda + " de " + p.charname + " para " + alvo.charname, -1, p.charname);
+	debug_log("TRANSFERENCIA: " + p.charname + " -> " + alvo.charname + " " + quantidade + " " + moeda);
+}
+
+// --------------------------------------------------------------------------
+// pay_island
+// --------------------------------------------------------------------------
+
+void econ_cmd_pay_island(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(ilha_ciclo_timer.elapsed >= ILHA_CICLO_INTERVALO_MS) ilha_verificar_ciclo();
+
+	ilha_registro@ r = ilha_obter(p.charname);
+	if(r is null || r.have_island != 1) {
+		econ_msg(player_index, ";Você não tem nenhuma ilha para pagar o aluguel.;");
+		return;
+	}
+
+	if(r.payment == 1) {
+		econ_msg(player_index, ";Não adianta tentar pagar algo que já está pago.;");
+		return;
+	}
+
+	if(!ilha_e_dia_de_pagamento()) {
+		econ_msg(player_index, ";Infelizmente, não é o momento de fazer isto. O aluguel só pode ser pago aos sábados.;");
+		return;
+	}
+
+	if(p.inv_item_number(ILHA_ALUGUEL_ITEM) < ILHA_ALUGUEL_VALOR) {
+		econ_msg(player_index, ";Você não tem o necessário para pagar. O aluguel custa " + ILHA_ALUGUEL_VALOR + " " + ILHA_ALUGUEL_ITEM + ".;");
+		return;
+	}
+
+	int payment_anterior = r.payment;
+	int payed_anterior = r.payed;
+	string ciclo_anterior = r.ciclo;
+
+	r.payment = 1;
+	r.payed = 1;
+	r.ciclo = ilha_hoje();
+
+	if(!ilha_salvar(r)) {
+		r.payment = payment_anterior;
+		r.payed = payed_anterior;
+		r.ciclo = ciclo_anterior;
+		econ_msg(player_index, ";Não foi possível registrar o pagamento. Tente novamente.;");
+		return;
+	}
+
+	p.inv_add_item(ILHA_ALUGUEL_ITEM, -ILHA_ALUGUEL_VALOR, true);
+	p.payment = 1;
+	p.payed = 1;
+
+	if(database_initialized && bancoJogo !is null && p.dados_carregados) {
+		save_player_inventory_to_db(p);
+	}
+
+	send_reliable_text(p.peer_id, "ps buy.ogg", 0);
+	econ_msg(player_index, ";O acesso à sua ilha foi restaurado e o pagamento foi concluído.;");
+
+	log_to_database("INFO", "ECONOMY", "pay_island: " + p.charname + " pagou " + ILHA_ALUGUEL_VALOR + " " + ILHA_ALUGUEL_ITEM, -1, p.charname);
+	debug_log("ILHA: " + p.charname + " pagou o aluguel da ilha");
+}
+
+// --------------------------------------------------------------------------
+// Consultas do celular
+// --------------------------------------------------------------------------
+
+void econ_cmd_saldo(int player_index, string moeda) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null || p.afk) return;
+
+	if(moeda == "stryx") {
+		econ_msg(player_index, ";Atualmente você tem; " + loja_formatar_valor(p.stryx) + " Stryx.");
+	} else {
+		econ_msg(player_index, ";Atualmente você tem; " + loja_formatar_valor(p.creditos) + " ;créditos;.");
+	}
+}
+
+void econ_cmd_reencarn(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null || p.afk) return;
+
+	int falta = p.xprequerida - p.xp;
+	if(falta < 0) falta = 0;
+
+	econ_msg(player_index, ";Você está na fase angelical; ;" + p.reencarnou + ".; ;Atualmente você tem; ;" + p.xp + "; ;pontos de experiência e para subir ao próximo nível precisa de; ;" + falta + "; ;deles.; ;Sua energia elemental é de; " + int(p.elemental_energy) + "%");
+}
+
+void econ_cmd_sanity(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	econ_msg(player_index, ";O celular faz um exame rápido e revela o seu nível de sanidade. Atualmente é de; " + int(p.sanity) + "%.");
+}
+
+void econ_cmd_checkstats(int player_index, string opcao) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null || p.afk) return;
+
+	opcao = opcao.trim_whitespace().lower();
+
+	if(opcao == "stats1") {
+		econ_msg(player_index, ";Atualmente você tem; " + p.ngripe + "% ;de gripe.;");
+	}
+	else if(opcao == "stats2") {
+		econ_msg(player_index, ";Atualmente você tem; " + int(p.doente) + "% ;de enfermidade.;");
+	}
+	else if(opcao == "stats3") {
+		econ_msg(player_index, ";Atualmente você tem; " + int(p.demoniaca) + "% ;da enfermidade demoníaca.;");
+	}
+}
+
+void econ_cmd_monster(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	int achados = 0;
+	for(uint i = 0; i < monstruos_global.length(); i++) {
+		monstruo@ m = monstruos_global[i];
+		if(m is null) continue;
+		if(m.map != ECON_MAPA_MONSTRO) continue;
+		if(m.morreu || m.vida <= 0) continue;
+
+		string texto = ";O monstro lendário está acordado neste momento, no mapa; " + m.map + ". ;Coordenadas:; " + m.x + ", " + m.y + ". ;Sua vida atual é; " + m.vida + ". ";
+		if(m.golpeado != "") {
+			texto += ";Quem domina a vitalidade dele é; " + m.golpeado + ".";
+		} else {
+			texto += ";Até agora ninguém causou dano a ele.;";
+		}
+
+		econ_msg(player_index, texto);
+		achados++;
+	}
+
+	if(achados == 0) {
+		econ_msg(player_index, ";O monstro lendário está dormindo neste momento. A ilha está completamente livre.;");
+	}
+}
+
+// --------------------------------------------------------------------------
+// Servicos por telefone
+// --------------------------------------------------------------------------
+
+// O BGT pedia destino (cabana/casa/mansao) e marcava uma entrega que nunca era
+// concluida. Aqui o pedido abre a loja de comida pelo catalogo do port e a
+// compra cai direto no inventario, pelo fluxo normal de loja do cliente.
+void econ_cmd_comida(int player_index, string resto) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null || p.afk) return;
+
+	string[] partes = split_non_empty_tokens(resto);
+	if(partes.length() == 0) {
+		econ_msg(player_index, ";Você precisa escolher uma opção de entrega.;");
+		return;
+	}
+
+	string opcao = partes[0].lower();
+
+	// Formato do cliente BGT: "comida comprar <qtd> <item> <destino>".
+	if(opcao == "comprar") {
+		int quantidade = 0;
+		if(partes.length() < 3 || !econ_ler_quantidade(partes[1], quantidade)) {
+			econ_msg(player_index, ";Por favor, escreva um valor válido...;");
+			return;
+		}
+		loja_processar_compra(player_index, ECON_LOJA_COMIDA, partes[2], quantidade);
+		return;
+	}
+
+	loja_abrir_para(player_index, ECON_LOJA_COMIDA);
+}
+
+// No BGT o pedido so marcava contrato/tnave, que nenhum laco consumia: o
+// efeito visivel era apenas esta mensagem.
+void econ_cmd_nave(int player_index) {
+	if(player_index < 0 || player_index >= int(players.length())) return;
+
+	player@ p = @players[player_index];
+	if(p is null) return;
+
+	if(p.silenciado == 1 || file_exists("players/" + p.charname + "/silencio.usr") || p.map == "prisão2") return;
+
+	econ_msg(player_index, ";Dentro de instantes a nave chegará para buscar você.;");
+	debug_log("NAVE: " + p.charname + " chamou a nave pelo celular");
+}
+
+// --------------------------------------------------------------------------
+// Pacotes crus vindos do cliente
+//
+// Chamar em process_player_command() ANTES de process_command(), logo depois
+// de handle_canais_packet(). Devolve false rapido para comandos alheios.
+// --------------------------------------------------------------------------
+
+bool handle_economia_packet(uint64 peer_id, string command) {
+	if(ilha_ciclo_timer.elapsed >= ILHA_CICLO_INTERVALO_MS) ilha_verificar_ciclo();
+
+	if(command == "") return false;
+	if(command.find("/") == 0) return false;
+
+	string verbo = command;
+	string resto = "";
+	int espaco = command.find(" ");
+	if(espaco > 0) {
+		verbo = command.substr(0, espaco);
+		resto = command.substr(espaco + 1).trim_whitespace();
+	}
+
+	bool sem_argumento = (verbo == "pay_island" || verbo == "stryx" || verbo == "creditos" ||
+		verbo == "nave" || verbo == "reencarn" || verbo == "sanity" || verbo == "monster");
+	bool com_argumento = (verbo == "transferencia" || verbo == "comida" || verbo == "checkstats" ||
+		verbo == "store" || verbo == "pc");
+
+	if(!sem_argumento && !com_argumento) return false;
+
+	// Verbos de consulta nunca levam argumento: com texto depois, nao e nosso.
+	if(sem_argumento && resto != "") return false;
+
+	int idx = indice_jogador_por_peer(peer_id);
+	if(idx < 0) return true;
+
+	if(verbo == "transferencia") {
+		econ_cmd_transferencia(idx, resto);
+	}
+	else if(verbo == "pay_island") {
+		econ_cmd_pay_island(idx);
+	}
+	else if(verbo == "stryx" || verbo == "creditos") {
+		econ_cmd_saldo(idx, verbo);
+	}
+	else if(verbo == "comida") {
+		econ_cmd_comida(idx, resto);
+	}
+	else if(verbo == "nave") {
+		econ_cmd_nave(idx);
+	}
+	else if(verbo == "reencarn") {
+		econ_cmd_reencarn(idx);
+	}
+	else if(verbo == "sanity") {
+		econ_cmd_sanity(idx);
+	}
+	else if(verbo == "monster") {
+		econ_cmd_monster(idx);
+	}
+	else if(verbo == "checkstats") {
+		econ_cmd_checkstats(idx, resto);
+	}
+	else if(verbo == "store") {
+		// Mesmo caminho do /store digitado (permissoes e tipo de loja inclusos).
+		string barra = "/store";
+		if(resto != "") barra += " " + resto;
+		process_command(players[idx], barra);
+	}
+	else if(verbo == "pc") {
+		// Menu de computador do cliente (computadormenu): o port nao tem
+		// logica de servidor para ele. Nao confundir com /pc (pactochat).
+		econ_msg(idx, ";Este computador não está disponível no momento.;");
+	}
+
+	return true;
+}
