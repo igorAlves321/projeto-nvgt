@@ -471,15 +471,22 @@ void cmd_pinfo(int player_index, string target_name) {
 		return;
 	}
 
-	bool exists = file_exists("players/" + target_name + "/player.dat") ||
-	              file_exists("players/" + target_name + "/player.usr");
+	// Jogador offline: a conta esta na tabela players e os cargos em player_roles.
+	bool exists = false;
+	if(database_initialized && bancoJogo !is null) {
+		sqlite3statement@ stmt_conta = bancoJogo.prepare("SELECT 1 FROM players WHERE LOWER(username) = ? LIMIT 1;");
+		if(@stmt_conta != null) {
+			stmt_conta.bind_text(1, target_name.lower());
+			exists = (stmt_conta.step() == SQLITE_ROW);
+		}
+	}
 
 	if(!exists) {
 		send_admin_error(player_index, "pinfo", "Jogador '" + target_name + "' não encontrado no sistema!");
 		return;
 	}
 
-	bool is_admin_player = file_exists("players/" + target_name + "/admin.usr");
+	bool is_admin_player = check_is_admin(target_name);
 
 	data += target_name + "|";
 	data += "Offline|";

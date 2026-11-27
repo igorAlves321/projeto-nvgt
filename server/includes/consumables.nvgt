@@ -409,6 +409,7 @@ void init_consumables_system() {
 	create_consumables_table();
 	seed_default_consumables();
 	load_consumables_from_database();
+	init_itens_especiais();
 
 	debug_log("CONSUMABLES: Sistema inicializado com " + consumables.get_size() + " itens consumíveis");
 }
@@ -421,6 +422,10 @@ bool use_item(int player_index, string item_name) {
 	if(item_name.find("caixa_de_presente_") == 0) { abrir_presente(player_index, item_name); return true; }
 
 	player@ p = players[player_index];
+
+	// Itens com efeito proprio (itens_especiais.nvgt): pocoes de flag, vida extra,
+	// teleporte e afins, portados de usar() do BGT.
+	if (usar_item_especial(p, item_name)) return true;
 
 	if (!p.inv_item_exists(item_name)) {
 		send_reliable_text(p.peer_id, "msg Você não possui este item!", 0);
@@ -630,6 +635,8 @@ void add_buff(int player_index, string buff_name, int value, int duration_ms) {
 
 	if (buff_name == "antimina") {
 		players[player_index].antimina = value;
+		// O playerloop derruba antimina quando tantimina passa da duracao da pocao.
+		players[player_index].tantimina.restart();
 	}
 	else if (buff_name == "speed_boost") {
 		players[player_index].speed_multiplier = value;

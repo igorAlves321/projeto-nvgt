@@ -1,0 +1,536 @@
+
+// ============================================================================
+// DADOS GLOBAIS NO SQLITE
+// ----------------------------------------------------------------------------
+// Tudo que ainda vivia em arquivo solto (marcadores .usr, creditos de compra
+// web, mensagem da equipe) passa a viver no banco. Este modulo tambem guarda
+// os helpers usados pelas migracoes de guildas (guilds.nvgt), veiculos
+// (vehicles.nvgt), zonas (admin_zone_commands.nvgt) e estatisticas
+// (systems_advanced.nvgt), a importacao unica dos arquivos legados e a troca
+// de apelido nas tabelas novas.
+//
+// Tabelas deste arquivo:
+//   - player_marcadores(username, marcador)  antigos admintudo.usr,
+//     enable_chat_adm.usr e cheater.usr em players/<nome>/.
+//   - creditos_pendentes(username, quantidade, entregue)  antigo
+//     players/<nome>/credits.txt gravado pelo site.
+//   - server_config['mensagem_equipe']  antigo mensagemaes.txt.
+//
+// Arquivo legado importado nunca e apagado: vira <nome>.migrado.
+// ============================================================================
+
+const string MARCADOR_ADMINTUDO = "admintudo";
+const string MARCADOR_CHAT_ADM = "enable_chat_adm";
+const string MARCADOR_CHEATER = "cheater";
+
+const string GLOBAIS_CHAVE_MENSAGEM_EQUIPE = "mensagem_equipe";
+const uint CREDITOS_INTERVALO_CONSULTA_MS = 10000;
+
+bool marcadores_tabela_ok = false;
+bool marcadores_cache_carregado = false;
+dictionary marcadores_cache;
+
+bool creditos_tabela_ok = false;
+bool creditos_consulta_feita = false;
+timer creditos_timer_consulta;
+dictionary creditos_nomes_pendentes;
+
+bool globais_msg_equipe_carregada = false;
+string globais_msg_equipe_cache = "";
+
+// --------------------------------------------------------------------------
+// Helpers genericos
+// --------------------------------------------------------------------------
+
+bool globais_db_pronto() {
+	return database_initialized && bancoJogo !is null;
+}
+
+bool globais_exec(string sql) {
+	if(!globais_db_pronto()) return false;
+
+	if(bancoJogo.execute(sql) != SQLITE_OK) {
+		debug_log("GLOBAIS: erro SQL: " + bancoJogo.get_last_error_text() + " | " + sql);
+		return false;
+	}
+	return true;
+}
+
+bool globais_exec1(string sql, string a) {
+	if(!globais_db_pronto()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("GLOBAIS: erro ao preparar: " + bancoJogo.get_last_error_text() + " | " + sql);
+		return false;
+	}
+
+	stmt.bind_text(1, a);
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool globais_exec2(string sql, string a, string b) {
+	if(!globais_db_pronto()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(sql);
+	if(@stmt == null) {
+		debug_log("GLOBAIS: erro ao preparar: " + bancoJogo.get_last_error_text() + " | " + sql);
+		return false;
+	}
+
+	stmt.bind_text(1, a);
+	stmt.bind_text(2, b);
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool globais_tabela_tem_coluna(string tabela, string coluna) {
+	if(!globais_db_pronto()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("PRAGMA table_info(" + tabela + ");");
+	if(@stmt == null) return false;
+
+	while(stmt.step() == SQLITE_ROW) {
+		if(stmt.column_text(1) == coluna) return true;
+	}
+	return false;
+}
+
+// Le um arquivo legado inteiro. Retorna false se ele nao existe ou nao abre.
+bool globais_ler_arquivo(string caminho, string &out conteudo) {
+	conteudo = "";
+	if(!file_exists(caminho)) return false;
+
+	file f;
+	if(!f.open(caminho, "rb")) return false;
+
+	conteudo = f.read();
+	f.close();
+	return true;
+}
+
+// Aposenta um arquivo legado ja importado: <nome> vira <nome>.migrado.
+// Retorna true quando o original deixou de existir.
+bool globais_arquivar_legado(string caminho) {
+	if(!file_exists(caminho)) return true;
+
+	if(!file_copy(caminho, caminho + ".migrado", true)) {
+		debug_log("GLOBAIS: nao foi possivel criar " + caminho + ".migrado");
+		return false;
+	}
+
+	file_delete(caminho);
+	if(file_exists(caminho)) {
+		debug_log("GLOBAIS: nao foi possivel remover o original " + caminho);
+		return false;
+	}
+	return true;
+}
+
+// find_files/find_directories devolvem so o nome; se vier caminho, corta.
+string globais_nome_base(string caminho) {
+	caminho = caminho.replace("\\", "/");
+	while(caminho.length() > 0 && caminho.substr(caminho.length() - 1) == "/") {
+		caminho = caminho.substr(0, caminho.length() - 1);
+	}
+
+	int barra = caminho.find_last("/");
+	if(barra >= 0) caminho = caminho.substr(barra + 1);
+	return caminho;
+}
+
+// --------------------------------------------------------------------------
+// Marcadores de jogador (antigos arquivos .usr vazios)
+// --------------------------------------------------------------------------
+
+bool marcadores_garantir_tabela() {
+	if(marcadores_tabela_ok) return true;
+	if(!globais_db_pronto()) return false;
+
+	string criar = """
+		CREATE TABLE IF NOT EXISTS player_marcadores (
+			username TEXT NOT NULL,
+			marcador TEXT NOT NULL,
+			definido_por TEXT DEFAULT 'system',
+			definido_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (username, marcador)
+		);
+	""";
+
+	if(bancoJogo.execute(criar) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela player_marcadores: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	marcadores_tabela_ok = true;
+	return true;
+}
+
+string marcador_chave(string nome, string marcador) {
+	return nome.trim_whitespace().lower() + "|" + marcador.lower();
+}
+
+// A tabela e pequena e consultada a cada mensagem de equipe: fica em memoria.
+bool marcadores_carregar_cache() {
+	if(marcadores_cache_carregado) return true;
+	if(!marcadores_garantir_tabela()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT username, marcador FROM player_marcadores;");
+	if(@stmt == null) return false;
+
+	marcadores_cache.delete_all();
+	while(stmt.step() == SQLITE_ROW) {
+		marcadores_cache.set(marcador_chave(stmt.column_text(0), stmt.column_text(1)), 1);
+	}
+
+	marcadores_cache_carregado = true;
+	return true;
+}
+
+bool marcador_tem(string nome, string marcador) {
+	if(nome == "" || marcador == "") return false;
+	if(!marcadores_carregar_cache()) return false;
+	return marcadores_cache.exists(marcador_chave(nome, marcador));
+}
+
+// Liga ou desliga um marcador. O nome e gravado em minusculas.
+bool marcador_definir(string nome, string marcador, bool ativo, string por = "system") {
+	nome = nome.trim_whitespace().lower();
+	marcador = marcador.trim_whitespace().lower();
+	if(nome == "" || marcador == "") return false;
+	if(!marcadores_garantir_tabela()) return false;
+
+	sqlite3statement@ stmt;
+	if(ativo) {
+		@stmt = bancoJogo.prepare("INSERT OR IGNORE INTO player_marcadores (username, marcador, definido_por) VALUES (?, ?, ?);");
+	} else {
+		@stmt = bancoJogo.prepare("DELETE FROM player_marcadores WHERE username = ? AND marcador = ?;");
+	}
+	if(@stmt == null) {
+		debug_log("MARCADORES: erro ao preparar: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, nome);
+	stmt.bind_text(2, marcador);
+	if(ativo) stmt.bind_text(3, por);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("MARCADORES: erro ao gravar " + marcador + " de " + nome + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	if(marcadores_carregar_cache()) {
+		string chave = marcador_chave(nome, marcador);
+		if(ativo) marcadores_cache.set(chave, 1);
+		else if(marcadores_cache.exists(chave)) marcadores_cache.delete(chave);
+	}
+	return true;
+}
+
+// Quem nao e da equipe mas recebe o chat/avisos de administracao.
+bool marcador_recebe_chat_adm(string nome) {
+	return marcador_tem(nome, MARCADOR_ADMINTUDO) || marcador_tem(nome, MARCADOR_CHAT_ADM);
+}
+
+// --------------------------------------------------------------------------
+// Creditos de compra web pendentes de entrega
+// --------------------------------------------------------------------------
+// O site deixa de gravar players/<nome>/credits.txt e passa a inserir uma
+// linha: INSERT INTO creditos_pendentes (username, quantidade, origem).
+
+bool creditos_garantir_tabela() {
+	if(creditos_tabela_ok) return true;
+	if(!globais_db_pronto()) return false;
+
+	string criar = """
+		CREATE TABLE IF NOT EXISTS creditos_pendentes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			quantidade REAL NOT NULL,
+			origem TEXT DEFAULT 'site',
+			criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+			entregue INTEGER DEFAULT 0,
+			entregue_em DATETIME DEFAULT NULL
+		);
+	""";
+
+	if(bancoJogo.execute(criar) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela creditos_pendentes: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_creditos_pendentes ON creditos_pendentes(entregue, username);");
+
+	creditos_tabela_ok = true;
+	return true;
+}
+
+bool creditos_adicionar_pendente(string nome, double quantidade, string origem = "site") {
+	nome = nome.trim_whitespace();
+	if(nome == "" || quantidade <= 0) return false;
+	if(!creditos_garantir_tabela()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT INTO creditos_pendentes (username, quantidade, origem) VALUES (?, ?, ?);");
+	if(@stmt == null) {
+		debug_log("CREDITOS: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, nome);
+	stmt.bind_double(2, quantidade);
+	stmt.bind_text(3, origem);
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("CREDITOS: erro ao gravar pendencia de " + nome + ": " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	// Forca nova consulta na proxima passada do loop do jogador.
+	creditos_consulta_feita = false;
+	return true;
+}
+
+void creditos_atualizar_pendentes() {
+	creditos_nomes_pendentes.delete_all();
+	if(!creditos_garantir_tabela()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT DISTINCT LOWER(username) FROM creditos_pendentes WHERE entregue = 0;");
+	if(@stmt == null) return;
+
+	while(stmt.step() == SQLITE_ROW) {
+		creditos_nomes_pendentes.set(stmt.column_text(0), 1);
+	}
+}
+
+// Chamado no loop do jogador. A consulta ao banco e global e espacada; por
+// jogador so ha uma busca em dicionario.
+void creditos_entregar_pendentes(player@ p) {
+	if(p is null || p.charname == "") return;
+	if(!globais_db_pronto()) return;
+
+	if(!creditos_consulta_feita || creditos_timer_consulta.elapsed >= CREDITOS_INTERVALO_CONSULTA_MS) {
+		creditos_consulta_feita = true;
+		creditos_timer_consulta.restart();
+		creditos_atualizar_pendentes();
+	}
+
+	string chave = p.charname.lower();
+	if(!creditos_nomes_pendentes.exists(chave)) return;
+	creditos_nomes_pendentes.delete(chave);
+
+	double total = 0;
+	int ultimo_id = 0;
+	int linhas = 0;
+	{
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT COALESCE(SUM(quantidade), 0), COALESCE(MAX(id), 0), COUNT(*) FROM creditos_pendentes WHERE entregue = 0 AND LOWER(username) = ?;");
+		if(@stmt == null) return;
+
+		stmt.bind_text(1, chave);
+		if(stmt.step() != SQLITE_ROW) return;
+
+		total = stmt.column_double(0);
+		ultimo_id = stmt.column_int(1);
+		linhas = stmt.column_int(2);
+	}
+	if(linhas <= 0) return;
+
+	// Marca como entregue antes de creditar: uma falha aqui nao duplica nada.
+	{
+		sqlite3statement@ stmt = bancoJogo.prepare("UPDATE creditos_pendentes SET entregue = 1, entregue_em = CURRENT_TIMESTAMP WHERE entregue = 0 AND LOWER(username) = ? AND id <= ?;");
+		if(@stmt == null) return;
+
+		stmt.bind_text(1, chave);
+		stmt.bind_int(2, ultimo_id);
+		if(stmt.step() != SQLITE_DONE) {
+			debug_log("CREDITOS: erro ao marcar entrega de " + p.charname + ": " + bancoJogo.get_last_error_text());
+			return;
+		}
+	}
+
+	if(total <= 0) return;
+
+	if(enable_double_emeralds == 1) ge(p.charname, total * 2);
+	else ge(p.charname, total);
+	save_player_to_database(p);
+
+	save_transfer("sistema", p.charname, "creditos", "mediante compra no site", total);
+	string texto = p.charname + " fez a compra de " + total + " creditos em " + DATE_DAY + "." + DATE_MONTH + "." + DATE_YEAR + " as " + TIME_HOUR + "." + TIME_MINUTE + ".";
+	eadm(texto, "notify5.ogg", 150);
+	log(texto, "log_compras");
+}
+
+// --------------------------------------------------------------------------
+// Mensagem para a equipe (antigo mensagemaes.txt)
+// --------------------------------------------------------------------------
+
+string globais_mensagem_equipe() {
+	if(!globais_msg_equipe_carregada) {
+		if(!globais_db_pronto()) return "";
+		globais_msg_equipe_cache = config_get_text(GLOBAIS_CHAVE_MENSAGEM_EQUIPE, "");
+		globais_msg_equipe_carregada = true;
+	}
+	return globais_msg_equipe_cache;
+}
+
+// Texto vazio apaga a mensagem.
+void globais_definir_mensagem_equipe(string texto) {
+	texto = texto.trim_whitespace();
+	if(!globais_db_pronto()) return;
+
+	if(texto == "") globais_exec1("DELETE FROM server_config WHERE key = ?;", GLOBAIS_CHAVE_MENSAGEM_EQUIPE);
+	else config_set_text(GLOBAIS_CHAVE_MENSAGEM_EQUIPE, texto, "Mensagem exibida para a equipe ao entrar (antigo mensagemaes.txt)");
+
+	globais_msg_equipe_cache = texto;
+	globais_msg_equipe_carregada = true;
+}
+
+// --------------------------------------------------------------------------
+// Importacao unica dos arquivos legados
+// --------------------------------------------------------------------------
+
+void globais_importar_mensagem_equipe() {
+	string conteudo;
+	if(!globais_ler_arquivo("mensagemaes.txt", conteudo)) return;
+
+	conteudo = conteudo.trim_whitespace();
+	if(conteudo != "" && config_get_text(GLOBAIS_CHAVE_MENSAGEM_EQUIPE, "") == "") {
+		globais_definir_mensagem_equipe(conteudo);
+		debug_log("MIGRACAO: mensagemaes.txt importado para server_config");
+	}
+
+	globais_arquivar_legado("mensagemaes.txt");
+}
+
+bool globais_importar_marcador_arquivo(string nome, string marcador) {
+	string caminho = "players/" + nome + "/" + marcador + ".usr";
+	if(!file_exists(caminho)) return false;
+
+	if(!marcador_definir(nome, marcador, true, "migracao")) return false;
+	globais_arquivar_legado(caminho);
+	return true;
+}
+
+// Varre players/<nome>/ atras dos arquivos que viraram tabela. Depois da
+// primeira passada nao sobra nada para importar: tudo fica como .migrado.
+void globais_importar_pastas_de_jogadores() {
+	if(!directory_exists("players")) return;
+
+	string[]@ pastas = find_directories("players/*");
+	if(pastas is null) return;
+
+	int marcadores = 0;
+	int tradutores = 0;
+	int veiculos = 0;
+	int creditos = 0;
+
+	for(uint i = 0; i < pastas.length(); i++) {
+		string nome = globais_nome_base(pastas[i]);
+		if(nome == "" || nome == "." || nome == "..") continue;
+
+		string base = "players/" + nome + "/";
+
+		if(globais_importar_marcador_arquivo(nome, MARCADOR_ADMINTUDO)) marcadores++;
+		if(globais_importar_marcador_arquivo(nome, MARCADOR_CHAT_ADM)) marcadores++;
+		if(globais_importar_marcador_arquivo(nome, MARCADOR_CHEATER)) marcadores++;
+
+		if(file_exists(base + "translator.usr")) {
+			if(add_role(nome, "translator", "migracao", "Importado de translator.usr")) {
+				globais_arquivar_legado(base + "translator.usr");
+				tradutores++;
+			}
+		}
+
+		string[]@ arquivos = find_files(base + "*.vehicle");
+		if(arquivos !is null) {
+			for(uint j = 0; j < arquivos.length(); j++) {
+				string arquivo = globais_nome_base(arquivos[j]);
+				if(arquivo.length() <= 8) continue;
+
+				string tipo = arquivo.substr(0, arquivo.length() - 8).lower();
+				string conteudo;
+				if(!globais_ler_arquivo(base + arquivo, conteudo)) continue;
+
+				if(veiculo_importar_legado(nome, tipo, parse_float(conteudo.trim_whitespace()))) {
+					globais_arquivar_legado(base + arquivo);
+					veiculos++;
+				}
+			}
+		}
+
+		string texto_creditos;
+		if(globais_ler_arquivo(base + "credits.txt", texto_creditos)) {
+			double quantidade = 0;
+			string[] partes = texto_creditos.split("|");
+			for(uint j = 0; j < partes.length(); j++) {
+				quantidade += parse_float(partes[j].trim_whitespace());
+			}
+
+			// Sem chave natural para INSERT OR IGNORE: o arquivo sai do caminho
+			// primeiro, e so entao a pendencia entra no banco.
+			if(creditos_garantir_tabela() && globais_arquivar_legado(base + "credits.txt")) {
+				if(quantidade > 0) {
+					if(creditos_adicionar_pendente(nome, quantidade, "credits.txt")) creditos++;
+					else debug_log("MIGRACAO: creditos de " + nome + " (" + quantidade + ") ficaram apenas em credits.txt.migrado");
+				}
+			}
+		}
+	}
+
+	if(marcadores + tradutores + veiculos + creditos > 0) {
+		debug_log("MIGRACAO: pastas de jogadores -> " + marcadores + " marcadores, " + tradutores + " tradutores, " + veiculos + " veiculos, " + creditos + " creditos pendentes");
+	}
+}
+
+// Cria as tabelas deste modulo e importa os arquivos legados. Chamado no
+// boot por iniciar.nvgt, depois de init_database().
+void init_dados_globais() {
+	if(!globais_db_pronto()) {
+		debug_log("ERRO: init_dados_globais - Banco nao inicializado");
+		return;
+	}
+
+	marcadores_garantir_tabela();
+	creditos_garantir_tabela();
+	veiculos_garantir_tabela();
+	guildas_garantir_tabelas();
+	zonas_garantir_tabela();
+
+	globais_importar_mensagem_equipe();
+	globais_importar_pastas_de_jogadores();
+
+	marcadores_cache_carregado = false;
+	marcadores_carregar_cache();
+	globais_mensagem_equipe();
+}
+
+// --------------------------------------------------------------------------
+// Troca de apelido
+// --------------------------------------------------------------------------
+// Chamado por changename() (legacy_compat.nvgt). As guildas em memoria sao
+// renomeadas la mesmo e regravadas por save_guilds(); aqui ficam as tabelas.
+void globais_renomear_jogador(string antigo, string novo) {
+	antigo = antigo.trim_whitespace();
+	novo = novo.trim_whitespace();
+	if(antigo == "" || novo == "" || antigo == novo) return;
+	if(!globais_db_pronto()) return;
+
+	if(guildas_garantir_tabelas()) {
+		globais_exec2("UPDATE OR REPLACE guilda_membros SET username = ? WHERE username = ?;", novo, antigo);
+		globais_exec2("UPDATE guildas SET lider = ? WHERE lider = ?;", novo, antigo);
+	}
+
+	if(veiculos_garantir_tabela()) {
+		globais_exec2("UPDATE OR REPLACE player_vehicles SET username = ? WHERE username = ?;", novo, antigo);
+		veiculos_renomear_dono_em_memoria(antigo, novo);
+	}
+
+	if(marcadores_garantir_tabela()) {
+		globais_exec2("UPDATE OR REPLACE player_marcadores SET username = ? WHERE username = ?;", novo.lower(), antigo.lower());
+		marcadores_cache_carregado = false;
+	}
+
+	if(creditos_garantir_tabela()) {
+		globais_exec2("UPDATE creditos_pendentes SET username = ? WHERE LOWER(username) = ?;", novo, antigo.lower());
+		creditos_consulta_feita = false;
+	}
+}

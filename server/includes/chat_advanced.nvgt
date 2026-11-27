@@ -513,8 +513,8 @@ void send_pm(int sender_index, string target_name, string message) {
 
 		debug_log("💬 PM de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
 	} else {
-		// O nome vem do cliente e vira caminho de arquivo logo abaixo: só
-		// segue se for exatamente uma conta cadastrada.
+		// O nome vem do cliente: só segue se for exatamente uma conta
+		// cadastrada (tabela players).
 		string nome_cadastrado = social_nome_canonico(target_name);
 		if(nome_cadastrado == "" || !is_valid_player_name(nome_cadastrado) || nome_cadastrado.find("/") >= 0 || nome_cadastrado.find("..") >= 0) {
 			send_reliable_text(players[sender_index].peer_id, "msg2 Que curioso, uma mensagem tentando ser enviada para uma pessoa inexistente.", 0);
@@ -527,13 +527,13 @@ void send_pm(int sender_index, string target_name, string message) {
 			return;
 		}
 
-		if(!directory_exists("players/" + target_name)) directory_create("players/" + target_name);
+		// Tabela pm_offline (mail.nvgt); entregue no próximo login do destinatário.
+		if(!dados_jogador_pm_offline_gravar(target_name, players[sender_index].charname, filtered)) {
+			send_reliable_text(players[sender_index].peer_id, "msg2 Não foi possível guardar sua mensagem agora. Tente novamente mais tarde.", 0);
+			return;
+		}
 
 		send_reliable_text(players[sender_index].peer_id, "msg2 Sua mensagem foi enviada para " + target_name + "!", 0);
-		file f;
-		f.open("players/" + target_name + "/pm.md", "a");
-		f.write("Mensagem permanente não lida de " + players[sender_index].charname + ": " + filtered + "\r\n");
-		f.close();
 
 		debug_log("💬 PM offline de " + players[sender_index].charname + " para " + target_name + ": " + filtered);
 	}

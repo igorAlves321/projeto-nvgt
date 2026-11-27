@@ -37,40 +37,70 @@ class friend_list {
 		}
 	}
 
+	// Tabela 'amigos' (criada em dados_jogador_garantir_tabelas(), mail.nvgt).
+	// Regrava a lista inteira do dono; a cópia em memória é a autoridade.
 	void save() {
-		string path = "players/" + owner + "/friends.dat";
-		file f;
-		if(!f.open(path, "w")) {
-			debug_log("FRIENDS: Erro ao salvar lista de " + owner);
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("FRIENDS: Erro ao salvar lista de " + owner + " (banco indisponível)");
 			return;
 		}
 
-		string content = "";
+		bool sp = dj_inicio();
+		bool ok = true;
+
+		if(!dj_exec1("DELETE FROM amigos WHERE dono = ?;", owner)) ok = false;
 		for(uint i = 0; i < friends.length(); i++) {
-			if(i > 0) content += ",";
-			content += friends[i];
+			if(friends[i] == "") continue;
+			if(!dj_exec3("INSERT OR IGNORE INTO amigos (dono, amigo, ordem) VALUES (?, ?, ?);", owner, friends[i], "" + i)) ok = false;
 		}
 
-		f.write(content);
-		f.close();
+		dj_fim(sp, ok);
+		if(!ok) debug_log("FRIENDS: Erro ao salvar lista de " + owner);
 	}
 
-	void load() {
-		string path = "players/" + owner + "/friends.dat";
-		if(!file_exists(path)) return;
+	// Importação única de players/<dono>/friends.dat.
+	void importar_legado() {
+		string path = dj_caminho_legado(owner, "friends.dat");
+		if(path == "" || !file_exists(path)) return;
 
 		file f;
 		if(!f.open(path, "r")) {
-			debug_log("FRIENDS: Erro ao carregar lista de " + owner);
+			debug_log("FRIENDS: Erro ao abrir " + path + " para importar");
 			return;
 		}
 
 		string content = f.read();
 		f.close();
 
-		if(content == "") return;
-
 		string[] loaded = content.split(",");
+
+		bool sp = dj_inicio();
+		bool ok = true;
+		for(uint i = 0; i < loaded.length(); i++) {
+			string nome = loaded[i].trim_whitespace();
+			if(nome == "") continue;
+			if(!dj_exec3("INSERT OR IGNORE INTO amigos (dono, amigo, ordem) VALUES (?, ?, ?);", owner, nome, "" + i)) ok = false;
+		}
+		dj_fim(sp, ok);
+
+		if(!ok) {
+			debug_log("FRIENDS: falha ao importar " + path + "; o arquivo foi mantido");
+			return;
+		}
+
+		dj_marcar_migrado(path);
+		debug_log("FRIENDS: lista de " + owner + " importada de friends.dat");
+	}
+
+	void load() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("FRIENDS: banco indisponível ao carregar lista de " + owner);
+			return;
+		}
+
+		importar_legado();
+
+		string[] loaded = dj_lista("SELECT amigo FROM amigos WHERE dono = ? ORDER BY ordem, rowid;", owner);
 		for(uint i = 0; i < loaded.length(); i++) {
 			if(loaded[i] != "" && !is_friend(loaded[i])) {
 				friends.insert_last(loaded[i]);
@@ -130,9 +160,25 @@ void cmd_addfriend(int player_index, string target_name) {
 		return;
 	}
 
-	if(!directory_exists("players/" + target_name)) {
+	// Conta cadastrada (tabela players), com o nome na caixa exata do cadastro.
+	string nome_cadastrado = social_nome_canonico(target_name);
+	if(nome_cadastrado == "") {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
 		return;
+	}
+
+	if(nome_cadastrado != target_name) {
+		target_name = nome_cadastrado;
+
+		if(players[player_index].charname == target_name) {
+			send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Você não pode adicionar a si mesmo!", 0);
+			return;
+		}
+
+		if(fl.is_friend(target_name)) {
+			send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] " + target_name + " ja está na sua lista!", 0);
+			return;
+		}
 	}
 
 	fl.add_friend(target_name);

@@ -28,8 +28,9 @@ void cmd_tempban(int player_index, string target_name, double days, string reaso
 	string admin_name = players[player_index].charname;
 	string computer_id = players[target].computer_id;
 	if(!add_ban_db(target_name, computer_id, "", admin_name, reason, int(minutes))) {
-		create_temp_ban(target_name, minutes, 0.0, reason, computer_id);
-		debug_log("WARN: Fallback para create_temp_ban() - SQL falhou");
+		send_admin_error(player_index, "tempban", "Erro ao gravar o banimento no banco de dados. Nada foi aplicado.");
+		debug_log("ERRO: tempban de " + target_name + " nao foi gravado em server_bans");
+		return;
 	}
 
 	eadm(admin_name + " baniu temporariamente " + target_name + " por " + days + " dias. Razão: " + reason);
@@ -62,8 +63,9 @@ void cmd_ban(int player_index, string target_name, string reason = "Violacao das
 	string computer_id = (target != -1) ? players[target].computer_id : "";
 	string admin_name = players[player_index].charname;
 	if(!add_ban_db(target_name, computer_id, "", admin_name, reason, 0)) {
-		create_temp_ban(target_name, 525600.0 * 10, 0.0, reason, computer_id);
-		debug_log("WARN: Fallback para create_temp_ban() - SQL falhou");
+		send_admin_error(player_index, "ban", "Erro ao gravar o banimento no banco de dados. Nada foi aplicado.");
+		debug_log("ERRO: ban de " + target_name + " nao foi gravado em server_bans");
+		return;
 	}
 
 	eadm(admin_name + " baniu permanentemente " + target_name + ". Razão: " + reason);
@@ -83,14 +85,17 @@ void cmd_unban(int player_index, string target_name) {
 		return;
 	}
 
-	bool unbanned = unban_player_db(target_name);
-	bool legacy_removed = remove_temp_ban(target_name);
-	if(unbanned || legacy_removed) {
+	if(!is_banned_db(target_name)) {
+		send_admin_error(player_index, "unban", "Jogador não está banido ou ban não encontrado.");
+		return;
+	}
+
+	if(unban_player_db(target_name)) {
 		send_reliable_text(players[player_index].peer_id, "msg2 " + target_name + " foi desbanido.", 0);
 		eadm(players[player_index].charname + " desbaniu " + target_name);
 		debug_log("ADMIN: " + players[player_index].charname + " desbaniu " + target_name);
 	} else {
-		send_admin_error(player_index, "unban", "Jogador não está banido ou ban não encontrado.");
+		send_admin_error(player_index, "unban", "Erro ao remover o banimento no banco de dados.");
 	}
 }
 

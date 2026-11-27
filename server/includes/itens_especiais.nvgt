@@ -1,0 +1,1232 @@
+// ============================================================================
+//  ITENS ESPECIAIS
+// ----------------------------------------------------------------------------
+//  Porte dos casos especificos de usar() do BGT (re_server_test.bgt:1400-1736)
+//  e do "use" do elixir angelical (net.bgt:889 / voids.bgt:926).
+//
+//  Entrada unica: usar_item_especial(), chamada no comeco de use_item()
+//  (consumables.nvgt). Parametros ajustaveis ficam na tabela itens_especiais
+//  (semeada com INSERT OR IGNORE); o estado por jogador que precisa sobreviver
+//  ao relogin fica em itens_especiais_estado.
+//
+//  Diferencas de projeto em relacao ao BGT:
+//   - saludfangelical (teto de vida) nao existe no port. O teto aqui e
+//     _geral.teto_vida_base + _geral.teto_vida_por_fase * reencarnou, nunca
+//     abaixo da vida maxima natural do jogador.
+//   - No BGT a vida maxima voltava a 10000 a cada logout. No port maxhealth e
+//     persistente, entao a vida ganha por pocao e guardada a parte
+//     (vida_extra) e retirada no proximo login, salvo com vitalidade perpetua.
+//   - A sanidade do port vai de 0 a 100 (no BGT, 0 a 1000): o ganho da pocao
+//     branca e multiplicado por pocao_branca.sanidade_escala.
+// ============================================================================
+
+const string IE_ANTIMINAS = "pocao_antiminas";
+const string IE_ANTIMETEOROS = "pocao_antimeteoros";
+const string IE_TROVAO = "pocao_do_trovao";
+const string IE_PROTETORA = "pocao_protetora";
+const string IE_AMETISTA = "pocao_de_ametista";
+const string IE_VITAL = "pocao_vital";
+const string IE_ANGELICAL = "pocao_angelical";
+const string IE_BRANCA = "pocao_branca";
+const string IE_LUMINOSA = "bebida_luminosa";
+const string IE_PO_ENERGIA = "po_de_energia";
+const string IE_VITALIDADE = "vitalidade_perpetua";
+const string IE_RUNA = "runa_dourada";
+const string IE_ENVELOPE = "envelope_circular_dourado";
+const string IE_IRATCE = "iratce";
+const string IE_IRATCE_GASTO = "iratce_gasto";
+const string IE_VIDRO = "vidro_quebrado";
+const string IE_CAIXA = "caixa_especial_com_laco_dourado";
+const string IE_ELIXIR = "elixir_angelical";
+const string IE_GERAL = "_geral";
+const string IE_LOJA = "_loja";
+const string IE_LOJA_VINCULO = "loja_magica";
+
+const int IE_SALVAR_MS = 60000;
+const int IE_VARRER_MS = 30000;
+
+// Lidos pelo playerloop (player.nvgt) e pelo pacote times (pacotes_itens.nvgt).
+// Recarregados da tabela itens_especiais em ie_carregar_parametros().
+int ie_dur_antiminas_ms = 300000;
+int ie_dur_antimeteoros_ms = 600000;
+int ie_dur_trovao_ms = 600000;
+int ie_dur_protetora_ms = 60000;
+int ie_dur_ametista_s = 900;
+int ie_dur_luminosa_s = 7200;
+double ie_mult_ametista = 6.0;
+double ie_mult_luminosa = 3.0;
+
+dictionary ie_numeros;
+dictionary ie_textos;
+dictionary ie_estados;
+timer ie_varredura_timer;
+bool ie_tabelas_prontas = false;
+
+class ie_estado {
+	string jogador = "";
+	player@ dono;
+	bool linha_no_banco = false;
+	double vida_extra = 0;
+	int vitalidade_acumulos = 0;
+	double vitalidade_total_s = 0;
+	double vitalidade_gasto_s = 0;
+	bool regen_ativo = false;
+	bool regen_sanidade = false;
+	int regen_ticks = 0;
+	int mascara = 0;
+	timer t_regen;
+	timer t_vitalidade;
+	timer t_salvar;
+}
+
+// ----------------------------------------------------------------------------
+// Utilitarios
+// ----------------------------------------------------------------------------
+
+bool ie_banco_ok() {
+	return database_initialized && bancoJogo !is null;
+}
+
+void ie_msg(player@ p, string texto) {
+	if(p is null) return;
+	send_reliable_text(p.peer_id, "msg2 ;" + texto + ";", 0);
+}
+
+void ie_som_em(string mapa, int x, int y, string som) {
+	if(som == "" || som == "none") return;
+	int mi = get_map_index_from(mapa);
+	if(mi < 0 || mi >= int(server_maps.length())) return;
+	server_maps[mi].send_packet(0, "play " + som, x, y);
+}
+
+void ie_som(player@ p, string som) {
+	if(p is null) return;
+	ie_som_em(p.map, p.x, p.y, som);
+}
+
+void ie_consumir(player@ p, string item, int quantidade) {
+	p.inv_add_item(item, -quantidade, true);
+	save_player_inventory_to_db(p);
+}
+
+void ie_entregar(player@ p, string item, int quantidade) {
+	p.inv_add_item(item, quantidade, true);
+	save_player_inventory_to_db(p);
+}
+
+bool ie_e_item_especial(string nome) {
+	if(nome == IE_ANTIMINAS || nome == IE_ANTIMETEOROS || nome == IE_TROVAO) return true;
+	if(nome == IE_PROTETORA || nome == IE_AMETISTA || nome == IE_VITAL) return true;
+	if(nome == IE_ANGELICAL || nome == IE_BRANCA || nome == IE_LUMINOSA) return true;
+	if(nome == IE_PO_ENERGIA || nome == IE_VITALIDADE || nome == IE_RUNA) return true;
+	if(nome == IE_ENVELOPE || nome == IE_IRATCE || nome == IE_VIDRO) return true;
+	if(nome == IE_CAIXA || nome == IE_ELIXIR) return true;
+	if(nome == PET_ITEM_ADOCAO || nome == PET_ITEM_RACAO) return true;
+	return false;
+}
+
+// ----------------------------------------------------------------------------
+// Parametros (tabela itens_especiais)
+// ----------------------------------------------------------------------------
+
+double ie_num(string item, string parametro, double padrao) {
+	string chave = item + "|" + parametro;
+	double valor = padrao;
+	if(ie_numeros.exists(chave)) ie_numeros.get(chave, valor);
+	return valor;
+}
+
+string ie_txt(string item, string parametro, string padrao) {
+	string chave = item + "|" + parametro;
+	string valor = padrao;
+	if(ie_textos.exists(chave)) ie_textos.get(chave, valor);
+	return valor;
+}
+
+void ie_criar_tabelas() {
+	ie_tabelas_prontas = false;
+	if(!ie_banco_ok()) return;
+
+	string tabela_parametros = """
+		CREATE TABLE IF NOT EXISTS itens_especiais (
+			item TEXT NOT NULL,
+			parametro TEXT NOT NULL,
+			valor REAL NOT NULL DEFAULT 0,
+			texto TEXT DEFAULT '',
+			PRIMARY KEY (item, parametro)
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_parametros) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela itens_especiais: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	string tabela_estado = """
+		CREATE TABLE IF NOT EXISTS itens_especiais_estado (
+			jogador TEXT PRIMARY KEY,
+			vida_extra REAL DEFAULT 0,
+			vida_natural REAL DEFAULT 0,
+			vitalidade_acumulos INTEGER DEFAULT 0,
+			vitalidade_total_s REAL DEFAULT 0,
+			vitalidade_gasto_s REAL DEFAULT 0,
+			regen_ativo INTEGER DEFAULT 0,
+			regen_sanidade INTEGER DEFAULT 0,
+			regen_ticks INTEGER DEFAULT 0,
+			antimina_ms INTEGER DEFAULT -1,
+			ameteoro_ms INTEGER DEFAULT -1,
+			trovao_ms INTEGER DEFAULT -1,
+			protegido_ms INTEGER DEFAULT -1,
+			ametista_s INTEGER DEFAULT -1,
+			luminosa_s INTEGER DEFAULT -1,
+			atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	if(bancoJogo.execute(tabela_estado) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela itens_especiais_estado: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	ie_tabelas_prontas = true;
+}
+
+void ie_semear(string item, string parametro, double valor, string texto = "") {
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO itens_especiais (item, parametro, valor, texto) VALUES (?, ?, ?, ?);");
+	if(@stmt == null) return;
+
+	stmt.bind_text(1, item);
+	stmt.bind_text(2, parametro);
+	stmt.bind_double(3, valor);
+	stmt.bind_text(4, texto);
+	stmt.step();
+}
+
+void ie_semear_parametros() {
+	if(!ie_tabelas_prontas) return;
+
+	// Duracoes originais: player.bgt:1090-1216.
+	ie_semear(IE_ANTIMINAS, "duracao_ms", 300000);
+	ie_semear(IE_ANTIMINAS, "som", 0, "potion.ogg");
+	ie_semear(IE_ANTIMETEOROS, "duracao_ms", 600000);
+	ie_semear(IE_ANTIMETEOROS, "som", 0, "potion.ogg");
+	ie_semear(IE_TROVAO, "duracao_ms", 600000);
+	ie_semear(IE_TROVAO, "som", 0, "spell_thunder_start.ogg");
+	ie_semear(IE_PROTETORA, "duracao_ms", 60000);
+	ie_semear(IE_PROTETORA, "som", 0, "potion.ogg");
+	ie_semear(IE_AMETISTA, "duracao_s", 900);
+	ie_semear(IE_AMETISTA, "multiplicador_dano", 6);
+	ie_semear(IE_AMETISTA, "som", 0, "getpotionpower.ogg");
+	ie_semear(IE_LUMINOSA, "duracao_s", 7200);
+	ie_semear(IE_LUMINOSA, "multiplicador_dano", 3);
+	ie_semear(IE_LUMINOSA, "som", 0, "poção.ogg");
+
+	ie_semear(IE_VITAL, "vida_min", 10000);
+	ie_semear(IE_VITAL, "vida_max", 25000);
+	ie_semear(IE_VITAL, "som", 0, "gethealth.ogg");
+
+	// Regeneracao: 120 pulsos de 1 s, compartilhados pelas pocoes angelical e branca.
+	ie_semear(IE_ANGELICAL, "pulsos", 120);
+	ie_semear(IE_ANGELICAL, "intervalo_ms", 1000);
+	ie_semear(IE_ANGELICAL, "vida_min", 5000);
+	ie_semear(IE_ANGELICAL, "vida_max", 20000);
+	ie_semear(IE_ANGELICAL, "som", 0, "potion.ogg");
+	ie_semear(IE_BRANCA, "sanidade_min", 2);
+	ie_semear(IE_BRANCA, "sanidade_max", 4);
+	ie_semear(IE_BRANCA, "sanidade_escala", 0.1);
+	ie_semear(IE_BRANCA, "som", 0, "potion.ogg");
+
+	ie_semear(IE_PO_ENERGIA, "quantidade", 10);
+	ie_semear(IE_PO_ENERGIA, "x", 5);
+	ie_semear(IE_PO_ENERGIA, "y", 5);
+	ie_semear(IE_PO_ENERGIA, "som", 0, "teleporter.ogg");
+
+	// 43200 * 60 segundos conectados = 30 dias por unidade, ate 12 acumulos.
+	ie_semear(IE_VITALIDADE, "duracao_s", 2592000);
+	ie_semear(IE_VITALIDADE, "acumulos_max", 12);
+	ie_semear(IE_VITALIDADE, "som", 0, "notify_powerup.ogg");
+	ie_semear(IE_VITALIDADE, "som_fim", 0, "notify_died.ogg");
+
+	ie_semear(IE_IRATCE, "vida", 50000);
+	ie_semear(IE_IRATCE, "mapa_bloqueado", 0, "mausoleo_infernal");
+	ie_semear(IE_IRATCE, "som", 0, "magia_fogo_iniciou.ogg");
+
+	ie_semear(IE_VIDRO, "divisor", 6);
+	ie_semear(IE_VIDRO, "som", 0, "sangra.ogg");
+
+	ie_semear(IE_ENVELOPE, "moedas", 1);
+
+	ie_semear(IE_ELIXIR, "divisor", 9);
+	ie_semear(IE_ELIXIR, "alcance", 5);
+	ie_semear(IE_ELIXIR, "som", 0, "gethealth.ogg");
+
+	ie_semear(IE_CAIXA, "som", 0, "notify_applause.ogg");
+
+	ie_semear(IE_GERAL, "teto_vida_base", 50000);
+	ie_semear(IE_GERAL, "teto_vida_por_fase", 1000);
+}
+
+void ie_carregar_parametros() {
+	ie_numeros.delete_all();
+	ie_textos.delete_all();
+
+	if(ie_tabelas_prontas) {
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT item, parametro, valor, texto FROM itens_especiais;");
+		if(@stmt != null) {
+			while(stmt.step() == SQLITE_ROW) {
+				string chave = stmt.column_text(0) + "|" + stmt.column_text(1);
+				double valor = stmt.column_double(2);
+				string texto = stmt.column_text(3);
+				ie_numeros.set(chave, valor);
+				if(texto != "") ie_textos.set(chave, texto);
+			}
+		}
+	}
+
+	ie_dur_antiminas_ms = int(ie_num(IE_ANTIMINAS, "duracao_ms", 300000));
+	ie_dur_antimeteoros_ms = int(ie_num(IE_ANTIMETEOROS, "duracao_ms", 600000));
+	ie_dur_trovao_ms = int(ie_num(IE_TROVAO, "duracao_ms", 600000));
+	ie_dur_protetora_ms = int(ie_num(IE_PROTETORA, "duracao_ms", 60000));
+	ie_dur_ametista_s = int(ie_num(IE_AMETISTA, "duracao_s", 900));
+	ie_dur_luminosa_s = int(ie_num(IE_LUMINOSA, "duracao_s", 7200));
+	ie_mult_ametista = ie_num(IE_AMETISTA, "multiplicador_dano", 6);
+	ie_mult_luminosa = ie_num(IE_LUMINOSA, "multiplicador_dano", 3);
+
+	if(ie_dur_antiminas_ms < 1000) ie_dur_antiminas_ms = 1000;
+	if(ie_dur_antimeteoros_ms < 1000) ie_dur_antimeteoros_ms = 1000;
+	if(ie_dur_trovao_ms < 1000) ie_dur_trovao_ms = 1000;
+	if(ie_dur_protetora_ms < 1000) ie_dur_protetora_ms = 1000;
+	if(ie_dur_ametista_s < 1) ie_dur_ametista_s = 1;
+	if(ie_dur_luminosa_s < 1) ie_dur_luminosa_s = 1;
+	if(ie_mult_ametista < 1) ie_mult_ametista = 1;
+	if(ie_mult_luminosa < 1) ie_mult_luminosa = 1;
+}
+
+// ----------------------------------------------------------------------------
+// Catalogo: itens, descricoes e loja
+// ----------------------------------------------------------------------------
+
+void ie_registrar_itens() {
+	if(!ie_banco_ok()) return;
+
+	int inseridos = 0;
+	if(ensure_item_in_catalog(IE_ANTIMINAS, "Poção antiminas")) inseridos++;
+	if(ensure_item_in_catalog(IE_ANTIMETEOROS, "Poção antimeteoros")) inseridos++;
+	if(ensure_item_in_catalog(IE_TROVAO, "Poção do trovão")) inseridos++;
+	if(ensure_item_in_catalog(IE_PROTETORA, "Poção protetora")) inseridos++;
+	if(ensure_item_in_catalog(IE_AMETISTA, "Poção de ametista")) inseridos++;
+	if(ensure_item_in_catalog(IE_VITAL, "Poção vital")) inseridos++;
+	if(ensure_item_in_catalog(IE_ANGELICAL, "Poção angelical")) inseridos++;
+	if(ensure_item_in_catalog(IE_BRANCA, "Poção branca")) inseridos++;
+	if(ensure_item_in_catalog(IE_LUMINOSA, "Bebida luminosa")) inseridos++;
+	if(ensure_item_in_catalog(IE_PO_ENERGIA, "Pó de energia")) inseridos++;
+	if(ensure_item_in_catalog(IE_VITALIDADE, "Vitalidade perpétua")) inseridos++;
+	if(ensure_item_in_catalog(IE_RUNA, "Runa dourada")) inseridos++;
+	if(ensure_item_in_catalog(IE_ENVELOPE, "Envelope circular dourado")) inseridos++;
+	if(ensure_item_in_catalog(IE_IRATCE, "Iratce")) inseridos++;
+	if(ensure_item_in_catalog(IE_IRATCE_GASTO, "Iratce gasto")) inseridos++;
+	if(ensure_item_in_catalog(IE_VIDRO, "Vidro quebrado")) inseridos++;
+	if(ensure_item_in_catalog(IE_CAIXA, "Caixa especial com laço dourado")) inseridos++;
+	if(ensure_item_in_catalog(IE_ELIXIR, "Elixir angelical")) inseridos++;
+
+	if(inseridos > 0) {
+		load_items_from_database();
+		debug_log("ITENS ESPECIAIS: " + inseridos + " itens inseridos no catalogo");
+	}
+}
+
+void ie_descrever(string item, string descricao) {
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO item_descriptions (name, description) VALUES (?, ?);");
+	if(@stmt != null) {
+		stmt.bind_text(1, item);
+		stmt.bind_text(2, descricao);
+		stmt.step();
+	}
+
+	if(!item_descriptions.exists(item)) item_descriptions.set(item, descricao);
+}
+
+void ie_semear_descricoes() {
+	if(!ie_banco_ok()) return;
+
+	sqlite3statement@ tabela = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='item_descriptions' LIMIT 1;");
+	if(@tabela == null || tabela.step() != SQLITE_ROW) return;
+
+	ie_descrever(IE_ANTIMINAS, "Um frasco transparente de conteúdo amarelo, que emite uma luz da mesma cor. Na tampa está escrito: poção para evitar as minas. Dura 5 minutos.");
+	ie_descrever(IE_ANTIMETEOROS, "Um frasco transparente de conteúdo verde-esmeralda, que emite uma luz da mesma cor. Na tampa está escrito: poção para se proteger dos meteoros. Dura 10 minutos.");
+	ie_descrever(IE_TROVAO, "Um frasco transparente. Ao segurá-lo você sente uma pequena descarga elétrica. O conteúdo é azulado e solta faíscas. Na tampa está escrito: para mais velocidade. Dura 10 minutos.");
+	ie_descrever(IE_PROTETORA, "Um frasco transparente de conteúdo branco e luminoso, que traz uma sensação de bem-estar. Na tampa está escrito: protege de enfermidades demoníacas. Dura 1 minuto.");
+	ie_descrever(IE_AMETISTA, "Ao beber este líquido maravilhoso, o dano dos seus ataques é multiplicado por 6 durante 15 minutos de combate.");
+	ie_descrever(IE_VITAL, "Uma poção que faz uma grande energia correr pelas suas veias, aumentando a sua vida e a sua vida máxima até você sair do jogo.");
+	ie_descrever(IE_ANGELICAL, "Um frasco branco-prateado com um anjo desenhado. Beba e a sua vida se regenerará sozinha durante 2 minutos.");
+	ie_descrever(IE_BRANCA, "Uma poção branca e serena. Devolve aos poucos a sua tranquilidade mental durante 2 minutos.");
+	ie_descrever(IE_LUMINOSA, "Uma garrafa pequena com um líquido que emana uma luz potente e aparentemente inextinguível. Triplica o dano dos seus ataques por 2 horas de combate.");
+	ie_descrever(IE_PO_ENERGIA, "Um pó com carga negativa. Com 10 porções, leva você de volta à sua ilha privada.");
+	ie_descrever(IE_VITALIDADE, "Coloca a sua vida no máximo sempre que você conecta ao jogo, durante 30 dias. Se usar várias, o efeito é acumulativo.");
+	ie_descrever(IE_RUNA, "Uma runa dourada entregue aos casados. Leva você até onde o seu cônjuge estiver.");
+	ie_descrever(IE_ENVELOPE, "Um envelope circular dourado. Abra para receber a moeda que ele guarda.");
+	ie_descrever(IE_IRATCE, "Uma runa de cura desenhada com estela. Aumenta muito a sua vida e a sua vida máxima. Não funciona em lugares de energia demoníaca.");
+	ie_descrever(IE_IRATCE_GASTO, "Um iratce que já entregou todo o seu poder. Agora é só uma lembrança.");
+	ie_descrever(IE_VIDRO, "Um caco de vidro afiado. Usá-lo fere gravemente quem o segura.");
+	ie_descrever(IE_CAIXA, "Uma caixa de presente preciosa, muito bem decorada. Será uma boa ideia abri-la para ver o que tem dentro?");
+	ie_descrever(IE_ELIXIR, "Um frasco muito comprido, com um líquido dourado dentro. Cura você e os companheiros de equipe que estiverem por perto.");
+}
+
+int ie_codigo_livre(int preferido) {
+	for(int codigo = preferido; codigo <= LOJA_CODIGO_MAXIMO; codigo++) {
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT 1 FROM loja_itens WHERE codigo = ? LIMIT 1;");
+		if(@stmt == null) return 0;
+		stmt.bind_int(1, codigo);
+		if(stmt.step() != SQLITE_ROW) return codigo;
+	}
+	return 0;
+}
+
+void ie_loja_inserir(string item, string moeda, double preco, string descricao, int codigo_preferido, bool vincular) {
+	sqlite3statement@ existe = bancoJogo.prepare("SELECT 1 FROM loja_itens WHERE LOWER(item) = ? LIMIT 1;");
+	if(@existe == null) return;
+	existe.bind_text(1, item);
+	if(existe.step() == SQLITE_ROW) return;
+
+	loja_inserir_padrao(item, moeda, preco, descricao, ie_codigo_livre(codigo_preferido));
+	if(vincular) loja_vincular_item(IE_LOJA_VINCULO, item, "system");
+}
+
+// Roda uma unica vez por banco (marcador _loja.semeada): depois disso o
+// catalogo e administrado pelos comandos da loja, e um item removido nao volta.
+void ie_semear_loja() {
+	if(!ie_tabelas_prontas) return;
+	if(ie_num(IE_LOJA, "semeada", 0) >= 1) return;
+
+	sqlite3statement@ tabela = bancoJogo.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='loja_itens' LIMIT 1;");
+	if(@tabela == null || tabela.step() != SQLITE_ROW) return;
+
+	// Loja sem vinculo nenhum ja mostra o catalogo inteiro; so vincula quando a
+	// loja magica tem lista propria, para nao esconder o que ela vende hoje.
+	bool vincular = loja_contar_vinculos(IE_LOJA_VINCULO) > 0;
+
+	// Precos do items_for_sale.db do BGT (moeda "mgerems" convertida para
+	// "reais" mantendo o valor, como ja foi feito com os veiculos). Os itens
+	// que la nao tinham preco avulso seguem a faixa dos vizinhos.
+	ie_loja_inserir(IE_ANTIMINAS, "reais", 2000000, "Poção para evitar as minas. Dura 5 minutos.", 3001, vincular);
+	ie_loja_inserir(IE_ANTIMETEOROS, "reais", 2000000, "Poção para se proteger dos meteoros. Dura 10 minutos.", 3002, vincular);
+	ie_loja_inserir(IE_TROVAO, "reais", 2000000, "Poção para mais velocidade. Dura 10 minutos.", 3003, vincular);
+	ie_loja_inserir(IE_PROTETORA, "reais", 1000000, "Protege de enfermidades demoníacas. Dura 1 minuto.", 3004, vincular);
+	ie_loja_inserir(IE_LUMINOSA, "reais", 3000000, "Um líquido luminoso que triplica o dano dos seus ataques por 2 horas de combate.", 3005, vincular);
+	ie_loja_inserir(IE_AMETISTA, "reais", 2000000, "Multiplica por 6 o dano dos seus ataques durante 15 minutos de combate.", 3006, vincular);
+	ie_loja_inserir(IE_VITAL, "reais", 2000000, "Aumenta a sua vida e a sua vida máxima até você sair do jogo.", 3007, vincular);
+	ie_loja_inserir(IE_ANGELICAL, "reais", 1500000, "Regenera a sua vida sozinha durante 2 minutos.", 3008, vincular);
+	ie_loja_inserir(IE_BRANCA, "reais", 1000000, "Devolve aos poucos a sua sanidade durante 2 minutos.", 3009, vincular);
+	ie_loja_inserir(IE_ELIXIR, "reais", 200, "Cura você e os companheiros de equipe que estiverem por perto.", 3010, vincular);
+	ie_loja_inserir(IE_VITALIDADE, "creditos", 60, "Coloca a sua vida no máximo sempre que você conecta, durante 30 dias. Acumulativo.", 3011, vincular);
+	ie_loja_inserir(IE_PO_ENERGIA, "reais", 20000, "Com 10 porções, leva você de volta à sua ilha privada.", 3012, vincular);
+	ie_loja_inserir(IE_RUNA, "reais", 1000000, "Leva você até onde o seu cônjuge estiver.", 3013, vincular);
+	ie_loja_inserir(IE_ENVELOPE, "reais", 10000, "Um envelope dourado com uma moeda dentro.", 3014, vincular);
+	ie_loja_inserir(IE_IRATCE, "reais", 5000000, "Runa de cura que aumenta muito a sua vida e a sua vida máxima.", 3015, vincular);
+	ie_loja_inserir(IE_VIDRO, "reais", 1000, "Um caco de vidro afiado. Cuidado ao usar.", 3016, vincular);
+	ie_loja_inserir(IE_CAIXA, "reais", 15000000, "Uma caixa de presente preciosa. Será uma boa ideia abri-la?", 3017, vincular);
+
+	sqlite3statement@ marca = bancoJogo.prepare("INSERT OR REPLACE INTO itens_especiais (item, parametro, valor, texto) VALUES (?, 'semeada', 1, '');");
+	if(@marca != null) {
+		marca.bind_text(1, IE_LOJA);
+		marca.step();
+	}
+	ie_numeros.set(IE_LOJA + "|semeada", 1.0);
+
+	carregar_catalogo_loja(true);
+	debug_log("ITENS ESPECIAIS: itens acrescentados ao catalogo da loja");
+}
+
+// Chamada no fim de init_consumables_system() (consumables.nvgt).
+void init_itens_especiais() {
+	ie_criar_tabelas();
+	ie_semear_parametros();
+	ie_carregar_parametros();
+	ie_registrar_itens();
+	ie_semear_descricoes();
+	ie_semear_loja();
+	ie_varredura_timer.restart();
+
+	debug_log("ITENS ESPECIAIS: sistema inicializado com " + ie_numeros.get_size() + " parametros");
+}
+
+// ----------------------------------------------------------------------------
+// Vida extra e teto de vida
+// ----------------------------------------------------------------------------
+
+double ie_vida_natural(player@ p, ie_estado@ st) {
+	double natural = p.maxhealth - st.vida_extra;
+	if(natural < 5000) natural = 5000;
+	return natural;
+}
+
+// Equivalente ao saludfangelical do BGT (voids.bgt:1564).
+double ie_teto_vida(player@ p, ie_estado@ st) {
+	double natural = ie_vida_natural(p, st);
+	double teto = ie_num(IE_GERAL, "teto_vida_base", 50000) + ie_num(IE_GERAL, "teto_vida_por_fase", 1000) * double(p.reencarnou);
+	if(teto < natural) teto = natural;
+	return teto;
+}
+
+// Soma vida maxima temporaria respeitando o teto. Devolve quanto entrou.
+double ie_dar_vida_extra(player@ p, ie_estado@ st, double ganho) {
+	if(ganho <= 0) return 0;
+
+	double natural = ie_vida_natural(p, st);
+	double limite = ie_teto_vida(p, st) - natural;
+	double novo = st.vida_extra + ganho;
+	if(novo > limite) novo = limite;
+	if(novo < st.vida_extra) novo = st.vida_extra;
+
+	double entrou = novo - st.vida_extra;
+	st.vida_extra = novo;
+	p.maxhealth = natural + novo;
+	return entrou;
+}
+
+void ie_tirar_vida_extra(player@ p, ie_estado@ st) {
+	double natural = ie_vida_natural(p, st);
+	st.vida_extra = 0;
+	p.maxhealth = natural;
+	if(p.health > p.maxhealth) p.health = p.maxhealth;
+}
+
+void ie_curar(player@ p, double quantidade) {
+	p.health += quantidade;
+	if(p.health > p.maxhealth) p.health = p.maxhealth;
+}
+
+// ----------------------------------------------------------------------------
+// Estado por jogador (tabela itens_especiais_estado)
+// ----------------------------------------------------------------------------
+
+bool ie_buff_generico_ativo(string jogador, string buff) {
+	for(uint i = 0; i < active_buffs.length(); i++) {
+		if(active_buffs[i].player_name == jogador && active_buffs[i].buff_name == buff) return true;
+	}
+	return false;
+}
+
+int ie_mascara_de(player@ p, ie_estado@ st) {
+	int m = 0;
+	if(p.antimina == 1) m += 1;
+	if(p.ameteoro == 1) m += 2;
+	if(p.trueno == 1) m += 4;
+	if(p.protegido == 1) m += 8;
+	if(p.amethyst == 1) m += 16;
+	if(p.caverna == 1) m += 32;
+	if(st.regen_ativo) m += 64;
+	if(st.vitalidade_acumulos > 0) m += 128;
+	if(st.vida_extra > 0) m += 256;
+	return m;
+}
+
+void ie_salvar_estado(player@ p, ie_estado@ st) {
+	st.t_salvar.restart();
+	st.mascara = ie_mascara_de(p, st);
+
+	if(!ie_tabelas_prontas || p.charname == "") return;
+
+	if(st.mascara == 0) {
+		if(!st.linha_no_banco) return;
+
+		sqlite3statement@ apagar = bancoJogo.prepare("DELETE FROM itens_especiais_estado WHERE jogador = ?;");
+		if(@apagar != null) {
+			apagar.bind_text(1, p.charname);
+			apagar.step();
+		}
+		st.linha_no_banco = false;
+		return;
+	}
+
+	// Enquanto a regeneracao de vida corre, grava o maximo que vida_extra pode
+	// atingir: assim um logout ou queda no meio nunca deixa vida temporaria
+	// virar permanente no proximo login (ver ie_iniciar_sessao).
+	double natural = ie_vida_natural(p, st);
+	double extra_gravada = st.vida_extra;
+	if(st.regen_ativo && !st.regen_sanidade) {
+		double limite = ie_teto_vida(p, st) - natural;
+		if(limite > extra_gravada) extra_gravada = limite;
+	}
+
+	int antimina_ms = -1;
+	if(p.antimina == 1 && !ie_buff_generico_ativo(p.charname, "antimina")) antimina_ms = int(p.tantimina.elapsed);
+	int ameteoro_ms = p.ameteoro == 1 ? int(p.tameteoro.elapsed) : -1;
+	int trovao_ms = p.trueno == 1 ? int(p.tmveloz2.elapsed) : -1;
+	int protegido_ms = p.protegido == 1 ? int(p.tprotegido.elapsed) : -1;
+	int ametista_s = p.amethyst == 1 ? p.amethyst_time : -1;
+	int luminosa_s = p.caverna == 1 ? p.caverna_time : -1;
+
+	string query = """
+		INSERT OR REPLACE INTO itens_especiais_estado (
+			jogador, vida_extra, vida_natural,
+			vitalidade_acumulos, vitalidade_total_s, vitalidade_gasto_s,
+			regen_ativo, regen_sanidade, regen_ticks,
+			antimina_ms, ameteoro_ms, trovao_ms, protegido_ms, ametista_s, luminosa_s,
+			atualizado_em
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("ITENS ESPECIAIS: erro ao preparar gravacao de estado: " + bancoJogo.get_last_error_text());
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+	stmt.bind_double(2, extra_gravada);
+	stmt.bind_double(3, extra_gravada > 0 ? natural : 0.0);
+	stmt.bind_int(4, st.vitalidade_acumulos);
+	stmt.bind_double(5, st.vitalidade_total_s);
+	stmt.bind_double(6, st.vitalidade_gasto_s);
+	stmt.bind_int(7, st.regen_ativo ? 1 : 0);
+	stmt.bind_int(8, st.regen_sanidade ? 1 : 0);
+	stmt.bind_int(9, st.regen_ticks);
+	stmt.bind_int(10, antimina_ms);
+	stmt.bind_int(11, ameteoro_ms);
+	stmt.bind_int(12, trovao_ms);
+	stmt.bind_int(13, protegido_ms);
+	stmt.bind_int(14, ametista_s);
+	stmt.bind_int(15, luminosa_s);
+
+	if(stmt.step() == SQLITE_DONE) st.linha_no_banco = true;
+}
+
+// Primeiro tick do jogador na sessao: le a linha do banco, devolve a vida
+// maxima ao valor natural (ou ao teto, com vitalidade perpetua) e religa os
+// efeitos que ainda tinham tempo, como o load_configs.bgt fazia.
+void ie_iniciar_sessao(player@ p, ie_estado@ st) {
+	@st.dono = p;
+	st.jogador = p.charname;
+	st.linha_no_banco = false;
+	st.vida_extra = 0;
+	st.vitalidade_acumulos = 0;
+	st.vitalidade_total_s = 0;
+	st.vitalidade_gasto_s = 0;
+	st.regen_ativo = false;
+	st.regen_sanidade = false;
+	st.regen_ticks = 0;
+	st.t_regen.restart();
+	st.t_vitalidade.restart();
+	st.t_salvar.restart();
+
+	if(!ie_tabelas_prontas) {
+		st.mascara = ie_mascara_de(p, st);
+		return;
+	}
+
+	string query = """
+		SELECT vida_extra, vida_natural, vitalidade_acumulos, vitalidade_total_s, vitalidade_gasto_s,
+		       regen_ativo, regen_sanidade, regen_ticks,
+		       antimina_ms, ameteoro_ms, trovao_ms, protegido_ms, ametista_s, luminosa_s
+		FROM itens_especiais_estado WHERE jogador = ?;
+	""";
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		st.mascara = ie_mascara_de(p, st);
+		return;
+	}
+
+	stmt.bind_text(1, p.charname);
+	if(stmt.step() != SQLITE_ROW) {
+		st.mascara = ie_mascara_de(p, st);
+		return;
+	}
+
+	st.linha_no_banco = true;
+
+	double extra_gravada = stmt.column_double(0);
+	double natural_gravada = stmt.column_double(1);
+	st.vitalidade_acumulos = stmt.column_int(2);
+	st.vitalidade_total_s = stmt.column_double(3);
+	st.vitalidade_gasto_s = stmt.column_double(4);
+	st.regen_ativo = stmt.column_int(5) != 0;
+	st.regen_sanidade = stmt.column_int(6) != 0;
+	st.regen_ticks = stmt.column_int(7);
+	int antimina_ms = stmt.column_int(8);
+	int ameteoro_ms = stmt.column_int(9);
+	int trovao_ms = stmt.column_int(10);
+	int protegido_ms = stmt.column_int(11);
+	int ametista_s = stmt.column_int(12);
+	int luminosa_s = stmt.column_int(13);
+
+	// A vida maxima salva em players inclui a vida extra que estava ativa.
+	// extra_gravada nunca e menor que ela, e natural_gravada cobre o caso de a
+	// linha do jogador ter sido salva antes de a pocao fazer efeito.
+	if(extra_gravada > 0) {
+		double natural = p.maxhealth - extra_gravada;
+		if(natural < natural_gravada) natural = natural_gravada;
+		if(natural < 5000) natural = 5000;
+		if(natural < p.maxhealth) p.maxhealth = natural;
+		if(p.health > p.maxhealth) p.health = p.maxhealth;
+	}
+
+	if(st.vitalidade_acumulos > 0) {
+		// net.bgt:295: com vitalidade perpetua a vida volta ao maximo ao conectar.
+		ie_dar_vida_extra(p, st, ie_teto_vida(p, st));
+		p.health = p.maxhealth;
+	}
+
+	if(antimina_ms >= 0 && antimina_ms < ie_dur_antiminas_ms) {
+		p.antimina = 1;
+		p.tantimina.restart();
+		p.tantimina.force(antimina_ms);
+	}
+	if(ameteoro_ms >= 0 && ameteoro_ms < ie_dur_antimeteoros_ms) {
+		p.ameteoro = 1;
+		p.tameteoro.restart();
+		p.tameteoro.force(ameteoro_ms);
+	}
+	if(trovao_ms >= 0 && trovao_ms < ie_dur_trovao_ms) {
+		p.trueno = 1;
+		p.tmveloz2.restart();
+		p.tmveloz2.force(trovao_ms);
+		send_reliable_text(p.peer_id, "aveloz", 0);
+	}
+	if(protegido_ms >= 0 && protegido_ms < ie_dur_protetora_ms) {
+		p.protegido = 1;
+		p.tprotegido.restart();
+		p.tprotegido.force(protegido_ms);
+	}
+	if(ametista_s >= 0 && ametista_s < ie_dur_ametista_s) {
+		p.amethyst = 1;
+		p.amethyst_time = ametista_s;
+		p.tamethyst.restart();
+	}
+	if(luminosa_s >= 0 && luminosa_s < ie_dur_luminosa_s) {
+		p.caverna = 1;
+		p.ncaverna = 1;
+		p.caverna_time = luminosa_s;
+		p.tcaverna.restart();
+	}
+
+	ie_salvar_estado(p, st);
+}
+
+ie_estado@ ie_obter_estado(player@ p) {
+	if(p is null || p.charname == "") return null;
+
+	ie_estado@ st;
+	if(ie_estados.get(p.charname, @st) && st !is null) {
+		if(st.dono is p) return st;
+		ie_iniciar_sessao(p, st);
+		return st;
+	}
+
+	@st = ie_estado();
+	ie_estados.set(p.charname, @st);
+	ie_iniciar_sessao(p, st);
+	return st;
+}
+
+// Solta o estado em memoria de quem ja saiu (ou trocou de nome).
+void ie_varrer_estados() {
+	ie_varredura_timer.restart();
+
+	string[]@ nomes = ie_estados.get_keys();
+	for(uint i = 0; i < nomes.length(); i++) {
+		ie_estado@ st;
+		if(!ie_estados.get(nomes[i], @st) || st is null) {
+			ie_estados.delete(nomes[i]);
+			continue;
+		}
+
+		int idx = get_player_index_from(nomes[i]);
+		if(idx < 0 || players[idx] !is st.dono) ie_estados.delete(nomes[i]);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Tick (chamado pelo playerloop, player.nvgt)
+// ----------------------------------------------------------------------------
+
+void ie_encerrar_regen(player@ p, ie_estado@ st) {
+	st.regen_ativo = false;
+	st.regen_sanidade = false;
+	st.regen_ticks = 0;
+}
+
+void ie_pulso_regen(player@ p, ie_estado@ st) {
+	if(!st.regen_sanidade) {
+		// player.bgt:1044: vida e vida maxima sobem com sorteios independentes.
+		int vida_min = int(ie_num(IE_ANGELICAL, "vida_min", 5000));
+		int vida_max = int(ie_num(IE_ANGELICAL, "vida_max", 20000));
+		if(vida_max < vida_min) vida_max = vida_min;
+
+		double cura = random(vida_min, vida_max);
+		ie_dar_vida_extra(p, st, random(vida_min, vida_max));
+		ie_curar(p, cura);
+	}
+	else {
+		int sanidade_min = int(ie_num(IE_BRANCA, "sanidade_min", 2));
+		int sanidade_max = int(ie_num(IE_BRANCA, "sanidade_max", 4));
+		if(sanidade_max < sanidade_min) sanidade_max = sanidade_min;
+
+		p.sanity += double(random(sanidade_min, sanidade_max)) * ie_num(IE_BRANCA, "sanidade_escala", 0.1);
+		if(p.sanity > 100) p.sanity = 100;
+		send_reliable_text(p.peer_id, "sanity " + int(floor(p.sanity + 0.5)), 0);
+	}
+
+	st.regen_ticks++;
+	if(st.regen_ticks >= int(ie_num(IE_ANGELICAL, "pulsos", 120))) ie_encerrar_regen(p, st);
+}
+
+void ie_pulso_vitalidade(player@ p, ie_estado@ st) {
+	st.vitalidade_gasto_s += 1;
+	if(st.vitalidade_gasto_s < st.vitalidade_total_s) return;
+
+	// player.bgt:1392: o BGT voltava a vida maxima para 10000; aqui volta para
+	// a vida maxima natural do jogador.
+	st.vitalidade_acumulos = 0;
+	st.vitalidade_gasto_s = 0;
+	st.vitalidade_total_s = 0;
+	ie_tirar_vida_extra(p, st);
+
+	ie_msg(p, "A vitalidade perpétua que protegia você chegou ao fim.");
+	string som_fim = ie_txt(IE_VITALIDADE, "som_fim", "notify_died.ogg");
+	if(som_fim != "" && som_fim != "none") send_reliable_text(p.peer_id, "ps " + som_fim, 0);
+}
+
+void itens_especiais_tick(player@ p) {
+	if(p is null || !p.dados_carregados || p.charname == "") return;
+
+	if(ie_varredura_timer.elapsed >= IE_VARRER_MS) ie_varrer_estados();
+
+	ie_estado@ st = ie_obter_estado(p);
+	if(st is null) return;
+
+	if(st.regen_ativo && st.t_regen.elapsed >= int(ie_num(IE_ANGELICAL, "intervalo_ms", 1000))) {
+		st.t_regen.restart();
+		ie_pulso_regen(p, st);
+	}
+
+	if(st.vitalidade_acumulos > 0 && st.t_vitalidade.elapsed >= 1000) {
+		st.t_vitalidade.restart();
+		ie_pulso_vitalidade(p, st);
+	}
+
+	// Grava na hora quando um efeito liga ou desliga; fora isso, a cada minuto
+	// enquanto houver algo ativo.
+	int mascara = ie_mascara_de(p, st);
+	if(mascara != st.mascara) ie_salvar_estado(p, st);
+	else if(mascara != 0 && st.t_salvar.elapsed >= IE_SALVAR_MS) ie_salvar_estado(p, st);
+}
+
+// weapons.bgt:26: bebida luminosa triplica e pocao de ametista sextuplica o
+// dano das armas. Chamado em bullet.nvgt logo apos calculate_combat_damage().
+int ie_multiplicar_dano(int player_index, int dano) {
+	if(player_index < 0 || player_index >= int(players.length())) return dano;
+
+	if(players[player_index].caverna == 1) return int(double(dano) * ie_mult_luminosa);
+	if(players[player_index].amethyst == 1) return int(double(dano) * ie_mult_ametista);
+	return dano;
+}
+
+// Linhas extras do pacote times (pitens_listar_tempos, pacotes_itens.nvgt).
+void ie_listar_tempos(player@ p, string[]@ linhas) {
+	ie_estado@ st = ie_obter_estado(p);
+	if(st is null) return;
+
+	if(st.regen_ativo) {
+		double restante = double(int(ie_num(IE_ANGELICAL, "pulsos", 120)) - st.regen_ticks) * ie_num(IE_ANGELICAL, "intervalo_ms", 1000);
+		pitens_linha_de_tempo(linhas, st.regen_sanidade ? "da poção branca" : "da poção angelical", restante);
+	}
+
+	if(st.vitalidade_acumulos > 0) {
+		pitens_linha_de_tempo(linhas, "da vitalidade perpétua", (st.vitalidade_total_s - st.vitalidade_gasto_s) * 1000.0);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Efeitos
+// ----------------------------------------------------------------------------
+
+const string IE_MSG_JA_ATIVA = "Você já tem esta poção fazendo efeito em você...";
+
+void ie_usar_antiminas(player@ p) {
+	if(p.antimina == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_ANTIMINAS, 1);
+	ie_msg(p, "De um momento para o outro, você sente uma proteção impressionante ao tomar esta poção...");
+	p.antimina = 1;
+	p.tantimina.restart();
+	ie_som(p, ie_txt(IE_ANTIMINAS, "som", "potion.ogg"));
+}
+
+void ie_usar_antimeteoros(player@ p) {
+	if(p.ameteoro == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_ANTIMETEOROS, 1);
+	ie_msg(p, "De um momento para o outro, você sente algo mágico ao tomar esta poção...");
+	p.ameteoro = 1;
+	p.tameteoro.restart();
+	ie_som(p, ie_txt(IE_ANTIMETEOROS, "som", "potion.ogg"));
+}
+
+void ie_usar_trovao(player@ p) {
+	if(p.trueno == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_TROVAO, 1);
+	ie_msg(p, "Você sente a energia das tempestades inundar todo o seu corpo.");
+	send_reliable_text(p.peer_id, "aveloz", 0);
+	p.tmveloz2.restart();
+	p.trueno = 1;
+	ie_som(p, ie_txt(IE_TROVAO, "som", "spell_thunder_start.ogg"));
+}
+
+void ie_usar_protetora(player@ p) {
+	if(p.protegido == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_PROTETORA, 1);
+	ie_msg(p, "Você sente uma aura protetora que afasta você do perigo.");
+	p.protegido = 1;
+	p.tprotegido.restart();
+	ie_som(p, ie_txt(IE_PROTETORA, "som", "potion.ogg"));
+}
+
+// A pocao de ametista e a bebida luminosa se cancelam (re_server_test.bgt:1496, 1574).
+void ie_usar_ametista(player@ p) {
+	if(p.caverna == 1) {
+		p.caverna = 0;
+		p.ncaverna = -1;
+	}
+	if(p.amethyst == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_AMETISTA, 1);
+	ie_msg(p, "Uma força inexplicável toma conta de você e multiplica o poder dos seus ataques.");
+	p.amethyst = 1;
+	p.amethyst_time = 0;
+	p.tamethyst.restart();
+	ie_som(p, ie_txt(IE_AMETISTA, "som", "getpotionpower.ogg"));
+}
+
+void ie_usar_luminosa(player@ p) {
+	if(p.amethyst == 1) {
+		p.amethyst = 0;
+		p.amethyst_time = 0;
+	}
+	if(p.caverna == 1) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_consumir(p, IE_LUMINOSA, 1);
+	ie_msg(p, "Você sente uma força divina que aumenta a sua força de uma maneira inimaginável!");
+	p.ncaverna = 1;
+	p.caverna_time = 0;
+	p.tcaverna.restart();
+	p.caverna = 1;
+	ie_som(p, ie_txt(IE_LUMINOSA, "som", "poção.ogg"));
+}
+
+void ie_usar_vital(player@ p, ie_estado@ st) {
+	int vida_min = int(ie_num(IE_VITAL, "vida_min", 10000));
+	int vida_max = int(ie_num(IE_VITAL, "vida_max", 25000));
+	if(vida_max < vida_min) vida_max = vida_min;
+
+	double vida = random(vida_min, vida_max);
+	ie_dar_vida_extra(p, st, vida);
+	ie_curar(p, vida);
+
+	ie_som(p, ie_txt(IE_VITAL, "som", "gethealth.ogg"));
+	ie_msg(p, "Ao tomar esta poção, você sente uma grande energia que corre pelas suas veias!");
+	ie_consumir(p, IE_VITAL, 1);
+}
+
+void ie_usar_angelical(player@ p, ie_estado@ st) {
+	if(st.regen_ativo && st.regen_sanidade) {
+		ie_msg(p, "A poção branca ainda está fazendo efeito em você.");
+		return;
+	}
+
+	ie_consumir(p, IE_ANGELICAL, 1);
+	// Como no BGT, beber outra com o efeito ativo nao zera a contagem de pulsos.
+	st.regen_ativo = true;
+	st.regen_sanidade = false;
+	st.t_regen.restart();
+	ie_msg(p, "Uma luz serena envolve você e a sua vida começa a se regenerar.");
+	ie_som(p, ie_txt(IE_ANGELICAL, "som", "potion.ogg"));
+}
+
+void ie_usar_branca(player@ p, ie_estado@ st) {
+	if(st.regen_ativo && st.regen_sanidade) {
+		ie_msg(p, IE_MSG_JA_ATIVA);
+		return;
+	}
+
+	ie_som(p, ie_txt(IE_BRANCA, "som", "potion.ogg"));
+	st.regen_ativo = true;
+	st.regen_sanidade = true;
+	st.t_regen.restart();
+	ie_msg(p, "Você sente que pouco a pouco a sua tranquilidade mental volta...");
+	ie_consumir(p, IE_BRANCA, 1);
+}
+
+void ie_usar_po_de_energia(player@ p, int player_index) {
+	int quantidade = int(ie_num(IE_PO_ENERGIA, "quantidade", 10));
+	if(quantidade < 1) quantidade = 1;
+
+	if(p.inv_item_number(IE_PO_ENERGIA) < quantidade) {
+		ie_msg(p, "Você precisa de " + quantidade + " porções de pó de energia para fazer isso.");
+		return;
+	}
+
+	ilha_registro@ ilha = ilha_obter(p.charname);
+	if(ilha is null || ilha.have_island != 1) {
+		ie_msg(p, "O pó escorre entre os seus dedos sem efeito: você não tem uma ilha privada.");
+		return;
+	}
+	if(ilha.payment == 0) {
+		ie_msg(p, "O pó não reage: o aluguel da sua ilha privada está em atraso.");
+		return;
+	}
+
+	string destino = ILHA_PREFIXO_MAPA + p.charname;
+	if(p.map == destino) {
+		ie_msg(p, "Você já está na sua ilha privada.");
+		return;
+	}
+	if(get_map_index_from(destino) < 0) {
+		ie_msg(p, "A sua ilha privada não está disponível no momento.");
+		return;
+	}
+
+	int dest_x = int(ie_num(IE_PO_ENERGIA, "x", 5));
+	int dest_y = int(ie_num(IE_PO_ENERGIA, "y", 5));
+	string som = ie_txt(IE_PO_ENERGIA, "som", "teleporter.ogg");
+
+	ie_som(p, som);
+	changemap(destino, player_index, dest_x, dest_y);
+	p.map_name = destino;
+	p.mapaatual = destino;
+	ie_som_em(destino, dest_x, 0, som);
+	ie_consumir(p, IE_PO_ENERGIA, quantidade);
+}
+
+void ie_usar_vitalidade(player@ p, ie_estado@ st) {
+	double duracao = ie_num(IE_VITALIDADE, "duracao_s", 2592000);
+	int acumulos_max = int(ie_num(IE_VITALIDADE, "acumulos_max", 12));
+
+	if(st.vitalidade_acumulos > 0 && st.vitalidade_acumulos >= acumulos_max) {
+		ie_msg(p, "Uma força mágica impede você de fazer isto...");
+		return;
+	}
+
+	if(st.vitalidade_acumulos <= 0) {
+		st.vitalidade_acumulos = 1;
+		st.vitalidade_total_s = duracao;
+		st.vitalidade_gasto_s = 0;
+		ie_dar_vida_extra(p, st, ie_teto_vida(p, st));
+		p.health = p.maxhealth;
+	}
+	else {
+		st.vitalidade_acumulos += 1;
+		st.vitalidade_total_s += duracao;
+	}
+
+	st.t_vitalidade.restart();
+	ie_consumir(p, IE_VITALIDADE, 1);
+	ie_msg(p, "Você sente um impulso de vida invadir todo o seu corpo.");
+	ie_som(p, ie_txt(IE_VITALIDADE, "som", "notify_powerup.ogg"));
+}
+
+// Substituida no port pelo comando /irate (casamentos_commands.nvgt), que ja
+// trata conjuge ausente e tempo de espera. A runa nao e consumida, como no BGT.
+void ie_usar_runa(player@ p, int player_index) {
+	string conjuge = get_parceiro(p.charname, VINCULO_CASAMENTO);
+	if(conjuge != "") {
+		int idx = indice_jogador_por_nome(conjuge);
+		if(idx >= 0 && idx < int(players.length())) {
+			int mi = get_map_index_from(players[idx].map);
+			bool bloqueado = is_game_disabled(players[idx].x, players[idx].y, players[idx].map);
+			if(mi >= 0 && mi < int(server_maps.length()) && server_maps[mi].is_disabled(IE_RUNA)) bloqueado = true;
+			if(bloqueado) {
+				ie_msg(p, "Você não pode fazer isso, algo impede.");
+				return;
+			}
+		}
+	}
+
+	cmd_irate(player_index);
+}
+
+void ie_usar_envelope(player@ p) {
+	ie_consumir(p, IE_ENVELOPE, 1);
+	gc(p.charname, ie_num(IE_ENVELOPE, "moedas", 1));
+}
+
+void ie_usar_iratce(player@ p, ie_estado@ st) {
+	string mapa_bloqueado = ie_txt(IE_IRATCE, "mapa_bloqueado", "mausoleo_infernal");
+	if(mapa_bloqueado != "" && p.map == mapa_bloqueado) {
+		ie_msg(p, "Ora, veja. Esta runa não funciona aqui. A energia demoníaca deste lugar é tão grande que impede o iratce de funcionar.");
+		return;
+	}
+
+	if(p.maxhealth >= ie_teto_vida(p, st)) {
+		ie_msg(p, "A sua vida já está no limite: o iratce não reage.");
+		return;
+	}
+
+	double vida = ie_num(IE_IRATCE, "vida", 50000);
+	ie_dar_vida_extra(p, st, vida);
+	ie_curar(p, vida);
+
+	ie_consumir(p, IE_IRATCE, 1);
+	ie_entregar(p, IE_IRATCE_GASTO, 1);
+	ie_som(p, ie_txt(IE_IRATCE, "som", "magia_fogo_iniciou.ogg"));
+}
+
+// O vidro nao e consumido; a morte e anunciada pelo playerloop (lasthit "vidrio").
+void ie_usar_vidro(player@ p, ie_estado@ st) {
+	double divisor = ie_num(IE_VIDRO, "divisor", 6);
+	if(divisor < 1) divisor = 1;
+
+	p.health -= floor(ie_teto_vida(p, st) / divisor + 0.5);
+	p.lasthit = "vidrio";
+
+	ie_som(p, ie_txt(IE_VIDRO, "som", "sangra.ogg"));
+	int mi = get_map_index_from(p.map);
+	if(mi >= 0 && mi < int(server_maps.length())) {
+		server_maps[mi].send_packet(0, "inithurt " + p.voice, p.x, p.y);
+	}
+}
+
+void ie_usar_caixa(player@ p) {
+	string pelucia = p.charname + "_de_pelucia";
+	ensure_item_in_catalog(pelucia, "Pelúcia de " + p.charname);
+
+	ie_entregar(p, pelucia, 1);
+	ie_consumir(p, IE_CAIXA, 1);
+	ie_msg(p, "De forma mágica e inexplicável, junto de você se materializa um clone perfeito seu, que logo encolhe e se transforma em uma pequena pelúcia muito adorável.");
+	ie_som(p, ie_txt(IE_CAIXA, "som", "notify_applause.ogg"));
+}
+
+// u_bcurar() do BGT (voids.bgt:926): cura quem esta na equipe, a ate 5 passos.
+void ie_usar_elixir(player@ p, ie_estado@ st) {
+	if(p.pacifico == 1 || p.health <= 0) return;
+	if(p.health >= p.maxhealth) {
+		ie_msg(p, "A sua vida já está completa.");
+		return;
+	}
+
+	int alcance = int(ie_num(IE_ELIXIR, "alcance", 5));
+	double divisor = ie_num(IE_ELIXIR, "divisor", 9);
+	if(divisor < 1) divisor = 1;
+
+	int[] alvos;
+	for(uint i = 0; i < p.nomesequipe.length(); i++) {
+		int z = get_player_index_from(p.nomesequipe[i]);
+		if(z < 0) continue;
+
+		double distancia = get_player_distance(p, players[z]);
+		if(distancia < 0 || distancia > alcance) continue;
+		if(players[z].pacifico != 0 || players[z].newbie || players[z].afk) continue;
+		if(alvos.find(z) < 0) alvos.insert_last(z);
+	}
+
+	if(alvos.length() == 0) {
+		ie_msg(p, "Não há ninguém da sua equipe por perto que possa ser curado.");
+		return;
+	}
+
+	for(uint i = 0; i < alvos.length(); i++) {
+		player@ alvo = players[alvos[i]];
+		ie_estado@ st_alvo = st;
+		if(alvo !is p) @st_alvo = ie_obter_estado(alvo);
+		if(st_alvo is null) continue;
+		ie_curar(alvo, floor(ie_teto_vida(alvo, st_alvo) / divisor + 0.5));
+	}
+
+	ie_consumir(p, IE_ELIXIR, 1);
+	ie_som(p, ie_txt(IE_ELIXIR, "som", "gethealth.ogg"));
+}
+
+// No port o filhote e a racao sao os itens do sistema de pets (pets.nvgt), que
+// substituem pergamino_sanguinolento e paquete_de_comida_para_perros do BGT.
+void ie_usar_filhote(player@ p) {
+	if(jogador_tem_pet(p.charname)) {
+		ie_msg(p, "Você não pode fazer isto: você já tem um pet.");
+		return;
+	}
+	ie_msg(p, "Dê um nome ao seu cachorrinho: use /adotar seguido do nome.");
+}
+
+// ----------------------------------------------------------------------------
+// Entrada: devolve true quando o item e um item especial (tratado aqui).
+// ----------------------------------------------------------------------------
+
+bool usar_item_especial(player@ p, string nome) {
+	if(p is null) return false;
+
+	nome = nome.trim_whitespace();
+	if(!ie_e_item_especial(nome)) return false;
+
+	int player_index = get_player_index_from(p.charname);
+	if(player_index < 0) return true;
+
+	if(p.inv_item_number(nome) < 1) {
+		ie_msg(p, "Você não possui este item!");
+		return true;
+	}
+
+	// usar() do BGT comecava por is_disabled(nitem, mapa).
+	int mi = get_map_index_from(p.map);
+	if(mi >= 0 && mi < int(server_maps.length()) && server_maps[mi].is_disabled(nome)) {
+		ie_msg(p, "Este item não pode ser usado neste lugar.");
+		return true;
+	}
+
+	if(nome == PET_ITEM_RACAO) {
+		cmd_alimentar(player_index);
+		return true;
+	}
+	if(nome == PET_ITEM_ADOCAO) {
+		ie_usar_filhote(p);
+		return true;
+	}
+
+	ie_estado@ st = ie_obter_estado(p);
+	if(st is null) return true;
+
+	if(nome == IE_ANTIMINAS) ie_usar_antiminas(p);
+	else if(nome == IE_ANTIMETEOROS) ie_usar_antimeteoros(p);
+	else if(nome == IE_TROVAO) ie_usar_trovao(p);
+	else if(nome == IE_PROTETORA) ie_usar_protetora(p);
+	else if(nome == IE_AMETISTA) ie_usar_ametista(p);
+	else if(nome == IE_LUMINOSA) ie_usar_luminosa(p);
+	else if(nome == IE_VITAL) ie_usar_vital(p, st);
+	else if(nome == IE_ANGELICAL) ie_usar_angelical(p, st);
+	else if(nome == IE_BRANCA) ie_usar_branca(p, st);
+	else if(nome == IE_PO_ENERGIA) ie_usar_po_de_energia(p, player_index);
+	else if(nome == IE_VITALIDADE) ie_usar_vitalidade(p, st);
+	else if(nome == IE_RUNA) ie_usar_runa(p, player_index);
+	else if(nome == IE_ENVELOPE) ie_usar_envelope(p);
+	else if(nome == IE_IRATCE) ie_usar_iratce(p, st);
+	else if(nome == IE_VIDRO) ie_usar_vidro(p, st);
+	else if(nome == IE_CAIXA) ie_usar_caixa(p);
+	else if(nome == IE_ELIXIR) ie_usar_elixir(p, st);
+
+	// Depois de um teleporte o indice continua valido, mas o estado e do mesmo
+	// jogador: grava ja, para o efeito nao depender do salvamento periodico.
+	ie_salvar_estado(p, st);
+
+	debug_log("ITENS ESPECIAIS: " + p.charname + " usou " + nome);
+	return true;
+}

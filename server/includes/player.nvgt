@@ -903,7 +903,7 @@ class player {
 		return this.constructor;
 	}
 	bool is_translator() {
-		return file_exists("players/" + this.charname + "/translator.usr");
+		return has_role(this.charname, "translator");
 	}
 	void watch_player(string who) {
 		this.watching = 1;
@@ -1295,7 +1295,7 @@ class player {
 				this.tamethyst.restart();
 				if(this.pacifico == 0) this.amethyst_time++;
 			}
-			if(this.amethyst_time >= 900) {
+			if(this.amethyst_time >= ie_dur_ametista_s) {
 				this.amethyst = 0;
 				this.tamethyst.force(0);
 				this.tamethyst.pause();
@@ -1307,26 +1307,26 @@ class player {
 				this.tcaverna.restart();
 				if(this.pacifico == 0) this.caverna_time++;
 			}
-			if(this.caverna == 1 && this.caverna_time >= 7200) {
+			if(this.caverna == 1 && this.caverna_time >= ie_dur_luminosa_s) {
 				this.ncaverna = -1;
 				this.caverna = 0;
 				send_reliable_text(this.peer_id, "msgnormal Sientes la fuerza divina regresandote a la normalidad...", 0);
 			}
-			if(this.antimina == 1 && this.tantimina.elapsed >= 300000) {
+			if(this.antimina == 1 && this.tantimina.elapsed >= ie_dur_antiminas_ms) {
 				this.tantimina.force(0);
 				this.tantimina.pause();
 				this.antimina = 0;
 				send_reliable_text(this.peer_id, "msgnormal de repente, te comienzas a sentir vulnerable.", 0);
 				send_packet10(0, this.charname, this.charname, "door17open.ogg " + this.x + " " + this.y, this.map);
 			}
-			if(this.ameteoro == 1 && this.tameteoro.elapsed >= 600000) {
+			if(this.ameteoro == 1 && this.tameteoro.elapsed >= ie_dur_antimeteoros_ms) {
 				this.tameteoro.force(0);
 				this.tameteoro.pause();
 				this.ameteoro = 0;
 				send_reliable_text(this.peer_id, "msg2 ;Sientes que algo extrano abandona tu cuerpo.;", 0);
 				server_maps[mapindex].send_packet(0, "play appear.ogg", this.x, this.y);
 			}
-			if(this.trueno == 1 && this.tmveloz2.elapsed >= 600000) {
+			if(this.trueno == 1 && this.tmveloz2.elapsed >= ie_dur_trovao_ms) {
 				this.trueno = 0;
 				send_reliable_text(this.peer_id, "dveloz", 0);
 				send_reliable_text(this.peer_id, "msgnormal Sientes la energia del rayo dejando de fluir por tus venas.", 0);
@@ -1334,13 +1334,14 @@ class player {
 				this.tmveloz2.force(0);
 				this.tmveloz2.pause();
 			}
-			if(this.protegido == 1 && this.tprotegido.elapsed >= 60000) {
+			if(this.protegido == 1 && this.tprotegido.elapsed >= ie_dur_protetora_ms) {
 				this.tprotegido.force(0);
 				this.tprotegido.pause();
 				this.protegido = 0;
 				send_reliable_text(this.peer_id, "msgnormal Sientes que algo extrano abandona tu cuerpo.", 0);
 				send_packet10(0, this.charname, this.charname, "door17open.ogg " + this.x + " " + this.y, this.map);
 			}
+			itens_especiais_tick(this);
 			if(this.y < 0) {
 				this.y = 0;
 				send_reliable_text(this.peer_id, "move " + this.x + " " + this.y, 0);
@@ -1353,40 +1354,13 @@ class player {
 			}
 			importar_regalo_txt_legado(this.charname);
 			nickname_apply_pending_on_login(get_player_index_from(this.charname));
-			if(file_exists("players/" + this.charname + "/credits.txt")) {
-				file f;
-				f.open("players/" + this.charname + "/credits.txt", "r");
-				string[] content = string_split(f.read(), "|", false);
-				f.close();
-				double cantity = 0;
-				for(uint i = 0; i < content.length(); i++) {
-					cantity += string_to_number(content[i]);
-				}
-				if(enable_double_emeralds == 1) ge(this.charname, cantity * 2);
-				else ge(this.charname, cantity);
-				file_delete("players/" + this.charname + "/credits.txt");
-				save_transfer("sistema", this.charname, "creditos", "mediante compra em sitio web", cantity);
-				string text = this.charname + " hizo la compra de " + cantity + " creditos el " + DATE_DAY + "." + DATE_MONTH + "." + DATE_YEAR + " a " + TIME_HOUR + "." + TIME_MINUTE + ".";
-				eadm(text, "notify5.ogg", 150);
-				log(text, "log_compras");
-			}
-			if(file_exists("players/" + this.charname + "/pm.md")) {
-				file f;
-				f.open("players/" + this.charname + "/pm.md", "r");
-				string mensaje = f.read();
-				f.close();
-				string[] lines = string_split(mensaje, "\r\n", false);
-				for(uint i = 0; i < lines.length(); i++) {
-					send_reliable_text(this.peer_id, "permanent " + lines[i], 0);
-					send_reliable_text(this.peer_id, "ps message.ogg", 0);
-				}
-				file_delete("players/" + this.charname + "/pm.md");
-			}
-			if(file_exists("mensagemaes.txt")) {
-				file pr;
-				pr.open("mensagemaes.txt", "r");
-				string mensaje = pr.read();
-				pr.close();
+			// Creditos de compra web: tabela creditos_pendentes (dados_globais.nvgt).
+			creditos_entregar_pendentes(this);
+			// PMs deixadas enquanto offline: tabela pm_offline (mail.nvgt).
+			dados_jogador_pm_offline_entregar(this.charname, this.peer_id);
+			// Mensagem para a equipe: server_config['mensagem_equipe'] (dados_globais.nvgt).
+			if(!this.avisado && globais_mensagem_equipe() != "") {
+				string mensaje = globais_mensagem_equipe();
 				for(uint i = 0; i < players.length(); i++) {
 					if(!this.avisado && this.check_admin()) {
 						send_reliable_text(this.peer_id, "msg4 Mensagem disponivel! " + mensaje, 0);
@@ -1629,7 +1603,6 @@ class player {
 				if(this.inv_item_number("reais") >= this.negativo) {
 					this.inv_add_item("reais", 0 - this.negativo);
 					this.negativo = 0;
-					write_to(this.charname, "negativo.usr", this.negativo);
 				}
 			}
 			if(savetimer.elapsed >= 90000) {

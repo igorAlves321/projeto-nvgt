@@ -11,12 +11,9 @@ class vehicle {
 	}
 
     void take_vehicle() {
-        if(file_exists("players/" + this.owner + "/" + this.type + ".vehicle")) {
-            file f;
-            if(f.open("players/" + this.owner + "/" + this.type + ".vehicle", "r")) {
-                this.fuel = parse_float(f.read());
-                f.close();
-            }
+        double salvo = 0.0;
+        if(veiculo_ler_combustivel(this.owner, this.type, salvo)) {
+            this.fuel = salvo;
         } else {
             this.fuel = 100.0;
             save_vehicle_config();
@@ -33,10 +30,7 @@ class vehicle {
 	}
 
 	void save_vehicle_config() {
-		file f;
-		if(!f.open("players/" + this.owner + "/" + this.type + ".vehicle", "w")) return;
-		f.write("" + this.fuel);
-		f.close();
+		vehicle_save_fuel(this.owner, this.type, this.fuel);
 	}
 
 	void discount_fuel(double cantity) {
@@ -81,12 +75,15 @@ class car : vehicle {
 const double VEHICLE_BASE_WALK_SPEED = 14.0;
 const uint VEHICLE_LOOP_INTERVAL_MS = 250;
 const uint VEHICLE_ENGINE_SOUND_INTERVAL_MS = 3000;
+const uint VEHICLE_FUEL_SAVE_INTERVAL_MS = 5000;
 
 dictionary vehicle_runtime_fuel;
 dictionary vehicle_last_x;
 dictionary vehicle_last_y;
 dictionary vehicle_last_engine_sound;
 dictionary vehicle_last_low_fuel_warn;
+dictionary vehicle_last_fuel_save;
+bool veiculos_tabela_ok = false;
 timer vehicle_loop_timer;
 
 string vehicle_key(const string&in owner, const string&in vtype) {
@@ -109,30 +106,141 @@ double vehicle_max_walk_speed_for_type(const string&in vtype) {
     return VEHICLE_BASE_WALK_SPEED;
 }
 
-double vehicle_load_fuel(const string&in owner, const string&in vtype) {
-    double fuel = 0.0;
-    string path = "players/" + owner + "/" + vtype + ".vehicle";
-    if(file_exists(path)) {
-        file f;
-        if(f.open(path, "r")) {
-            fuel = parse_float(f.read());
-            f.close();
-        }
+// --------------------------------------------------------------------------
+// Persistencia: tabela player_vehicles (antes players/<nome>/<tipo>.vehicle).
+// A linha existir e o que marca a posse do veiculo; combustivel vai de 0 a 100.
+// --------------------------------------------------------------------------
+
+bool veiculos_garantir_tabela() {
+    if(veiculos_tabela_ok) return true;
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string criar = """
+        CREATE TABLE IF NOT EXISTS player_vehicles (
+            username TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            combustivel REAL NOT NULL DEFAULT 100,
+            adquirido_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (username, tipo)
+        );
+    """;
+
+    if(bancoJogo.execute(criar) != SQLITE_OK) {
+        debug_log("ERRO ao criar tabela player_vehicles: " + bancoJogo.get_last_error_text());
+        return false;
     }
+
+    veiculos_tabela_ok = true;
+    return true;
+}
+
+// Retorna false quando o jogador nao tem o veiculo.
+bool veiculo_ler_combustivel(const string&in owner, const string&in vtype, double &out combustivel) {
+    combustivel = 0.0;
+    if(owner == "" || vtype == "") return false;
+    if(!veiculos_garantir_tabela()) return false;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("SELECT combustivel FROM player_vehicles WHERE username = ? AND tipo = ?;");
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, owner);
+    stmt.bind_text(2, vtype);
+    if(stmt.step() != SQLITE_ROW) return false;
+
+    combustivel = stmt.column_double(0);
+    if(combustivel < 0.0) combustivel = 0.0;
+    if(combustivel > 100.0) combustivel = 100.0;
+    return true;
+}
+
+bool veiculo_jogador_possui(const string&in owner, const string&in vtype) {
+    double combustivel = 0.0;
+    return veiculo_ler_combustivel(owner, vtype, combustivel);
+}
+
+// Importacao unica de um <tipo>.vehicle legado: nao sobrescreve linha existente.
+bool veiculo_importar_legado(const string&in owner, const string&in vtype, double fuel) {
+    if(owner == "" || vtype == "") return false;
+    if(!veiculos_garantir_tabela()) return false;
     if(fuel < 0.0) fuel = 0.0;
     if(fuel > 100.0) fuel = 100.0;
+
+    sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO player_vehicles (username, tipo, combustivel) VALUES (?, ?, ?);");
+    if(@stmt == null) return false;
+
+    stmt.bind_text(1, owner);
+    stmt.bind_text(2, vtype);
+    stmt.bind_double(3, fuel);
+    return stmt.step() == SQLITE_DONE;
+}
+
+double vehicle_load_fuel(const string&in owner, const string&in vtype) {
+    double fuel = 0.0;
+    veiculo_ler_combustivel(owner, vtype, fuel);
     return fuel;
 }
 
+// Grava o combustivel, criando o veiculo se ele ainda nao existir.
 void vehicle_save_fuel(const string&in owner, const string&in vtype, double fuel) {
     if(fuel < 0.0) fuel = 0.0;
     if(fuel > 100.0) fuel = 100.0;
-    string path = "players/" + owner + "/" + vtype + ".vehicle";
-    file f;
-    if(f.open(path, "w")) {
-        f.write("" + fuel);
-        f.close();
+    if(owner == "" || vtype == "") return;
+    if(!veiculos_garantir_tabela()) return;
+
+    sqlite3statement@ inserir = bancoJogo.prepare("INSERT OR IGNORE INTO player_vehicles (username, tipo, combustivel) VALUES (?, ?, ?);");
+    if(@inserir == null) {
+        debug_log("VEICULOS: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+        return;
     }
+    inserir.bind_text(1, owner);
+    inserir.bind_text(2, vtype);
+    inserir.bind_double(3, fuel);
+    inserir.step();
+
+    sqlite3statement@ atualizar = bancoJogo.prepare("UPDATE player_vehicles SET combustivel = ?, atualizado_em = CURRENT_TIMESTAMP WHERE username = ? AND tipo = ?;");
+    if(@atualizar == null) {
+        debug_log("VEICULOS: erro ao preparar update: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    atualizar.bind_double(1, fuel);
+    atualizar.bind_text(2, owner);
+    atualizar.bind_text(3, vtype);
+    if(atualizar.step() != SQLITE_DONE) {
+        debug_log("VEICULOS: erro ao gravar combustivel de " + owner + "/" + vtype + ": " + bancoJogo.get_last_error_text());
+    }
+
+    vehicle_last_fuel_save.set(vehicle_key(owner, vtype), ticks());
+}
+
+// Troca de apelido: leva junto o estado em memoria de quem esta dirigindo.
+void veiculos_renomear_dono_em_memoria(const string&in antigo, const string&in novo) {
+    string[] tipos = {"carro", "moto", "lancha", "helicoptero"};
+    for(uint i = 0; i < tipos.length(); i++) {
+        string chave_antiga = vehicle_key(antigo, tipos[i]);
+        if(vehicle_runtime_fuel.exists(chave_antiga)) {
+            double fuel = 0.0;
+            vehicle_runtime_fuel.get(chave_antiga, fuel);
+            vehicle_runtime_fuel.set(vehicle_key(novo, tipos[i]), fuel);
+            vehicle_runtime_fuel.delete(chave_antiga);
+        }
+        if(vehicle_last_fuel_save.exists(chave_antiga)) vehicle_last_fuel_save.delete(chave_antiga);
+    }
+
+    if(vehicle_last_x.exists(antigo)) {
+        int lastx = 0;
+        vehicle_last_x.get(antigo, lastx);
+        vehicle_last_x.set(novo, lastx);
+        vehicle_last_x.delete(antigo);
+    }
+    if(vehicle_last_y.exists(antigo)) {
+        int lasty = 0;
+        vehicle_last_y.get(antigo, lasty);
+        vehicle_last_y.set(novo, lasty);
+        vehicle_last_y.delete(antigo);
+    }
+    if(vehicle_last_engine_sound.exists(antigo)) vehicle_last_engine_sound.delete(antigo);
+    if(vehicle_last_low_fuel_warn.exists(antigo)) vehicle_last_low_fuel_warn.delete(antigo);
 }
 
 void vehicles_loop() {
@@ -170,7 +278,14 @@ void vehicles_loop() {
         if(moved_tiles > 0) {
             fuel -= vehicle_fuel_cost_per_tile(vtype) * moved_tiles;
             if(fuel < 0.0) fuel = 0.0;
-            vehicle_save_fuel(owner, vtype, fuel);
+
+            // O consumo fica em vehicle_runtime_fuel; o banco e atualizado de
+            // tempos em tempos, ao sair, ao abastecer e quando o tanque seca.
+            uint64 ultimo_save = 0;
+            if(vehicle_last_fuel_save.exists(key)) vehicle_last_fuel_save.get(key, ultimo_save);
+            if(fuel <= 0.0 || (ticks() - ultimo_save) >= VEHICLE_FUEL_SAVE_INTERVAL_MS) {
+                vehicle_save_fuel(owner, vtype, fuel);
+            }
         }
 
         players[i].MAX_WALK_SPEED = vehicle_max_walk_speed_for_type(vtype);
@@ -191,6 +306,7 @@ void vehicles_loop() {
             send_reliable_text(players[i].peer_id, "play vehicle_exit.ogg", 0);
             broadcast_to_map(players[i].map, "play vehicle_exit.ogg " + players[i].x + " " + players[i].y, players[i].peer_id);
             vehicle_runtime_fuel.delete(key);
+            vehicle_last_fuel_save.delete(key);
             vehicle_last_x.delete(owner);
             vehicle_last_y.delete(owner);
             vehicle_last_engine_sound.delete(owner);
@@ -283,6 +399,7 @@ void cmd_sair(int player_index) {
 
     players[player_index].vehicle_type = "";
     vehicle_runtime_fuel.delete(key);
+    vehicle_last_fuel_save.delete(key);
     vehicle_last_x.delete(players[player_index].charname);
     vehicle_last_y.delete(players[player_index].charname);
     vehicle_last_engine_sound.delete(players[player_index].charname);

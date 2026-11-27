@@ -133,85 +133,184 @@ class mailbox {
 		}
 	}
 
+	// Grava a caixa inteira (tabelas correio_caixas, correio_mensagens e
+	// correio_anexos). A cópia em memória é a autoridade.
 	void save() {
-		string path = "players/" + owner + "/mailbox.dat";
-
-		file f;
-		if(!f.open(path, "wb")) {
-			debug_log("MAIL: Erro ao salvar mailbox de " + owner);
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("MAIL: Erro ao salvar mailbox de " + owner + " (banco indisponível)");
 			return;
 		}
 
-		f.write("" + messages.length() + "\n");
-		f.write("" + next_message_id + "\n");
+		bool sp = dj_inicio();
+		bool ok = true;
+
+		if(!dj_exec1("DELETE FROM correio_anexos WHERE dono = ?;", owner)) ok = false;
+		if(!dj_exec1("DELETE FROM correio_mensagens WHERE dono = ?;", owner)) ok = false;
+		if(!dj_exec2("INSERT OR REPLACE INTO correio_caixas (username, proximo_id) VALUES (?, ?);", owner, "" + next_message_id)) ok = false;
 
 		for(uint i = 0; i < messages.length(); i++) {
-			f.write(messages[i].sender + "\n");
-			f.write(messages[i].subject + "\n");
-			f.write(messages[i].body + "\n");
-			f.write("" + messages[i].gold_attached + "\n");
-			f.write("" + (messages[i].is_read ? "1" : "0") + "\n");
-
-			string[] item_keys = messages[i].items_attached.get_keys();
-			f.write("" + item_keys.length() + "\n");
-			for(uint j = 0; j < item_keys.length(); j++) {
-				f.write(item_keys[j] + "\n");
-				f.write("" + int(messages[i].items_attached[item_keys[j]]) + "\n");
-			}
+			if(!dj_correio_inserir_mensagem(owner, messages[i])) ok = false;
 		}
 
-		f.close();
-		debug_log("MAIL: Mailbox de " + owner + " salva (" + messages.length() + " mensagens)");
+		dj_fim(sp, ok);
+
+		if(ok) debug_log("MAIL: Mailbox de " + owner + " salva (" + messages.length() + " mensagens)");
+		else debug_log("MAIL: Erro ao salvar mailbox de " + owner);
 	}
 
-	void load() {
-		string path = "players/" + owner + "/mailbox.dat";
+	// Importação única de players/<dono>/mailbox.dat. A linha em
+	// correio_caixas marca que a caixa já está no banco: sem isso, um arquivo
+	// que não pôde ser renomeado traria de volta anexos já retirados.
+	void importar_legado() {
+		string path = dj_caminho_legado(owner, "mailbox.dat");
+		if(path == "" || !file_exists(path)) return;
+
+		string[] ja_importada = dj_lista("SELECT username FROM correio_caixas WHERE username = ?;", owner);
+		if(ja_importada.length() > 0) {
+			dj_marcar_migrado(path);
+			return;
+		}
 
 		file f;
 		if(!f.open(path, "rb")) {
+			debug_log("MAIL: não foi possível abrir " + path + " para importar");
 			return;
 		}
 
 		string content = f.read();
 		f.close();
 
+		player_mail_message@[] antigas;
+		int proximo = 1;
+
 		string[] lines = content.split("\n");
-		if(lines.length() < 2) return;
+		if(lines.length() >= 2) {
+			int msg_count = parse_int(lines[0]);
+			proximo = parse_int(lines[1]);
 
-		int msg_count = parse_int(lines[0]);
-		next_message_id = parse_int(lines[1]);
+			int line_idx = 2;
+			for(int i = 0; i < msg_count && line_idx < int(lines.length()); i++) {
+				if(line_idx + 5 >= int(lines.length())) break;
 
-		int line_idx = 2;
-		for(int i = 0; i < msg_count && line_idx < int(lines.length()); i++) {
-			if(line_idx + 5 >= int(lines.length())) break;
+				string sender = lines[line_idx++];
+				string subject = lines[line_idx++];
+				string body = lines[line_idx++];
+				int gold = parse_int(lines[line_idx++]);
+				bool is_read = parse_int(lines[line_idx++]) == 1;
 
-			string sender = lines[line_idx++];
-			string subject = lines[line_idx++];
-			string body = lines[line_idx++];
-			int gold = parse_int(lines[line_idx++]);
-			bool is_read = parse_int(lines[line_idx++]) == 1;
+				player_mail_message msg(i + 1, sender, owner, subject, body);
+				msg.is_read = is_read;
 
-			player_mail_message msg(i + 1, sender, owner, subject, body);
-			msg.is_read = is_read;
+				if(gold > 0) {
+					msg.attach_gold(gold);
+				}
+
+				if(line_idx < int(lines.length())) {
+					int item_count = parse_int(lines[line_idx++]);
+					for(int j = 0; j < item_count && line_idx + 1 < int(lines.length()); j++) {
+						string item_name = lines[line_idx++];
+						int qty = parse_int(lines[line_idx++]);
+						msg.attach_item(item_name, qty);
+					}
+				}
+
+				antigas.insert_last(msg);
+			}
+		}
+
+		if(proximo <= int(antigas.length())) proximo = int(antigas.length()) + 1;
+
+		bool sp = dj_inicio();
+		bool ok = true;
+
+		if(!dj_exec2("INSERT OR IGNORE INTO correio_caixas (username, proximo_id) VALUES (?, ?);", owner, "" + proximo)) ok = false;
+		for(uint i = 0; i < antigas.length(); i++) {
+			if(!dj_correio_inserir_mensagem(owner, antigas[i])) ok = false;
+		}
+
+		dj_fim(sp, ok);
+
+		if(!ok) {
+			debug_log("MAIL: falha ao importar " + path + "; o arquivo foi mantido");
+			return;
+		}
+
+		dj_marcar_migrado(path);
+		debug_log("MAIL: " + antigas.length() + " mensagens de " + owner + " importadas de mailbox.dat");
+	}
+
+	void load() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("MAIL: banco indisponível ao carregar mailbox de " + owner);
+			return;
+		}
+
+		importar_legado();
+
+		messages.resize(0);
+
+		sqlite3statement@ caixa = bancoJogo.prepare("SELECT proximo_id FROM correio_caixas WHERE username = ?;");
+		if(@caixa != null) {
+			caixa.bind_text(1, owner);
+			if(caixa.step() == SQLITE_ROW) next_message_id = caixa.column_int(0);
+		}
+
+		int maior_id = 0;
+
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT msg_id, remetente, assunto, corpo, gold, lida FROM correio_mensagens WHERE dono = ? ORDER BY msg_id;");
+		if(@stmt == null) {
+			debug_log("MAIL: erro ao carregar mailbox de " + owner + ": " + bancoJogo.get_last_error_text());
+			return;
+		}
+		stmt.bind_text(1, owner);
+
+		while(stmt.step() == SQLITE_ROW) {
+			int msg_id = stmt.column_int(0);
+			int gold = stmt.column_int(4);
+
+			player_mail_message msg(msg_id, stmt.column_text(1), owner, stmt.column_text(2), stmt.column_text(3));
+			msg.is_read = (stmt.column_int(5) == 1);
 
 			if(gold > 0) {
 				msg.attach_gold(gold);
 			}
 
-			if(line_idx < int(lines.length())) {
-				int item_count = parse_int(lines[line_idx++]);
-				for(int j = 0; j < item_count && line_idx + 1 < int(lines.length()); j++) {
-					string item_name = lines[line_idx++];
-					int qty = parse_int(lines[line_idx++]);
-					msg.attach_item(item_name, qty);
-				}
-			}
-
 			messages.insert_last(msg);
+			if(msg_id > maior_id) maior_id = msg_id;
 		}
+
+		sqlite3statement@ anexos = bancoJogo.prepare("SELECT msg_id, item, quantidade FROM correio_anexos WHERE dono = ? ORDER BY msg_id, item;");
+		if(@anexos != null) {
+			anexos.bind_text(1, owner);
+			while(anexos.step() == SQLITE_ROW) {
+				player_mail_message@ alvo = get_message(anexos.column_int(0));
+				if(alvo is null) continue;
+				alvo.attach_item(anexos.column_text(1), anexos.column_int(2));
+			}
+		}
+
+		if(next_message_id <= maior_id) next_message_id = maior_id + 1;
+		if(next_message_id < 1) next_message_id = 1;
 
 		debug_log("MAIL: Mailbox de " + owner + " carregada (" + messages.length() + " mensagens)");
 	}
+}
+
+// Uma mensagem e seus anexos. INSERT OR IGNORE: serve tanto para o save()
+// (que apaga as linhas do dono antes) quanto para a importação do legado.
+bool dj_correio_inserir_mensagem(string dono, player_mail_message@ msg) {
+	if(msg is null) return true;
+
+	string[] p = {dono, "" + msg.id, msg.sender, msg.subject, msg.body, "" + msg.gold_attached, (msg.is_read ? "1" : "0")};
+	if(!dj_exec("INSERT OR IGNORE INTO correio_mensagens (dono, msg_id, remetente, assunto, corpo, gold, lida) VALUES (?, ?, ?, ?, ?, ?, ?);", p)) return false;
+
+	bool ok = true;
+	string[] item_keys = msg.items_attached.get_keys();
+	for(uint j = 0; j < item_keys.length(); j++) {
+		int qty = dj_dict_int(@msg.items_attached, item_keys[j]);
+		if(!dj_exec4("INSERT OR IGNORE INTO correio_anexos (dono, msg_id, item, quantidade) VALUES (?, ?, ?, ?);", dono, "" + msg.id, item_keys[j], "" + qty)) ok = false;
+	}
+	return ok;
 }
 
 dictionary player_mailboxes;
@@ -228,11 +327,10 @@ mailbox@ get_mailbox(string player_name) {
 }
 
 void cmd_sendmail(int player_index, string recipient, string subject, string message) {
-	bool recipient_exists = false;
-	string[] player_folders = find_directories("players/" + recipient);
-	if(player_folders.length() > 0) {
-		recipient_exists = true;
-	}
+	// Conta cadastrada (tabela players), com o nome na caixa exata do cadastro.
+	string destinatario_real = social_nome_canonico(recipient);
+	bool recipient_exists = (destinatario_real != "");
+	if(recipient_exists) recipient = destinatario_real;
 
 	if(!recipient_exists) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador '" + recipient + "' não encontrado!", 0);
@@ -395,11 +493,10 @@ void cmd_sendmailgold(int player_index, string recipient, string subject, string
 		return;
 	}
 
-	bool recipient_exists = false;
-	string[] player_folders = find_directories("players/" + recipient);
-	if(player_folders.length() > 0) {
-		recipient_exists = true;
-	}
+	// Conta cadastrada (tabela players), com o nome na caixa exata do cadastro.
+	string destinatario_real = social_nome_canonico(recipient);
+	bool recipient_exists = (destinatario_real != "");
+	if(recipient_exists) recipient = destinatario_real;
 
 	if(!recipient_exists) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
@@ -457,11 +554,10 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 		return;
 	}
 
-	bool recipient_exists = false;
-	string[] player_folders = find_directories("players/" + recipient);
-	if(player_folders.length() > 0) {
-		recipient_exists = true;
-	}
+	// Conta cadastrada (tabela players), com o nome na caixa exata do cadastro.
+	string destinatario_real = social_nome_canonico(recipient);
+	bool recipient_exists = (destinatario_real != "");
+	if(recipient_exists) recipient = destinatario_real;
 
 	if(!recipient_exists) {
 		send_reliable_text(players[player_index].peer_id, "msg2 [ERRO] Jogador não encontrado!", 0);
@@ -502,4 +598,439 @@ void cmd_sendmailitem(int player_index, string recipient, string subject, string
 	}
 
 	debug_log("MAIL: " + players[player_index].charname + " enviou " + item_name + " x" + quantity + " via mail para " + recipient);
+}
+
+// ==========================================================================
+// Dados persistentes por jogador (SQLite)
+//
+// Tudo que era arquivo em players/<nome>/ destes sistemas virou tabela:
+//   friends.dat      -> amigos                              (friends.nvgt)
+//   mailbox.dat      -> correio_caixas, correio_mensagens,
+//                       correio_anexos                      (este arquivo)
+//   quests.dat       -> quests_ativas, quests_progresso,
+//                       quests_completas                    (quests.nvgt)
+//   achievements.dat -> conquistas_jogador, conquistas_desbloqueadas,
+//                       conquistas_progresso, conquistas_titulos
+//                                                           (achievements.nvgt)
+//   daily.dat        -> recompensas_diarias                 (daily_rewards.nvgt)
+//   pm.md            -> pm_offline                          (send_pm / login)
+//
+// As classes continuam sendo a cópia em memória; save() regrava as linhas do
+// jogador e load() lê do banco. Na primeira carga o arquivo legado, se
+// existir, é importado com INSERT OR IGNORE e renomeado para <nome>.migrado.
+//
+// "Jogador existe" é sempre social_nome_canonico() (pacotes_social.nvgt), que
+// consulta a tabela players.
+// ==========================================================================
+
+bool dados_jogador_tabelas_prontas = false;
+
+bool dados_jogador_garantir_tabelas() {
+	if(dados_jogador_tabelas_prontas) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string[] tabelas = {
+		"CREATE TABLE IF NOT EXISTS amigos (dono TEXT NOT NULL COLLATE NOCASE, amigo TEXT NOT NULL COLLATE NOCASE, ordem INTEGER DEFAULT 0, criado_em DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (dono, amigo));",
+		"CREATE TABLE IF NOT EXISTS correio_caixas (username TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, proximo_id INTEGER NOT NULL DEFAULT 1);",
+		"CREATE TABLE IF NOT EXISTS correio_mensagens (dono TEXT NOT NULL COLLATE NOCASE, msg_id INTEGER NOT NULL, remetente TEXT NOT NULL DEFAULT '' COLLATE NOCASE, assunto TEXT DEFAULT '', corpo TEXT DEFAULT '', gold INTEGER DEFAULT 0, lida INTEGER DEFAULT 0, criado_em DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (dono, msg_id));",
+		"CREATE TABLE IF NOT EXISTS correio_anexos (dono TEXT NOT NULL COLLATE NOCASE, msg_id INTEGER NOT NULL, item TEXT NOT NULL, quantidade INTEGER DEFAULT 0, PRIMARY KEY (dono, msg_id, item));",
+		"CREATE TABLE IF NOT EXISTS pm_offline (id INTEGER PRIMARY KEY AUTOINCREMENT, destinatario TEXT NOT NULL COLLATE NOCASE, remetente TEXT NOT NULL DEFAULT '' COLLATE NOCASE, mensagem TEXT NOT NULL DEFAULT '', legado_idx INTEGER, criado_em DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE (destinatario, legado_idx));",
+		"CREATE TABLE IF NOT EXISTS quests_ativas (username TEXT NOT NULL COLLATE NOCASE, quest_id INTEGER NOT NULL, ordem INTEGER DEFAULT 0, PRIMARY KEY (username, quest_id));",
+		"CREATE TABLE IF NOT EXISTS quests_progresso (username TEXT NOT NULL COLLATE NOCASE, quest_id INTEGER NOT NULL, objetivo TEXT NOT NULL, valor INTEGER DEFAULT 0, PRIMARY KEY (username, quest_id, objetivo));",
+		"CREATE TABLE IF NOT EXISTS quests_completas (username TEXT NOT NULL COLLATE NOCASE, quest_id TEXT NOT NULL, vezes INTEGER DEFAULT 1, ordem INTEGER DEFAULT 0, PRIMARY KEY (username, quest_id));",
+		"CREATE TABLE IF NOT EXISTS conquistas_jogador (username TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, total_pontos INTEGER DEFAULT 0, titulo_ativo TEXT DEFAULT '');",
+		"CREATE TABLE IF NOT EXISTS conquistas_desbloqueadas (username TEXT NOT NULL COLLATE NOCASE, conquista_id TEXT NOT NULL, ordem INTEGER DEFAULT 0, PRIMARY KEY (username, conquista_id));",
+		"CREATE TABLE IF NOT EXISTS conquistas_progresso (username TEXT NOT NULL COLLATE NOCASE, chave TEXT NOT NULL, valor INTEGER DEFAULT 0, PRIMARY KEY (username, chave));",
+		"CREATE TABLE IF NOT EXISTS conquistas_titulos (username TEXT NOT NULL COLLATE NOCASE, titulo TEXT NOT NULL, ordem INTEGER DEFAULT 0, PRIMARY KEY (username, titulo));",
+		"CREATE TABLE IF NOT EXISTS recompensas_diarias (username TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, sequencia INTEGER DEFAULT 0, total_dias INTEGER DEFAULT 0, coletado_hoje INTEGER DEFAULT 0, giro_disponivel INTEGER DEFAULT 1, caixa_disponivel INTEGER DEFAULT 0, salvo_em INTEGER DEFAULT 0);"
+	};
+
+	bool ok = true;
+	for(uint i = 0; i < tabelas.length(); i++) {
+		if(bancoJogo.execute(tabelas[i]) != SQLITE_OK) {
+			debug_log("DADOS_JOGADOR: erro ao criar tabela: " + bancoJogo.get_last_error_text());
+			ok = false;
+		}
+	}
+	if(!ok) return false;
+
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_amigos_amigo ON amigos(amigo);");
+
+	dados_jogador_tabelas_prontas = true;
+	debug_log("OK - Tabelas de dados de jogador criadas/verificadas (amigos, correio, pm_offline, quests, conquistas, recompensas_diarias)");
+	return true;
+}
+
+// Opcional: as tabelas também são criadas sozinhas no primeiro uso.
+void init_dados_jogador() {
+	dados_jogador_garantir_tabelas();
+}
+
+// --------------------------------------------------------------------------
+// Helpers de banco. Todo parâmetro vai como texto: as colunas INTEGER
+// convertem sozinhas pela afinidade de tipo do SQLite.
+// --------------------------------------------------------------------------
+
+bool dj_exec(string query, string[]@ params) {
+	if(!dados_jogador_garantir_tabelas()) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("DADOS_JOGADOR: erro ao preparar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	if(params !is null) {
+		for(uint i = 0; i < params.length(); i++) {
+			stmt.bind_text(int(i) + 1, params[i]);
+		}
+	}
+
+	if(stmt.step() != SQLITE_DONE) {
+		debug_log("DADOS_JOGADOR: erro ao executar query: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+	return true;
+}
+
+bool dj_exec1(string query, string p1) {
+	string[] p = {p1};
+	return dj_exec(query, p);
+}
+
+bool dj_exec2(string query, string p1, string p2) {
+	string[] p = {p1, p2};
+	return dj_exec(query, p);
+}
+
+bool dj_exec3(string query, string p1, string p2, string p3) {
+	string[] p = {p1, p2, p3};
+	return dj_exec(query, p);
+}
+
+bool dj_exec4(string query, string p1, string p2, string p3, string p4) {
+	string[] p = {p1, p2, p3, p4};
+	return dj_exec(query, p);
+}
+
+// Primeira coluna de cada linha de uma query com um único parâmetro de texto.
+string[] dj_lista(string query, string p1) {
+	string[] saida;
+	if(!dados_jogador_garantir_tabelas()) return saida;
+
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) {
+		debug_log("DADOS_JOGADOR: erro ao preparar consulta: " + bancoJogo.get_last_error_text());
+		return saida;
+	}
+
+	stmt.bind_text(1, p1);
+
+	while(stmt.step() == SQLITE_ROW) {
+		saida.insert_last(stmt.column_text(0));
+	}
+	return saida;
+}
+
+// Agrupa as escritas de um save() numa transação só (SAVEPOINT aninha, então
+// funciona mesmo se quem chamou já estiver dentro de outra).
+bool dj_inicio() {
+	if(!dados_jogador_garantir_tabelas()) return false;
+	return bancoJogo.execute("SAVEPOINT dados_jogador;") == SQLITE_OK;
+}
+
+void dj_fim(bool aberto, bool ok) {
+	if(!aberto) return;
+	if(ok && bancoJogo.execute("RELEASE dados_jogador;") == SQLITE_OK) return;
+
+	debug_log("DADOS_JOGADOR: gravação desfeita: " + bancoJogo.get_last_error_text());
+	bancoJogo.execute("ROLLBACK TO dados_jogador;");
+	bancoJogo.execute("RELEASE dados_jogador;");
+}
+
+// Os dicionários de progresso guardam o número como texto ("" + valor).
+int dj_dict_int(dictionary@ d, string chave) {
+	if(d is null || !d.exists(chave)) return 0;
+
+	string texto = "";
+	if(d.get(chave, texto)) return int(parse_int(texto));
+
+	int64 inteiro = 0;
+	if(d.get(chave, inteiro)) return int(inteiro);
+
+	double real = 0;
+	if(d.get(chave, real)) return int(real);
+
+	return 0;
+}
+
+// --------------------------------------------------------------------------
+// Arquivos legados
+// --------------------------------------------------------------------------
+
+// Caminho de players/<nome>/<arquivo>, ou "" se o nome não servir de pasta.
+string dj_caminho_legado(string nome, string arquivo) {
+	if(nome == "" || nome.find("/") >= 0 || nome.find("\\") >= 0 || nome.find("..") >= 0 || nome.find(":") >= 0) return "";
+	return "players/" + nome + "/" + arquivo;
+}
+
+// Renomeia o arquivo já importado para <nome>.migrado (não apaga o conteúdo).
+bool dj_marcar_migrado(string caminho) {
+	if(caminho == "" || !file_exists(caminho)) return true;
+
+	if(!file_copy(caminho, caminho + ".migrado", true)) {
+		debug_log("DADOS_JOGADOR: não foi possível criar " + caminho + ".migrado");
+		return false;
+	}
+	if(!file_delete(caminho)) {
+		debug_log("DADOS_JOGADOR: não foi possível remover " + caminho + " depois de migrar");
+		return false;
+	}
+	return true;
+}
+
+// --------------------------------------------------------------------------
+// PM deixada para quem está offline (antigo players/<nome>/pm.md)
+// --------------------------------------------------------------------------
+
+// Quem já foi conferido e não tem PM pendente (chave: nome em minúsculas).
+// A entrega é chamada a cada volta do laço do jogador (player.nvgt), então o
+// banco só é consultado de novo quando alguém grava uma PM para o nome.
+dictionary dj_pm_sem_pendencia;
+
+// Chamado por send_pm() (chat_advanced.nvgt) quando o destinatário está offline.
+bool dados_jogador_pm_offline_gravar(string destinatario, string remetente, string mensagem) {
+	destinatario = destinatario.trim_whitespace();
+	if(destinatario == "") return false;
+
+	string chave = destinatario.lower();
+	if(dj_pm_sem_pendencia.exists(chave)) dj_pm_sem_pendencia.delete(chave);
+
+	return dj_exec3("INSERT INTO pm_offline (destinatario, remetente, mensagem) VALUES (?, ?, ?);", destinatario, remetente, mensagem);
+}
+
+// As linhas do pm.md antigo entram com remetente vazio e o texto completo.
+void dj_pm_importar_legado(string nome) {
+	string path = dj_caminho_legado(nome, "pm.md");
+	if(path == "" || !file_exists(path)) return;
+
+	file f;
+	if(!f.open(path, "rb")) {
+		debug_log("PM: não foi possível abrir " + path + " para importar");
+		return;
+	}
+	string conteudo = f.read();
+	f.close();
+
+	string[] linhas = conteudo.replace("\r\n", "\n").replace("\r", "\n").split("\n");
+
+	bool sp = dj_inicio();
+	bool ok = true;
+	for(uint i = 0; i < linhas.length(); i++) {
+		if(linhas[i].trim_whitespace() == "") continue;
+		if(!dj_exec3("INSERT OR IGNORE INTO pm_offline (destinatario, remetente, mensagem, legado_idx) VALUES (?, '', ?, ?);", nome, linhas[i], "" + i)) ok = false;
+	}
+	dj_fim(sp, ok);
+
+	if(!ok) {
+		debug_log("PM: falha ao importar " + path + "; o arquivo foi mantido");
+		return;
+	}
+	dj_marcar_migrado(path);
+}
+
+// Chamado no laço do jogador (player.nvgt): entrega e apaga as PMs pendentes.
+void dados_jogador_pm_offline_entregar(string nome, uint64 peer_id) {
+	if(nome == "") return;
+
+	string chave = nome.lower();
+	if(dj_pm_sem_pendencia.exists(chave)) return;
+
+	if(!dados_jogador_garantir_tabelas()) return;
+
+	dj_pm_importar_legado(nome);
+	dj_pm_sem_pendencia.set(chave, true);
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, remetente, mensagem FROM pm_offline WHERE destinatario = ? ORDER BY id;");
+	if(@stmt == null) {
+		debug_log("PM: erro ao ler PMs offline de " + nome + ": " + bancoJogo.get_last_error_text());
+		return;
+	}
+	stmt.bind_text(1, nome);
+
+	string[] linhas;
+	int ultimo_id = 0;
+	while(stmt.step() == SQLITE_ROW) {
+		int id = stmt.column_int(0);
+		string remetente = stmt.column_text(1);
+		string mensagem = stmt.column_text(2);
+
+		if(id > ultimo_id) ultimo_id = id;
+		if(remetente == "") linhas.insert_last(mensagem);
+		else linhas.insert_last("Mensagem permanente não lida de " + remetente + ": " + mensagem);
+	}
+
+	if(linhas.length() == 0) return;
+
+	for(uint i = 0; i < linhas.length(); i++) {
+		send_reliable_text(peer_id, "permanent " + linhas[i], 0);
+		send_reliable_text(peer_id, "ps message.ogg", 0);
+	}
+
+	dj_exec2("DELETE FROM pm_offline WHERE destinatario = ? AND id <= ?;", nome, "" + ultimo_id);
+}
+
+// --------------------------------------------------------------------------
+// Troca de apelido (chamado por changename() em legacy_compat.nvgt)
+// --------------------------------------------------------------------------
+
+void dados_jogador_renomear(string antigo, string novo) {
+	antigo = antigo.trim_whitespace();
+	novo = novo.trim_whitespace();
+	if(antigo == "" || novo == "" || antigo == novo) return;
+	if(!dados_jogador_garantir_tabelas()) return;
+
+	// 1) Quem ainda não está em memória é carregado pelo nome antigo: é a
+	// carga que importa o arquivo legado de players/<antigo>/. Se já existe
+	// algo no nome novo, é o mesmo objeto que outro passo do rename já moveu.
+	if(!player_friends.exists(antigo) && !player_friends.exists(novo)) get_friend_list(antigo);
+	if(!player_mailboxes.exists(antigo) && !player_mailboxes.exists(novo)) get_mailbox(antigo);
+	if(!player_quest_logs.exists(antigo) && !player_quest_logs.exists(novo)) get_player_quest_log(antigo);
+	if(!player_achievements.exists(antigo) && !player_achievements.exists(novo)) get_player_achievements(antigo);
+	if(!player_daily_trackers.exists(antigo) && !player_daily_trackers.exists(novo)) get_daily_tracker(antigo);
+
+	// 2) Banco: todas as colunas que guardam o nome.
+	string[] comandos = {
+		"UPDATE OR REPLACE amigos SET dono = ? WHERE dono = ?;",
+		"UPDATE OR REPLACE amigos SET amigo = ? WHERE amigo = ?;",
+		"UPDATE OR REPLACE correio_anexos SET dono = ? WHERE dono = ?;",
+		"UPDATE OR REPLACE correio_mensagens SET dono = ? WHERE dono = ?;",
+		"UPDATE correio_mensagens SET remetente = ? WHERE remetente = ?;",
+		"UPDATE OR REPLACE correio_caixas SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE pm_offline SET destinatario = ? WHERE destinatario = ?;",
+		"UPDATE pm_offline SET remetente = ? WHERE remetente = ?;",
+		"UPDATE OR REPLACE quests_progresso SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE quests_ativas SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE quests_completas SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE conquistas_jogador SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE conquistas_desbloqueadas SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE conquistas_progresso SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE conquistas_titulos SET username = ? WHERE username = ?;",
+		"UPDATE OR REPLACE recompensas_diarias SET username = ? WHERE username = ?;"
+	};
+
+	bool sp = dj_inicio();
+	bool ok = true;
+	for(uint i = 0; i < comandos.length(); i++) {
+		if(!dj_exec2(comandos[i], novo, antigo)) ok = false;
+	}
+	dj_fim(sp, ok);
+	if(!ok) debug_log("DADOS_JOGADOR: falha ao renomear " + antigo + " -> " + novo + " no banco");
+
+	if(dj_pm_sem_pendencia.exists(antigo.lower())) dj_pm_sem_pendencia.delete(antigo.lower());
+	if(dj_pm_sem_pendencia.exists(novo.lower())) dj_pm_sem_pendencia.delete(novo.lower());
+
+	// 3) Cópias em memória: a chave do dicionário e o dono de cada objeto.
+	if(player_friends.exists(antigo)) {
+		friend_list@ fl_antigo = cast<friend_list@>(player_friends[antigo]);
+		player_friends.delete(antigo);
+		if(fl_antigo !is null) {
+			fl_antigo.owner = novo;
+			player_friends.set(novo, @fl_antigo);
+		}
+	}
+	if(player_mailboxes.exists(antigo)) {
+		mailbox@ mb_antigo = cast<mailbox@>(player_mailboxes[antigo]);
+		player_mailboxes.delete(antigo);
+		if(mb_antigo !is null) {
+			mb_antigo.owner = novo;
+			player_mailboxes.set(novo, @mb_antigo);
+		}
+	}
+	if(player_quest_logs.exists(antigo)) {
+		player_quest_log@ ql_antigo = cast<player_quest_log@>(player_quest_logs[antigo]);
+		player_quest_logs.delete(antigo);
+		if(ql_antigo !is null) {
+			ql_antigo.player_name = novo;
+			player_quest_logs.set(novo, @ql_antigo);
+		}
+	}
+	if(player_achievements.exists(antigo)) {
+		achievement_progress@ ap_antigo = cast<achievement_progress@>(player_achievements[antigo]);
+		player_achievements.delete(antigo);
+		if(ap_antigo !is null) {
+			ap_antigo.player_name = novo;
+			player_achievements.set(novo, @ap_antigo);
+		}
+	}
+	if(player_daily_trackers.exists(antigo)) {
+		daily_reward_tracker@ dt_antigo = cast<daily_reward_tracker@>(player_daily_trackers[antigo]);
+		player_daily_trackers.delete(antigo);
+		if(dt_antigo !is null) {
+			dt_antigo.player_name = novo;
+			player_daily_trackers.set(novo, @dt_antigo);
+		}
+	}
+
+	// 4) Referências ao nome antigo nas listas e caixas de quem está em
+	// memória (o banco já foi corrigido no passo 2).
+	string antigo_minusculo = antigo.lower();
+
+	string[] chaves_amigos = player_friends.get_keys();
+	for(uint i = 0; i < chaves_amigos.length(); i++) {
+		friend_list@ fl = cast<friend_list@>(player_friends[chaves_amigos[i]]);
+		if(fl is null) continue;
+		for(uint a = 0; a < fl.friends.length(); a++) {
+			if(fl.friends[a].lower() == antigo_minusculo) fl.friends[a] = novo;
+		}
+	}
+
+	string[] chaves_caixas = player_mailboxes.get_keys();
+	for(uint i = 0; i < chaves_caixas.length(); i++) {
+		mailbox@ mb = cast<mailbox@>(player_mailboxes[chaves_caixas[i]]);
+		if(mb is null) continue;
+		for(uint m = 0; m < mb.messages.length(); m++) {
+			if(mb.messages[m].sender.lower() == antigo_minusculo) mb.messages[m].sender = novo;
+			if(mb.messages[m].recipient.lower() == antigo_minusculo) mb.messages[m].recipient = novo;
+		}
+	}
+
+	// 5) O que está em memória é a versão mais nova: regrava no nome novo.
+	if(player_friends.exists(novo)) {
+		friend_list@ fl_novo = cast<friend_list@>(player_friends[novo]);
+		if(fl_novo !is null) {
+			fl_novo.owner = novo;
+			fl_novo.save();
+		}
+	}
+	if(player_mailboxes.exists(novo)) {
+		mailbox@ mb_novo = cast<mailbox@>(player_mailboxes[novo]);
+		if(mb_novo !is null) {
+			mb_novo.owner = novo;
+			mb_novo.save();
+		}
+	}
+	if(player_quest_logs.exists(novo)) {
+		player_quest_log@ ql_novo = cast<player_quest_log@>(player_quest_logs[novo]);
+		if(ql_novo !is null) {
+			ql_novo.player_name = novo;
+			ql_novo.save();
+		}
+	}
+	if(player_achievements.exists(novo)) {
+		achievement_progress@ ap_novo = cast<achievement_progress@>(player_achievements[novo]);
+		if(ap_novo !is null) {
+			ap_novo.player_name = novo;
+			ap_novo.save();
+		}
+	}
+	if(player_daily_trackers.exists(novo)) {
+		daily_reward_tracker@ dt_novo = cast<daily_reward_tracker@>(player_daily_trackers[novo]);
+		if(dt_novo !is null) {
+			dt_novo.player_name = novo;
+			dt_novo.save();
+		}
+	}
+
+	debug_log("DADOS_JOGADOR: " + antigo + " -> " + novo + " (amigos, correio, pm, quests, conquistas, diária)");
 }

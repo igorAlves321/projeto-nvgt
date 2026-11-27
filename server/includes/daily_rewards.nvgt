@@ -77,31 +77,33 @@ class daily_reward_tracker {
 		return reward;
 	}
 
+	// Tabela 'recompensas_diarias' (criada em dados_jogador_garantir_tabelas(),
+	// mail.nvgt). salvo_em guarda o time_stamp() da gravação, como a última
+	// linha do daily.dat antigo.
 	void save() {
-		string path = "players/" + player_name + "/daily.dat";
+		string[] p = {
+			player_name, "" + current_streak, "" + total_days,
+			(claimed_today ? "1" : "0"), (spin_available ? "1" : "0"), (box_available ? "1" : "0"),
+			"" + time_stamp()
+		};
 
-		file f;
-		if(!f.open(path, "wb")) {
+		if(!dj_exec("INSERT OR REPLACE INTO recompensas_diarias (username, sequencia, total_dias, coletado_hoje, giro_disponivel, caixa_disponivel, salvo_em) VALUES (?, ?, ?, ?, ?, ?, ?);", p)) {
 			debug_log("DAILY: Erro ao salvar daily tracker de " + player_name);
 			return;
 		}
 
-		f.write("" + current_streak + "\n");
-		f.write("" + total_days + "\n");
-		f.write("" + (claimed_today ? "1" : "0") + "\n");
-		f.write("" + (spin_available ? "1" : "0") + "\n");
-		f.write("" + (box_available ? "1" : "0") + "\n");
-		f.write("" + time_stamp() + "\n");
-
-		f.close();
 		debug_log("DAILY: Tracker de " + player_name + " salvo");
 	}
 
-	void load() {
-		string path = "players/" + player_name + "/daily.dat";
+	// Importação única de players/<nome>/daily.dat, preservando o instante
+	// gravado no arquivo.
+	void importar_legado() {
+		string path = dj_caminho_legado(player_name, "daily.dat");
+		if(path == "" || !file_exists(path)) return;
 
 		file f;
 		if(!f.open(path, "rb")) {
+			debug_log("DAILY: não foi possível abrir " + path + " para importar");
 			return;
 		}
 
@@ -109,15 +111,47 @@ class daily_reward_tracker {
 		f.close();
 
 		string[] lines = content.split("\n");
-		if(lines.length() < 6) return;
+		if(lines.length() >= 6) {
+			string[] p = {
+				player_name, "" + parse_int(lines[0]), "" + parse_int(lines[1]),
+				(parse_int(lines[2]) == 1 ? "1" : "0"), (parse_int(lines[3]) == 1 ? "1" : "0"), (parse_int(lines[4]) == 1 ? "1" : "0"),
+				"" + parse_uint(lines[5])
+			};
 
-		current_streak = parse_int(lines[0]);
-		total_days = parse_int(lines[1]);
-		claimed_today = (parse_int(lines[2]) == 1);
-		spin_available = (parse_int(lines[3]) == 1);
-		box_available = (parse_int(lines[4]) == 1);
+			if(!dj_exec("INSERT OR IGNORE INTO recompensas_diarias (username, sequencia, total_dias, coletado_hoje, giro_disponivel, caixa_disponivel, salvo_em) VALUES (?, ?, ?, ?, ?, ?, ?);", p)) {
+				debug_log("DAILY: falha ao importar " + path + "; o arquivo foi mantido");
+				return;
+			}
+		}
 
-		uint64 last_time = parse_uint(lines[5]);
+		dj_marcar_migrado(path);
+		debug_log("DAILY: tracker de " + player_name + " importado de daily.dat");
+	}
+
+	void load() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("DAILY: banco indisponível ao carregar tracker de " + player_name);
+			return;
+		}
+
+		importar_legado();
+
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT sequencia, total_dias, coletado_hoje, giro_disponivel, caixa_disponivel, salvo_em FROM recompensas_diarias WHERE username = ?;");
+		if(@stmt == null) {
+			debug_log("DAILY: erro ao carregar tracker de " + player_name + ": " + bancoJogo.get_last_error_text());
+			return;
+		}
+		stmt.bind_text(1, player_name);
+
+		if(stmt.step() != SQLITE_ROW) return;
+
+		current_streak = stmt.column_int(0);
+		total_days = stmt.column_int(1);
+		claimed_today = (stmt.column_int(2) == 1);
+		spin_available = (stmt.column_int(3) == 1);
+		box_available = (stmt.column_int(4) == 1);
+
+		uint64 last_time = parse_uint(stmt.column_text(5));
 		uint64 now = time_stamp();
 
 		if((now - last_time) >= 86400 && !claimed_today) {

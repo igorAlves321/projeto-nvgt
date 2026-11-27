@@ -173,41 +173,74 @@ class player_quest_log {
 		}
 	}
 
-	void save() {
-		string path = "players/" + player_name + "/quests.dat";
+	// Insere o estado em memória nas tabelas quests_ativas, quests_progresso e
+	// quests_completas (criadas em dados_jogador_garantir_tabelas(), mail.nvgt).
+	// INSERT OR IGNORE: o save() apaga as linhas do jogador antes; a
+	// importação do legado não apaga nada.
+	bool gravar_no_banco() {
+		bool ok = true;
 
-		file f;
-		if(!f.open(path, "wb")) {
-			debug_log("QUESTS: Erro ao salvar quest log de " + player_name);
-			return;
-		}
-
-		f.write("" + active_quests.length() + "\n");
 		for(uint i = 0; i < active_quests.length(); i++) {
-			f.write("" + active_quests[i].quest_id + "\n");
+			string qid = "" + active_quests[i].quest_id;
+			if(!dj_exec3("INSERT OR IGNORE INTO quests_ativas (username, quest_id, ordem) VALUES (?, ?, ?);", player_name, qid, "" + i)) ok = false;
 
 			string[] prog_keys = active_quests[i].progress.get_keys();
-			f.write("" + prog_keys.length() + "\n");
 			for(uint j = 0; j < prog_keys.length(); j++) {
-				f.write(prog_keys[j] + "\n");
-				f.write("" + int(active_quests[i].progress[prog_keys[j]]) + "\n");
+				int amount = dj_dict_int(@active_quests[i].progress, prog_keys[j]);
+				if(!dj_exec4("INSERT OR IGNORE INTO quests_progresso (username, quest_id, objetivo, valor) VALUES (?, ?, ?, ?);", player_name, qid, prog_keys[j], "" + amount)) ok = false;
 			}
 		}
 
-		f.write("" + completed_quests.length() + "\n");
+		// completed_quests repete o id das quests repetíveis: uma linha por
+		// quest, com a quantidade de vezes.
+		string[] ids;
+		int[] vezes;
 		for(uint i = 0; i < completed_quests.length(); i++) {
-			f.write(completed_quests[i] + "\n");
+			if(completed_quests[i] == "") continue;
+			int pos = ids.find(completed_quests[i]);
+			if(pos >= 0) {
+				vezes[pos]++;
+			} else {
+				ids.insert_last(completed_quests[i]);
+				vezes.insert_last(1);
+			}
+		}
+		for(uint i = 0; i < ids.length(); i++) {
+			if(!dj_exec4("INSERT OR IGNORE INTO quests_completas (username, quest_id, vezes, ordem) VALUES (?, ?, ?, ?);", player_name, ids[i], "" + vezes[i], "" + i)) ok = false;
 		}
 
-		f.close();
-		debug_log("QUESTS: Quest log de " + player_name + " salvo");
+		return ok;
 	}
 
-	void load() {
-		string path = "players/" + player_name + "/quests.dat";
+	void save() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("QUESTS: Erro ao salvar quest log de " + player_name + " (banco indisponível)");
+			return;
+		}
+
+		bool sp = dj_inicio();
+		bool ok = true;
+
+		if(!dj_exec1("DELETE FROM quests_progresso WHERE username = ?;", player_name)) ok = false;
+		if(!dj_exec1("DELETE FROM quests_ativas WHERE username = ?;", player_name)) ok = false;
+		if(!dj_exec1("DELETE FROM quests_completas WHERE username = ?;", player_name)) ok = false;
+		if(!gravar_no_banco()) ok = false;
+
+		dj_fim(sp, ok);
+
+		if(ok) debug_log("QUESTS: Quest log de " + player_name + " salvo");
+		else debug_log("QUESTS: Erro ao salvar quest log de " + player_name);
+	}
+
+	// Importação única de players/<nome>/quests.dat. Só é chamada por load(),
+	// com as listas ainda vazias.
+	void importar_legado() {
+		string path = dj_caminho_legado(player_name, "quests.dat");
+		if(path == "" || !file_exists(path)) return;
 
 		file f;
 		if(!f.open(path, "rb")) {
+			debug_log("QUESTS: não foi possível abrir " + path + " para importar");
 			return;
 		}
 
@@ -215,31 +248,95 @@ class player_quest_log {
 		f.close();
 
 		string[] lines = content.split("\n");
-		if(lines.length() < 1) return;
 
 		int line_idx = 0;
 
-		int active_count = parse_int(lines[line_idx++]);
-		for(int i = 0; i < active_count && line_idx < int(lines.length()); i++) {
-			int qid = parse_int(lines[line_idx++]);
-			quest_progress qp(qid);
+		if(lines.length() >= 1) {
+			int active_count = parse_int(lines[line_idx++]);
+			for(int i = 0; i < active_count && line_idx < int(lines.length()); i++) {
+				int qid = parse_int(lines[line_idx++]);
+				quest_progress qp(qid);
 
-			if(line_idx < int(lines.length())) {
-				int prog_count = parse_int(lines[line_idx++]);
-				for(int j = 0; j < prog_count && line_idx + 1 < int(lines.length()); j++) {
-					string obj = lines[line_idx++];
-					int amount = parse_int(lines[line_idx++]);
-					qp.progress.set(obj, "" + amount);
+				if(line_idx < int(lines.length())) {
+					int prog_count = parse_int(lines[line_idx++]);
+					for(int j = 0; j < prog_count && line_idx + 1 < int(lines.length()); j++) {
+						string obj = lines[line_idx++];
+						int amount = parse_int(lines[line_idx++]);
+						qp.progress.set(obj, "" + amount);
+					}
 				}
+
+				if(!has_active_quest(qid)) active_quests.insert_last(qp);
 			}
 
+			if(line_idx < int(lines.length())) {
+				int completed_count = parse_int(lines[line_idx++]);
+				for(int i = 0; i < completed_count && line_idx < int(lines.length()); i++) {
+					completed_quests.insert_last(lines[line_idx++]);
+				}
+			}
+		}
+
+		bool sp = dj_inicio();
+		bool ok = gravar_no_banco();
+		dj_fim(sp, ok);
+
+		// O que vale é o que está no banco; load() relê em seguida.
+		active_quests.resize(0);
+		completed_quests.resize(0);
+
+		if(!ok) {
+			debug_log("QUESTS: falha ao importar " + path + "; o arquivo foi mantido");
+			return;
+		}
+
+		dj_marcar_migrado(path);
+		debug_log("QUESTS: quest log de " + player_name + " importado de quests.dat");
+	}
+
+	void load() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("QUESTS: banco indisponível ao carregar quest log de " + player_name);
+			return;
+		}
+
+		active_quests.resize(0);
+		completed_quests.resize(0);
+
+		importar_legado();
+
+		sqlite3statement@ ativas = bancoJogo.prepare("SELECT quest_id FROM quests_ativas WHERE username = ? ORDER BY ordem, quest_id;");
+		if(@ativas == null) {
+			debug_log("QUESTS: erro ao carregar quest log de " + player_name + ": " + bancoJogo.get_last_error_text());
+			return;
+		}
+		ativas.bind_text(1, player_name);
+		while(ativas.step() == SQLITE_ROW) {
+			quest_progress qp(ativas.column_int(0));
 			active_quests.insert_last(qp);
 		}
 
-		if(line_idx < int(lines.length())) {
-			int completed_count = parse_int(lines[line_idx++]);
-			for(int i = 0; i < completed_count && line_idx < int(lines.length()); i++) {
-				completed_quests.insert_last(lines[line_idx++]);
+		sqlite3statement@ progresso = bancoJogo.prepare("SELECT quest_id, objetivo, valor FROM quests_progresso WHERE username = ?;");
+		if(@progresso != null) {
+			progresso.bind_text(1, player_name);
+			while(progresso.step() == SQLITE_ROW) {
+				quest_progress@ alvo = get_quest_progress(progresso.column_int(0));
+				if(alvo is null) continue;
+				alvo.progress.set(progresso.column_text(1), "" + progresso.column_int(2));
+			}
+		}
+
+		sqlite3statement@ completas = bancoJogo.prepare("SELECT quest_id, vezes FROM quests_completas WHERE username = ? ORDER BY ordem, quest_id;");
+		if(@completas != null) {
+			completas.bind_text(1, player_name);
+			while(completas.step() == SQLITE_ROW) {
+				string qid = completas.column_text(0);
+				int vezes = completas.column_int(1);
+				if(qid == "") continue;
+				if(vezes < 1) vezes = 1;
+				for(int v = 0; v < vezes; v++) {
+					completed_quests.insert_last(qid);
+				}
 			}
 		}
 

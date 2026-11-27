@@ -159,6 +159,15 @@ void create_history_tables() {
             -- Atualizado automaticamente
             last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+            -- Totais do jogo (classe statistics em systems_advanced.nvgt,
+            -- antigo stats.dat). Ficam no fim: get_statistics_for_date() le
+            -- as colunas acima por posicao.
+            total_kills INTEGER DEFAULT 0,
+            total_deaths INTEGER DEFAULT 0,
+            items_crafted INTEGER DEFAULT 0,
+            npcs_killed INTEGER DEFAULT 0,
+            playtime_minutes INTEGER DEFAULT 0,
+
             UNIQUE(date)
         );
     """;
@@ -174,6 +183,8 @@ void create_history_tables() {
     if(bancoJogo.execute(create_stats) != SQLITE_OK) {
         debug_log("ERRO ao criar tabela server_statistics: " + bancoJogo.get_last_error_text());
     }
+
+    estatisticas_garantir_colunas();
 
     debug_log("Tabelas de histórico criadas com sucesso");
 }
@@ -300,6 +311,23 @@ void update_statistics(string stat_type, int increment = 1) {
     }
 }
 
+// Bancos criados antes da migracao do stats.dat nao tem as colunas de totais
+// do jogo em server_statistics: acrescenta as que faltarem.
+bool estatisticas_garantir_colunas() {
+    if(!database_initialized || bancoJogo is null) return false;
+
+    string[] colunas = {"total_kills", "total_deaths", "items_crafted", "npcs_killed", "playtime_minutes"};
+    for(uint i = 0; i < colunas.length(); i++) {
+        if(globais_tabela_tem_coluna("server_statistics", colunas[i])) continue;
+
+        if(bancoJogo.execute("ALTER TABLE server_statistics ADD COLUMN " + colunas[i] + " INTEGER DEFAULT 0;") != SQLITE_OK) {
+            debug_log("ERRO ao adicionar coluna " + colunas[i] + " em server_statistics: " + bancoJogo.get_last_error_text());
+            return false;
+        }
+    }
+    return true;
+}
+
 void update_peak_players(int current_players) {
     if(current_players > current_peak_players) {
         current_peak_players = current_players;
@@ -318,12 +346,23 @@ void save_daily_statistics_async() {
 
     string today = datetime_now().substr(0, 10);
 
+    // INSERT OR IGNORE + UPDATE em vez de INSERT OR REPLACE: a linha do dia
+    // tambem guarda os totais do jogo (total_kills etc.), que um REPLACE zeraria.
+    sqlite3statement@ stmt_dia = bancoJogo.prepare("INSERT OR IGNORE INTO server_statistics (date) VALUES (?);");
+    if(@stmt_dia == null) {
+        debug_log("ERRO ao preparar save de estatísticas: " + bancoJogo.get_last_error_text());
+        return;
+    }
+    stmt_dia.bind_text(1, today);
+    stmt_dia.step();
+
     string query = """
-        INSERT OR REPLACE INTO server_statistics
-        (date, peak_players, total_logins, new_registrations, unique_players,
-         total_combats, items_spawned, items_collected, messages_sent,
-         server_uptime_seconds, database_queries, backup_count, last_updated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+        UPDATE server_statistics SET
+            peak_players = ?, total_logins = ?, new_registrations = ?, unique_players = ?,
+            total_combats = ?, items_spawned = ?, items_collected = ?, messages_sent = ?,
+            server_uptime_seconds = ?, database_queries = ?, backup_count = ?,
+            last_updated = CURRENT_TIMESTAMP
+        WHERE date = ?;
     """;
 
     sqlite3statement@ stmt = bancoJogo.prepare(query);
@@ -332,18 +371,18 @@ void save_daily_statistics_async() {
         return;
     }
 
-    stmt.bind_text(1, today);
-    stmt.bind_int(2, current_stats.peak_players);
-    stmt.bind_int(3, current_stats.total_logins);
-    stmt.bind_int(4, current_stats.new_registrations);
-    stmt.bind_int(5, current_stats.unique_players);
-    stmt.bind_int(6, current_stats.total_combats);
-    stmt.bind_int(7, current_stats.items_spawned);
-    stmt.bind_int(8, current_stats.items_collected);
-    stmt.bind_int(9, current_stats.messages_sent);
-    stmt.bind_int(10, current_stats.server_uptime_seconds);
-    stmt.bind_int(11, current_stats.database_queries);
-    stmt.bind_int(12, current_stats.backup_count);
+    stmt.bind_int(1, current_stats.peak_players);
+    stmt.bind_int(2, current_stats.total_logins);
+    stmt.bind_int(3, current_stats.new_registrations);
+    stmt.bind_int(4, current_stats.unique_players);
+    stmt.bind_int(5, current_stats.total_combats);
+    stmt.bind_int(6, current_stats.items_spawned);
+    stmt.bind_int(7, current_stats.items_collected);
+    stmt.bind_int(8, current_stats.messages_sent);
+    stmt.bind_int(9, current_stats.server_uptime_seconds);
+    stmt.bind_int(10, current_stats.database_queries);
+    stmt.bind_int(11, current_stats.backup_count);
+    stmt.bind_text(12, today);
 
     if(stmt.step() != SQLITE_DONE) {
         debug_log("ERRO ao salvar estatísticas: " + bancoJogo.get_last_error_text());

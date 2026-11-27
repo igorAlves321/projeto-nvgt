@@ -1,22 +1,14 @@
+#include "dados_globais.nvgt"
 
 bool create_essential_directories() {
     debug_log("=== PASSO 1: Criando diretórios essenciais ===");
 
     string[] directories = {
         "players",
-        "cars",
-        "boats",
-        "tanks",
-        "motos",
-        "pets",
-        "jaulas",
-        "configs",
-        "gifts",
         "maps",
         "database",
         "backups",
         "logs",
-        "tempbans",
         "uploads"
     };
 
@@ -54,6 +46,10 @@ bool load_server_configurations() {
     }
     debug_log("✓ Banco de dados inicializado (auth.nvgt + db_auth.nvgt)");
 
+    debug_log("Preparando dados globais no banco...");
+    init_dados_globais();
+    debug_log("✓ Dados globais prontos (marcadores, veículos, créditos, arquivos legados)");
+
     debug_log("Carregando items...");
     init_items_system();
     debug_log("✓ Items carregados");
@@ -83,11 +79,11 @@ bool load_server_configurations() {
 
     debug_log("Carregando zonas desabilitadas...");
     init_disabled_zones();
-    int loaded_zones_from_disk = load_disabled_zones_from_disk();
-    if(loaded_zones_from_disk >= 0) {
-        debug_log("✓ Zonas sobrescritas do arquivo: " + loaded_zones_from_disk);
+    int zonas_do_banco = zonas_carregar_do_banco();
+    if(zonas_do_banco >= 0) {
+        debug_log("✓ Zonas carregadas do banco: " + zonas_do_banco);
     } else {
-        debug_log("ℹ️ disabled_zones.cfg não encontrado, mantendo zonas padrão.");
+        debug_log("ℹ️ Nenhuma zona salva no banco, mantendo zonas padrão.");
     }
     debug_log("✓ Zonas desabilitadas carregadas");
 
@@ -110,6 +106,9 @@ bool initialize_core_systems() {
     debug_log("Inicializando sistema de histórico...");
     init_history_system();
     debug_log("✓ Sistema de histórico inicializado (history.nvgt)");
+
+    server_stats.carregar_do_banco();
+    debug_log("✓ Estatísticas globais carregadas (server_statistics)");
 
     debug_log("Inicializando sistema de comandos...");
     init_command_system();
@@ -162,9 +161,8 @@ bool initialize_core_systems() {
 bool load_persistent_data() {
     debug_log("=== PASSO 4: Carregando dados persistentes ===");
 
-    debug_log("Carregando banimentos temporários...");
-    load_all_tempbans();
-    debug_log("✓ Tempbans carregados");
+    cleanup_expired_bans_db();
+    debug_log("✓ Banimentos no banco: " + count_active_bans_db() + " ativos (server_bans)");
 
     debug_log("Carregando guilds persistidas...");
     init_guilds();

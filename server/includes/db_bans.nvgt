@@ -179,21 +179,15 @@ void cleanup_expired_bans_db() {
     bancoJogo.execute(query);
 }
 
+// Importacao unica dos arquivos de ban legados. Depois de lido, o arquivo vira
+// <nome>.migrado e o banco passa a ser a unica fonte.
 void migrate_banidos_dat_to_db() {
     if (!database_initialized) return;
 
-    file f;
-    if (!f.open("banidos.dat", "rb")) {
-        debug_log("MIGRAÇÃO: Arquivo banidos.dat não encontrado (OK se já migrado)");
-        return;
-    }
+    string content;
+    if (!globais_ler_arquivo("banidos.dat", content)) return;
 
-    string content = f.read();
-    f.close();
-
-    if (content == "") return;
-
-    string[] banned = content.split("\r\n");
+    string[] banned = content.replace("\r", "").split("\n");
     int migrated = 0;
 
     for (uint i = 0; i < banned.length(); i++) {
@@ -201,35 +195,25 @@ void migrate_banidos_dat_to_db() {
         if (name == "") continue;
 
         if (!is_banned_db(name)) {
-            add_ban_db(name, "", "", "SISTEMA_MIGRAÇÃO", "Migrado de banidos.dat", 0);
+            if (!add_ban_db(name, "", "", "SISTEMA_MIGRAÇÃO", "Migrado de banidos.dat", 0)) {
+                debug_log("MIGRAÇÃO: falha ao importar ban de " + name + "; banidos.dat mantido");
+                return;
+            }
             migrated++;
         }
     }
 
-    if (migrated > 0) {
-        debug_log("MIGRAÇÃO: " + migrated + " bans permanentes migrados de banidos.dat");
-        if (file_exists("banidos.dat")) {
-            file_copy("banidos.dat", "banidos.dat.backup", true);
-            file_delete("banidos.dat");
-        }
-    }
+    debug_log("MIGRAÇÃO: " + migrated + " bans permanentes migrados de banidos.dat");
+    globais_arquivar_legado("banidos.dat");
 }
 
 void migrate_tempbans_to_db() {
     if (!database_initialized) return;
 
-    file f;
-    if (!f.open("tempbans.usr", "r")) {
-        debug_log("MIGRAÇÃO: Arquivo tempbans.usr não encontrado (OK se já migrado)");
-        return;
-    }
+    string content;
+    if (!globais_ler_arquivo("tempbans.usr", content)) return;
 
-    string content = f.read();
-    f.close();
-
-    if (content == "") return;
-
-    string[] bans = content.split("\r\n");
+    string[] bans = content.replace("\r", "").split("\n");
     int migrated = 0;
 
     for (uint i = 0; i < bans.length(); i++) {
@@ -245,19 +229,17 @@ void migrate_tempbans_to_db() {
 
             int remaining = int(total_mins - elapsed);
             if (remaining > 0 && !is_banned_db(playername, hwid)) {
-                add_ban_db(playername, hwid, "", "SISTEMA_MIGRAÇÃO", motivo, remaining);
+                if (!add_ban_db(playername, hwid, "", "SISTEMA_MIGRAÇÃO", motivo, remaining)) {
+                    debug_log("MIGRAÇÃO: falha ao importar tempban de " + playername + "; tempbans.usr mantido");
+                    return;
+                }
                 migrated++;
             }
         }
     }
 
-    if (migrated > 0) {
-        debug_log("MIGRAÇÃO: " + migrated + " tempbans migrados de tempbans.usr");
-        if (file_exists("tempbans.usr")) {
-            file_copy("tempbans.usr", "tempbans.usr.backup", true);
-            file_delete("tempbans.usr");
-        }
-    }
+    debug_log("MIGRAÇÃO: " + migrated + " tempbans migrados de tempbans.usr");
+    globais_arquivar_legado("tempbans.usr");
 }
 
 void migrate_legacy_bans() {

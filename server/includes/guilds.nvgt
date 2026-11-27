@@ -1,5 +1,8 @@
 
+// Guildas persistem nas tabelas guildas e guilda_membros (ver o fim do
+// arquivo). GUILDS_FILE e so o arquivo legado, importado uma unica vez.
 const string GUILDS_FILE = "database/guilds.dat";
+const uint GUILD_XP_SAVE_INTERVAL_MS = 30000;
 
 class guild {
 	string name;
@@ -15,6 +18,7 @@ class guild {
 	dictionary pending_invites;
 	int level;
 	int xp;
+	timer xp_save_timer;
 
 	guild(string guild_name, string leader_name, string guild_tag) {
 		this.name = guild_name;
@@ -154,9 +158,18 @@ class guild {
 	void add_xp(int amount) {
 		xp += amount;
 
+		bool subiu = false;
 		while(xp >= get_required_xp_for_level(level + 1) && level < 10) {
 			level++;
+			subiu = true;
 			broadcast_message("Guild subiu para nAvel " + level + "!");
+		}
+
+		// XP de guilda entra a cada abate: grava no banco no maximo a cada
+		// GUILD_XP_SAVE_INTERVAL_MS, ou na hora quando sobe de nivel.
+		if(subiu || xp_save_timer.elapsed >= GUILD_XP_SAVE_INTERVAL_MS) {
+			xp_save_timer.restart();
+			guilda_db_salvar_progresso(this);
 		}
 	}
 
@@ -548,32 +561,7 @@ void cmd_donateguild(int player_index, int amount) {
 	save_guilds();
 }
 
-string serialize_guild(guild@ g) {
-	string data = "";
-	data += g.name + "|";
-	data += g.leader + "|";
-	data += g.tag + "|";
-	data += g.guild_gold + "|";
-	data += g.level + "|";
-	data += g.xp + "|";
-
-	string off = "";
-	for(uint i = 0; i < g.officers.length(); i++) {
-		if(i > 0) off += ",";
-		off += g.officers[i];
-	}
-	data += off + "|";
-
-	string mem = "";
-	for(uint i = 0; i < g.members.length(); i++) {
-		if(i > 0) mem += ",";
-		mem += g.members[i];
-	}
-	data += mem;
-
-	return data;
-}
-
+// Formato do guilds.dat legado: nome|lider|tag|ouro|nivel|xp|oficiais|membros
 guild@ deserialize_guild(string data) {
 	string[] parts = data.split("|");
 	if(parts.length() < 8) return null;
@@ -615,63 +603,325 @@ guild@ deserialize_guild(string data) {
 	return g;
 }
 
-void save_guilds() {
-	file f;
-	if(!f.open(GUILDS_FILE, "w")) {
-		debug_log("GUILD: Erro ao salvar guilds");
-		return;
+// --------------------------------------------------------------------------
+// Persistencia no SQLite
+// --------------------------------------------------------------------------
+// guildas(id, nome, lider, tag, ouro, nivel, xp, max_membros, max_oficiais)
+// guilda_membros(guilda_id, username, cargo, ordem)  cargo: lider/oficial/membro
+//
+// As guildas continuam em memoria (active_guilds / player_guilds); o banco e
+// regravado por save_guilds() a cada mudanca, como o arquivo era.
+
+bool guildas_tabelas_ok = false;
+bool guildas_carregadas = false;
+
+bool guildas_garantir_tabelas() {
+	if(guildas_tabelas_ok) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string criar_guildas = """
+		CREATE TABLE IF NOT EXISTS guildas (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			nome TEXT UNIQUE NOT NULL,
+			lider TEXT NOT NULL,
+			tag TEXT DEFAULT '',
+			ouro INTEGER DEFAULT 0,
+			nivel INTEGER DEFAULT 1,
+			xp INTEGER DEFAULT 0,
+			max_membros INTEGER DEFAULT 50,
+			max_oficiais INTEGER DEFAULT 5,
+			criada_em DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	""";
+
+	string criar_membros = """
+		CREATE TABLE IF NOT EXISTS guilda_membros (
+			username TEXT PRIMARY KEY,
+			guilda_id INTEGER NOT NULL,
+			cargo TEXT NOT NULL DEFAULT 'membro',
+			ordem INTEGER DEFAULT 0
+		);
+	""";
+
+	if(bancoJogo.execute(criar_guildas) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela guildas: " + bancoJogo.get_last_error_text());
+		return false;
 	}
 
-	string content = "";
-	for(uint i = 0; i < active_guilds.length(); i++) {
-		if(i > 0) content += "\n";
-		content += serialize_guild(active_guilds[i]);
+	if(bancoJogo.execute(criar_membros) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela guilda_membros: " + bancoJogo.get_last_error_text());
+		return false;
 	}
 
-	f.write(content);
-	f.close();
+	bancoJogo.execute("CREATE INDEX IF NOT EXISTS idx_guilda_membros_guilda ON guilda_membros(guilda_id);");
 
-	debug_log("GUILD: Salvo " + active_guilds.length() + " guilds");
+	guildas_tabelas_ok = true;
+	return true;
 }
 
-void load_guilds() {
-	if(!file_exists(GUILDS_FILE)) {
-		debug_log("GUILD: Arquivo de guilds não encontrado, criando novo");
+int guilda_db_id(string nome) {
+	if(!guildas_garantir_tabelas()) return -1;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT id FROM guildas WHERE nome = ?;");
+	if(@stmt == null) return -1;
+
+	stmt.bind_text(1, nome);
+	if(stmt.step() != SQLITE_ROW) return -1;
+
+	return stmt.column_int(0);
+}
+
+// substituir = true regrava o cargo de quem ja esta na tabela (save normal);
+// false preserva o que existe (importacao do arquivo legado).
+bool guilda_db_inserir_membro(int guilda_id, string username, string cargo, int ordem, bool substituir) {
+	if(username == "") return false;
+
+	string verbo = substituir ? "INSERT OR REPLACE" : "INSERT OR IGNORE";
+	sqlite3statement@ stmt = bancoJogo.prepare(verbo + " INTO guilda_membros (username, guilda_id, cargo, ordem) VALUES (?, ?, ?, ?);");
+	if(@stmt == null) {
+		debug_log("GUILD: erro ao preparar membro: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, username);
+	stmt.bind_int(2, guilda_id);
+	stmt.bind_text(3, cargo);
+	stmt.bind_int(4, ordem);
+	return stmt.step() == SQLITE_DONE;
+}
+
+// Grava a lista de membros de uma guilda. O lider entra uma vez so, como 'lider'.
+void guilda_db_gravar_membros(guild@ g, int guilda_id, bool substituir) {
+	int ordem = 0;
+	guilda_db_inserir_membro(guilda_id, g.leader, "lider", ordem++, substituir);
+
+	for(uint i = 0; i < g.officers.length(); i++) {
+		if(g.officers[i] == g.leader) continue;
+		guilda_db_inserir_membro(guilda_id, g.officers[i], "oficial", ordem++, substituir);
+	}
+
+	for(uint i = 0; i < g.members.length(); i++) {
+		if(g.members[i] == g.leader) continue;
+		if(g.officers.find(g.members[i]) >= 0) continue;
+		guilda_db_inserir_membro(guilda_id, g.members[i], "membro", ordem++, substituir);
+	}
+}
+
+bool guilda_db_gravar(guild@ g) {
+	if(g is null || g.name == "") return false;
+	if(!guildas_garantir_tabelas()) return false;
+
+	{
+		sqlite3statement@ inserir = bancoJogo.prepare("INSERT OR IGNORE INTO guildas (nome, lider, tag) VALUES (?, ?, ?);");
+		if(@inserir == null) {
+			debug_log("GUILD: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+			return false;
+		}
+		inserir.bind_text(1, g.name);
+		inserir.bind_text(2, g.leader);
+		inserir.bind_text(3, g.tag);
+		inserir.step();
+	}
+
+	{
+		sqlite3statement@ atualizar = bancoJogo.prepare("UPDATE guildas SET lider = ?, tag = ?, ouro = ?, nivel = ?, xp = ?, max_membros = ?, max_oficiais = ? WHERE nome = ?;");
+		if(@atualizar == null) {
+			debug_log("GUILD: erro ao preparar update: " + bancoJogo.get_last_error_text());
+			return false;
+		}
+		atualizar.bind_text(1, g.leader);
+		atualizar.bind_text(2, g.tag);
+		atualizar.bind_int(3, g.guild_gold);
+		atualizar.bind_int(4, g.level);
+		atualizar.bind_int(5, g.xp);
+		atualizar.bind_int(6, g.max_members);
+		atualizar.bind_int(7, g.max_officers);
+		atualizar.bind_text(8, g.name);
+		if(atualizar.step() != SQLITE_DONE) {
+			debug_log("GUILD: erro ao gravar '" + g.name + "': " + bancoJogo.get_last_error_text());
+			return false;
+		}
+	}
+
+	int guilda_id = guilda_db_id(g.name);
+	if(guilda_id <= 0) return false;
+
+	{
+		sqlite3statement@ limpar = bancoJogo.prepare("DELETE FROM guilda_membros WHERE guilda_id = ?;");
+		if(@limpar == null) return false;
+		limpar.bind_int(1, guilda_id);
+		limpar.step();
+	}
+
+	guilda_db_gravar_membros(g, guilda_id, true);
+	return true;
+}
+
+// Ouro, nivel e XP de uma guilda, sem regravar a lista de membros.
+void guilda_db_salvar_progresso(guild@ g) {
+	if(g is null || !guildas_carregadas) return;
+	if(!guildas_garantir_tabelas()) return;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("UPDATE guildas SET ouro = ?, nivel = ?, xp = ? WHERE nome = ?;");
+	if(@stmt == null) return;
+
+	stmt.bind_int(1, g.guild_gold);
+	stmt.bind_int(2, g.level);
+	stmt.bind_int(3, g.xp);
+	stmt.bind_text(4, g.name);
+	stmt.step();
+}
+
+void guilda_db_apagar(int guilda_id) {
+	sqlite3statement@ membros = bancoJogo.prepare("DELETE FROM guilda_membros WHERE guilda_id = ?;");
+	if(@membros != null) {
+		membros.bind_int(1, guilda_id);
+		membros.step();
+	}
+
+	sqlite3statement@ guilda = bancoJogo.prepare("DELETE FROM guildas WHERE id = ?;");
+	if(@guilda != null) {
+		guilda.bind_int(1, guilda_id);
+		guilda.step();
+	}
+}
+
+void save_guilds() {
+	// Sem a carga inicial, a lista em memoria esta vazia: gravar agora
+	// apagaria as guildas do banco.
+	if(!guildas_carregadas) {
+		debug_log("GUILD: save ignorado, guildas ainda nao carregadas do banco");
+		return;
+	}
+	if(!guildas_garantir_tabelas()) {
+		debug_log("GUILD: Erro ao salvar guilds (banco indisponivel)");
 		return;
 	}
 
-	file f;
-	if(!f.open(GUILDS_FILE, "r")) {
-		debug_log("GUILD: Erro ao carregar guilds");
-		return;
+	int[] ids_db;
+	string[] nomes_db;
+	{
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, nome FROM guildas;");
+		if(@stmt == null) {
+			debug_log("GUILD: Erro ao salvar guilds: " + bancoJogo.get_last_error_text());
+			return;
+		}
+		while(stmt.step() == SQLITE_ROW) {
+			ids_db.insert_last(stmt.column_int(0));
+			nomes_db.insert_last(stmt.column_text(1));
+		}
 	}
 
-	string content = f.read();
-	f.close();
+	// Guildas dissolvidas saem do banco.
+	for(uint i = 0; i < ids_db.length(); i++) {
+		if(get_guild_by_name(nomes_db[i]) is null) guilda_db_apagar(ids_db[i]);
+	}
 
-	if(content == "") return;
+	int salvas = 0;
+	for(uint i = 0; i < active_guilds.length(); i++) {
+		if(active_guilds[i] is null) continue;
+		if(guilda_db_gravar(active_guilds[i])) salvas++;
+	}
 
-	active_guilds.resize(0);
-	player_guilds.delete_all();
+	debug_log("GUILD: Salvo " + salvas + " guilds");
+}
 
-	string[] lines = content.split("\n");
+// Importacao unica do guilds.dat: INSERT OR IGNORE, depois vira guilds.dat.migrado.
+void guildas_importar_arquivo_legado() {
+	if(!file_exists(GUILDS_FILE)) return;
+
+	string content;
+	if(!globais_ler_arquivo(GUILDS_FILE, content)) return;
+
+	string[] lines = content.replace("\r", "").split("\n");
+	int importadas = 0;
+
 	for(uint i = 0; i < lines.length(); i++) {
 		if(lines[i] == "") continue;
 
 		guild@ g = deserialize_guild(lines[i]);
-		if(g !is null) {
-			active_guilds.insert_last(g);
+		if(g is null || g.name == "") continue;
 
-			player_guilds.set(g.leader, g.name);
-			for(uint j = 0; j < g.officers.length(); j++) {
-				player_guilds.set(g.officers[j], g.name);
-			}
-			for(uint j = 0; j < g.members.length(); j++) {
-				player_guilds.set(g.members[j], g.name);
-			}
+		sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO guildas (nome, lider, tag, ouro, nivel, xp) VALUES (?, ?, ?, ?, ?, ?);");
+		if(@stmt == null) {
+			debug_log("GUILD: erro ao importar guilds.dat: " + bancoJogo.get_last_error_text());
+			return;
+		}
+		stmt.bind_text(1, g.name);
+		stmt.bind_text(2, g.leader);
+		stmt.bind_text(3, g.tag);
+		stmt.bind_int(4, g.guild_gold);
+		stmt.bind_int(5, g.level);
+		stmt.bind_int(6, g.xp);
+		if(stmt.step() != SQLITE_DONE) {
+			debug_log("GUILD: erro ao importar '" + g.name + "': " + bancoJogo.get_last_error_text());
+			return;
+		}
+
+		int guilda_id = guilda_db_id(g.name);
+		if(guilda_id <= 0) continue;
+
+		guilda_db_gravar_membros(g, guilda_id, false);
+		importadas++;
+	}
+
+	debug_log("GUILD MIGRACAO: " + importadas + " guilds importadas de " + GUILDS_FILE);
+	globais_arquivar_legado(GUILDS_FILE);
+}
+
+void load_guilds() {
+	if(!guildas_garantir_tabelas()) {
+		debug_log("GUILD: Erro ao carregar guilds (banco indisponivel)");
+		return;
+	}
+
+	guildas_importar_arquivo_legado();
+
+	active_guilds.resize(0);
+	player_guilds.delete_all();
+
+	int[] ids;
+	{
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT id, nome, lider, tag, ouro, nivel, xp, max_membros, max_oficiais FROM guildas ORDER BY id;");
+		if(@stmt == null) {
+			debug_log("GUILD: Erro ao carregar guilds: " + bancoJogo.get_last_error_text());
+			return;
+		}
+
+		while(stmt.step() == SQLITE_ROW) {
+			guild g(stmt.column_text(1), stmt.column_text(2), stmt.column_text(3));
+			g.members.resize(0);
+			g.guild_gold = stmt.column_int(4);
+			g.level = stmt.column_int(5);
+			g.xp = stmt.column_int(6);
+			if(stmt.column_int(7) > 0) g.max_members = stmt.column_int(7);
+			if(stmt.column_int(8) > 0) g.max_officers = stmt.column_int(8);
+
+			active_guilds.insert_last(g);
+			ids.insert_last(stmt.column_int(0));
 		}
 	}
 
+	for(uint i = 0; i < active_guilds.length(); i++) {
+		guild@ g = active_guilds[i];
+		player_guilds.set(g.leader, g.name);
+
+		sqlite3statement@ stmt = bancoJogo.prepare("SELECT username, cargo FROM guilda_membros WHERE guilda_id = ? ORDER BY ordem, rowid;");
+		if(@stmt == null) continue;
+		stmt.bind_int(1, ids[i]);
+
+		while(stmt.step() == SQLITE_ROW) {
+			string username = stmt.column_text(0);
+			string cargo = stmt.column_text(1);
+			if(username == "" || username == g.leader) continue;
+
+			if(cargo == "oficial") g.officers.insert_last(username);
+			else g.members.insert_last(username);
+			player_guilds.set(username, g.name);
+		}
+	}
+
+	guildas_carregadas = true;
 	debug_log("GUILD: Carregado " + active_guilds.length() + " guilds");
 }
 

@@ -113,44 +113,73 @@ class achievement_progress {
 		return false;
 	}
 
-	void save() {
-		string path = "players/" + player_name + "/achievements.dat";
+	void limpar_memoria() {
+		unlocked_achievements.resize(0);
+		unlocked_titles.resize(0);
+		progress.delete_all();
+		total_points = 0;
+		active_title = "";
+	}
 
-		file f;
-		if(!f.open(path, "wb")) {
-			debug_log("ACHIEVEMENTS: Erro ao salvar achievements de " + player_name);
-			return;
-		}
+	// Insere o estado em memória nas tabelas conquistas_jogador,
+	// conquistas_desbloqueadas, conquistas_progresso e conquistas_titulos
+	// (criadas em dados_jogador_garantir_tabelas(), mail.nvgt).
+	// INSERT OR IGNORE: o save() apaga as linhas do jogador antes; a
+	// importação do legado não apaga nada.
+	bool gravar_no_banco() {
+		bool ok = true;
 
-		f.write("" + unlocked_achievements.length() + "\n");
+		if(!dj_exec3("INSERT OR IGNORE INTO conquistas_jogador (username, total_pontos, titulo_ativo) VALUES (?, ?, ?);", player_name, "" + total_points, active_title)) ok = false;
+
 		for(uint i = 0; i < unlocked_achievements.length(); i++) {
-			f.write(unlocked_achievements[i] + "\n");
+			if(unlocked_achievements[i] == "") continue;
+			if(!dj_exec3("INSERT OR IGNORE INTO conquistas_desbloqueadas (username, conquista_id, ordem) VALUES (?, ?, ?);", player_name, unlocked_achievements[i], "" + i)) ok = false;
 		}
 
 		string[] prog_keys = progress.get_keys();
-		f.write("" + prog_keys.length() + "\n");
 		for(uint i = 0; i < prog_keys.length(); i++) {
-			f.write(prog_keys[i] + "\n");
-			f.write("" + int(progress[prog_keys[i]]) + "\n");
+			int valor = dj_dict_int(@progress, prog_keys[i]);
+			if(!dj_exec3("INSERT OR IGNORE INTO conquistas_progresso (username, chave, valor) VALUES (?, ?, ?);", player_name, prog_keys[i], "" + valor)) ok = false;
 		}
 
-		f.write("" + total_points + "\n");
-		f.write(active_title + "\n");
-
-		f.write("" + unlocked_titles.length() + "\n");
 		for(uint i = 0; i < unlocked_titles.length(); i++) {
-			f.write(unlocked_titles[i] + "\n");
+			if(unlocked_titles[i] == "") continue;
+			if(!dj_exec3("INSERT OR IGNORE INTO conquistas_titulos (username, titulo, ordem) VALUES (?, ?, ?);", player_name, unlocked_titles[i], "" + i)) ok = false;
 		}
 
-		f.close();
-		debug_log("ACHIEVEMENTS: Progresso de " + player_name + " salvo");
+		return ok;
 	}
 
-	void load() {
-		string path = "players/" + player_name + "/achievements.dat";
+	void save() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("ACHIEVEMENTS: Erro ao salvar achievements de " + player_name + " (banco indisponível)");
+			return;
+		}
+
+		bool sp = dj_inicio();
+		bool ok = true;
+
+		if(!dj_exec1("DELETE FROM conquistas_jogador WHERE username = ?;", player_name)) ok = false;
+		if(!dj_exec1("DELETE FROM conquistas_desbloqueadas WHERE username = ?;", player_name)) ok = false;
+		if(!dj_exec1("DELETE FROM conquistas_progresso WHERE username = ?;", player_name)) ok = false;
+		if(!dj_exec1("DELETE FROM conquistas_titulos WHERE username = ?;", player_name)) ok = false;
+		if(!gravar_no_banco()) ok = false;
+
+		dj_fim(sp, ok);
+
+		if(ok) debug_log("ACHIEVEMENTS: Progresso de " + player_name + " salvo");
+		else debug_log("ACHIEVEMENTS: Erro ao salvar achievements de " + player_name);
+	}
+
+	// Importação única de players/<nome>/achievements.dat. Só é chamada por
+	// load(), com o objeto ainda vazio.
+	void importar_legado() {
+		string path = dj_caminho_legado(player_name, "achievements.dat");
+		if(path == "" || !file_exists(path)) return;
 
 		file f;
 		if(!f.open(path, "rb")) {
+			debug_log("ACHIEVEMENTS: não foi possível abrir " + path + " para importar");
 			return;
 		}
 
@@ -158,35 +187,83 @@ class achievement_progress {
 		f.close();
 
 		string[] lines = content.split("\n");
-		if(lines.length() < 1) return;
 
 		int line_idx = 0;
 
-		int ach_count = parse_int(lines[line_idx++]);
-		for(int i = 0; i < ach_count && line_idx < int(lines.length()); i++) {
-			unlocked_achievements.insert_last(lines[line_idx++]);
-		}
+		if(lines.length() >= 1) {
+			int ach_count = parse_int(lines[line_idx++]);
+			for(int i = 0; i < ach_count && line_idx < int(lines.length()); i++) {
+				unlocked_achievements.insert_last(lines[line_idx++]);
+			}
 
-		if(line_idx < int(lines.length())) {
-			int prog_count = parse_int(lines[line_idx++]);
-			for(int i = 0; i < prog_count && line_idx + 1 < int(lines.length()); i++) {
-				string key = lines[line_idx++];
-				int val = parse_int(lines[line_idx++]);
-				progress.set(key, "" + val);
+			if(line_idx < int(lines.length())) {
+				int prog_count = parse_int(lines[line_idx++]);
+				for(int i = 0; i < prog_count && line_idx + 1 < int(lines.length()); i++) {
+					string key = lines[line_idx++];
+					int val = parse_int(lines[line_idx++]);
+					progress.set(key, "" + val);
+				}
+			}
+
+			if(line_idx < int(lines.length())) {
+				total_points = parse_int(lines[line_idx++]);
+			}
+			if(line_idx < int(lines.length())) {
+				active_title = lines[line_idx++];
+			}
+
+			if(line_idx < int(lines.length())) {
+				int title_count = parse_int(lines[line_idx++]);
+				for(int i = 0; i < title_count && line_idx < int(lines.length()); i++) {
+					unlocked_titles.insert_last(lines[line_idx++]);
+				}
 			}
 		}
 
-		if(line_idx < int(lines.length())) {
-			total_points = parse_int(lines[line_idx++]);
-		}
-		if(line_idx < int(lines.length())) {
-			active_title = lines[line_idx++];
+		bool sp = dj_inicio();
+		bool ok = gravar_no_banco();
+		dj_fim(sp, ok);
+
+		// O que vale é o que está no banco; load() relê em seguida.
+		limpar_memoria();
+
+		if(!ok) {
+			debug_log("ACHIEVEMENTS: falha ao importar " + path + "; o arquivo foi mantido");
+			return;
 		}
 
-		if(line_idx < int(lines.length())) {
-			int title_count = parse_int(lines[line_idx++]);
-			for(int i = 0; i < title_count && line_idx < int(lines.length()); i++) {
-				unlocked_titles.insert_last(lines[line_idx++]);
+		dj_marcar_migrado(path);
+		debug_log("ACHIEVEMENTS: progresso de " + player_name + " importado de achievements.dat");
+	}
+
+	void load() {
+		if(!dados_jogador_garantir_tabelas()) {
+			debug_log("ACHIEVEMENTS: banco indisponível ao carregar progresso de " + player_name);
+			return;
+		}
+
+		limpar_memoria();
+		importar_legado();
+
+		sqlite3statement@ resumo = bancoJogo.prepare("SELECT total_pontos, titulo_ativo FROM conquistas_jogador WHERE username = ?;");
+		if(@resumo == null) {
+			debug_log("ACHIEVEMENTS: erro ao carregar progresso de " + player_name + ": " + bancoJogo.get_last_error_text());
+			return;
+		}
+		resumo.bind_text(1, player_name);
+		if(resumo.step() == SQLITE_ROW) {
+			total_points = resumo.column_int(0);
+			active_title = resumo.column_text(1);
+		}
+
+		unlocked_achievements = dj_lista("SELECT conquista_id FROM conquistas_desbloqueadas WHERE username = ? ORDER BY ordem, conquista_id;", player_name);
+		unlocked_titles = dj_lista("SELECT titulo FROM conquistas_titulos WHERE username = ? ORDER BY ordem, titulo;", player_name);
+
+		sqlite3statement@ prog = bancoJogo.prepare("SELECT chave, valor FROM conquistas_progresso WHERE username = ?;");
+		if(@prog != null) {
+			prog.bind_text(1, player_name);
+			while(prog.step() == SQLITE_ROW) {
+				progress.set(prog.column_text(0), "" + prog.column_int(1));
 			}
 		}
 

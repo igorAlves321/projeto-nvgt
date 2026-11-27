@@ -90,8 +90,7 @@ void eadm(string msg, string sound = "notifybleeps.ogg") {
 		if (players[i].moderador == true) {
 			can_receive = true;
 		}
-		if(file_exists("players/" + players[i].charname + "/admintudo.usr") ||
-		   file_exists("players/" + players[i].charname + "/enable_chat_adm.usr")) {
+		if(!can_receive && marcador_recebe_chat_adm(players[i].charname)) {
 			can_receive = true;
 		}
 
@@ -110,26 +109,6 @@ void opc(int index, string[] parsed) {
 			eadm("Ideia de " + players[index].charname + ": " + msg);
 		}
 	}
-}
-
-bool dcomando(int index, string[] parsed) {
-	string v = parsed[0].replace("/", "");
-	if (file_exists("qcomandos/" + v + ".md")) {
-		file f;
-		f.open("qcomandos/" + v + ".md", "r");
-		string[] vv = f.read().split("\r\n");
-		f.close();
-
-		bool r = false;
-		for (uint i = 0; i < vv.length(); i++) {
-			if (vv[i].lower() == players[index].charname.lower()) {
-				r = true;
-				break;
-			}
-		}
-		return r;
-	}
-	return false;
 }
 
 void broadcast_all(string message) {
@@ -192,38 +171,6 @@ void remove_item_from_player(int player_index, string item_name, int quantity) {
 	}
 }
 
-bool remove_temp_ban(string player_name) {
-	if(!file_exists("tempbans.usr")) return false;
-
-	file f;
-	if(!f.open("tempbans.usr", "r")) return false;
-
-	string content = f.read();
-	f.close();
-
-	string[] lines = content.split("\n");
-	string new_content = "";
-	bool found = false;
-
-	for(uint i = 0; i < lines.length(); i++) {
-		if(lines[i].find(player_name) < 0) {
-			new_content += lines[i] + "\n";
-		} else {
-			found = true;
-		}
-	}
-
-	if(found) {
-		file f2;
-		if(f2.open("tempbans.usr", "w")) {
-			f2.write(new_content);
-			f2.close();
-		}
-	}
-
-	return found;
-}
-
 void save_player(int player_index) {
 	if(player_index < 0 || player_index >= int(players.length())) return;
 	if(!players[player_index].is_logged_in) return;
@@ -235,24 +182,44 @@ void load_server_config() {
 	reload_all_server_data();
 }
 
+// Equipe do servidor a partir de player_roles: uma entrada por jogador, com
+// o cargo mais alto.
 string[] get_all_staff() {
 	string[] staff;
+	if(!database_initialized || bancoJogo is null) return staff;
 
-	string[]@ player_folders = find_directories("players/");
+	string query = """
+		SELECT username, role FROM player_roles
+		WHERE role IN ('dev', 'admin', 'moderator', 'builder')
+		AND (expires_at IS NULL OR expires_at > datetime('now'))
+		ORDER BY
+			CASE role
+				WHEN 'dev' THEN 1
+				WHEN 'admin' THEN 2
+				WHEN 'moderator' THEN 3
+				WHEN 'builder' THEN 4
+			END,
+			username;
+	""";
 
-	for(uint i = 0; i < player_folders.length(); i++) {
-		string player_name = player_folders[i];
-		string base_path = "players/" + player_name + "/";
+	sqlite3statement@ stmt = bancoJogo.prepare(query);
+	if(@stmt == null) return staff;
 
-		string role_str = "";
-		if(file_exists(base_path + "dev.usr")) role_str = "[DEV]";
-		else if(file_exists(base_path + "admin.usr")) role_str = "[ADMIN]";
-		else if(file_exists(base_path + "moderator.usr")) role_str = "[MOD]";
-		else if(file_exists(base_path + "builder.usr")) role_str = "[BUILDER]";
+	dictionary vistos;
+	while(stmt.step() == SQLITE_ROW) {
+		string player_name = stmt.column_text(0);
+		string role = stmt.column_text(1);
 
-		if(role_str != "") {
-			staff.insert_last(role_str + " " + player_name);
-		}
+		string chave = player_name.lower();
+		if(vistos.exists(chave)) continue;
+		vistos.set(chave, 1);
+
+		string role_str = "[BUILDER]";
+		if(role == "dev") role_str = "[DEV]";
+		else if(role == "admin") role_str = "[ADMIN]";
+		else if(role == "moderator") role_str = "[MOD]";
+
+		staff.insert_last(role_str + " " + player_name);
 	}
 
 	return staff;

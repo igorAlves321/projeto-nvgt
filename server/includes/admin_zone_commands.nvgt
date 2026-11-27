@@ -108,74 +108,161 @@ void cmd_checkzone(int player_index) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// Persistencia das zonas: tabela zonas_desabilitadas (antes disabled_zones.cfg)
+// --------------------------------------------------------------------------
+// /savezones regrava a tabela inteira a partir da memoria e /loadzones (e o
+// boot) le de volta. A chave ZONAS_CHAVE_SALVAS em server_config diz se alguem
+// ja salvou: sem ela valem as zonas padrao de init_disabled_zones(); com ela
+// vale o banco, mesmo que a lista salva esteja vazia.
+
+const string ZONAS_CHAVE_SALVAS = "zonas_desabilitadas_salvas";
+bool zonas_tabela_ok = false;
+
+bool zonas_garantir_tabela() {
+	if(zonas_tabela_ok) return true;
+	if(!database_initialized || bancoJogo is null) return false;
+
+	string criar = """
+		CREATE TABLE IF NOT EXISTS zonas_desabilitadas (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mapa TEXT NOT NULL,
+			minx INTEGER NOT NULL,
+			maxx INTEGER NOT NULL,
+			miny INTEGER NOT NULL,
+			maxy INTEGER NOT NULL,
+			sem_pvp INTEGER DEFAULT 1,
+			sem_itens INTEGER DEFAULT 0,
+			sem_comandos INTEGER DEFAULT 0,
+			mensagem TEXT DEFAULT 'Zona segura',
+			ordem INTEGER DEFAULT 0,
+			UNIQUE(mapa, minx, maxx, miny, maxy)
+		);
+	""";
+
+	if(bancoJogo.execute(criar) != SQLITE_OK) {
+		debug_log("ERRO ao criar tabela zonas_desabilitadas: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	zonas_tabela_ok = true;
+	return true;
+}
+
+bool zonas_db_inserir(game_disabled_zone@ zona, int ordem) {
+	if(zona is null) return false;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("INSERT OR IGNORE INTO zonas_desabilitadas (mapa, minx, maxx, miny, maxy, sem_pvp, sem_itens, sem_comandos, mensagem, ordem) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+	if(@stmt == null) {
+		debug_log("ZONES: erro ao preparar insert: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	stmt.bind_text(1, zona.map);
+	stmt.bind_int(2, zona.minx);
+	stmt.bind_int(3, zona.maxx);
+	stmt.bind_int(4, zona.miny);
+	stmt.bind_int(5, zona.maxy);
+	stmt.bind_int(6, zona.disable_pvp ? 1 : 0);
+	stmt.bind_int(7, zona.disable_items ? 1 : 0);
+	stmt.bind_int(8, zona.disable_commands ? 1 : 0);
+	stmt.bind_text(9, zona.message);
+	stmt.bind_int(10, ordem);
+	return stmt.step() == SQLITE_DONE;
+}
+
+bool zonas_salvar_no_banco() {
+	if(!zonas_garantir_tabela()) return false;
+
+	if(bancoJogo.execute("DELETE FROM zonas_desabilitadas;") != SQLITE_OK) {
+		debug_log("ZONES: erro ao limpar zonas_desabilitadas: " + bancoJogo.get_last_error_text());
+		return false;
+	}
+
+	bool ok = true;
+	for(uint i = 0; i < game_disabled_zones.length(); i++) {
+		if(game_disabled_zones[i] is null) continue;
+		if(!zonas_db_inserir(game_disabled_zones[i], int(i))) ok = false;
+	}
+
+	config_set_text(ZONAS_CHAVE_SALVAS, "1", "Zonas desabilitadas ja foram salvas no banco (/savezones)");
+	return ok;
+}
+
+// Importacao unica do disabled_zones.cfg. O arquivo antigo separava as linhas
+// com a sequencia literal barra-n, por isso as duas formas sao aceitas.
+void zonas_importar_arquivo_legado() {
+	if(!file_exists("disabled_zones.cfg")) return;
+	if(!zonas_garantir_tabela()) return;
+
+	string content;
+	if(!globais_ler_arquivo("disabled_zones.cfg", content)) return;
+
+	string[] lines = content.replace("\\n", "\n").replace("\r", "").split("\n");
+	int importadas = 0;
+	for(uint i = 0; i < lines.length(); i++) {
+		string line = lines[i].trim_whitespace();
+		if(line == "" || line.substr(0, 2) == "//") continue;
+
+		string[] parts = line.split("|");
+		if(parts.length() < 9) continue;
+
+		game_disabled_zone@ zona = game_disabled_zone(string_to_number(parts[1]), string_to_number(parts[2]), string_to_number(parts[3]), string_to_number(parts[4]), parts[0], parts[8]);
+		zona.disable_pvp = (parts[5] == "1");
+		zona.disable_items = (parts[6] == "1");
+		zona.disable_commands = (parts[7] == "1");
+
+		if(zonas_db_inserir(zona, importadas)) importadas++;
+	}
+
+	config_set_text(ZONAS_CHAVE_SALVAS, "1", "Zonas desabilitadas ja foram salvas no banco (/savezones)");
+	debug_log("ZONES MIGRACAO: " + importadas + " zonas importadas de disabled_zones.cfg");
+	globais_arquivar_legado("disabled_zones.cfg");
+}
+
+// Substitui as zonas em memoria pelas do banco. Retorna -1 quando o banco
+// nao esta disponivel ou quando nenhuma zona foi salva ainda.
+int zonas_carregar_do_banco() {
+	if(!zonas_garantir_tabela()) return -1;
+
+	zonas_importar_arquivo_legado();
+
+	if(config_get_text(ZONAS_CHAVE_SALVAS, "") != "1") return -1;
+
+	sqlite3statement@ stmt = bancoJogo.prepare("SELECT mapa, minx, maxx, miny, maxy, sem_pvp, sem_itens, sem_comandos, mensagem FROM zonas_desabilitadas ORDER BY ordem, id;");
+	if(@stmt == null) {
+		debug_log("ZONES: erro ao carregar zonas: " + bancoJogo.get_last_error_text());
+		return -1;
+	}
+
+	game_disabled_zones.resize(0);
+
+	int loaded = 0;
+	while(stmt.step() == SQLITE_ROW) {
+		game_disabled_zone@ zona = game_disabled_zone(stmt.column_int(1), stmt.column_int(2), stmt.column_int(3), stmt.column_int(4), stmt.column_text(0), stmt.column_text(8));
+		zona.disable_pvp = (stmt.column_int(5) == 1);
+		zona.disable_items = (stmt.column_int(6) == 1);
+		zona.disable_commands = (stmt.column_int(7) == 1);
+		game_disabled_zones.insert_last(zona);
+		loaded++;
+	}
+	return loaded;
+}
+
 void cmd_savezones(int player_index) {
 	if(!is_super_admin(player_index)) {
 		send_admin_error(player_index, "savezones", "Apenas super admins podem usar este comando!");
 		return;
 	}
 
-	file f;
-	if(!f.open("disabled_zones.cfg", "wb")) {
-		send_admin_error(player_index, "savezones", "Erro ao abrir arquivo para salvar!");
+	if(!zonas_salvar_no_banco()) {
+		send_admin_error(player_index, "savezones", "Erro ao salvar as zonas no banco de dados!");
 		return;
 	}
 
-	string content = "// Zonas Desabilitadas - Configuracao\\n";
-	content += "// Formato: map|minx|maxx|miny|maxy|pvp|items|commands|message\\n\\n";
-	for(uint i = 0; i < game_disabled_zones.length(); i++) {
-		content += game_disabled_zones[i].map + "|";
-		content += game_disabled_zones[i].minx + "|";
-		content += game_disabled_zones[i].maxx + "|";
-		content += game_disabled_zones[i].miny + "|";
-		content += game_disabled_zones[i].maxy + "|";
-		content += (game_disabled_zones[i].disable_pvp ? "1" : "0") + "|";
-		content += (game_disabled_zones[i].disable_items ? "1" : "0") + "|";
-		content += (game_disabled_zones[i].disable_commands ? "1" : "0") + "|";
-		content += game_disabled_zones[i].message + "\\n";
-	}
-
-	f.write(content);
-	f.close();
 	send_reliable_text(players[player_index].peer_id,
-		"msg2 " + game_disabled_zones.length() + " zonas salvas em disabled_zones.cfg", 0);
+		"msg2 " + game_disabled_zones.length() + " zonas salvas no banco de dados", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " salvou " + game_disabled_zones.length() + " zonas");
-}
-
-int load_disabled_zones_from_disk() {
-	file f;
-	if(!f.open("disabled_zones.cfg", "rb")) return -1;
-
-	string content = f.read();
-	f.close();
-	game_disabled_zones.resize(0);
-
-	string[] lines = content.split("\\n");
-	int loaded = 0;
-	for(uint i = 0; i < lines.length(); i++) {
-		string line = trim(lines[i]);
-		if(line == "" || line.substr(0, 2) == "//") continue;
-
-		string[] parts = line.split("|");
-		if(parts.length() >= 9) {
-			string map = parts[0];
-			int minx = string_to_number(parts[1]);
-			int maxx = string_to_number(parts[2]);
-			int miny = string_to_number(parts[3]);
-			int maxy = string_to_number(parts[4]);
-			bool pvp = (parts[5] == "1");
-			bool items = (parts[6] == "1");
-			bool commands = (parts[7] == "1");
-			string message = parts[8];
-
-			game_disabled_zone@ zona = game_disabled_zone(minx, maxx, miny, maxy, map, message);
-			zona.disable_pvp = pvp;
-			zona.disable_items = items;
-			zona.disable_commands = commands;
-			game_disabled_zones.insert_last(zona);
-			loaded++;
-		}
-	}
-	return loaded;
 }
 
 void cmd_loadzones(int player_index) {
@@ -184,12 +271,12 @@ void cmd_loadzones(int player_index) {
 		return;
 	}
 
-	int loaded = load_disabled_zones_from_disk();
+	int loaded = zonas_carregar_do_banco();
 	if(loaded < 0) {
-		send_admin_error(player_index, "loadzones", "Arquivo disabled_zones.cfg não encontrado!");
+		send_admin_error(player_index, "loadzones", "Nenhuma zona salva no banco de dados!");
 		return;
 	}
 
-	send_reliable_text(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas de disabled_zones.cfg", 0);
+	send_reliable_text(players[player_index].peer_id, "msg2 " + loaded + " zonas carregadas do banco de dados", 0);
 	debug_log("ADMIN: " + players[player_index].charname + " carregou " + loaded + " zonas");
 }
