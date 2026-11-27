@@ -571,6 +571,9 @@ bool net_json_try_get_string(const string &in json, const string &in field, stri
 string server_version_info = "";
 int player_health = -1;
 int player_fome = -1;
+int player_sanity = -1;
+int player_gold = -1;
+string server_hora_jogo = "";
 
 bool canais_menu_pendente = false;
 bool canais_menu_pronto = false;
@@ -632,6 +635,72 @@ void handle_fome_packet(string[] parsed) {
 	if(valor < 0) valor = 0;
 	player_fome = valor;
 	add_add_item("avisos", pu.get_value("Fome") + ": " + valor);
+}
+
+// "sanity <nivel_de_sanidade>"
+void handle_sanity_packet(string[] parsed) {
+	if(parsed.length() < 2) return;
+
+	int valor = string_to_number(parsed[1]);
+	if(valor < 0) valor = 0;
+	player_sanity = valor;
+	add_add_item("avisos", pu.get_value("Sanidade") + ": " + valor);
+}
+
+// "gold <ouro_atual>"
+void handle_gold_packet(string[] parsed) {
+	if(parsed.length() < 2) return;
+
+	int valor = string_to_number(parsed[1]);
+	if(valor < 0) valor = 0;
+	player_gold = valor;
+	add_add_item("avisos", pu.get_value("Ouro") + ": " + valor);
+}
+
+// "time <h>:00 AM|PM": o servidor manda a cada virada de hora do jogo, entao
+// vai so para o buffer, sem interromper a fala.
+void handle_time_packet(string full_msg) {
+	string valor = full_msg.length() > 5 ? full_msg.substr(5).trim_whitespace() : "";
+	if(valor == "") return;
+
+	server_hora_jogo = valor;
+	add_add_item("avisos", pu.get_value("Hora do jogo") + ": " + valor, false);
+}
+
+// "sound <arquivo.ogg> [x] [y]": som de outro jogador no mapa.
+void handle_sound_packet(string[] parsed) {
+	if(parsed.length() < 2 || parsed[1] == "") return;
+
+	if(parsed.length() >= 4) {
+		p.play_2d(parsed[1], me.x, me.y, string_to_number(parsed[2]), string_to_number(parsed[3]), false);
+	}
+	else {
+		p.play_stationary(parsed[1], false);
+	}
+}
+
+// "crouched <nome> on|off": outro jogador do mapa agachou ou levantou.
+void handle_crouched_packet(string[] parsed) {
+	if(parsed.length() < 3) return;
+
+	uint ultimo = parsed.length() - 1;
+	string estado = parsed[ultimo];
+	if(estado != "on" && estado != "off") return;
+
+	string nome = parsed[1];
+	for(uint i = 2; i < ultimo; i++) {
+		nome += " " + parsed[i];
+	}
+	if(nome == un) return;
+
+	int indice = get_player(nome);
+	if(indice < 0) return;
+
+	players[indice].stance = (estado == "on") ? STANCE_CROUCHED : STANCE_STANDING;
+
+	if(players[indice].map == mapname) {
+		p.play_2d(estado == "on" ? "centar.ogg" : "levantar.ogg", me.x, me.y, players[indice].x, players[indice].y, false);
+	}
 }
 
 // "channels <rotulo>=<nome>\r\n<rotulo>=<nome>...": catalogo de canais de chat.
@@ -745,6 +814,21 @@ void process_channel_0(string full_msg, string[] parsed, const network_event@ ev
 	}
 	else if(parsed[0] == "fome") {
 		handle_fome_packet(parsed);
+	}
+	else if(parsed[0] == "sanity") {
+		handle_sanity_packet(parsed);
+	}
+	else if(parsed[0] == "gold") {
+		handle_gold_packet(parsed);
+	}
+	else if(parsed[0] == "time") {
+		handle_time_packet(full_msg);
+	}
+	else if(parsed[0] == "sound") {
+		handle_sound_packet(parsed);
+	}
+	else if(parsed[0] == "crouched") {
+		handle_crouched_packet(parsed);
 	}
 	else if(parsed[0] == "setconfig") {
 		handle_setconfig_packet(full_msg);

@@ -49,6 +49,28 @@ class inv_category {
 
 inv_category@[] inv_categories;
 
+// Ordem do inventário recebida em "setinv" (resposta do servidor ao sortinv).
+// O dictionary player_inv não guarda ordem, por isso ela fica nesta lista.
+string[] inv_ordem;
+
+string[] inv_chaves_em_ordem() {
+	string[] resultado;
+	for(uint i = 0; i < inv_ordem.size(); i++) {
+		if(player_inv.exists(inv_ordem[i]) && resultado.find(inv_ordem[i]) < 0) {
+			resultado.insert_last(inv_ordem[i]);
+		}
+	}
+
+	string[] chaves = player_inv.get_keys();
+	for(uint i = 0; i < chaves.size(); i++) {
+		if(resultado.find(chaves[i]) < 0) {
+			resultado.insert_last(chaves[i]);
+			inv_ordem.insert_last(chaves[i]);
+		}
+	}
+	return resultado;
+}
+
 void load_inv(string invdata) {
 	string content = invdata.replace("inv ", "");
 	string[] lines = content.split("\r\n");
@@ -78,6 +100,7 @@ void setinv(string invdata) {
 	if(lines.size() == 0) return;
 
 	player_inv.delete_all();
+	inv_ordem.resize(0);
 
 	for(uint i = 0; i < lines.size(); i++) {
 		if(lines[i].length() > 0) {
@@ -86,6 +109,7 @@ void setinv(string invdata) {
 				int qty = string_to_number(values[1]);
 				if(qty > 0) {
 					player_inv.set(values[0], qty);
+					inv_ordem.insert_last(values[0]);
 				}
 			}
 		}
@@ -301,7 +325,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 
 	if(inv_categories.size() > 0 && cindex < int(inv_categories.size())) {
 		if(inv_categories[cindex].name == "all") {
-			peramitors2 = player_inv.get_keys();
+			peramitors2 = inv_chaves_em_ordem();
 			int real_count = 0;
 			for(uint i = 0; i < peramitors2.size(); i++) {
 				if(inv_item_number(peramitors2[i]) > 0) real_count++;
@@ -323,7 +347,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 			}
 		}
 	} else {
-		peramitors2 = player_inv.get_keys();
+		peramitors2 = inv_chaves_em_ordem();
 		int real_count = 0;
 		for(uint i = 0; i < peramitors2.size(); i++) {
 			if(inv_item_number(peramitors2[i]) > 0) real_count++;
@@ -339,7 +363,7 @@ void invmenu(string category = "all", string sonido = "abrirziper.ogg") {
 		wait(5);
 
 		peramitors.resize(0);
-		peramitors2 = player_inv.get_keys();
+		peramitors2 = inv_chaves_em_ordem();
 
 		if(peramitors2.size() == 0) break;
 
